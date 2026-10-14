@@ -31,6 +31,52 @@ NATIVE = load("plugin_native_test", HERE / "plugin-native.py")
 INSTALLER = load("plugin_native_installer_test", HERE.parent / "scripts/plugin-manager.py")
 
 
+class SafeDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        previous = NATIVE.DIAGNOSTICS
+        NATIVE.DIAGNOSTICS = NATIVE.SafeDiagnostics()
+        self.addCleanup(setattr, NATIVE, "DIAGNOSTICS", previous)
+
+    def test_real_failed_subprocess_records_status_without_exposing_argv_or_stderr(self):
+        marker = "synthetic-sensitive-diagnostic-marker"
+        with self.assertRaises(NATIVE.AcceptanceFailure) as failure:
+            NATIVE.command(["python3", "-c", "import sys;sys.stderr.write('" + marker + "');sys.exit(17)"])
+        self.assertIn("expected exit 0, actual exit 17", str(failure.exception))
+        self.assertNotIn(marker, str(failure.exception))
+        self.assertEqual(NATIVE.DIAGNOSTICS.last_command,
+                         {"command": "python3", "expected_exit_code": 0, "actual_exit_code": 17})
+
+    def test_command_names_strip_sudo_identity_environment_code_and_unknown_basename(self):
+        marker = "synthetic-sensitive-diagnostic-marker"
+        self.assertEqual(NATIVE.command_name(["sudo", "-n", "-u", "fixture-user", "-g", "fixture-group",
+            "env", "-i", "UNEXPECTED_SECRET=" + marker, "python3", "-c", marker]), "python3")
+        self.assertEqual(NATIVE.command_name(["sudo", "-n", "systemctl", "restart", marker]),
+                         "systemctl restart")
+        self.assertEqual(NATIVE.command_name(["/tmp/" + marker]), "fixture-command")
+
+    def test_api_status_failure_never_includes_payload_or_headers(self):
+        import io
+        import json
+        marker = "synthetic-sensitive-provider-text"
+
+        class Response(io.BytesIO):
+            status = 503
+
+        class Opener:
+            def open(self, request, timeout):
+                return Response(json.dumps({"error": {"message": marker}}).encode())
+
+        client = NATIVE.API.__new__(NATIVE.API)
+        client.origin, client.csrf, client.opener = "https://localhost:4443", "fixture-csrf", Opener()
+        client.accounts = {key: "credential-" + key for key in ("smtp_username", "smtp_password", "session", "admin")}
+        with self.assertRaises(NATIVE.AcceptanceFailure) as failure:
+            client.request("/api/v1/admin/plugins/check", "POST", {})
+        self.assertIn("expected 200, actual 503", str(failure.exception))
+        self.assertNotIn(marker, str(failure.exception))
+        self.assertEqual(NATIVE.DIAGNOSTICS.last_api, {"method": "POST", "path": "/api/v1/admin/plugins/check",
+                         "expected_status": 200, "actual_status": 503})
+
+
 class PluginNativeGuardTests(unittest.TestCase):
     def guard(self, settings, arguments=None):
         with tempfile.TemporaryDirectory(prefix="aster-plugin-guard-") as directory:

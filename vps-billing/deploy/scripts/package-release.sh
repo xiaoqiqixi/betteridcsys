@@ -63,7 +63,7 @@ mkdir -p "$bundle"
     go version -m "$bundle/bin/aster-api" > "$tmp/go-build.txt"
     go version -m "$bundle/bin/aster-plugin-host" > "$tmp/go-host-build.txt"
     # The shipped core cannot import the independent SMTP transport.
-    go list -mod=readonly -deps ./cmd/server | python3 -c 'import sys; deps=set(sys.stdin.read().splitlines()); sys.exit(1 if "aster/billing/plugins/smtp" in deps or "net/smtp" in deps or "os/exec" in deps else 0)'
+    go list -mod=readonly -buildvcs=false -deps ./cmd/server | python3 -c 'import sys; deps=set(sys.stdin.read().splitlines()); sys.exit(1 if "aster/billing/plugins/smtp" in deps or "net/smtp" in deps or "os/exec" in deps else 0)'
   else
     go build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$version" -o "$bundle/plugin" ./plugins/smtp/cmd/plugin
     go version -m "$bundle/plugin" > "$tmp/go-build.txt"
@@ -81,7 +81,7 @@ if [[ $kind == core ]]; then
   cp -R "$build/docs" "$bundle/docs"
   cp -R "$build/deploy/systemd" "$bundle/deploy/systemd"
   cp "$build/deploy/nginx.native.conf" "$bundle/deploy/"
-  cp "$build/deploy/scripts/backup-native.sh" "$build/deploy/scripts/plugin-manager.py" "$bundle/deploy/scripts/"
+  cp "$build/deploy/scripts/backup-native.sh" "$build/deploy/scripts/plugin-manager.py" "$build/deploy/scripts/update-manager.py" "$bundle/deploy/scripts/"
   cp "$snapshot/README.md" "$bundle/REPOSITORY-README.md"
   cp "$build/README.md" "$bundle/PROJECT-README.md"
   cp "$build/backend/go.mod" "$build/backend/go.sum" "$bundle/manifests/"
@@ -91,7 +91,7 @@ python3 "$script_dir/release-manifest.py" manifest "$snapshot" "$bundle" "$tmp/g
 find "$bundle" -type d -exec chmod 755 {} +
 find "$bundle" -type f -exec chmod 644 {} +
 if [[ $kind == core ]]; then
-  chmod 755 "$bundle/bin/aster-api" "$bundle/bin/aster-plugin-host" "$bundle/deploy/scripts/backup-native.sh" "$bundle/deploy/scripts/plugin-manager.py"
+  chmod 755 "$bundle/bin/aster-api" "$bundle/bin/aster-plugin-host" "$bundle/deploy/scripts/backup-native.sh" "$bundle/deploy/scripts/plugin-manager.py" "$bundle/deploy/scripts/update-manager.py"
 else
   chmod 755 "$bundle/plugin"
 fi

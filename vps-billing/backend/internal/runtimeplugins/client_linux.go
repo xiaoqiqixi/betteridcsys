@@ -49,6 +49,9 @@ func (m *Manager) State() State {
 	a, err := loadApproval(m.root, m.policy, m.rules)
 	if errors.Is(err, ErrDisabled) {
 		state.Status = "disabled"
+		if a != nil {
+			state.ID, state.Version, state.PolicyRevision = a.Selection.ID, a.Selection.Version, a.PolicyRevision
+		}
 		return state
 	}
 	if err != nil {

@@ -58,6 +58,7 @@ import type {
   CheckoutSession,
 } from "./lib/api";
 import SettingsPage from "./components/SettingsPage.vue";
+import UpdatesPage from "./components/UpdatesPage.vue";
 import PlansPage from "./components/PlansPage.vue";
 import {
   defaultSiteSettings,
@@ -162,6 +163,11 @@ const nav = computed(() =>
           id: "settings",
           label: tr("站点设置", "Site settings"),
           icon: Settings,
+        },
+        {
+          id: "updates",
+          label: tr("版本更新", "Version updates"),
+          icon: Download,
         },
       ]
     : [
@@ -1194,10 +1200,15 @@ onMounted(init);
                                       "设置站点品牌、联系方式和默认偏好。",
                                       "Manage site branding, contact details and defaults.",
                                     )
-                                  : tr(
-                                      "你的身份、会话与安全信息。",
-                                      "Your profile, session and security information.",
-                                    )
+                                  : page === "updates"
+                                    ? tr(
+                                        "检查核心与插件版本，生成可审计的主机更新交接。",
+                                        "Check core and plugin versions and request an audited host handoff.",
+                                      )
+                                    : tr(
+                                        "你的身份、会话与安全信息。",
+                                        "Your profile, session and security information.",
+                                      )
               }}
             </p>
           </div>
@@ -2031,6 +2042,12 @@ onMounted(init);
           :key="session.user?.id"
           :preview="preview"
           :refresh-token="integrationRefresh"
+        />
+        <UpdatesPage
+          v-else-if="page === 'updates' && isAdmin"
+          :key="session.user?.id"
+          :preview="preview"
+          :administrator="isAdmin"
         />
         <template v-else-if="page === 'account'"
           ><div class="account-grid">

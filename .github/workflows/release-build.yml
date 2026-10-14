@@ -107,6 +107,7 @@ jobs:
           path: |
             ${{ runner.temp }}/native-acceptance-evidence/native-acceptance.json
             ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json
+            ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native-failure.json
             ${{ runner.temp }}/native-acceptance-evidence/cleanup.json
             ${{ runner.temp }}/native-acceptance-evidence/https-tests.json
             ${{ runner.temp }}/native-acceptance-evidence/restored-https-tests.json

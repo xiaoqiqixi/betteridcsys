@@ -173,7 +173,7 @@ func TestDisabledAndPassiveDiscovery(t *testing.T) {
 	f.policy.SMTP.Enabled = false
 	writeJSON(t, f.manager.policy, f.policy)
 	os.Remove(f.binary)
-	if f.manager.State().Status != "disabled" {
+	if state := f.manager.State(); state.Status != "disabled" || state.Version != "1.0.0" || state.ID != "email.smtp" || state.PolicyRevision != 1 {
 		t.Fatal("disabled plugin not reported")
 	}
 	if _, err := f.manager.Check(context.Background()); !errors.Is(err, ErrDisabled) {

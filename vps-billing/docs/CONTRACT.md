@@ -29,6 +29,9 @@
 | `GET /admin/invoices/{id}` | 管理员 | 直接读取任意账单；该路由无支付操作 |
 | `GET /admin/site-settings` | 管理员 | 完整站点设置及 revision |
 | `POST /admin/site-settings` | 管理员 + CSRF | 校验字段与 revision；同事务更新设置与审计，冲突拒绝 |
+| `GET /admin/updates` | 管理员 | 当前 Core/SMTP 审批版本与本地查询快照，不主动联网 |
+| `POST /admin/updates/check` | 管理员 + CSRF | 严格空 JSON `{}`；明确检查固定官方正常 Release |
+| `POST /admin/updates/handoff` | 管理员 + CSRF | 重核候选/本地状态、保存审计后生成未签名主机交接，不安装/执行 |
 | `GET /admin/integrations` | 管理员 | 只读适配器能力/配置字段说明，永不返回秘密值或引用 |
 | `GET /admin/plugins` | 管理员 | 被动发现清单与 SMTP 本地审批状态，不执行代码/连接 |
 | `POST /admin/plugins/check` | 管理员 + CSRF | 严格空 JSON `{}`；主动兼容握手，不传 SMTP 凭据、不发信 |
@@ -61,3 +64,11 @@
 测试成功 `{data:{status:"accepted"}}` 表示 SMTP 接受，非收件箱投递证明。未启用返回 409 `SMTP_DISABLED`，配置版本冲突 409 `SETTINGS_CONFLICT`，密钥不可用 503 `SMTP_KEY_UNAVAILABLE`，限速 429 `RATE_LIMITED`，未确认接受 502 `SMTP_UNAVAILABLE`，结果不确定 502 `SMTP_DELIVERY_UNCERTAIN`。客户端不得自动重发不确定请求。
 
 插件不获得数据库/Store、会话秘密或加密密钥；金融状态仍由核心控制。Core 只发现已安装 manifest，只有 root 明确批准版本后才连接独立进程；新增兼容插件可独立构建/替换，无需重编 Core。没有网页上传或恶意代码沙箱。配置、安装/回退、TLS、时限、审计与恢复要求见 [PLUGINS.md](PLUGINS.md) 和 [PLUGIN_PROTOCOL.md](PLUGIN_PROTOCOL.md)。
+
+## 管理员版本更新
+
+模式固定 `manual_host_handoff`。读取返回 `current`（core_version、smtp_version/status、plugin_policy_revision）、`source`（固定 repository、not_checked/available/unavailable）、checked_at 与 items。SMTP 版本来自本地审批，不证明进程运行；未检查/查询失败不得表示没有新版本。候选包含 component、稳定 tag/version、固定官方 release_url、纯文本 notes、发布时间/源码、Release/build标识、四资产摘要/大小、compatible/update_available、preconditions 与 catalog_sha256。
+
+交接请求严格限定 `{component,tag,source_sha,release_id,catalog_sha256,acknowledge_manual_handoff:true}`，不得传任意URL、命令、目录或token。请求最多4KiB，拒绝未知/重复/null/错误类型；未明确确认返回400 `UPDATE_ACK_REQUIRED`。服务端重查官方信息，确认选择指纹、本地版本/策略仍一致且候选可更新，再持久审计后以202返回 `{schema:1,status:"awaiting_host_operator",intent:{...}}`。intent 包含请求/操作者ID、创建/到期时间、固定仓库身份、组件/版本/源码、构建与资产、当时Core/插件/策略信息，有效期30分钟。交接未签名，不是主机安装授权或安装成功。
+
+官方不可用返回503 `UPDATE_UNAVAILABLE`，已有检查返回409 `UPDATE_BUSY`，选择/现场变化返回409 `UPDATE_STALE`，不兼容/不是新版本返回409 `UPDATE_INCOMPATIBLE`。权限与CSRF/Origin/Host沿用通用规则；审计/网络失败或响应不确定不能假称交接成功或自动重复提交。主机工具独立核验与暂存，实际应用仍按 [UPDATES.md](UPDATES.md)及 [UPGRADE.md](UPGRADE.md)执行。

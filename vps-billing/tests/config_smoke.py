@@ -12,7 +12,7 @@ ARGS, rest = parser.parse_known_args()
 
 class ProductionConfig(unittest.TestCase):
     def check_fails(self, settings, expected):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('APP_', 'SESSION_SECRET', 'MYSQL_', 'BOOTSTRAP_', 'TRUSTED_PROXY', 'PAYMENT_PROVIDER', 'EMAIL_PROVIDER', 'SMTP_', 'PLUGIN_', 'INTEGRATIONS_CONFIG'))}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('APP_', 'SESSION_SECRET', 'MYSQL_', 'BOOTSTRAP_', 'TRUSTED_PROXY', 'PAYMENT_PROVIDER', 'EMAIL_PROVIDER', 'SMTP_', 'PLUGIN_', 'UPDATE_', 'INTEGRATIONS_CONFIG'))}
         env.update(settings)
         completed = subprocess.run([ARGS.binary], env=env, text=True, capture_output=True, timeout=15)
         self.assertNotEqual(completed.returncode, 0, 'Unsafe configuration started successfully')

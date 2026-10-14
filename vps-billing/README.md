@@ -16,6 +16,7 @@ Core 被动读取 manifest，不执行未知文件、启动服务或自动下载
 
 - [原生安装](docs/INSTALL.md)：来源、目录、独立数据库身份、秘密、迁移和 HTTPS。
 - [宝塔部署与更新](docs/BAOTA.md)：复用面板 Nginx/MySQL，系统 API 与独立 SMTP，前后端同步切换。
+- [后台版本更新](docs/UPDATES.md)：固定官方 Release 查询、明确审计交接与主机独立核验/暂存。
 - [升级与回退](docs/UPGRADE.md)、[备份恢复](docs/BACKUP_RECOVERY.md)、[运维](docs/OPERATIONS.md)。
 - [接口契约](docs/CONTRACT.md)、[站点与计价](docs/SITE_SETTINGS.md)、[安全边界](docs/SECURITY.md)。
 
@@ -60,7 +61,7 @@ API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5
 | `backend/internal/runtimeplugins/` | 被动发现、受保护文件与审批、Unix RPC 客户端 |
 | `backend/cmd/plugin-host/` | 独立身份验证并执行批准的程序 inode |
 | `backend/plugins/smtp/` | 独立 SMTP 程序、TLS 传输与测试 |
-| `deploy/systemd/`、`deploy/scripts/` | 原生服务样例、备份、插件管理与精确提交打包 |
+| `deploy/systemd/`、`deploy/scripts/` | 原生服务样例、备份、插件管理、更新交接暂存与精确提交打包 |
 | `deploy/ci/` | 只读检查、临时原生服务验收和受信发布程序 |
 
 在 `main` 维护，同提交源码、包、来源与检查记录对应。Core/SMTP 每个正常 Release 只上传对应程序包和 BUILD/PROVENANCE/校验和，不手动上传源码包，历史资产保留。见 [构建发布](docs/RELEASE.md) 与 [CI 流程](docs/CI_RELEASE_AUTOMATION.md)。

@@ -51,7 +51,7 @@ sha256sum -c SHA256SUMS
 tar -tzf aster-VERSION-linux-amd64.tar.gz
 ```
 
-阅读 `BUILD.json`：确认 `source_commit` 是已审查的提交、目标为 `linux/amd64`，工具链版本与验证记录相符，修订包的 `deployment_model` 明确为单服务器原生方案。归档根目录应只有 `aster-VERSION-linux-amd64/`，不可包含绝对路径或 `..`。先以普通用户解压到空目录，再检查内容。Core 包 `deploy/` 含 systemd/Nginx 样例、`scripts/backup-native.sh` 和 `scripts/plugin-manager.py`；插件包不含 Core 或数据库。归档和来源文件必须与对应已审查提交一致。保留旧发布目录与校验清单，避免原地覆盖运行文件。
+阅读 `BUILD.json`：确认 `source_commit` 是已审查的提交、目标为 `linux/amd64`，工具链版本与验证记录相符，修订包的 `deployment_model` 明确为单服务器原生方案。归档根目录应只有 `aster-VERSION-linux-amd64/`，不可包含绝对路径或 `..`。先以普通用户解压到空目录，再检查内容。Core 包 `deploy/` 含 systemd/Nginx 样例、`scripts/backup-native.sh`、`scripts/plugin-manager.py` 和 `scripts/update-manager.py`；插件包不含 Core 或数据库。归档和来源文件必须与对应已审查提交一致。保留旧发布目录与校验清单，避免原地覆盖运行文件。
 
 ```text
 /opt/aster/releases/VERSION/
@@ -240,6 +240,10 @@ sudo systemctl reload nginx
 模板声明 80/443 默认站点；若发行版欢迎页也占用默认站点，先核对它没有承载其他业务，再停用其 `sites-enabled` 链接。真实域名及公共 CA 证书由该部署环境提供，模板不会申请证书或配置 DNS；证书路径必须存在且私钥权限受控。隔离验收使用临时私有 CA 与 localhost，只能证明该测试信任链下的 TLS 校验，不等于公共 CA 签发、真实 DNS 或续期已完成。
 
 先验证证书链、SNI、续期监控，再开放公众流量。生产模式 API 已发送 `Strict-Transport-Security: max-age=31536000`；需结合静态站点制定一致的 HSTS 政策，不要误以为 Nginx 没写 HSTS 就完全没有该响应头。不要用 `curl -k` 的成功结果验收证书，也不要以测试关闭浏览器安全设置。systemd 与 Nginx 文件需按目标路径、域名、证书和既有站点调整；它们不会自动安装服务器或申请证书。
+
+## 后台更新的运行权限
+
+安装后按 [UPDATES.md](UPDATES.md)使用管理员版本更新入口。API 只能查询固定官方 Release 并记录明确请求的交接，不应授予 root、sudo、运行目录写权限或 service 管理能力。不要为“网页更新”把程序或插件目录归给 `aster`。主机运维工具在独立权限边界核验并准备程序，实际停服、Core/网页切换和数据库迁移仍遵循维护窗口与恢复计划。
 
 ## 5. 初次验收与站点配置
 

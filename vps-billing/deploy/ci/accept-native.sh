@@ -41,7 +41,7 @@ sudo -n true || fail 'Passwordless sudo is required on this disposable runner.'
 mysql_cmd=("$mysql_root/bin/mysql" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --batch --skip-column-names)
 server_data=$("${mysql_cmd[@]}" --execute='SELECT @@datadir' 2>/dev/null) || fail 'Could not verify owned native MySQL identity.'
 [[ $(realpath -e "$server_data") == "$fixture_root/data" ]] || fail 'Refusing any database outside the owned fixture data directory.'
-for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!PLUGIN_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@}; do unset "$variable"; done
+for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!PLUGIN_@} ${!UPDATE_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@}; do unset "$variable"; done
 export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 PYTHONDONTWRITEBYTECODE=1
 mkdir -m 700 -- "$evidence"
 scratch=$(mktemp -d "${RUNNER_TEMP:?}/aster-native-accept.XXXXXXXX")

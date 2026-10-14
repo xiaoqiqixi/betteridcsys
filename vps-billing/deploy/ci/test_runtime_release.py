@@ -31,7 +31,7 @@ def elf_bytes():
     return bytes(data)
 
 
-def runtime_fixture(kind='core', binary_override=None, build_override=None):
+def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=()):
     version = '0.4.0' if kind == 'core' else '1.0.0'
     tag = ('v' if kind == 'core' else 'smtp-v') + version
     root = ('aster' if kind == 'core' else 'aster-smtp') + '-' + version + '-linux-amd64'
@@ -79,13 +79,15 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None):
     if kind == 'core':
         bundle['manifests/BUILD.json'] = build_raw
     bundle.update(binary_override or {})
+    for name in remove_members:
+        bundle.pop(name)
     # Helper defaults chmod only aster-api; set explicit modes for each runtime binary/script.
     import io, tarfile
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode='w:gz', format=tarfile.GNU_FORMAT) as archive:
         for name, data in sorted(bundle.items()):
             item = tarfile.TarInfo(root + '/' + name)
-            item.mode = 0o755 if name in set(binaries) | {'deploy/scripts/plugin-manager.py', 'deploy/scripts/backup-native.sh'} else 0o644
+            item.mode = 0o755 if name in set(binaries) | {'deploy/scripts/plugin-manager.py', 'deploy/scripts/backup-native.sh', 'deploy/scripts/update-manager.py'} else 0o644
             item.size = len(data)
             archive.addfile(item, io.BytesIO(data))
     files = refresh_checksums({'BUILD.json': build_raw, root + '.tar.gz': output.getvalue()})
@@ -164,6 +166,37 @@ class RuntimeReleaseTests(unittest.TestCase):
                 pipeline.validate_package(files, SHA, version)
         _, version, files, _, _ = runtime_fixture(binary_override={'bin/aster-plugin-host': b'not an executable'})
         with self.assertRaises(pipeline.GuardError): pipeline.validate_package(files, SHA, version)
+
+    def test_update_cli_is_required_and_bound_to_exact_git_source(self):
+        api, env, event, files, _, _, version = normal_flow()
+        policy = pipeline.prepare_publish(api, env, event)
+        build = pipeline.strict_json(files["BUILD.json"])
+        self.assertEqual(build["source_files"]["deploy/scripts/update-manager.py"], "vps-billing/deploy/scripts/update-manager.py")
+        self.assertIn("vps-billing/deploy/scripts/update-manager.py", pipeline.TRUSTED_PATHS)
+        self.assertIn("vps-billing/deploy/scripts/test-update-manager.py", pipeline.TRUSTED_PATHS)
+        tree = api.responses[("GET", PREFIX + f"/git/trees/{SHA}?recursive=1")]
+        entry = next(item for item in tree["tree"] if item["path"] == "vps-billing/deploy/scripts/update-manager.py")
+        entry["sha"] = "f" * 40
+        with self.assertRaises(pipeline.GuardError):
+            pipeline.verify_provenance(files, policy, api)
+        self.assertFalse(api.mutations)
+
+    def test_update_cli_trust_inventory_matches_the_publisher(self):
+        import importlib.util, sys
+        name = "release_update_policy_fixture"
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1] / "scripts/update-manager.py")
+        manager = importlib.util.module_from_spec(spec)
+        sys.modules[name] = manager
+        try:
+            spec.loader.exec_module(manager)
+            self.assertEqual(manager.TRUSTED_PATHS, set(pipeline.TRUSTED_PATHS))
+        finally:
+            sys.modules.pop(name, None)
+
+    def test_core_without_shipped_update_cli_is_rejected(self):
+        _, version, files, _, _ = runtime_fixture(remove_members=("deploy/scripts/update-manager.py",))
+        with self.assertRaises(pipeline.GuardError):
+            pipeline.validate_package(files, SHA, version)
 
     def test_smtp_fixed_inventory_manifest_inner_hash_and_notice_text_are_enforced(self):
         for path, data in (('unknown.go', b'package fixture'), ('plugin', b'not ELF'), ('manifest.json', b'{}'), ('SHA256SUMS', b''), ('THIRD_PARTY_NOTICES.json', b'{"schema":1,"notices":[]}')):

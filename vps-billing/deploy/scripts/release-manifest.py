@@ -84,7 +84,7 @@ def source_copies(source, bundle, kind):
             for path in sorted((source / "vps-billing" / prefix).rglob("*")):
                 if path.is_file():
                     copies[str(path.relative_to(source / "vps-billing"))] = str(path.relative_to(source))
-        for path in ("deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py"):
+        for path in ("deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"):
             copies[path] = "vps-billing/" + path
         for path in ("backend/go.mod", "backend/go.sum", "frontend/package.json", "frontend/package-lock.json"):
             copies["manifests/" + Path(path).name] = "vps-billing/" + path

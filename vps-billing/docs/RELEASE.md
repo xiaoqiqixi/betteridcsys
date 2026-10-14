@@ -11,13 +11,19 @@ Core 与运行时插件分别采用语义化版本、构建包和 Release。当�
 | Core | `v0.4.0` | `aster-0.4.0-linux-amd64.tar.gz` | `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS` |
 | SMTP | `smtp-v1.0.0` | `aster-smtp-1.0.0-linux-amd64.tar.gz` | `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS` |
 
-Core 包含静态 API、`aster-plugin-host`、编译网页、安装文档、systemd/Nginx 样例、备份与插件安装管理工具、依赖清单及许可证。SMTP 包只含独立 `plugin` 程序、`manifest.json`、说明、许可证/notice 和包内校验清单；不捆绑 Core、网页、数据库或任何凭据。两者分别生成来源记录，不能用 Core 的校验和证明另一个插件包。
+Core 包含静态 API、`aster-plugin-host`、编译网页、安装文档、systemd/Nginx 样例、备份、插件安装管理与更新交接暂存工具、依赖清单及许可证。SMTP 包只含独立 `plugin` 程序、`manifest.json`、说明、许可证/notice 和包内校验清单；不捆绑 Core、网页、数据库或任何凭据。两者分别生成来源记录，不能用 Core 的校验和证明另一个插件包。
 
 新程序 Release **不手动上传源码 tar/zip**。源码从 Git 对应标签取得；GitHub 自带的源码下载由平台生成。历史候选及其原资产保留，不覆盖、重命名或重新构建历史文件。SMTP 发布不替代 Core 的 latest 标记。
 
 `BUILD.json` 记录包种类、版本、精确源码提交、提交时间、目标、工具链、构建参数和关键输入哈希。`PROVENANCE.json` 绑定仓库、标签、源码、Actions run/attempt、受信发布控制文件及各资产的大小/哈希。`SHA256SUMS` 校验同 Release 的程序包、BUILD 和来源文件。校验和及未签名的来源记录证明一致性，不能替代下载来源认证、签名、完整 SBOM 或法律审查。
 
 程序包不含真实配置、密钥、客户数据、数据库转储、测试日志或缓存。测试证据保持脱敏，不能为方便排障把完整环境变量或服务商回复附进 Release。
+
+## 后台版本查询与安装交接
+
+后台更新只接受固定官方仓库的正常 Core/SMTP Release，显示来源、版本/说明与兼容条件；草稿、预发布、不兼容或资料不完整的资产不能被当作可自动安装候选。管理员明确交接后状态为“待运维处理”，不更改运行服务。主机工具独立重查官方资产、锁/日志与文件备份条件，只暂存已核验版本；数据库恢复/schema/维护窗口仍由运维核对，实际应用、Core迁移及回退限制见 [UPDATES.md](UPDATES.md) 和 [UPGRADE.md](UPGRADE.md)。
+
+归档摘要和PROVENANCE目前没有独立发行签名。官方下载与API的TLS来源校验不能描述为签名验真或防止仓库管理员恶意发布；发布和更新流程各自验证一致性，不能只复用网页给出的校验值。
 
 ## 从精确提交复现
 

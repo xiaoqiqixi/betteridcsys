@@ -9,7 +9,7 @@ Go、Vue 3 / TypeScript 与 MySQL 的 VPS 计费项目，提供客户与管理�
 从 [GitHub Releases](https://github.com/xiaoqiqixi/betteridcsys/releases) 获取 Core 的 Linux amd64 包及同一 Release 的 `SHA256SUMS`、`BUILD.json`、`PROVENANCE.json`，核对来源和校验和后安装。运行包已含 API、编译网页、插件宿主、配置样例、文档及许可证，无需在服务器编译。目标基线为 Ubuntu 24.04、systemd、Nginx HTTPS 与本机 MySQL 8.4 LTS；宝塔环境复用已有服务。
 
 - [原生安装](vps-billing/docs/INSTALL.md) · [宝塔部署](vps-billing/docs/BAOTA.md)
-- [升级与回退](vps-billing/docs/UPGRADE.md) · [备份恢复](vps-billing/docs/BACKUP_RECOVERY.md)
+- [后台版本更新](vps-billing/docs/UPDATES.md) · [升级与回退](vps-billing/docs/UPGRADE.md) · [备份恢复](vps-billing/docs/BACKUP_RECOVERY.md)
 - [安全边界](vps-billing/docs/SECURITY.md) · [验证记录](vps-billing/docs/VALIDATION.md)
 
 ```text
@@ -28,6 +28,10 @@ API 只监听回环地址，网页与接口由 Nginx 在同一 HTTPS 来源提�
 Core `0.4.0` 与 SMTP `1.0.0` 分开构建、安装和发布，SMTP 使用 `aster.smtp/1`，兼容 Core `>=0.4.0,<0.5.0`。Core 只读取 manifest，不因发现文件自动执行；主机管理员校验独立包并批准具体版本后，独立 systemd 身份通过 Unix socket 提供能力。替换插件无需重编 Core，旧插件保留用于回退。
 
 插件不是任意恶意代码沙箱：需审查来源，SMTP 插件能接触本次发信凭据与内容。插件没有数据库接口、会话秘密或主机服务管理权限。安装、启停、目的地授权与故障处理见 [插件指南](vps-billing/docs/PLUGINS.md)，协议见 [PLUGIN_PROTOCOL.md](vps-billing/docs/PLUGIN_PROTOCOL.md)。
+
+## 后台版本更新
+
+管理员可查看固定官方仓库的正常 Release、版本、说明与兼容条件，并明确创建带审计的运维交接。网页不取得 root 权限、不执行程序或切换运行服务；主机运维工具独立核验资产并准备更新，实际应用和数据库迁移按维护窗口执行。显示“待运维处理”不等于安装成功，详见 [更新流程](vps-billing/docs/UPDATES.md)。
 
 ## 开发与维护
 

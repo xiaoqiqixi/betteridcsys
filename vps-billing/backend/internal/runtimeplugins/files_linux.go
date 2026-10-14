@@ -156,6 +156,11 @@ func loadApproval(root, policyPath string, rules trust) (*Approval, error) {
 		return nil, ErrUnavailable
 	}
 	if err := validatePolicy(policy, rules); err != nil {
+		// Disabled policy metadata is useful for version/update status, but it
+		// grants no executable approval and does not read the selected binary.
+		if errors.Is(err, ErrDisabled) && policy.SMTP != nil {
+			return &Approval{Selection: *policy.SMTP, PolicyRevision: policy.Revision}, err
+		}
 		return nil, err
 	}
 	s := *policy.SMTP

@@ -4,6 +4,7 @@ import (
 	"aster/billing/internal/billing"
 	"aster/billing/internal/integrations"
 	"aster/billing/internal/runtimeplugins"
+	"aster/billing/internal/updates"
 	"aster/billing/pkg/pluginapi"
 	"context"
 	"errors"
@@ -169,7 +170,15 @@ func main() {
 		fatal("invalid SMTP encryption key file; require a readable private regular 32-byte file and safe parent directories")
 	}
 	plugins := runtimeplugins.New(os.Getenv("PLUGIN_DIRECTORY"), os.Getenv("PLUGIN_POLICY_FILE"))
-	app := billing.NewAppWithIntegrations(store, billing.Config{Plugins: plugins, SMTPKey: smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: proxyCIDRs}, registry)
+	releaseToken, releaseTokenErr := updates.LoadTokenFile(os.Getenv("UPDATE_RELEASE_TOKEN_FILE"))
+	if releaseTokenErr != nil {
+		fatal("invalid private release credential file; require a protected private regular file")
+	}
+	updateService := updates.New(releaseToken, func() updates.Current {
+		state := plugins.State()
+		return updates.Current{CoreVersion: pluginapi.CoreVersion, SMTPVersion: state.Version, SMTPStatus: state.Status, PluginPolicyRevision: state.PolicyRevision}
+	})
+	app := billing.NewAppWithIntegrations(store, billing.Config{Updates: updateService, Plugins: plugins, SMTPKey: smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: proxyCIDRs}, registry)
 	server := &http.Server{Addr: listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)

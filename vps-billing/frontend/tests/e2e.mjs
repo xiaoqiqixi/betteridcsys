@@ -35,6 +35,14 @@ async function allowLoopbackOnly(browserContext) {
       await route.abort("blockedbyclient");
       return;
     }
+    if (
+      requestURL.pathname.startsWith("/api/v1/admin/updates") &&
+      route.request().method() !== "GET"
+    ) {
+      blockedRequests.push("Update check or handoff must be explicit");
+      await route.abort("blockedbyclient");
+      return;
+    }
     await route.continue();
   });
 }
@@ -314,6 +322,27 @@ try {
     smtp.locator('[data-testid="smtp-test-form"] button[type="submit"]'),
   ).toBeDisabled();
   await shot("smtp-disabled-desktop");
+  await page.getByRole("link", { name: "版本更新", exact: true }).click();
+  await expect(page.locator("h1")).toHaveText("版本更新");
+  await expect(page.locator(".updates-version").first()).toHaveText("0.4.0");
+  await expect(
+    page.getByText("尚未检查官方版本。不会自动检查或安装。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "检查官方更新", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "生成更新交接单", exact: true }),
+  ).toHaveCount(0);
+  await shot("updates-local-status-desktop");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    )
+    .toBe(true);
+  await shot("updates-local-status-mobile");
+  await page.setViewportSize({ width: 1440, height: 1100 });
   originalSettings = await json("/admin/site-settings");
   await page.getByRole("link", { name: "站点设置", exact: true }).click();
   await page.locator('input[name="site_name"]').fill("验收测试云");
@@ -368,7 +397,7 @@ try {
   expect(errors).toEqual([]);
   expect(blockedRequests).toEqual([]);
   console.log(
-    "PASS: real demo API, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, admin settings save/preview, new-visitor defaults, immutable invoice issuer, settings restored; no browser runtime errors.",
+    "PASS: real demo API, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, actual core version and update status without automatic check or handoff, admin settings save/preview, new-visitor defaults, immutable invoice issuer, settings restored; no browser runtime errors.",
   );
 } finally {
   try {

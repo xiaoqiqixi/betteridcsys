@@ -86,6 +86,8 @@ RPO/RTO 应由业务可接受的数据损失和恢复时间确定并实测。历
 
 ## 6. 升级与后续服务接入
 
+后台版本更新按 [UPDATES.md](UPDATES.md)检查固定官方 Release、创建明确审计交接，再由主机工具独立核验与暂存；API不持有root或service控制能力，暂存/交接与实际应用分别记录。
+
 升级必须遵循 [UPGRADE.md](UPGRADE.md)：保存已核验版本目录、配置版本与备份时点，停写后迁移，再原子切换 `/opt/aster/current`。当前不承诺滚动升级或向下迁移；旧二进制可能拒绝新 schema，因此应用目录回退不等于数据库回滚。
 
 支付保持 `payment.disabled`；保留旧注册表默认 `EMAIL_PROVIDER=email.disabled`，官方 SMTP 独立受 root 策略、兼容插件服务、精确目的地、后台设置和本机密钥控制。默认关闭，可由管理员保存后主动测试，不自动发送业务通知。紧急停用、在途结果、受限出口、TLS 与审计要求见 [PLUGINS.md](PLUGINS.md) 和 [SECURITY.md](SECURITY.md)。未知 provider ID 仍拒绝启动，不自动下载代码；新插件须审查、独立构建与验收；已有 Core 可安装/替换兼容插件，无需重编 Core。单独更新遵循 [插件版本切换](PLUGINS.md#3-独立更新与回退)，不随意重启 API 或在线覆盖程序。

@@ -46,6 +46,8 @@ TRUSTED_PATHS = (
     "vps-billing/deploy/scripts/package-release.sh",
     "vps-billing/deploy/scripts/release-manifest.py",
     "vps-billing/deploy/scripts/plugin-manager.py",
+    "vps-billing/deploy/scripts/update-manager.py",
+    "vps-billing/deploy/scripts/test-update-manager.py",
     "vps-billing/deploy/systemd/aster-api.service",
     "vps-billing/deploy/systemd/aster-smtp.service",
 )
@@ -70,7 +72,7 @@ INPUT_PATHS = (
 CURRENT_INPUT_PATHS = INPUT_PATHS + ("vps-billing/backend/pkg/pluginapi/protocol.go", "vps-billing/backend/plugins/smtp/VERSION")
 ROOT_LICENSE_HASH = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 SMTP_FILES = {"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"}
-CORE_DEPLOY_FILES = {"deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py"}
+CORE_DEPLOY_FILES = {"deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"}
 
 
 class GuardError(Exception):
@@ -712,7 +714,7 @@ def validate_runtime_package(files, source_sha, version, kind, provenance_data=N
         for src in INPUT_PATHS:
             dest = "LICENSE" if src == "LICENSE" else "REPOSITORY-README.md" if src == "README.md" else "manifests/" + src.rsplit("/", 1)[1]
             require(sha256(bundle[dest]) == inputs[src], "Runtime input checksum mismatch")
-        archive_permissions(raw, root, required_binaries | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py"})
+        archive_permissions(raw, root, required_binaries | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"})
     else:
         require(set(bundle) == SMTP_FILES and copies == {"LICENSE": "LICENSE", "README.md": "vps-billing/backend/plugins/smtp/README.md"}, "SMTP archive must contain exactly six fixed files")
         manifest = strict_json(bundle["manifest.json"], limit=8192)
@@ -976,7 +978,7 @@ def publish(api, policy, archive_bytes):
     if normal:
         component = "Aster Core" if kind == "core" else "Aster official SMTP plugin"
         fields["name"] = component + " " + provenance["version"]
-        fields["body"] = f"{component} {provenance['version']}，Linux amd64。源码提交：`{provenance['source_sha']}`。\n\n核心与官方 SMTP 独立分发，协议 `aster.smtp/1`，SMTP 支持 Core >=0.4.0,<0.5.0。插件需明确安装、固定哈希批准和单独的非特权进程；运行包不附手工源码归档。付款、主控/被控与自动开通尚未实现；SMTP 只提供主动管理员测试，不代表业务通知或收件箱投递。\n\n本版本通过所链接构建的回归、原生 systemd/HTTPS/备份恢复、独立插件替换与崩溃隔离、浏览器和依赖扫描门槛；这些结果只覆盖合成回环测试，不构成生产就绪声明。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。附件包含独立安装包、SHA-256、BUILD 与 PROVENANCE；安装、升级与限制见核心文档。"
+        fields["body"] = f"{component} {provenance['version']}，Linux amd64。源码提交：`{provenance['source_sha']}`。\n\n核心与官方 SMTP 独立分发，协议 `aster.smtp/1`，SMTP 支持 Core >=0.4.0,<0.5.0。插件需明确安装、固定哈希批准和单独的非特权进程；运行包不附手工源码归档。核心提供官方版本检查和审计交接，由主机管理员明确暂存与预检；网页不执行 root 替换、迁移或服务控制。付款、主控/被控与自动开通尚未实现；SMTP 只提供主动管理员测试，不代表业务通知或收件箱投递。\n\n本版本通过所链接构建的回归、原生 systemd/HTTPS/备份恢复、独立插件替换与崩溃隔离、浏览器和依赖扫描门槛；这些结果只覆盖合成回环测试，不构成生产就绪声明。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。附件包含独立安装包、SHA-256、BUILD 与 PROVENANCE；安装、升级与限制见核心文档。"
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

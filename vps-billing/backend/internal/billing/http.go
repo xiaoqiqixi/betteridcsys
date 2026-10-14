@@ -23,6 +23,7 @@ import (
 )
 
 type Config struct {
+	Updates           UpdateService
 	Plugins           *runtimeplugins.Manager
 	SMTPKey           *SMTPCipher
 	Demo              bool
@@ -314,6 +315,10 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if p == "/admin/email-settings" || p == "/admin/email-settings/test" {
 		a.emailSettingsHTTP(w, r, u, p == "/admin/email-settings/test")
+		return
+	}
+	if p == "/admin/updates" || p == "/admin/updates/check" || p == "/admin/updates/handoff" {
+		a.updateHTTP(w, r, u, p)
 		return
 	}
 	if p == "/admin/plugins" || p == "/admin/plugins/check" {

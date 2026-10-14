@@ -32,6 +32,7 @@ class CheckScriptTest(unittest.TestCase):
         )
         (project / "deploy/scripts/test-release-manifest.py").write_text("pass\n")
         (project / "deploy/scripts/test-plugin-manager.py").write_text("pass\n")
+        (project / "deploy/scripts/test-update-manager.py").write_text("pass\n")
         (project / "deploy/scripts/test-backup-native.sh").write_text("#!/bin/sh\nexit 0\n")
         (project / "tests/config_smoke.py").write_text(
             "import os\nassert 'ASTER_MYSQL_TEST_DSN' not in os.environ\n"
@@ -166,6 +167,14 @@ class CheckScriptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("ASTER_MYSQL_TEST_DSN is required", result.stderr)
         self.assertFalse(self.events.exists())
+
+    def test_missing_update_regressions_stop_before_any_build_or_go_test(self):
+        (self.source / "vps-billing/deploy/scripts/test-update-manager.py").unlink()
+        result = self.run_check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Source checkout is missing deploy/scripts/test-update-manager.py", result.stderr)
+        self.assertFalse(self.events.exists())
+        self.assertFalse(self.pid_file.exists())
 
     def test_skipped_go_test_fails_closed(self):
         result = self.run_check(CI_TEST_GO_SKIP="1")

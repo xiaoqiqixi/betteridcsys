@@ -33,14 +33,82 @@ class AcceptanceFailure(RuntimeError):
     pass
 
 
+class SafeDiagnostics:
+    """Only fixed stages, command names, numeric status and file metadata."""
+    def __init__(self):
+        self.stage = "initializing"
+        self.last_command = None
+        self.last_api = None
+        self.path_metadata = []
+
+    def enter(self, name):
+        require(re.fullmatch(r"[a-z0-9_.-]{1,96}", name) is not None, "Invalid fixed diagnostic stage")
+        self.stage = name
+        print("PLUGIN_NATIVE_STAGE=" + name, flush=True)
+
+    def paths(self, values):
+        for path in sorted(set(map(Path, values)), key=str):
+            entry = {"path": str(path)}
+            try:
+                info = path.lstat()
+                entry.update(uid=info.st_uid, gid=info.st_gid, mode=oct(stat.S_IMODE(info.st_mode)),
+                    kind="directory" if stat.S_ISDIR(info.st_mode) else
+                         "symlink" if stat.S_ISLNK(info.st_mode) else "other")
+            except OSError as failure:
+                entry["error_class"] = type(failure).__name__
+            self.path_metadata.append(entry)
+        print("PLUGIN_NATIVE_PATH_METADATA_JSON=" + json.dumps(self.path_metadata, sort_keys=True), flush=True)
+
+
+DIAGNOSTICS = SafeDiagnostics()
+
+
+def command_name(arguments):
+    """Do not return env values, script source, targets or arbitrary arguments."""
+    items = list(map(str, arguments))
+    if items and Path(items[0]).name == "sudo":
+        items.pop(0)
+        while items and items[0].startswith("-"):
+            option = items.pop(0)
+            if option in ("-u", "-g") and items:
+                items.pop(0)
+    if items and Path(items[0]).name == "env":
+        items.pop(0)
+        while items and (items[0].startswith("-") or "=" in items[0]):
+            items.pop(0)
+    name = Path(items[0]).name if items else "unresolved"
+    # Executable paths are restricted by the fixture. Unknown command names
+    # are replaced, rather than trusting arbitrary argv text as a diagnostic.
+    allowed = {"go", "git", "python3", "systemctl", "systemd-analyze", "install", "test",
+               "sha256sum", "stat", "cat", "mv", "ln", "rm", "journalctl", "kill", "timeout",
+               "aster-plugin-host", "smtp-1.0.0", "smtp-1.0.1"}
+    if name not in allowed:
+        name = "fixture-command"
+    subcommands = {"go": {"build", "version"}, "git": {"rev-parse"},
+                  "systemctl": {"show", "start", "stop", "restart", "kill", "reset-failed", "daemon-reload"},
+                  "systemd-analyze": {"verify"}}
+    operation = next((item for item in items[1:] if item in subcommands.get(name, set())), None)
+    return name + (" " + operation if operation else "")
+
+
+def completed_command(arguments, returncode, expected):
+    DIAGNOSTICS.last_command = {"command": command_name(arguments), "expected_exit_code": expected,
+                                "actual_exit_code": returncode}
+    return DIAGNOSTICS.last_command
+
+
 def require(condition, description):
     if not condition:
         raise AcceptanceFailure(description)
 
 
 def command(arguments, *, expected=0, cwd=None, timeout=30):
+    DIAGNOSTICS.last_command = {"command": command_name(arguments), "expected_exit_code": expected,
+                                "actual_exit_code": None}
     result = subprocess.run(arguments, cwd=cwd, capture_output=True, timeout=timeout)
-    require(result.returncode == expected, "Owned fixture command failed: " + Path(arguments[0]).name)
+    diagnostic = completed_command(arguments, result.returncode, expected)
+    require(result.returncode == expected, "Owned fixture command failed: " + diagnostic["command"]
+            + "; expected exit " + str(expected) + ", actual exit " + str(result.returncode))
     return result.stdout
 
 
@@ -54,11 +122,14 @@ def fixture_package(source, scratch, version):
     executable = scratch / ("smtp-" + version)
     environment = dict(os.environ, CGO_ENABLED="0", GOOS="linux", GOARCH="amd64",
                        GOENV="off", GOFLAGS="", GOWORK="off", GOTOOLCHAIN="local")
-    result = subprocess.run([
+    arguments = [
         "go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags",
         "-s -w -X main.version=" + version, "-o", str(executable), "./plugins/smtp/cmd/plugin",
-    ], cwd=project / "backend", env=environment, capture_output=True, timeout=180)
-    require(result.returncode == 0, "Independent SMTP fixture compilation failed")
+    ]
+    DIAGNOSTICS.last_command = {"command": "go build", "expected_exit_code": 0, "actual_exit_code": None}
+    result = subprocess.run(arguments, cwd=project / "backend", env=environment, capture_output=True, timeout=180)
+    completed_command(arguments, result.returncode, 0)
+    require(result.returncode == 0, "Independent SMTP fixture compilation failed; actual exit " + str(result.returncode))
     binary = executable.read_bytes()
     require(binary.startswith(b"\x7fELF\x02\x01"), "SMTP fixture is not Linux amd64 ELF")
     require(command([str(executable), "--version"]).strip() == ("Aster SMTP plugin " + version).encode(),
@@ -119,12 +190,15 @@ class API:
         except urllib.error.HTTPError as failure:
             response = failure
         with response:
+            DIAGNOSTICS.last_api = {"method": method, "path": path, "expected_status": expected,
+                                    "actual_status": response.status}
             raw = response.read(65537)
             require(len(raw) <= 65536, "API response exceeded fixture bound")
             require(all(str(self.accounts[key]).encode() not in raw
                         for key in ("smtp_username", "smtp_password", "session", "admin")),
                     "API response exposed a fixture secret")
-            require(response.status == expected, "API acceptance status differs for " + path)
+            require(response.status == expected, "API acceptance status differs for " + path
+                    + "; expected " + str(expected) + ", actual " + str(response.status))
         value = json.loads(raw)
         if path == "/api/v1/session" and expected == 200:
             self.csrf = value["data"]["csrf_token"]
@@ -155,6 +229,9 @@ class NativePluginAcceptance:
         self.fixture = None
         self.api = None
         self.initial_settings = None
+        DIAGNOSTICS.enter("validate_owned_fixture_contract")
+        DIAGNOSTICS.paths(["/", "/opt", "/etc", "/run", self.opt, self.config, self.run, self.root,
+                          self.scratch.parent, self.scratch])
         self.validate_contract()
         self.api_uid = pwd.getpwnam(self.api_user).pw_uid
         self.worker_uid = pwd.getpwnam(self.worker_user).pw_uid
@@ -163,6 +240,7 @@ class NativePluginAcceptance:
         self.baseline_hash = hashlib.sha256(self.core.read_bytes()).hexdigest()
         self.baseline_pid = self.pid(self.api_unit)
         self.accounts = json.loads((self.scratch / "accounts.json").read_text())
+        DIAGNOSTICS.enter("authenticate_existing_https_api")
         self.api = API(self.port, str(self.scratch / "ca.pem"), self.accounts)
 
     def validate_contract(self):
@@ -192,6 +270,7 @@ class NativePluginAcceptance:
         return int(value)
 
     def unchanged_core(self, stage):
+        DIAGNOSTICS.enter(stage)
         require(self.pid(self.api_unit) == self.baseline_pid, "Core PID changed during " + stage)
         digest = hashlib.sha256(self.core.read_bytes()).hexdigest()
         require(digest == self.baseline_hash, "Core executable changed during " + stage)
@@ -205,10 +284,18 @@ class NativePluginAcceptance:
                             "healthy": True, "orders_api": True})
 
     def manager(self, *arguments, succeeds=True):
-        result = subprocess.run(["sudo", "-n", "python3", str(self.installer), "--root", str(self.root),
-            "--policy", str(self.policy), "--core-version", "0.4.0", *map(str, arguments)],
+        action = str(arguments[0]) if arguments else "missing"
+        DIAGNOSTICS.enter("plugin_manager_" + action)
+        execution = ["sudo", "-n", "python3", str(self.installer), "--root", str(self.root),
+            "--policy", str(self.policy), "--core-version", "0.4.0", *map(str, arguments)]
+        expected = 0 if succeeds else "nonzero"
+        DIAGNOSTICS.last_command = {"command": "plugin-manager " + action, "expected_exit_code": expected,
+                                    "actual_exit_code": None}
+        result = subprocess.run(execution,
             capture_output=True, timeout=30)
-        require((result.returncode == 0) == succeeds, "Plugin-manager acceptance outcome differs")
+        DIAGNOSTICS.last_command["actual_exit_code"] = result.returncode
+        require((result.returncode == 0) == succeeds, "Plugin-manager " + action
+                + " acceptance outcome differs; expected exit " + str(expected) + ", actual exit " + str(result.returncode))
         return json.loads(result.stdout) if succeeds else None
 
     def revision(self):
@@ -241,6 +328,7 @@ class NativePluginAcceptance:
         raise AcceptanceFailure("Approved plugin did not become ready after bounded systemd restart")
 
     def start_fixture_and_unit(self):
+        DIAGNOSTICS.enter("start_loopback_tls_fixture")
         spec = importlib.util.spec_from_file_location("native_loopback_smtp", Path(__file__).with_name("smtp-loopback-fixture.py"))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -264,11 +352,15 @@ class NativePluginAcceptance:
         unit = unit.replace(str(self.opt / "current/bin/aster-plugin-host"), str(self.host))
         local = self.scratch / "smtp.service"
         local.write_text(unit)
+        DIAGNOSTICS.enter("install_owned_smtp_systemd_unit")
         privileged("install", "-m", "644", local, self.worker_file)
+        DIAGNOSTICS.enter("verify_owned_smtp_systemd_unit")
         privileged("systemd-analyze", "verify", self.worker_file)
+        DIAGNOSTICS.enter("reload_owned_smtp_systemd_unit")
         privileged("systemctl", "daemon-reload")
 
     def verify_worker_isolation(self, version, pid):
+        DIAGNOSTICS.enter("verify_running_worker_isolation_" + version)
         properties = privileged("systemctl", "show", self.worker_unit, "-p", "User", "-p", "Group",
             "-p", "NoNewPrivileges", "-p", "ProtectSystem", "-p", "StandardOutput", "-p", "StandardError",
             "-p", "CapabilityBoundingSet", "-p", "ExecStart").decode()
@@ -314,6 +406,7 @@ finally:s.close()
         self.checks.append("different_uid_systemd_verified_fd_exec_scrubbed_environment_peer_uid_and_secret_denial")
 
     def unknown_discovery(self):
+        DIAGNOSTICS.enter("create_never_execute_unknown_discovery_fixture")
         marker = self.run / "smtp" / "unknown-executed"
         empty = self.scratch / "empty-marker"
         empty.write_bytes(b"")
@@ -328,6 +421,7 @@ finally:s.close()
         local.write_text(json.dumps(manifest))
         privileged("install", "-m", "755", trap, directory / "plugin")
         privileged("install", "-m", "644", local, directory / "manifest.json")
+        DIAGNOSTICS.enter("discover_unknown_file_without_execution")
         discovered = self.api.request("/api/v1/admin/plugins")
         require(any(item["id"] == "email.trap" for item in discovered["items"]),
                 "Passive discovery did not encounter the unknown fixture")
@@ -337,6 +431,7 @@ finally:s.close()
         self.checks.append("passive_discovery_unknown_executable_never_executed")
 
     def inherited_descriptor_canary(self):
+        DIAGNOSTICS.enter("verified_fd_exec_inherited_descriptor_canary")
         canary = self.config / "descriptor-canary"
         local = self.scratch / "descriptor-canary"
         local.write_text("nonsecret inherited descriptor must disappear\n")
@@ -399,8 +494,10 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
         self.manifests = {}
         packages = {}
         package_directory = self.opt / "plugin-test-packages"
+        DIAGNOSTICS.enter("prepare_protected_test_package_directory")
         privileged("install", "-d", "-m", "755", package_directory)
         for version in ("1.0.0", "1.0.1"):
+            DIAGNOSTICS.enter("compile_independent_smtp_fixture_" + version)
             built_package, self.manifests[version] = fixture_package(self.source, self.scratch, version)
             packages[version] = package_directory / built_package.name
             privileged("install", "-m", "644", built_package, packages[version])
@@ -417,6 +514,7 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
         privileged("test", "-S", self.socket, expected=1)
         self.unchanged_core("install_without_activation")
         self.selection("1.0.0")
+        DIAGNOSTICS.enter("reject_execution_of_disabled_selection")
         disabled = self.api.request("/api/v1/admin/plugins")["smtp"]
         require(disabled["status"] == "disabled", "Selecting a plugin implicitly enabled it")
         privileged("-u", self.worker_user, "env", "-i", "PATH=/usr/bin:/bin", "timeout", "2", self.host,
@@ -425,15 +523,18 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
         self.checks.append("install_immutable_no_overwrite_selection_disabled_explicit_enable")
         self.manager("enable", "--revision", self.revision())
         self.inherited_descriptor_canary()
+        DIAGNOSTICS.enter("start_approved_smtp_1.0.0_unit")
         privileged("systemctl", "start", self.worker_unit)
         pid = self.wait_worker("1.0.0")
         self.verify_worker_isolation("1.0.0", pid)
         self.unchanged_core("smtp_1.0.0_active")
         self.initial_settings = self.api.request("/api/v1/admin/email-settings")
+        DIAGNOSTICS.enter("save_enabled_synthetic_smtp_configuration")
         body = {key: self.initial_settings[key] for key in ("host", "port", "tls_mode", "from_address", "from_name")}
         body.update(revision=self.initial_settings["revision"], enabled=True, host="localhost", port=self.fixture.port,
                     tls_mode="implicit_tls", username=self.accounts["smtp_username"], password=self.accounts["smtp_password"])
         settings = self.api.request("/api/v1/admin/email-settings", "POST", body)
+        DIAGNOSTICS.enter("send_first_fixed_synthetic_tls_message")
         result = self.api.request("/api/v1/admin/email-settings/test", "POST", {
             "revision": settings["revision"], "to": "operator@native-ci.invalid"})
         require(result["status"] == "accepted" and self.fixture.report()["accepted"] == 1,
@@ -555,11 +656,14 @@ def main():
             urllib.error.URLError, http.client.HTTPException, concurrent.futures.TimeoutError) as failure:
         # Do not serialize exception details or command outputs, which may
         # contain a fixture credential. Failure evidence is deliberately fixed.
-        (args.evidence / "plugin-native-failure.json").write_text(
-            json.dumps({"suite": "native-independent-runtime-plugins", "success": False,
-                        "reason": str(failure) if isinstance(failure, AcceptanceFailure) else type(failure).__name__,
-                        "completed_checks": acceptance.checks if acceptance else [],
-                        "completed_stages": acceptance.stages if acceptance else []}) + "\n")
+        diagnostic = {"suite": "native-independent-runtime-plugins", "success": False,
+                      "reason": str(failure) if isinstance(failure, AcceptanceFailure) else type(failure).__name__,
+                      "completed_checks": acceptance.checks if acceptance else [],
+                      "completed_stages": acceptance.stages if acceptance else [],
+                      "last_stage": DIAGNOSTICS.stage, "last_command": DIAGNOSTICS.last_command,
+                      "last_api": DIAGNOSTICS.last_api, "path_metadata": DIAGNOSTICS.path_metadata}
+        (args.evidence / "plugin-native-failure.json").write_text(json.dumps(diagnostic) + "\n")
+        print("PLUGIN_NATIVE_FAILURE_JSON=" + json.dumps(diagnostic, sort_keys=True), flush=True)
         raise SystemExit("FAIL: native runtime plugin acceptance did not pass")
     finally:
         if acceptance:
