@@ -1036,6 +1036,16 @@ def publish(api, policy, archive_bytes):
         component = "Aster Core" if kind == "core" else "Aster official SMTP plugin"
         fields["name"] = component + " " + provenance["version"]
         fields["body"] = f"{component} {provenance['version']}，Linux amd64。源码提交：`{provenance['source_sha']}`。\n\n核心与官方 SMTP 独立分发，协议 `aster.smtp/1`，SMTP 支持声明的 Core 兼容范围。插件需明确安装、固定哈希批准和单独的非特权进程；运行包不附手工源码归档。核心提供官方版本检查和审计交接，由主机管理员明确暂存与预检；网页不执行 root 替换、迁移或服务控制。付款、主控/被控与自动开通尚未实现；SMTP 只提供主动管理员测试，不代表业务通知或收件箱投递。\n\n本版本通过所链接构建的回归、原生 systemd/HTTPS/备份恢复、独立插件替换与崩溃隔离、浏览器和依赖扫描门槛；这些结果只覆盖合成回环测试，不构成生产就绪声明。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。附件包含原始 Linux amd64 程序及必须配套的资源包、SHA-256、BUILD 与 PROVENANCE；安装、升级与限制见核心文档。"
+        raw_distribution = distribution_format(provenance["version"], kind) == "raw-binaries-v1"
+        if not raw_distribution:
+            fields["body"] = fields["body"].replace("原始 Linux amd64 程序及必须配套的资源包", "Linux amd64 运行归档")
+        source_docs = f"https://github.com/{REPOSITORY}/blob/{provenance['source_sha']}/vps-billing/docs/"
+        if raw_distribution and kind == "core":
+            fields["body"] += f"\n\n财务更新：新安装仅启用 CNY，运营者配置其他币种与独立报价；没有汇率或历史金额转换。已使用精度锁定，未完成财务义务阻止停用，历史金额与套餐快照保留；新界面确认报价在事务内校验，价格变化要求重新确认。迁移 007 / 14 表须停写并验证备份恢复，没有破坏性数据库降级。附件为两个裸程序、资源和三份元数据，共六项。[财务规则]({source_docs}FINANCIAL_MODEL.md) · [安装]({source_docs}INSTALL.md) · [升级恢复]({source_docs}UPGRADE.md)。"
+        elif raw_distribution:
+            build = strict_json(files["BUILD.json"])
+            compatibility = build["smtp_core_compatibility"]
+            fields["body"] += f"\n\n附件为一个裸 SMTP 程序、资源和三份元数据，共五项；协议保持 `aster.smtp/1`，声明 Core `>={compatibility['min']},<{compatibility['max_exclusive']}`。资源与程序须分别核验；旧工具不会自动支持新拆分输入，首次升级使用已核验的新管理工具。安装不自动批准或启用，仅支持管理员固定测试邮件。[插件安装与回退]({source_docs}PLUGINS.md)。"
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

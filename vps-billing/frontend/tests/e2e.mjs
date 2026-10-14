@@ -1,11 +1,26 @@
 import { chromium, expect } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 const base = process.env.TEST_BASE_URL || "http://localhost:5173";
 if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname))
   throw new Error("Browser acceptance must target a disposable loopback demo");
 const output = process.env.E2E_OUTPUT_DIR || "test-results/browser";
+const versionSource = await readFile(
+  new URL("../../backend/pkg/pluginapi/protocol.go", import.meta.url),
+  "utf8",
+);
+const versionDeclarations = [
+  ...versionSource.matchAll(/^\s*CoreVersion\s*=\s*(.*)$/gm),
+];
+if (versionDeclarations.length !== 1)
+  throw new Error("Expected one CoreVersion declaration in selected source");
+const expectedCoreVersion =
+  /^"((?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5}))"\s*$/.exec(
+    versionDeclarations[0][1],
+  )?.[1];
+if (!expectedCoreVersion)
+  throw new Error("Invalid selected-source CoreVersion literal");
 const browser = await chromium.launch({
   ...(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH }
@@ -569,7 +584,11 @@ try {
   await shot("smtp-disabled-desktop");
   await page.getByRole("link", { name: "版本更新", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("版本更新");
-  await expect(page.locator(".updates-version").first()).toHaveText("0.4.0");
+  const updateStatus = await json("/admin/updates");
+  expect(updateStatus.current.core_version).toBe(expectedCoreVersion);
+  await expect(page.locator(".updates-version").first()).toHaveText(
+    expectedCoreVersion,
+  );
   await expect(
     page.getByText("尚未检查官方版本。不会自动检查或安装。", { exact: true }),
   ).toBeVisible();

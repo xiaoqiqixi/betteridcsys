@@ -159,3 +159,5 @@ Core 不自动重试 RPC。SMTP 传输仅对 MAIL 前已明确的暂时失败最
 保留 `PAYMENT_PROVIDER=payment.disabled`、`EMAIL_PROVIDER=email.disabled`；后者是旧注册表选择，不是 SMTP 总开关，也不能改成 `email.smtp`。旧 `INTEGRATIONS_CONFIG_FILE` 只供已审查的编译期适配器配置，不安装运行时插件；未知 ID/字段、重复键、null、非字符串或超过 64 KiB 都拒绝，秘密使用受限引用，不直接填秘密值。
 
 Checkout 核验会话、CSRF、Host、账单所有权与待付正金额后，只传核心保存的金额/币种与业务 ID；当前返回 503 `PAYMENT_NOT_CONFIGURED`，不改变支付状态。当前未实现结算、对账和退款，order.created outbox 也没有消费者。本阶段仅进行财务核心审计，不接入支付渠道或资源开通。
+
+币种登记不代表支付槽支持该币种。编译期支付适配器声明 `supported_currencies` 和逐代码的 `currency_decimal_places` 映射，必须为每个代码明确 0–6 位精度，不能省略或多声明。Checkout 和已验证付款结果携带相同精度；核心按账单快照检查代码、精度、金额及业务身份，不进行换算。旧适配器作者须补齐此声明。这个类型化财务合同不等于已有支付渠道或运行时支付插件。

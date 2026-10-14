@@ -49,7 +49,7 @@ diff -r /workspace/smtp-a /workspace/smtp-b
 
 脚本从 Git archive 建立快照，不打包未提交产品改动；执行的配方和辅助程序必须等于所选提交。Go 使用静态 Linux amd64 构建、`-trimpath` 和固定参数；归档排序、时间和 owner 固定，gzip 不写入随机时间。两次一致仅证明指定环境下的复现范围，不是跨工具链或跨平台的普遍保证。
 
-版本必须与源码中 Core/SMTP 的版本声明一致。不能给旧程序随意改包名制造新版本。构建后检查程序 `--version`、ELF 目标、完整文件清单与许可证；新的插件 manifest 还要检查协议、核心兼容区间和程序 SHA-256。
+版本必须与源码中 Core/SMTP 的版本声明一致。不能给旧程序随意改包名制造新版本。构建后检查 API 的 `-version`、SMTP 的 `--version`、ELF 目标、完整文件清单与许可证。插件宿主没有版本 CLI 参数，按 BUILD 中的构建信息及 SHA-256 核对身份；新的插件 manifest 还要检查协议、核心兼容区间和程序 SHA-256。
 
 ## 发布门禁
 
