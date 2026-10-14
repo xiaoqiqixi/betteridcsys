@@ -53,7 +53,7 @@ diff -u /workspace/release-a/SHA256SUMS /workspace/release-b/SHA256SUMS
 
 ## 发布与安装
 
-只读 CI、标签候选构建与默认分支受信草稿发布流程，见 [CI 与草稿 Release 自动化](CI_RELEASE_AUTOMATION.md)。`86288e3` 的完整 CI 已通过，包括真实原生数据库、SMTP 设置加密与恢复、systemd/HTTPS、权限、API 重启、同 schema 切换及备份恢复；具体结果见 [原生验证记录](VALIDATION.md)。后续源码必须重新验证；源码集成、候选构建和 Release 创建分别记录，不互相替代。
+只读 CI、标签候选构建与默认分支受信草稿发布流程，见 [CI 与草稿 Release 自动化](CI_RELEASE_AUTOMATION.md)。`97a2f72` 的完整 CI 已通过，包括真实原生数据库、SMTP 设置加密与恢复、systemd/HTTPS、权限、API 重启、同 schema 切换、备份恢复及沙箱浏览器选购流程；具体结果见 [验证记录](VALIDATION.md)。后续源码必须重新验证；源码集成、候选构建和 Release 创建分别记录，不互相替代。
 
 先将 `main` 上的源码提交、生成的包和证据相互对应，再上传到明确标记的草稿 Release。没有可用 Release API 或授权凭据时，保留本地完整发布目录并报告出版阻塞；不要把上传失败说成发布成功，也不要为此创建长期凭据。
 

@@ -168,6 +168,19 @@ class CheckScriptTest(unittest.TestCase):
         self.assertEqual(self.events.read_text(), "go test\n")
         self.assertFalse(self.pid_file.exists())
 
+    def test_go_skip_scanner_errors_stop_before_later_checks(self):
+        for status in (2, 127):
+            with self.subTest(status=status):
+                if self.events.exists():
+                    self.events.unlink()
+                executable(self.bin / "grep", f"#!/bin/sh\nexit {status}\n")
+                result = self.run_check()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"Go skip scanner failed (exit {status})", result.stderr)
+                self.assertEqual(self.events.read_text(), "go test\n")
+                self.assertFalse(self.pid_file.exists())
+                self.assertNotIn("All required checks passed", result.stdout)
+
     def test_success_scrubs_environment_runs_all_checks_and_stops_api(self):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

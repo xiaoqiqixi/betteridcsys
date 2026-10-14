@@ -15,7 +15,7 @@ step() { printf '\n== %s ==\n' "$*"; }
 
 [[ $# -le 1 ]] || fail 'Usage: check.sh [source-repository-root]'
 [[ -n ${ASTER_MYSQL_TEST_DSN:-} ]] || fail 'ASTER_MYSQL_TEST_DSN is required; real MySQL tests must not silently skip.'
-for tool in git go node npm python3 bash sh mktemp tee; do
+for tool in git go node npm python3 bash sh mktemp tee grep; do
   command -v "$tool" >/dev/null 2>&1 || fail "Required command unavailable: $tool"
 done
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || fail 'This check requires a Linux amd64 runner to execute the built API.'
@@ -75,9 +75,13 @@ step 'Go race tests with required disposable MySQL'
   cd -- "$project_root/backend"
   go test -race -count=1 -v ./...
 ) | tee "$check_tmp/go-tests.log"
-if grep -Eq '^[[:space:]]*--- SKIP:' "$check_tmp/go-tests.log"; then
-  fail 'A Go test was skipped; this validation requires all database tests to run.'
-fi
+skip_scan_status=0
+grep -E '^[[:space:]]*--- SKIP:' "$check_tmp/go-tests.log" >/dev/null 2>&1 || skip_scan_status=$?
+case "$skip_scan_status" in
+  0) fail 'A Go test was skipped; this validation requires all database tests to run.' ;;
+  1) ;; # Complete scan with no skipped tests.
+  *) fail "Go skip scanner failed (exit $skip_scan_status); test completeness is unknown." ;;
+esac
 unset ASTER_MYSQL_TEST_DSN
 
 step 'Go vet and static Linux amd64 build'
