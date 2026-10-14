@@ -11,6 +11,10 @@ import (
 var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("idempotency conflict")
 var ErrUnavailable = errors.New("plan unavailable")
+var ErrCurrency = errors.New("unsupported currency")
+
+// JSON numbers must remain exact in browser clients. Both supported currencies use cents.
+const MaxMinor int64 = 9007199254740991
 
 type User struct {
 	ID           string `json:"id"`
@@ -32,29 +36,36 @@ type Plan struct {
 	Currency    string `json:"currency"`
 	Available   bool   `json:"available"`
 }
+type PlanPrice struct {
+	AmountMinor int64
+	Available   bool
+}
+
 type Order struct {
-	ID         string    `json:"id"`
-	Number     string    `json:"number"`
-	UserID     string    `json:"-"`
-	PlanName   string    `json:"plan_name"`
-	Status     string    `json:"status"`
-	TotalMinor int64     `json:"total_minor"`
-	Currency   string    `json:"currency"`
-	CreatedAt  time.Time `json:"created_at"`
-	ServiceID  string    `json:"service_id,omitempty"`
-	Hostname   string    `json:"hostname"`
+	Issuer     *InvoiceIdentity `json:"issuer,omitempty"`
+	ID         string           `json:"id"`
+	Number     string           `json:"number"`
+	UserID     string           `json:"-"`
+	PlanName   string           `json:"plan_name"`
+	Status     string           `json:"status"`
+	TotalMinor int64            `json:"total_minor"`
+	Currency   string           `json:"currency"`
+	CreatedAt  time.Time        `json:"created_at"`
+	ServiceID  string           `json:"service_id,omitempty"`
+	Hostname   string           `json:"hostname"`
 }
 type Invoice struct {
-	ID          string     `json:"id"`
-	Number      string     `json:"number"`
-	UserID      string     `json:"-"`
-	OrderID     string     `json:"order_id"`
-	Status      string     `json:"status"`
-	AmountMinor int64      `json:"amount_minor"`
-	Currency    string     `json:"currency"`
-	IssuedAt    time.Time  `json:"issued_at"`
-	DueAt       time.Time  `json:"due_at"`
-	PaidAt      *time.Time `json:"paid_at,omitempty"`
+	Issuer      *InvoiceIdentity `json:"issuer,omitempty"`
+	ID          string           `json:"id"`
+	Number      string           `json:"number"`
+	UserID      string           `json:"-"`
+	OrderID     string           `json:"order_id"`
+	Status      string           `json:"status"`
+	AmountMinor int64            `json:"amount_minor"`
+	Currency    string           `json:"currency"`
+	IssuedAt    time.Time        `json:"issued_at"`
+	DueAt       time.Time        `json:"due_at"`
+	PaidAt      *time.Time       `json:"paid_at,omitempty"`
 }
 type Service struct {
 	ID         string    `json:"id"`
@@ -89,12 +100,15 @@ type Summary struct {
 	ActiveServices  int
 	TotalServices   int
 	PendingInvoices int
+	UnpaidTotal     int64
 	MonthlyTotal    int64
 	Revenue         int64
 	Customers       int
 }
 type Store interface {
-	Summary(context.Context, string) (Summary, error)
+	Settings(context.Context) (SiteSettings, error)
+	UpdateSettings(context.Context, User, SiteSettings) (SiteSettings, error)
+	Summary(context.Context, string, string) (Summary, error)
 	Invoice(context.Context, string, string) (Invoice, error)
 	Ping(context.Context) error
 	UserByEmail(context.Context, string) (User, error)
@@ -104,7 +118,7 @@ type Store interface {
 	PutSession(context.Context, Session) error
 	Session(context.Context, string) (Session, error)
 	DeleteSession(context.Context, string) error
-	Plans(context.Context) ([]Plan, error)
+	Plans(context.Context, string) ([]Plan, error)
 	Orders(context.Context, string) ([]Order, error)
 	Invoices(context.Context, string) ([]Invoice, error)
 	Services(context.Context, string) ([]Service, error)

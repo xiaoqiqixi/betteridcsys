@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -75,8 +76,7 @@ func main() {
 		if !validSessionSecret(key) {
 			fatal("SESSION_SECRET must be a unique cryptographically random value of at least 32 bytes")
 		}
-		u, e := url.Parse(origin)
-		if e != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		if !validProductionOrigin(origin) {
 			fatal("APP_ORIGIN must be the canonical HTTPS origin without a path")
 		}
 	}
@@ -169,4 +169,39 @@ func main() {
 	if e := server.ListenAndServe(); e != nil && !errors.Is(e, http.ErrServerClosed) {
 		fatal("HTTP server failed")
 	}
+}
+
+func validProductionOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" || u.Path != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(origin, "#") || u.User != nil {
+		return false
+	}
+	// Browser Origin uses lowercase ASCII hosts and omits HTTPS's default port.
+	hostname := u.Hostname()
+	if hostname != strings.ToLower(hostname) {
+		return false
+	}
+	for _, r := range hostname {
+		if r > 127 {
+			return false
+		}
+	}
+	port := u.Port()
+	expectedHost := hostname
+	if ip := net.ParseIP(hostname); ip != nil {
+		if hostname != ip.String() {
+			return false
+		}
+		if strings.Contains(hostname, ":") {
+			expectedHost = "[" + hostname + "]"
+		}
+	}
+	if port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 || number == 443 || strconv.Itoa(number) != port {
+			return false
+		}
+		expectedHost = net.JoinHostPort(hostname, port)
+	}
+	return u.Host == expectedHost
 }

@@ -12,3 +12,16 @@ func TestRejectDefaultSessionSecrets(t *testing.T) {
 		t.Fatal("random-format secret rejected")
 	}
 }
+
+func TestProductionOriginValidation(t *testing.T) {
+	for _, origin := range []string{"https://billing.example?", "https://:443", "https://billing.example#", "https://billing.example/", "https://user:pass@billing.example", "http://billing.example", "https:billing.example", "https://billing.example:", "https://billing.example:443", "https://billing.example:0443", "https://Billing.example", "https://billing.example:99999"} {
+		if validProductionOrigin(origin) {
+			t.Fatal("invalid origin accepted", origin)
+		}
+	}
+	for _, origin := range []string{"https://billing.example", "https://billing.example:8443", "https://[2001:db8::1]"} {
+		if !validProductionOrigin(origin) {
+			t.Fatal("valid origin rejected", origin)
+		}
+	}
+}

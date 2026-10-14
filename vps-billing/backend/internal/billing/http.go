@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -91,6 +92,13 @@ func jsonOut(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": v})
 }
 func fail(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	locale := requestLocale(r.Header.Get("Accept-Language"))
+	w.Header().Set("Content-Language", locale)
+	if locale == "en" {
+		if translated, ok := englishErrors[code]; ok {
+			msg = translated
+		}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": msg, "request_id": w.Header().Get("X-Request-ID")}})
@@ -106,7 +114,8 @@ func errorKind(e error) string {
 	return "storage_error"
 }
 func body(w http.ResponseWriter, r *http.Request, v any) bool {
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
 		fail(w, r, 415, "JSON_REQUIRED", "请使用 JSON 请求")
 		return false
 	}
@@ -127,6 +136,7 @@ func (a *App) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-ID", ID())
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Add("Vary", "Accept-Language")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
@@ -225,12 +235,28 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p == "/plans" && r.Method == "GET" {
-		v, e := a.Store.Plans(r.Context())
+		currency, ok := a.queryCurrency(w, r)
+		if !ok {
+			return
+		}
+		v, e := a.Store.Plans(r.Context(), currency)
 		if e != nil {
 			a.internal(w, r, e)
 		} else {
+			if a.Config.Demo && requestLocale(r.Header.Get("Accept-Language")) == "en" {
+				localizeDemoPlans(v)
+			}
 			jsonOut(w, 200, v)
 		}
+		return
+	}
+	if p == "/site-settings" && r.Method == "GET" {
+		settings, err := a.Store.Settings(r.Context())
+		if err != nil {
+			a.internal(w, r, err)
+			return
+		}
+		jsonOut(w, 200, settings.Public())
 		return
 	}
 	u, e := a.current(r)
@@ -255,17 +281,43 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.createOrder(w, r, u)
 		return
 	}
-	if strings.HasPrefix(p, "/invoices/") {
-		id := strings.TrimPrefix(p, "/invoices/")
+	if p == "/admin/site-settings" {
+		if r.Method == "GET" {
+			settings, err := a.Store.Settings(r.Context())
+			a.result(w, r, settings, err)
+			return
+		}
+		var settings SiteSettings
+		if !body(w, r, &settings) {
+			return
+		}
+		if !ValidateSettings(settings) {
+			fail(w, r, 400, "INVALID_SETTINGS", "请检查必填项、语言、币种、联系方式和 HTTPS 地址")
+			return
+		}
+		updated, err := a.Store.UpdateSettings(r.Context(), u, settings)
+		if errors.Is(err, ErrSettingsConflict) {
+			fail(w, r, 409, "SETTINGS_CONFLICT", "设置已被其他管理员修改，请重新读取后再编辑")
+			return
+		}
+		a.result(w, r, updated, err)
+		return
+	}
+	if strings.HasPrefix(p, "/invoices/") || strings.HasPrefix(p, "/admin/invoices/") {
+		invoicePath := "/invoices/"
+		if admin {
+			invoicePath = "/admin/invoices/"
+		}
+		id := strings.TrimPrefix(p, invoicePath)
 		checkout := strings.HasSuffix(id, "/checkout")
 		if checkout {
 			id = strings.TrimSuffix(id, "/checkout")
 		}
-		if (checkout && r.Method != "POST") || (!checkout && r.Method != "GET") {
+		if (checkout && (admin || r.Method != "POST")) || (!checkout && r.Method != "GET") {
 			fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
 			return
 		}
-		invoice, e := a.Store.Invoice(r.Context(), u.ID, id)
+		invoice, e := a.Store.Invoice(r.Context(), uid, id)
 		if errors.Is(e, ErrNotFound) {
 			fail(w, r, 404, "NOT_FOUND", "未找到此账单")
 			return
@@ -287,7 +339,21 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch p {
 	case "/admin/integrations":
-		jsonOut(w, 200, map[string]any{"items": a.Integrations.Summaries()})
+		summaries := a.Integrations.Summaries()
+		if requestLocale(r.Header.Get("Accept-Language")) == "en" {
+			for n := range summaries {
+				if summaries[n].ID == "payment.disabled" || summaries[n].ID == "email.disabled" {
+					if summaries[n].ID == "payment.disabled" {
+						summaries[n].Name = "Payments not connected"
+					} else {
+						summaries[n].Name = "Email not connected"
+					}
+					summaries[n].Description = "Disabled adapter; no external operations"
+					summaries[n].Limitations = []string{"No live provider is installed. No charges, emails or billing state changes are performed."}
+				}
+			}
+		}
+		jsonOut(w, 200, map[string]any{"items": summaries})
 	case "/services":
 		v, e := a.Store.Services(r.Context(), uid)
 		a.result(w, r, v, e)
@@ -357,12 +423,15 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	v.Email = strings.ToLower(strings.TrimSpace(v.Email))
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if parsed := net.ParseIP(ip); parsed != nil {
+		ip = parsed.String()
+	}
 	for _, cidr := range a.Config.TrustedProxyCIDRs {
 		_, network, e := net.ParseCIDR(cidr)
 		if e == nil && network.Contains(net.ParseIP(ip)) {
 			forwarded := strings.TrimSpace(r.Header.Get("X-Real-IP"))
 			if net.ParseIP(forwarded) != nil {
-				ip = forwarded
+				ip = net.ParseIP(forwarded).String()
 			}
 			break
 		}
@@ -408,11 +477,19 @@ var keyPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{8,128}$`)
 
 func (a *App) createOrder(w http.ResponseWriter, r *http.Request, u User) {
 	var v struct {
-		PlanID   string `json:"plan_id"`
-		Hostname string `json:"hostname"`
+		PlanID   string          `json:"plan_id"`
+		Hostname string          `json:"hostname"`
+		Currency json.RawMessage `json:"currency"`
 	}
 	if !body(w, r, &v) {
 		return
+	}
+	currency := ""
+	if v.Currency != nil {
+		if err := json.Unmarshal(v.Currency, &currency); err != nil || !SupportedCurrency(currency) {
+			fail(w, r, 400, "INVALID_CURRENCY", "仅支持 CNY 和 USD")
+			return
+		}
 	}
 	v.Hostname = strings.ToLower(strings.TrimSpace(v.Hostname))
 	if !hostnamePattern.MatchString(v.Hostname) || len(v.PlanID) > 64 || v.PlanID == "" {
@@ -424,8 +501,7 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, r, 400, "IDEMPOTENCY_KEY_REQUIRED", "请提供 8–128 位幂等请求标识")
 		return
 	}
-	raw, _ := json.Marshal(v)
-	o, replayed, e := a.Store.CreateOrder(r.Context(), u, v.PlanID, v.Hostname, key, digest(string(raw)))
+	o, replayed, e := a.Store.CreateOrder(r.Context(), u, v.PlanID, v.Hostname, key, currency)
 	if errors.Is(e, ErrConflict) {
 		fail(w, r, 409, "IDEMPOTENCY_CONFLICT", "该请求标识已用于不同订单")
 		return
@@ -446,13 +522,17 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request, u User) {
 	jsonOut(w, status, o)
 }
 func (a *App) overview(w http.ResponseWriter, r *http.Request, uid string, admin bool) {
-	s, e := a.Store.Summary(r.Context(), uid)
+	currency, ok := a.queryCurrency(w, r)
+	if !ok {
+		return
+	}
+	s, e := a.Store.Summary(r.Context(), uid, currency)
 	if e != nil {
 		a.internal(w, r, e)
 		return
 	}
 	if admin {
-		jsonOut(w, 200, map[string]any{"customers": s.Customers, "total_services": s.TotalServices, "unpaid_invoices": s.PendingInvoices, "revenue_minor": s.Revenue, "currency": "USD"})
+		jsonOut(w, 200, map[string]any{"customers": s.Customers, "total_services": s.TotalServices, "unpaid_invoices": s.PendingInvoices, "revenue_minor": s.Revenue, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "customers_scope": "all"})
 		return
 	}
 	os, e := a.Store.Orders(r.Context(), uid)
@@ -463,12 +543,12 @@ func (a *App) overview(w http.ResponseWriter, r *http.Request, uid string, admin
 	if len(os) > 5 {
 		os = os[:5]
 	}
-	jsonOut(w, 200, map[string]any{"active_services": s.ActiveServices, "pending_invoices": s.PendingInvoices, "monthly_total_minor": s.MonthlyTotal, "currency": "USD", "recent_orders": os})
+	jsonOut(w, 200, map[string]any{"active_services": s.ActiveServices, "pending_invoices": s.PendingInvoices, "monthly_total_minor": s.MonthlyTotal, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "recent_orders": os, "recent_orders_scope": "all"})
 }
 
 // Checkout reads authoritative invoice values and never settles invoices/orders.
 func (a *App) checkout(w http.ResponseWriter, r *http.Request, invoice Invoice) {
-	if invoice.Status != "unpaid" || invoice.AmountMinor <= 0 || invoice.PaidAt != nil {
+	if invoice.Status != "unpaid" || !validAmount(invoice.AmountMinor) || !SupportedCurrency(invoice.Currency) || invoice.PaidAt != nil {
 		fail(w, r, 409, "INVOICE_NOT_PAYABLE", "当前账单不可支付")
 		return
 	}
@@ -477,6 +557,10 @@ func (a *App) checkout(w http.ResponseWriter, r *http.Request, invoice Invoice) 
 		AmountMinor: invoice.AmountMinor, Currency: invoice.Currency,
 		IdempotencyKey: "invoice:" + invoice.ID,
 	})
+	if errors.Is(err, integrations.ErrUnsupportedCurrency) {
+		fail(w, r, 409, "PAYMENT_CURRENCY_UNSUPPORTED", "当前支付渠道不支持此账单币种")
+		return
+	}
 	if errors.Is(err, integrations.ErrUnavailable) {
 		fail(w, r, 503, "PAYMENT_NOT_CONFIGURED", "支付渠道尚未接入，不会产生扣款")
 		return

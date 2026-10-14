@@ -78,7 +78,7 @@ class SecuritySmoke(unittest.TestCase):
 
     def test_unauthenticated_data_and_admin_denied(self):
         for path in ('overview', 'services', 'orders', 'invoices', 'audit', 'admin/overview',
-                     'admin/customers', 'admin/orders', 'admin/invoices', 'admin/integrations'):
+                     'admin/customers', 'admin/orders', 'admin/invoices', 'admin/integrations', 'admin/site-settings'):
             with self.subTest(path=path):
                 self.assertIn(self.client.request('/api/v1/' + path)[0], (401, 403))
 
@@ -92,7 +92,7 @@ class SecuritySmoke(unittest.TestCase):
 
     def test_customer_admin_boundary(self):
         client = self.customer()
-        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations'):
+        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings'):
             with self.subTest(path=path):
                 self.assertEqual(client.request('/api/v1/admin/' + path)[0], 403)
 
@@ -112,7 +112,7 @@ class SecuritySmoke(unittest.TestCase):
         self.assertTrue(plans)
         plan = plans[0]
         key = str(uuid.uuid4())
-        body = {'plan_id': plan['id'], 'hostname': 'smoke-' + key[:8]}
+        body = {'plan_id': plan['id'], 'hostname': 'smoke-' + key[:8], 'currency': plan['currency']}
         headers = {'Idempotency-Key': key}
         status, created, _ = client.request('/api/v1/orders', 'POST', body, headers=headers)
         self.assertIn(status, (200, 201), created)
@@ -176,7 +176,7 @@ class SecuritySmoke(unittest.TestCase):
         if not ARGS.admin_password:
             self.skipTest('TEST_ADMIN_PASSWORD not supplied')
         admin = Client().login(ARGS.admin_email, ARGS.admin_password)
-        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations'):
+        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings'):
             with self.subTest(path=path):
                 status, payload, _ = admin.request('/api/v1/admin/' + path)
                 self.assertEqual(status, 200, payload)
@@ -210,7 +210,7 @@ class SecuritySmoke(unittest.TestCase):
         plan = next(p for p in payload['data'] if p['available'])
         key = str(uuid.uuid4())
         cookies = '; '.join(c.name + '=' + c.value for c in client.jar)
-        body = {'plan_id': plan['id'], 'hostname': 'parallel-' + key[:8]}
+        body = {'plan_id': plan['id'], 'hostname': 'parallel-' + key[:8], 'currency': plan['currency']}
         def submit(_):
             sender = Client()
             sender.csrf = client.csrf
@@ -225,6 +225,87 @@ class SecuritySmoke(unittest.TestCase):
     def test_unknown_host_rejected(self):
         status, _, _ = self.client.request('/api/v1/session', headers={'Host': 'attacker.invalid'})
         self.assertIn(status, (400, 403, 421))
+
+    def test_currency_validation_and_language_are_independent(self):
+        status, payload, _ = self.client.request('/api/v1/site-settings')
+        self.assertEqual(status, 200)
+        self.assertIn(payload['data']['default_locale'], ('zh-CN', 'en'))
+        self.assertIn(payload['data']['default_currency'], ('CNY', 'USD'))
+        for private in ('email_signature', 'invoice_address', 'revision'):
+            self.assertNotIn(private, payload['data'])
+        for query in ('currency=EUR', 'currency=', 'currency=CNY&currency=USD'):
+            status, payload, _ = self.client.request('/api/v1/plans?' + query)
+            self.assertEqual(status, 400, payload)
+            self.assertEqual(payload['error']['code'], 'INVALID_CURRENCY')
+        for currency in ('CNY', 'USD'):
+            status, payload, _ = self.client.request('/api/v1/plans?currency=' + currency,
+                headers={'Accept-Language': 'en'})
+            self.assertEqual(status, 200, payload)
+            self.assertTrue(all(plan['currency'] == currency for plan in payload['data']))
+            self.assertTrue(all(isinstance(plan['price_minor'], int) for plan in payload['data']))
+        status, payload, _ = self.client.request('/api/v1/orders', headers={'Accept-Language': 'en'})
+        self.assertEqual(status, 401)
+        self.assertEqual(payload['error']['code'], 'AUTH_REQUIRED')
+        self.assertTrue(payload['error']['message'].isascii(), payload)
+
+    def test_settings_and_historical_multicurrency_invoices(self):
+        if not ARGS.admin_password:
+            self.skipTest('TEST_ADMIN_PASSWORD not supplied')
+        admin = Client().login(ARGS.admin_email, ARGS.admin_password)
+        customer = self.customer()
+        status, payload, _ = admin.request('/api/v1/admin/site-settings')
+        self.assertEqual(status, 200, payload)
+        original = payload['data']
+        for update in ({'support_url': 'javascript:alert(1)'}, {'logo': 'https://example.invalid/logo.svg'},
+                       {'theme': 'body{display:none}'}, {'default_currency': 'EUR'}, {'default_locale': 'fr'}):
+            status, _, _ = admin.request('/api/v1/admin/site-settings', 'POST', dict(original, **update))
+            self.assertEqual(status, 400)
+        status, _, _ = customer.request('/api/v1/admin/site-settings', 'POST', original)
+        self.assertEqual(status, 403)
+        status, _, _ = admin.request('/api/v1/admin/site-settings', 'POST', original, csrf=False)
+        self.assertEqual(status, 403)
+        issued_by = '测试开票主体-' + uuid.uuid4().hex[:8]
+        status, payload, _ = admin.request('/api/v1/admin/site-settings', 'POST',
+            dict(original, site_name='测试品牌', invoice_issuer=issued_by))
+        self.assertEqual(status, 200, payload)
+        try:
+            self.assertEqual(admin.request('/api/v1/admin/site-settings', 'POST', original)[0], 409)
+            snapshots = []
+            for currency in ('CNY', 'USD'):
+                _, catalog, _ = customer.request('/api/v1/plans?currency=' + currency)
+                plan = next(plan for plan in catalog['data'] if plan['available'])
+                _, before, _ = customer.request('/api/v1/overview?currency=' + currency)
+                key = str(uuid.uuid4())
+                body = {'plan_id': plan['id'], 'hostname': 'snapshot-' + key[:8], 'currency': currency}
+                status, payload, _ = customer.request('/api/v1/orders', 'POST', body,
+                    headers={'Idempotency-Key': key})
+                self.assertEqual(status, 201, payload)
+                order = payload['data']
+                self.assertEqual((order['currency'], order['total_minor']), (currency, plan['price_minor']))
+                other = 'USD' if currency == 'CNY' else 'CNY'
+                self.assertEqual(customer.request('/api/v1/orders', 'POST', dict(body, currency=other),
+                    headers={'Idempotency-Key': key})[0], 409)
+                _, after, _ = customer.request('/api/v1/overview?currency=' + currency)
+                self.assertEqual(after['data']['currency'], currency)
+                self.assertEqual(after['data']['pending_invoices'], before['data']['pending_invoices'] + 1)
+                _, payload, _ = customer.request('/api/v1/invoices')
+                invoice = next(i for i in payload['data'] if i['order_id'] == order['id'])
+                self.assertEqual(invoice['issuer']['name'], issued_by)
+                self.assertEqual((invoice['currency'], invoice['amount_minor']), (currency, plan['price_minor']))
+                snapshots.append(invoice)
+            _, current, _ = admin.request('/api/v1/admin/site-settings')
+            self.assertEqual(admin.request('/api/v1/admin/site-settings', 'POST',
+                dict(current['data'], invoice_issuer='后来主体', default_currency='USD'))[0], 200)
+            for expected in snapshots:
+                status, detail, _ = customer.request('/api/v1/invoices/' + expected['id'])
+                self.assertEqual(status, 200)
+                self.assertEqual(detail['data'], expected)
+                self.assertEqual(admin.request('/api/v1/admin/invoices/' + expected['id'])[0], 200)
+                self.assertEqual(admin.request('/api/v1/admin/invoices/' + expected['id'] + '/checkout', 'POST', {})[0], 405)
+        finally:
+            _, current, _ = admin.request('/api/v1/admin/site-settings')
+            restore = dict(original, revision=current['data']['revision'])
+            self.assertEqual(admin.request('/api/v1/admin/site-settings', 'POST', restore)[0], 200)
 
 if __name__ == '__main__':
     unittest.main(argv=['security_smoke.py'] + REMAINING, verbosity=2)

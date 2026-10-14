@@ -47,6 +47,10 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	_, e = m.DB.ExecContext(ctx, "INSERT INTO plan_prices(plan_id,currency,amount_minor,available) VALUES(?,'USD',600,TRUE),(?,'CNY',3900,TRUE)", p.ID, p.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -55,6 +59,7 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 				t.Error("fixture cleanup", e)
 			}
 		}
+		_, _ = m.DB.ExecContext(c, "DELETE FROM plan_prices WHERE plan_id=?", p.ID)
 		_, _ = m.DB.ExecContext(c, "DELETE FROM plans WHERE id=?", p.ID)
 	}()
 	var wg sync.WaitGroup
@@ -63,7 +68,7 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			o, _, e := m.CreateOrder(ctx, u, p.ID, "web-1", "same-key", "same-fp")
+			o, _, e := m.CreateOrder(ctx, u, p.ID, "web-1", "same-key", "USD")
 			if e != nil {
 				t.Error(e)
 				return
@@ -97,10 +102,10 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	if e != nil || n != 1 {
 		t.Fatal(n, e)
 	}
-	if _, _, e = m.CreateOrder(ctx, u, p.ID, "web-2", "same-key", "different-fp"); e != ErrConflict {
+	if _, _, e = m.CreateOrder(ctx, u, p.ID, "web-2", "same-key", "USD"); e != ErrConflict {
 		t.Fatal(e)
 	}
-	if _, _, e = m.CreateOrder(ctx, u, "missing-plan", "web-1", "unavailable-key", "fp"); e != ErrUnavailable {
+	if _, _, e = m.CreateOrder(ctx, u, "missing-plan", "web-1", "unavailable-key", "USD"); e != ErrUnavailable {
 		t.Fatal(e)
 	}
 	e = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM order_requests WHERE user_id=? AND request_key='unavailable-key'", u.ID).Scan(&n)
@@ -114,8 +119,64 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	if _, e = m.Invoice(ctx, ID(), is[0].ID); e != ErrNotFound {
 		t.Fatal("owner filter", e)
 	}
-	summary, e := m.Summary(ctx, u.ID)
+	summary, e := m.Summary(ctx, u.ID, "USD")
 	if e != nil || summary.PendingInvoices != 1 || summary.Revenue != 0 {
 		t.Fatal(summary, e)
+	}
+	admin := User{ID: ID(), Email: ID() + "@integration.invalid", Name: "Settings admin", Role: "admin", PasswordHash: "unused"}
+	if e = m.AddUser(ctx, admin); e != nil {
+		t.Fatal(e)
+	}
+	original, e := m.Settings(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() {
+		current, e := m.Settings(ctx)
+		if e == nil {
+			original.Revision = current.Revision
+			_, e = m.UpdateSettings(ctx, admin, original)
+		}
+		if e != nil {
+			t.Error("settings restore", e)
+		}
+		_, _ = m.DB.ExecContext(ctx, "DELETE FROM audit_events WHERE user_id=?", admin.ID)
+		_, _ = m.DB.ExecContext(ctx, "DELETE FROM users WHERE id=?", admin.ID)
+	}()
+	changed := original
+	changed.InvoiceIssuer = "测试开票公司"
+	updated, e := m.UpdateSettings(ctx, admin, changed)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = m.UpdateSettings(ctx, admin, changed); e != ErrSettingsConflict {
+		t.Fatal("persisted revision conflict", e)
+	}
+	order, _, e := m.CreateOrder(ctx, u, p.ID, "issuer-test", "issuer-key", "USD")
+	if e != nil {
+		t.Fatal(e)
+	}
+	updated.InvoiceIssuer = "后来公司"
+	if _, e = m.UpdateSettings(ctx, admin, updated); e != nil {
+		t.Fatal(e)
+	}
+	invoices, e := m.Invoices(ctx, u.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	found := false
+	for _, invoice := range invoices {
+		if invoice.OrderID == order.ID {
+			found = true
+			if invoice.Issuer == nil || invoice.Issuer.Name != "测试开票公司" {
+				t.Fatal("mutable SQL invoice identity", invoice)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing snapshot invoice")
+	}
+	if invoice, e := m.Invoice(ctx, "", is[0].ID); e != nil || invoice.ID != is[0].ID {
+		t.Fatal("admin direct detail", invoice, e)
 	}
 }

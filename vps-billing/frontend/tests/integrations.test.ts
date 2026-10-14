@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import IntegrationsPage from "../src/components/IntegrationsPage.vue";
+import { defaultSiteSettings } from "../src/lib/settings";
+import { restorePreferences, setLocale } from "../src/lib/i18n";
 import App from "../src/App.vue";
 import {
   previewIntegrations,
@@ -15,6 +17,8 @@ const manifest = (): IntegrationSummary[] =>
   structuredClone(previewIntegrations);
 const reply = (data: unknown) => ({ ok: true, json: async () => ({ data }) });
 beforeEach(() => {
+  localStorage.clear();
+  restorePreferences();
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute("open", "");
   };
@@ -29,6 +33,23 @@ afterEach(() => {
 });
 
 describe("read-only integrations registry", () => {
+  it("switches preview metadata and controls to English without any network request", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const wrapper = mount(IntegrationsPage, {
+      props: { preview: true, refreshToken: 0 },
+    });
+    await flushPromises();
+    setLocale("en");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Payment services");
+    expect(wrapper.text()).toContain("Payments · Disabled");
+    expect(wrapper.text()).toContain("Email · Disabled");
+    await wrapper.find(".integration-card button").trigger("click");
+    expect(wrapper.text()).toContain("No payment currencies available");
+    expect(fetcher).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
   it("fetches the actual registry and shows disabled adapters without install or enable controls", async () => {
     const fetcher = vi.fn().mockResolvedValue(reply({ items: manifest() }));
     vi.stubGlobal("fetch", fetcher);
@@ -117,6 +138,7 @@ describe("read-only integrations registry", () => {
     for (const data of [
       {},
       { items: null },
+      { items: [{ ...manifest()[0], supported_currencies: ["EUR"] }] },
       { items: [{ ...manifest()[0], status: "connected" }] },
       {
         items: [
@@ -171,6 +193,7 @@ describe("admin-only integrations route", () => {
   async function openApp(role: "admin" | "customer") {
     const fetcher = vi.fn(async (path: string) => {
       const data: Record<string, unknown> = {
+        "/site-settings": defaultSiteSettings,
         "/session": {
           user: { ...fixtures.previewUser, role },
           csrf_token: "test",
@@ -180,6 +203,7 @@ describe("admin-only integrations route", () => {
           customers: 1,
           total_services: 0,
           unpaid_invoices: 0,
+          unpaid_total_minor: 0,
           revenue_minor: 0,
           currency: "USD",
         },
@@ -191,6 +215,7 @@ describe("admin-only integrations route", () => {
         "/overview": {
           active_services: 0,
           pending_invoices: 0,
+          unpaid_total_minor: 0,
           monthly_total_minor: 0,
           currency: "USD",
           recent_orders: [],
@@ -201,7 +226,7 @@ describe("admin-only integrations route", () => {
         "/invoices": [],
         "/audit": [],
       };
-      return reply(data[path.replace("/api/v1", "")]);
+      return reply(data[path.replace("/api/v1", "").split("?")[0]!]);
     });
     vi.stubGlobal("fetch", fetcher);
     const router = createRouter({

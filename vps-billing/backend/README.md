@@ -1,10 +1,10 @@
-# Aster Billing API
+# Aster Billing API（星屿云）
 
-Go HTTP API, MySQL 8.4/InnoDB persistence, and a deliberately isolated in-memory demo. This is a first implementation for test-server acceptance, not a production certification, accounting ledger, tax engine, or ready-to-charge billing service.
+Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。当前候选范围为可配置运营身份、简体中文/English、独立 CNY/USD 报价及订单/账单；支付、邮件、退款、财务账本和 VPS 开通仍未接入。完整 API 约定见 [CONTRACT.md](../docs/CONTRACT.md)，实际验证见 [VALIDATION.md](../docs/VALIDATION.md)。
 
-## Local demonstration
+## 本机演示
 
-Requirements: Go 1.24+ (use a supported current patched toolchain for deployment).
+使用受支持、已更新的 Go 工具链；模块最低声明为 1.24.0，发布使用的精确版本记录在 BUILD.json。前端开发版本见 package.json/锁文件；发布包运行不需要 Node.js。
 
 ```sh
 cd backend
@@ -15,116 +15,80 @@ go build -buildvcs=false -o ./bin/aster-api ./cmd/server
 APP_MODE=demo APP_ORIGIN=http://localhost:5173 ./bin/aster-api
 ```
 
-API listens on `127.0.0.1:8080` by default. Frontend should proxy `/api` same-origin. No CORS wildcard support. In a constrained executor with read-only home, set writable `GOCACHE=/tmp/aster-go-cache GOPATH=/tmp/aster-go-path` first. This development workspace used `/tmp/go/bin/go` because `/usr/bin/go` is an unrelated program.
+默认监听 127.0.0.1:8080。前端同源代理 /api，禁止开放 demo 或 Vite 到公网。只在显式 APP_MODE=demo 可用的公开测试账号：
 
-Public demonstration accounts, usable **only in explicit APP_MODE=demo**:
+| 用途 | 邮箱 | 密码 |
+|---|---|---|
+| 客户 | demo@aster.local | DemoCustomer!2026 |
+| 管理员 | admin@aster.local | DemoAdmin!2026 |
+| 另一客户（所有权测试） | other@aster.local | DemoOther!2026 |
 
-- Customer: `demo@aster.local` / `DemoCustomer!2026`
-- Administrator: `admin@aster.local` / `DemoAdmin!2026`
-- Separate customer for ownership tests: `other@aster.local` / `DemoOther!2026`
+demo 无初始服务或假已付账单；创建订单只生成待付款记录，重启丢失内存数据。HTTP demo cookie 保持 HttpOnly/SameSite=Strict，但没有 Secure。默认生产模式不创建这些账号，不能通过切到 demo 绕过配置错误。
 
-Demo is empty initially: creating an order creates its unpaid invoice and safe audit event. There are no fabricated paid invoices or active services. Restarting discards all demo data. Demo cookies are not Secure for local HTTP, but remain HttpOnly and SameSite=Strict. Never bind demo to a public interface or expose it through a public tunnel.
+## 配置
 
-## Production-mode configuration
+| 环境变量 | 作用 |
+|---|---|
+| APP_MODE | production（默认）或显式 demo |
+| LISTEN_ADDR | 默认 127.0.0.1:8080；容器内部 0.0.0.0:8080 |
+| APP_ORIGIN | 精确 HTTPS 来源，无路径/尾斜杠，如 https://billing.example.com |
+| SESSION_SECRET / SESSION_SECRET_FILE | 独立随机秘密，至少 32 字节；优先受限文件 |
+| MYSQL_DSN / MYSQL_DSN_FILE | Go MySQL DSN；生产优先验证证书的 tls=true |
+| MYSQL_ALLOW_INSECURE | 默认 false；true 仅用于已审查的隔离同机测试网络 |
+| TRUSTED_PROXY_CIDRS | 直接可信代理精确 CIDR；空值不信任转发地址 |
+| BOOTSTRAP_EMAIL / NAME / ROLE | CLI 创建用户；role 默认 customer，管理员需显式 admin |
+| BOOTSTRAP_PASSWORD / BOOTSTRAP_PASSWORD_FILE | 唯一 16–72 字节强口令，不用 demo/示例值 |
+| PAYMENT_PROVIDER / EMAIL_PROVIDER | 默认 payment.disabled / email.disabled |
+| INTEGRATIONS_CONFIG_FILE | 可选受限本地 JSON；当前禁用适配器无需配置 |
 
-Default mode is production. Startup does not seed demo accounts and refuses missing origin, DSN, short/example session secrets, and invalid proxy CIDRs.
+FILE 形式优先。生产拒绝弱/示例会话秘密、无 DSN、非 HTTPS 来源、无效代理 CIDR/未知模式。强制 TLS 时拒绝 skip-verify、preferred 和明文回退。不要在源码、命令行、聊天或日志中存密码/DSN。
 
-| Environment | Purpose |
-| --- | --- |
-| `APP_MODE` | `production` (default) or explicit `demo` |
-| `LISTEN_ADDR` | default `127.0.0.1:8080`; internal container `0.0.0.0:8080` |
-| `APP_ORIGIN` | exact canonical HTTPS origin, no path/trailing slash; e.g. `https://billing.example.com` |
-| `SESSION_SECRET` / `SESSION_SECRET_FILE` | independent randomly generated secret, at least 32 bytes; prefer 32 random bytes hex-encoded |
-| `MYSQL_DSN` / `MYSQL_DSN_FILE` | Go MySQL driver DSN; e.g. `aster:...@tcp(db:3306)/aster?parseTime=true&tls=true` |
-| `MYSQL_ALLOW_INSECURE` | default false. `true` only for an explicitly isolated private database network; never public MySQL |
-| `TRUSTED_PROXY_CIDRS` | comma-separated exact trusted reverse-proxy CIDRs. Empty trusts no forwarded addresses |
-| `BOOTSTRAP_EMAIL` | email for CLI user creation; demo `@aster.local` blocked |
-| `BOOTSTRAP_NAME` | required display name, up to 120 UTF-8 bytes |
-| `BOOTSTRAP_ROLE` | customer by default; explicit `admin` for administrator |
-| `BOOTSTRAP_PASSWORD` / `BOOTSTRAP_PASSWORD_FILE` | unique 16–72 byte secret, not demonstration/example password |
+生产 cookie 是 __Host-aster_session，Secure、HttpOnly、SameSite=Strict、Path=/。API 端口不公开，可信反向代理覆盖 X-Real-IP，客户端原始转发头不可信。仅从配置的直接 peer CIDR 接受该头，IPv4/IPv6 地址归一化用于限速；不信任 X-Forwarded-For。不能使用 0.0.0.0/0 或任意私网作为代理信任。
 
-File forms take precedence. Do not store secrets in source, shell history, images, or DSNs in logs. Use restricted mounted secret files. Production cookies use `__Host-aster_session`, Secure, HttpOnly, SameSite=Strict and `/` path. TLS terminates at the trusted reverse proxy. Backend HTTP port must not be public. Proxy must preserve the canonical Host, and replace X-Real-IP with a verified client address. Forwarded addresses are accepted only from configured direct peer CIDRs; X-Forwarded-For is not trusted. An outer edge proxy requires its own narrowly configured real-IP trust chain. Never trust `0.0.0.0/0` or arbitrary client headers.
+## 数据库、迁移与身份
 
-## Database setup and user creation
+迁移 1/2/3 保持原文，迁移 4 新增订单 issuer 快照和受支持币种/精确金额约束，迁移 5 对订单/账单/服务加入二进制币种约束，拒绝小写或带重音的近似值。全部嵌入二进制，经数据库 advisory lock 串行执行，schema_migrations 保存编号/checksum；就绪检查验证完整 1–5 历史并拒绝未知新版本。MySQL DDL 不能整体事务回滚，已知中断恢复有专门处理，不能手改迁移记录绕过错误。
 
-Create a utf8mb4 MySQL 8.4 database using deployment tooling. Run migrations with a dedicated DDL account, then runtime with a lower-privilege DML account. Both must have access to the same database.
+以独立 DDL 身份执行 `aster-api -migrate`，API 用只有本库 SELECT/INSERT/UPDATE/DELETE 的 DML 身份。CLI 仍需完整生产配置。以 BOOTSTRAP_* 配置执行 `aster-api -create-user` 创建测试用户；没有公开注册、密码找回、自助改密、MFA、角色修改或完整账号管理 API。详细配置和权限步骤见 [INSTALL.md](../docs/INSTALL.md)。
 
-```sh
-# Supply APP_ORIGIN, SESSION_SECRET_FILE and MYSQL_DSN_FILE first.
-./bin/aster-api -migrate
-# Switch MYSQL_DSN_FILE to runtime credentials after migration.
-BOOTSTRAP_EMAIL=operator@example.com BOOTSTRAP_NAME=Operator \
-BOOTSTRAP_ROLE=admin BOOTSTRAP_PASSWORD_FILE=/run/secrets/bootstrap_password \
-  ./bin/aster-api -create-user
-# To create a customer, use BOOTSTRAP_ROLE=customer and that customer's credentials.
-./bin/aster-api
-```
+初始示例套餐不可售；升级保留既有 USD 可售状态。新下单读取 plan_prices 的 CNY/USD 独立报价，不再以旧 plans.price_minor/currency 为权威；需要套餐和所选币种均可售。没有后台套餐编辑器，受控 SQL 定价程序见 [SITE_SETTINGS.md](../docs/SITE_SETTINGS.md)。
 
-No public registration, password reset, MFA, email verification, user editing, catalog editor or role mutation API exists. Do not pretend these features are operational. CLI creation is intended for controlled test-server onboarding only until account lifecycle work is completed.
+## 会话与下单
 
-Migration 1 is embedded, guarded by a MySQL advisory lock, recorded with a SHA-256 checksum in `schema_migrations`, and safe to resume after interrupted initial DDL. MySQL DDL is not transactionally rollbackable. Never modify an applied migration: future schema changes need a new numbered migration and upgrade tests. Current migrator supports version 1 only. `/readyz` validates the version-1 checksum as well as database access. Backup and test restore before schema changes.
+1. GET /api/v1/session 获取 cookie 和 CSRF。
+2. POST /api/v1/auth/login 携带 JSON email/password 与 X-CSRF-Token；成功后使用新 token。
+3. GET /plans?currency=CNY 读取报价。省略查询币种使用站点默认；仅支持 CNY/USD。
+4. POST /orders 携带 `{"plan_id":"starter","hostname":"web-1","currency":"CNY"}` 和唯一 Idempotency-Key（8–128 个 ASCII 字母/数字/_.:-）。
+5. 所有变更都需 CSRF；存在 Origin 时必须精确匹配 APP_ORIGIN。未知 JSON 字段（含客户端价格/owner/role）拒绝。
+6. 注销撤销原会话并轮换匿名 token；会话 8 小时到期，数据库保存 token 哈希。
 
-Migration seeds three **unavailable** USD example plans. No account is seeded. An operator must review actual product, region, currency, tax treatment, pricing and capacity before enabling any plan. For an isolated acceptance database only, an operator can enable the starter example:
+请求 locale 使用受支持的语言，界面独立选择 zh-CN/en，默认中文。locale 不决定货币；报价/统计按显式 currency 查询。客户数全局，服务/账单计数和金额按币种。列表历史可以混合两种币种，每条记录自己的币种，不跨币种求和。
 
-```sql
-UPDATE plans SET available = TRUE WHERE id = 'starter';
-```
+同用户同幂等键同请求返回原订单；改变 currency/plan/hostname 冲突。MySQL 使用唯一请求键和事务；死锁/锁超时最多有限次重试。网络结果不明时复用原键及原请求。订单、账单、幂等记录、审计和 outbox 原子提交；金额、币种和运营身份快照之后不可被设置/价格更新改写。旧快照缺失不虚构历史公司身份。
 
-The API never accepts client prices. It reads and locks the plan inside the order transaction and stores immutable price/name snapshots. The `orders`, `invoices`, `order_requests`, `audit_events` and `outbox_events` changes commit atomically. No service or external resource is provisioned by this action.
+金额为最小货币单位整数，CNY/USD 均两位小数，单项和汇总不得超过安全整数上限 9007199254740991；客户端格式化不能通过浮点除法丢失分值。没有汇率、充值钱包或换汇。
 
-## Browser flow / security
+## 站点设置与支付边界
 
-1. GET `/api/v1/session` to obtain a session cookie and CSRF token.
-2. POST `/api/v1/auth/login` with JSON email/password and `X-CSRF-Token`.
-3. Use the rotated CSRF token returned by login, or GET session again.
-4. POST `/api/v1/orders` with JSON `{ "plan_id": "starter", "hostname": "web-1" }` and a unique `Idempotency-Key` (8–128 ASCII alphanumeric/`_.:-`). Keep the same key and body when retrying an uncertain result.
-5. All mutations require the CSRF header. If Origin is supplied it must exactly match APP_ORIGIN. Unknown fields (including price, owner and role) are rejected.
-6. Logout deletes the authenticated session and rotates the anonymous cookie/token. Sessions expire after 8 hours; database contains SHA-256 hashes, not bearer tokens.
+GET /site-settings 公开展示子集；管理员 GET/POST /admin/site-settings 读写完整设置。写入校验角色、CSRF、revision，设置与审计同事务；冲突返回 409。只接受纯文本、预设 logo/theme 和受限 HTTPS 链接，不接受任意脚本/HTML/CSS、远程抓取、文件上传或服务商秘密。展示地址不控制 DNS、证书或 APP_ORIGIN。
 
-A repeated identical order returns the original order. Reusing a key with a different body returns 409. Concurrent same-key requests serialize on a unique `(user_id, request_key)` database row. Deadlock/lock-timeout failures have bounded transaction retries. An uncertain network error after commit is recovered by retrying the same idempotency key, never by assuming failure and issuing a new key.
+管理员 GET /admin/invoices/{id} 提供直接只读详情；客户 GET /invoices/{id} 仍按所有权查询，避免用最多 1,000 条列表筛选漏掉旧账单。
 
-SQL is parameterized. Customer invoice lookup includes ownership in SQL; admin list routes enforce admin role from server-side session identity. Customers cannot choose another owner. Login uses bcrypt, generic invalid-credential responses and dummy hashing for unknown users. Login throttles IP and email within each API process. Request body is capped at 16 KiB, unknown JSON fields rejected, server/header/context timeouts configured. Errors are structured and redact SQL, credentials and internals.
+POST /invoices/{id}/checkout 核对所有权和待付状态后调用类型化注册表。当前只装禁用适配器，返回 503 PAYMENT_NOT_CONFIGURED，不改变订单/账单/服务。没有支付 webhook、真实验签落账、退款、续费、余额更新或 outbox 消费者。order.created 不是开通授权。详见 [PLUGINS.md](../docs/PLUGINS.md)。
 
-## Explicit payment/provisioning boundaries
-
-POST `/api/v1/invoices/{id}/checkout` verifies owner and payable state, then delegates through the typed integration registry. The shipped disabled provider returns HTTP 503 `PAYMENT_NOT_CONFIGURED`. No real provider has been implemented. There is no environment switch that silently simulates paid status. There is no wallet, saved-card form, payment webhook, balance mutation, refund endpoint, or renewal job.
-
-The transactional outbox records `order.created` but has **no consumer**, deliberately. An unpaid order must never be interpreted as authorization to provision. Future payment integration needs verified signed webhooks, event idempotency, reconciliation, refunds, chargeback and audit flows before a `payment.settled` transition and provisioning worker are enabled.
-
-## Pluggable integrations
-
-Payment and email use compiled typed adapters in `internal/integrations`. The immutable registry is dependency-injected; providers never receive SQL/Store access. `PAYMENT_PROVIDER` defaults to `payment.disabled`; `EMAIL_PROVIDER` defaults to `email.disabled`. Optional `INTEGRATIONS_CONFIG_FILE` loads a local JSON provider-to-field map, capped at 64 KiB, with duplicate keys, unknown fields/providers, trailing JSON and non-string values rejected. Secret fields accept references only. Unknown selections or invalid selected configuration stop startup. These are environment selections applied on restart, not dynamic plugin uploads. Adding a provider requires a registered Go adapter and rebuild. Neither default adapter reports successful payment/email delivery.
-
-GET `/api/v1/admin/integrations` returns `{data:{items:[...]}}` with provider manifests, redacted configuration schemas and status, only to administrators. It never returns configured values or secret-reference strings. No configuration-write route exists. Secrets for future adapters use environment or mounted-file references, not browser-submitted credentials. Checkout result URLs are restricted to provider-specific exact HTTPS hosts and provider calls have bounded context deadlines.
-
-See [plugin architecture and extension guide](../docs/PLUGINS.md) for the precise API, configuration/reference model, callback verification contract and mandatory future durable payment-deduplication/ledger work. Callback normalization and validation contracts exist, but there is no webhook route or settlement implementation. SMS, storage and controller are documented future domains, not installed providers. No schema migration is needed for this iteration.
-
-## Verification
+## 测试
 
 ```sh
 go test -race -v ./...
 go vet ./...
-go build -buildvcs=false ./cmd/server
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false ./cmd/server
 ```
 
-Go tests also cover registry validation/redaction, duplicate registration rejection, unavailable defaults, secret references, checkout URL rejection, settlement-field comparison, injected test adapters, admin integration access, ownership/CSRF before provider calls and no automatic paid transition. Go tests cover CSRF/origin rejection, cookie flags/Host validation, session logout, customer ownership, admin bypass, price tampering, exact server pricing, replay mismatch, concurrent same-key requests, and fail-closed checkout. Root `tests/` contains independent HTTP regression tests.
-
-Real MySQL integration is **optional and skipped unless explicitly configured**:
+真实 MySQL 测试只在显式配置 ASTER_MYSQL_TEST_DSN 时执行；专用库名必须含 _test，绝不能连接生产。使用受限进程环境注入测试 DSN，避免命令行暴露秘密。测试有 DDL/DML，需要一次性库；检查测试代码的清理范围，保留未知数据库不动。
 
 ```sh
-# Dedicated disposable database name MUST contain _test. Never production.
-ASTER_MYSQL_TEST_DSN='tester:...@tcp(127.0.0.1:3306)/aster_test?parseTime=true' \
-  go test -race -v ./internal/billing -run TestMySQLTransactionalOrders
+# ASTER_MYSQL_TEST_DSN 已由受限测试环境提供。
+go test -race -v ./internal/billing -run TestMySQL
 ```
 
-The test applies migration, verifies repeat migration/readiness, creates isolated fixture user and plan, races 16 duplicate orders, checks one order/invoice/audit/idempotency/outbox record, owner filters and failed-order rollback, then cleans only its fixture records. It requires schema/fixture DDL and DML permission. A live MySQL instance was not available in the development executor, so this test was authored but **not run** there. Container image builds, restore drills, actual TLS deployment and MySQL 8.4 acceptance remain release gates.
-
-## Remaining production release gates
-
-- Complete live MySQL acceptance, migrations/restore/failure injection and security review on test infrastructure.
-- Connect and independently verify payment/refund/reconciliation and provisioning systems. No real charges before that review.
-- Implement verified registration/account recovery, MFA, credential rotation and account/session lifecycle controls.
-- Replace process-local login limiter with shared infrastructure before multiple API replicas; layer trusted-edge rate limiting. Sessions themselves are database-backed.
-- Add pagination: current list APIs return at most 1,000 recent records; overview totals use untruncated SQL aggregates, and invoice detail is direct owner-scoped lookup. Do not treat list output as complete financial exports.
-- Add approved retention/session-expiry cleanup, append-only/external audit retention, operational monitoring, alerting, backup/restore, secret rotation and disaster recovery procedures.
-- Confirm currency, taxation, invoice legal requirements, renewals, cancellation and refund policy. USD values are provisional examples.
+测试结果的“跳过”不等于通过。HTTP/config 独立回归在 ../tests，完整发布/恢复门槛见 [RELEASE.md](../docs/RELEASE.md)。列表仍上限 1,000 且无分页/完整导出；审计非不可篡改账本；登录限速为进程内；没有后台会话清理、异地备份/PITR 或部署监控。上述边界不会因本轮测试通过而自动消失。

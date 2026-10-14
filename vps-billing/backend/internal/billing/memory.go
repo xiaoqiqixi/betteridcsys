@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"golang.org/x/crypto/bcrypt"
 	"sync"
 	"time"
@@ -12,10 +13,12 @@ type memoRequest struct {
 	Order       Order
 }
 type Memory struct {
+	settings SiteSettings
 	mu       sync.Mutex
 	users    map[string]User
 	sessions map[string]Session
 	plans    []Plan
+	prices   map[string]map[string]PlanPrice
 	orders   []Order
 	invoices []Invoice
 	services []Service
@@ -25,6 +28,12 @@ type Memory struct {
 
 func NewMemory() *Memory {
 	m := &Memory{users: map[string]User{}, sessions: map[string]Session{}, plans: Catalog(), orders: []Order{}, invoices: []Invoice{}, services: []Service{}, audits: []Audit{}, requests: map[string]memoRequest{}}
+	m.settings = DefaultSettings()
+	m.prices = map[string]map[string]PlanPrice{
+		"starter":     {"CNY": {3900, true}, "USD": {600, true}},
+		"standard":    {"CNY": {7900, true}, "USD": {1200, true}},
+		"performance": {"CNY": {15900, true}, "USD": {2400, true}},
+	}
 	for _, v := range []struct{ email, name, role, password string }{{"demo@aster.local", "林先生", "customer", "DemoCustomer!2026"}, {"admin@aster.local", "演示管理员", "admin", "DemoAdmin!2026"}, {"other@aster.local", "另一位客户", "customer", "DemoOther!2026"}} {
 		h, _ := bcrypt.GenerateFromPassword([]byte(v.password), bcrypt.DefaultCost)
 		u := User{ID: ID(), Email: v.email, Name: v.name, Role: v.role, PasswordHash: string(h)}
@@ -98,10 +107,19 @@ func (m *Memory) DeleteSession(_ context.Context, k string) error {
 	delete(m.sessions, k)
 	return nil
 }
-func (m *Memory) Plans(context.Context) ([]Plan, error) {
+func (m *Memory) Plans(_ context.Context, currency string) ([]Plan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]Plan{}, m.plans...), nil
+	if !SupportedCurrency(currency) {
+		return nil, ErrCurrency
+	}
+	out := append([]Plan{}, m.plans...)
+	for n := range out {
+		price := m.prices[out[n].ID][currency]
+		out[n].Currency, out[n].PriceMinor = currency, price.AmountMinor
+		out[n].Available = out[n].Available && price.Available && validAmount(price.AmountMinor)
+	}
+	return out, nil
 }
 func (m *Memory) Orders(_ context.Context, uid string) ([]Order, error) {
 	m.mu.Lock()
@@ -110,7 +128,7 @@ func (m *Memory) Orders(_ context.Context, uid string) ([]Order, error) {
 	for j := len(m.orders) - 1; j >= 0; j-- {
 		v := m.orders[j]
 		if uid == "" || v.UserID == uid {
-			r = append(r, v)
+			r = append(r, cloneOrder(v))
 		}
 	}
 	return r, nil
@@ -122,7 +140,7 @@ func (m *Memory) Invoices(_ context.Context, uid string) ([]Invoice, error) {
 	for j := len(m.invoices) - 1; j >= 0; j-- {
 		v := m.invoices[j]
 		if uid == "" || v.UserID == uid {
-			r = append(r, v)
+			r = append(r, cloneInvoice(v))
 		}
 	}
 	return r, nil
@@ -150,15 +168,25 @@ func (m *Memory) Audits(_ context.Context, uid string) ([]Audit, error) {
 	}
 	return r, nil
 }
-func (m *Memory) CreateOrder(_ context.Context, u User, pid, host, key, fp string) (Order, bool, error) {
+func (m *Memory) CreateOrder(_ context.Context, u User, pid, host, key, currency string) (Order, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if currency != "" && !SupportedCurrency(currency) {
+		return Order{}, false, ErrCurrency
+	}
+	fp := orderFingerprint(pid, host, currency)
 	k := u.ID + ":" + key
 	if r, ok := m.requests[k]; ok {
 		if r.Fingerprint != fp {
 			return Order{}, false, ErrConflict
 		}
-		return r.Order, true, nil
+		return cloneOrder(r.Order), true, nil
+	}
+	if currency == "" {
+		currency = m.settings.DefaultCurrency
+	}
+	if !SupportedCurrency(currency) {
+		return Order{}, false, ErrCurrency
 	}
 	var p Plan
 	for _, v := range m.plans {
@@ -166,15 +194,19 @@ func (m *Memory) CreateOrder(_ context.Context, u User, pid, host, key, fp strin
 			p = v
 		}
 	}
-	if !p.Available {
+	price := m.prices[pid][currency]
+	p.PriceMinor, p.Currency = price.AmountMinor, currency
+	if !p.Available || !price.Available || !validAmount(price.AmountMinor) {
 		return Order{}, false, ErrUnavailable
 	}
 	o, i, a := newRecords(u, p, host)
+	i.Issuer = m.settings.Identity()
+	o.Issuer = m.settings.Identity()
 	m.orders = append(m.orders, o)
 	m.invoices = append(m.invoices, i)
 	m.audits = append(m.audits, a)
 	m.requests[k] = memoRequest{fp, o}
-	return o, false, nil
+	return cloneOrder(o), false, nil
 }
 
 func (m *Memory) Invoice(c context.Context, uid, id string) (Invoice, error) {
@@ -189,29 +221,39 @@ func (m *Memory) Invoice(c context.Context, uid, id string) (Invoice, error) {
 	}
 	return Invoice{}, ErrNotFound
 }
-func (m *Memory) Summary(_ context.Context, uid string) (Summary, error) {
+func (m *Memory) Summary(_ context.Context, uid, currency string) (Summary, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out Summary
+	if !SupportedCurrency(currency) {
+		return out, ErrCurrency
+	}
 	for _, s := range m.services {
-		if uid != "" && uid != s.UserID {
+		if s.Currency != currency || (uid != "" && uid != s.UserID) {
 			continue
 		}
 		out.TotalServices++
 		if s.Status == "active" {
 			out.ActiveServices++
-			out.MonthlyTotal += s.PriceMinor
+			if !addAmount(&out.MonthlyTotal, s.PriceMinor) {
+				return Summary{}, errors.New("amount overflow")
+			}
 		}
 	}
 	for _, i := range m.invoices {
-		if uid != "" && uid != i.UserID {
+		if i.Currency != currency || (uid != "" && uid != i.UserID) {
 			continue
 		}
 		if i.Status == "unpaid" {
 			out.PendingInvoices++
+			if !addAmount(&out.UnpaidTotal, i.AmountMinor) {
+				return Summary{}, errors.New("amount overflow")
+			}
 		}
 		if i.Status == "paid" {
-			out.Revenue += i.AmountMinor
+			if !addAmount(&out.Revenue, i.AmountMinor) {
+				return Summary{}, errors.New("amount overflow")
+			}
 		}
 	}
 	for _, u := range m.users {
@@ -220,4 +262,42 @@ func (m *Memory) Summary(_ context.Context, uid string) (Summary, error) {
 		}
 	}
 	return out, nil
+}
+
+func (m *Memory) Settings(context.Context) (SiteSettings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.settings, nil
+}
+
+func (m *Memory) UpdateSettings(_ context.Context, actor User, settings SiteSettings) (SiteSettings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if actor.Role != "admin" || !ValidateSettings(settings) {
+		return SiteSettings{}, errors.New("invalid settings update")
+	}
+	if settings.Revision != m.settings.Revision || settings.Revision == MaxMinor {
+		return SiteSettings{}, ErrSettingsConflict
+	}
+	settings.Revision++
+	m.settings = settings
+	m.audits = append(m.audits, settingsAudit(actor))
+	return settings, nil
+}
+
+func cloneIdentity(i *InvoiceIdentity) *InvoiceIdentity {
+	if i == nil {
+		return nil
+	}
+	copy := *i
+	return &copy
+}
+func cloneOrder(o Order) Order { o.Issuer = cloneIdentity(o.Issuer); return o }
+func cloneInvoice(i Invoice) Invoice {
+	i.Issuer = cloneIdentity(i.Issuer)
+	if i.PaidAt != nil {
+		paid := *i.PaidAt
+		i.PaidAt = &paid
+	}
+	return i
 }

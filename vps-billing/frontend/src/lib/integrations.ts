@@ -1,3 +1,4 @@
+import { tr } from "./i18n";
 import { ApiError } from "./api";
 
 export interface IntegrationSummary {
@@ -9,6 +10,7 @@ export interface IntegrationSummary {
   configured: boolean;
   status: "disabled" | "ready" | "unavailable";
   capabilities: string[];
+  supported_currencies: ("CNY" | "USD")[];
   configuration_fields: {
     key: string;
     label: string;
@@ -24,7 +26,13 @@ export interface IntegrationSummary {
 // Unknown fields (including accidental configuration values) are never rendered.
 export function readIntegrationManifest(data: unknown): IntegrationSummary[] {
   const invalid = () => {
-    throw new ApiError("INVALID_RESPONSE", "扩展清单格式不正确，请稍后重试。");
+    throw new ApiError(
+      "INVALID_RESPONSE",
+      tr(
+        "扩展清单格式不正确，请稍后重试。",
+        "The integration manifest is invalid. Please try again.",
+      ),
+    );
   };
   if (
     !data ||
@@ -48,6 +56,10 @@ export function readIntegrationManifest(data: unknown): IntegrationSummary[] {
       typeof v.configured !== "boolean" ||
       v.configuration_mode !== "environment" ||
       !strings(v.capabilities) ||
+      !strings(v.supported_currencies) ||
+      !v.supported_currencies.every(
+        (currency) => currency === "CNY" || currency === "USD",
+      ) ||
       !strings(v.limitations) ||
       !Array.isArray(v.configuration_fields)
     )
@@ -81,6 +93,7 @@ export function readIntegrationManifest(data: unknown): IntegrationSummary[] {
       configured: v.configured,
       configuration_mode: "environment",
       capabilities: v.capabilities,
+      supported_currencies: v.supported_currencies as ("CNY" | "USD")[],
       limitations: v.limitations,
       configuration_fields: fields,
     };
@@ -97,6 +110,7 @@ export const previewIntegrations: IntegrationSummary[] = [
     configured: false,
     status: "disabled",
     capabilities: [],
+    supported_currencies: [],
     configuration_fields: [],
     configuration_mode: "environment",
     limitations: ["只读样例，未连接支付服务。"],
@@ -110,8 +124,35 @@ export const previewIntegrations: IntegrationSummary[] = [
     configured: false,
     status: "disabled",
     capabilities: [],
+    supported_currencies: [],
     configuration_fields: [],
     configuration_mode: "environment",
     limitations: ["只读样例，未连接邮件服务。"],
   },
 ];
+
+export function localizedPreviewIntegrations(): IntegrationSummary[] {
+  return previewIntegrations.map((item) => ({
+    ...item,
+    name:
+      item.kind === "payment"
+        ? tr("支付 · 未接入", "Payments · Disabled")
+        : tr("邮件 · 未接入", "Email · Disabled"),
+    description:
+      item.kind === "payment"
+        ? tr(
+            "此样例展示支付适配器的注册位置，不提供真实收款能力。",
+            "Sample payment adapter registration. Real payments are unavailable.",
+          )
+        : tr(
+            "此样例展示邮件适配器的注册位置，不提供真实邮件投递。",
+            "Sample email adapter registration. Real email delivery is unavailable.",
+          ),
+    limitations: [
+      tr(
+        "只读样例，未连接外部服务。",
+        "Read-only sample. No external service is connected.",
+      ),
+    ],
+  }));
+}
