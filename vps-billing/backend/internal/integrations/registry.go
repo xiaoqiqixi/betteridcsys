@@ -16,7 +16,6 @@ import (
 )
 
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9_.-]{1,63}$`)
-var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
 var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 type Registry struct {
@@ -26,6 +25,7 @@ type Registry struct {
 	paymentID     string
 	emailID       string
 	checkoutHosts []string
+	currencies    []string
 	timeout       time.Duration
 }
 type disabled struct{}
@@ -61,7 +61,7 @@ func New(ctx context.Context, definitions []Definition, o Options) (*Registry, e
 	defs := map[string]Definition{}
 	for _, kind := range []Kind{Payment, Email} {
 		id := string(kind) + ".disabled"
-		defs[id] = Definition{Manifest: Manifest{ID: id, Kind: kind, Name: map[Kind]string{Payment: "支付未接入", Email: "邮件未接入"}[kind], Description: "安全关闭的默认适配器，不执行外部操作", Capabilities: []string{}, ConfigurationFields: []ConfigurationField{}, Limitations: []string{"未安装真实服务商；不会扣款、发送邮件或变更账务状态"}}}
+		defs[id] = Definition{Manifest: Manifest{ID: id, Kind: kind, Name: map[Kind]string{Payment: "支付未接入", Email: "邮件未接入"}[kind], Description: "安全关闭的默认适配器，不执行外部操作", Capabilities: []string{}, SupportedCurrencies: []string{}, ConfigurationFields: []ConfigurationField{}, Limitations: []string{"未安装真实服务商；不会扣款、发送邮件或变更账务状态"}}}
 	}
 	for _, d := range definitions {
 		if err := validateDefinition(d); err != nil {
@@ -118,6 +118,7 @@ func New(ctx context.Context, definitions []Definition, o Options) (*Registry, e
 			if d.Manifest.Kind == Payment {
 				r.payment, err = d.PaymentFactory(c, cfg)
 				r.checkoutHosts = append([]string{}, d.CheckoutHosts...)
+				r.currencies = append([]string{}, d.Manifest.SupportedCurrencies...)
 			} else {
 				r.email, err = d.EmailFactory(c, cfg)
 			}
@@ -139,6 +140,16 @@ func validateDefinition(d Definition) error {
 	}
 	if (m.Kind == Payment && (d.PaymentFactory == nil || d.EmailFactory != nil)) || (m.Kind == Email && (d.EmailFactory == nil || d.PaymentFactory != nil)) || (m.Kind != Payment && m.Kind != Email) {
 		return fmt.Errorf("invalid factory for %s", m.ID)
+	}
+	currencies := map[string]bool{}
+	if (m.Kind == Payment && len(m.SupportedCurrencies) == 0) || (m.Kind == Email && len(m.SupportedCurrencies) != 0) {
+		return fmt.Errorf("invalid currency capabilities for %s", m.ID)
+	}
+	for _, currency := range m.SupportedCurrencies {
+		if !supportedCurrency(currency) || currencies[currency] {
+			return fmt.Errorf("invalid currency capabilities for %s", m.ID)
+		}
+		currencies[currency] = true
 	}
 	keys := map[string]bool{}
 	for _, f := range m.ConfigurationFields {
@@ -213,6 +224,7 @@ func ResolveSecret(ref string) (string, error) {
 }
 func cloneManifest(m Manifest) Manifest {
 	m.Capabilities = append([]string{}, m.Capabilities...)
+	m.SupportedCurrencies = append([]string{}, m.SupportedCurrencies...)
 	m.ConfigurationFields = append([]ConfigurationField{}, m.ConfigurationFields...)
 	m.Limitations = append([]string{}, m.Limitations...)
 	return m
@@ -226,8 +238,20 @@ func (r *Registry) Summaries() []Summary {
 	return out
 }
 func (r *Registry) CreateCheckout(ctx context.Context, in CheckoutRequest) (Checkout, error) {
-	if in.InvoiceID == "" || in.OrderID == "" || in.AccountID == "" || in.AmountMinor <= 0 || !currencyCode.MatchString(in.Currency) || in.IdempotencyKey == "" {
+	if in.InvoiceID == "" || in.OrderID == "" || in.AccountID == "" || in.AmountMinor <= 0 || in.AmountMinor > maxMinor || !supportedCurrency(in.Currency) || in.IdempotencyKey == "" {
 		return Checkout{}, ErrInvalidResult
+	}
+	if r.paymentID == "payment.disabled" {
+		return Checkout{}, ErrUnavailable
+	}
+	supported := false
+	for _, currency := range r.currencies {
+		if currency == in.Currency {
+			supported = true
+		}
+	}
+	if !supported {
+		return Checkout{}, ErrUnsupportedCurrency
 	}
 	c, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
@@ -287,7 +311,7 @@ func (r *Registry) VerifyCallback(ctx context.Context, in CallbackRequest) (Veri
 	if c.Err() != nil {
 		return VerifiedPayment{}, c.Err()
 	}
-	if v.ProviderID != r.paymentID || v.EventID == "" || v.TransactionID == "" || v.MerchantAccountID == "" || v.AccountID == "" || v.OrderID == "" || v.InvoiceID == "" || v.AmountMinor <= 0 || v.Currency == "" || v.SettledAt.IsZero() || v.Status != "settled" {
+	if v.ProviderID != r.paymentID || v.EventID == "" || v.TransactionID == "" || v.MerchantAccountID == "" || v.AccountID == "" || v.OrderID == "" || v.InvoiceID == "" || v.AmountMinor <= 0 || v.AmountMinor > maxMinor || !supportedCurrency(v.Currency) || v.SettledAt.IsZero() || v.Status != "settled" {
 		return VerifiedPayment{}, ErrInvalidResult
 	}
 	return v, nil

@@ -86,6 +86,11 @@ func TestSettingsValidation(t *testing.T) {
 		func(s *SiteSettings) { s.DisplayURL = "https://example.com/path" }, func(s *SiteSettings) { s.Logo = "https://remote.example/logo.svg" },
 		func(s *SiteSettings) { s.Theme = "body {color:red}" }, func(s *SiteSettings) { s.SupportEmail = "Name <test@example.com>" },
 		func(s *SiteSettings) { s.SiteName = "bad\nname" }, func(s *SiteSettings) { s.InvoiceIssuer = "" },
+		func(s *SiteSettings) { s.SupportURL = "https://127.0.0.1" }, func(s *SiteSettings) { s.SupportURL = "https://[::1]" },
+		func(s *SiteSettings) { s.SupportURL = "https://localhost" }, func(s *SiteSettings) { s.SupportURL = "https://support.example:8443" },
+		func(s *SiteSettings) { s.SupportURL = "https://invalid_host.example" }, func(s *SiteSettings) { s.DisplayURL = "https://example.com?" },
+		func(s *SiteSettings) { s.SiteName = "<script>alert(1)</script>" }, func(s *SiteSettings) { s.SiteName = "company\u202ename" },
+		func(s *SiteSettings) { s.Revision = MaxMinor + 1 },
 	} {
 		bad := good
 		mutate(&bad)

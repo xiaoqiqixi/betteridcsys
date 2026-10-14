@@ -10,6 +10,11 @@ import (
 
 var ErrUnavailable = errors.New("integration unavailable")
 var ErrInvalidResult = errors.New("invalid integration result")
+var ErrUnsupportedCurrency = errors.New("currency not supported by provider")
+
+const maxMinor int64 = 9007199254740991
+
+func supportedCurrency(c string) bool { return c == "CNY" || c == "USD" }
 
 type Kind string
 
@@ -26,6 +31,7 @@ type ConfigurationField struct {
 	Secret   bool   `json:"secret"`
 }
 type Manifest struct {
+	SupportedCurrencies []string             `json:"supported_currencies"`
 	ID                  string               `json:"id"`
 	Kind                Kind                 `json:"kind"`
 	Name                string               `json:"name"`

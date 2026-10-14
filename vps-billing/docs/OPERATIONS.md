@@ -1,5 +1,7 @@
 # 测试部署与运维手册
 
+本文件以 Compose 为主。原生 Linux amd64 包安装见 [INSTALL.md](INSTALL.md)，站点/定价见 [SITE_SETTINGS.md](SITE_SETTINGS.md)，升级回滚见 [UPGRADE.md](UPGRADE.md)，完整备份恢复程序见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)。本轮实际验收见 [VALIDATION.md](VALIDATION.md)。
+
 ## 1. 拓扑与前提
 
 浏览器 → 可信 TLS 终止代理 → 回环地址 `127.0.0.1:8080` 的 nginx → 内部 API → MySQL 8.4 LTS。网页与 `/api/` 同源，nginx 也代理 `/healthz` 和 `/readyz`。数据库不发布端口，`data` 网络设置为 internal。web 只加入 edge 和独立 proxy 网络，不能直接访问数据库；API 加入 proxy 和 data。
@@ -30,7 +32,7 @@ docker compose --env-file .env -f compose.yml --profile ops run --rm bootstrap
 
 `.env` 不保存密码。`secrets/` 外层目录权限为 0700，文件为 0444，使 Compose 只读挂载后非 root 容器可读；其他宿主机用户不能穿越该目录。文件级权限并不保护 root、Docker 管理员、备份管理员。不要把目录变成公开可遍历目录。若组织要求 0400 文件，改为经过验证的 secret manager/容器 UID 映射，而不是盲目 chmod 导致 API 读不到秘密。
 
-数据库身份已分离：`aster_migrator` 用于迁移且具备本库 DDL 权限，`aster_runtime` 只获 SELECT/INSERT/UPDATE/DELETE。API 与 bootstrap 只挂载 runtime DSN；迁移服务单独挂载 migration DSN；运行态不挂载 root 或 migration 秘密。首次空卷初始化时 `mysql-init-runtime.sh` 使用 root 创建最小权限 runtime 账号。
+数据库身份已分离：`aster_migrator` 用于迁移且具备本库 DDL 权限，`aster_runtime` 只获 SELECT/INSERT/UPDATE/DELETE。API 与 bootstrap 只挂载 runtime DSN；迁移服务单独挂载 migration DSN；运行态不挂载 root 或 migration 秘密。首次空卷初始化时 `mysql-init-runtime.sh` 使用 root 创建最小权限 runtime 账号。脚本由 `Dockerfile.mysql` 以明确只读/可执行权限打入数据库镜像；`docker compose build --pull` 也构建数据库镜像，不能只构建 API/web 后忽略数据库初始化变更。
 
 MySQL 初始化环境变量及账号初始化脚本只在空数据卷首次初始化时生效。已有旧版数据卷不会自动补建新账号，也不能重跑 CREATE USER 盲目覆盖。升级旧测试实例需先备份，再由 DBA 明确创建/授权 runtime 与 migration 身份，验证后切换 DSN；不能删卷绕过升级。之后修改 `mysql_password`（迁移）或 `mysql_runtime_password` 文件不会自动修改数据库用户密码，必须执行经过批准的密码轮换流程，再分别同步 migration/runtime DSN，验证后重启相关进程。不要通过删除卷来“修复”密码不一致。
 
@@ -44,7 +46,7 @@ MySQL 初始化环境变量及账号初始化脚本只在空数据卷首次初�
 
 ## 4. 健康、日志和故障
 
-- `/healthz`：进程存活；`/readyz`：数据库可用且初始 schema 版本/checksum 匹配。代理可达不等于业务验收完成。
+- `/healthz`：进程存活；`/readyz`：数据库可用且完整 schema 版本/checksum 匹配。代理可达不等于业务验收完成。
 - `docker compose ... logs --tail=100 api migrate web db` 查看启动失败。不要把原始日志公开分享，先检查邮箱、订单信息和秘密。
 - 缺密钥、非 HTTPS 来源、数据库不可达或迁移失败应停止启动，不能自动降级为内存模式。
 - `mysqladmin ping` 只用于数据库进程启动探测，不是凭据/业务完整性检查；API 就绪检查及功能测试仍必需。
@@ -63,7 +65,9 @@ MySQL 初始化环境变量及账号初始化脚本只在空数据卷首次初�
 
 ```sh
 # 1. 验证归档完整性，确认文件来源可信。
-sha256sum -c backups/aster-TIMESTAMP.sql.gz.sha256
+cd backups
+sha256sum -c aster-TIMESTAMP.sql.gz.sha256
+cd ..
 gzip -t backups/aster-TIMESTAMP.sql.gz
 # 2. 用不同 Compose project 创建独立数据库卷，绝不复用运行中的 project。
 docker compose --env-file .env -f compose.yml -p aster-restore up -d db
@@ -77,7 +81,7 @@ gzip -dc backups/aster-TIMESTAMP.sql.gz |
 
 ## 6. 更新与回滚
 
-发布前备份并演练还原。当前初始迁移不能等同完整的滚动升级/向下迁移体系。结构变更先做兼容性审查，采用 expand/contract 方式规划；无法确认兼容时停写维护，不在高峰直接更新。
+发布前备份并演练还原。当前迁移器校验已知迁移完整前缀并处理已知中断点，不等同完整的滚动升级/向下迁移体系。新 schema 可能被旧二进制拒绝；不能默认应用目录回退就能恢复。结构变更先做兼容性审查，采用 expand/contract 方式规划；无法确认兼容时停写维护，不在高峰直接更新。具体步骤见 [UPGRADE.md](UPGRADE.md)。
 
 保留旧镜像 digest、配置版本和数据库迁移版本。仅当 schema 向后兼容时回滚应用镜像；否则在停写和明确数据损失评估后恢复到经过验证的备份。禁止把 `down -v` 当作回滚。
 

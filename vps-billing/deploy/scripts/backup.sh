@@ -13,5 +13,6 @@ docker compose --env-file .env -f compose.yml exec -T db sh -c \
   'export MYSQL_PWD="$(cat /run/secrets/mysql_root_password)"; exec mysqldump --user=root --single-transaction --quick --routines --events --triggers --no-tablespaces --set-gtid-purged=OFF aster' | gzip -c > "$tmp"
 gzip -t "$tmp"
 mv "$tmp" "$file"
-sha256sum "$file" > "${file}.sha256"
+# Basename-only checksum remains valid after moving both files off the host.
+(cd backups && sha256sum "$(basename "$file")") > "${file}.sha256"
 echo "Created $file and checksum. Encrypt and copy off-host; creation is not a restore test."

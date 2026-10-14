@@ -2,6 +2,29 @@
 
 本文件区分“实现了配置”和“实际跑通”。编写日期：2026-10-14 UTC。
 
+## 本次维护里程碑（当前记录）
+
+本节替代下方早期快照中的“USD-only / MySQL 从未运行 / 仅迁移 1”等状态描述；历史记录仍保留原测试范围和时间，不向过去补写今天的结果。当前功能约定见 [CONTRACT.md](CONTRACT.md)，完整发布条件见 [RELEASE.md](RELEASE.md)。
+
+当前源码已完成以下云端验收；保留明确未完成的发布条件，不据此声称生产就绪。证据目录：`/workspace/aster-validation-20261014/`。实际工具链为 Go 1.27.2、Node 24.19.0、MySQL 8.4.11。
+
+- Go：全量 `go test -race -count=1 -v ./...` 38 个顶层测试、50 个子测试通过，0 失败、0 跳过；真实 MySQL 覆盖 35 个独立迁移场景，以及双币种、快照、并发幂等、金额边界和事务故障回滚。`go vet` 通过。证据 `backend-race-mysql.log`、`backend-vet.log`。
+- 前端：62 项单元/组件测试、typecheck、Vite 生产构建和格式检查通过。浏览器截图复核后把窄屏三列统计改为单列，重新构建和浏览器验收通过；这次纯 CSS 调整不改变业务逻辑。证据 `frontend-final.log`、`frontend-mobile-build.log`、`frontend-format-final.log`。
+- HTTP 安全冒烟 13/13、启动配置 8/8，均针对最新静态编译二进制；合成账号测试没有跳过。证据 `http-final.log`、`config-final.log`。
+- 浏览器：通过已获准的云端命令执行正常启动安装的 Chromium，保持沙箱开启。访问本机回环 demo，经真实 API 完成双语/币种独立偏好、CNY 下单、切换币种后历史不变、支付禁用、弹窗/搜索、手机导航、管理员设置预览和保存、新访客默认值、历史开具方快照及设置恢复。1440×1100 与 390×844 截图已检查，手机页面无横向溢出、侧栏完全关闭，流程无 pageerror。证据 `browser-final.log` 与 `browser/`。这不是完整无障碍、所有设备或生产 CSP 认证。
+- Docker：MySQL 自定义镜像构建通过，发现并修复初始化脚本宿主机权限造成 runtime 用户缺失的问题。原 API/web 多阶段构建因 Docker 构建网络 DNS 无法解析 proxy.golang.org/APK 镜像源失败；普通 host 构建网络仍失败，未绕过网络策略。证据 `compose-final-build.log` 与后续构建日志。
+- 容器运行替代验证：仅在一次性测试目录使用现有基础镜像和本轮本地编译产物组装运行镜像，不把它写成原多阶段 Dockerfile 构建通过。Compose 生产模式的 nginx→API health/ready、迁移 1–5、CLI 引导合成账号、Secure/HttpOnly/SameSite Cookie、权限/CSRF、设置持久化、CNY/USD 下单/幂等/快照/独立汇总、禁用 checkout 均通过。runtime 账号 CREATE/ALTER/DROP/GRANT 均被拒绝；非 root、只读、cap_drop、no-new-privileges 和端口边界已检查。请求在回环 HTTP 上模拟外层 HTTPS Host/Origin，不证明真实 TLS。证据 `compose-http-production.log`、`compose-runtime-privileges.log`、`compose-runtime-hardening.log`。
+- 真实备份恢复：执行 backup.sh，复制后校验 SHA-256/gzip，在独立临时 MySQL 项目恢复。12 张表及行数一致，迁移 checksum、设置、价格、订单/账单金额币种身份、幂等记录和分币种总额一致，孤立/不匹配记录 0，重复迁移退出 0。合成小库导入加比较约 7.3 秒，不作生产 RTO/RPO 承诺。证据 `compose-backup-restore.log`。没有验证备份加密、异地主机或生产规模恢复。
+- 打包/备份脚本：bash 语法、Python 编译、源文件排除规则、参数拒绝、文档相对链接、git diff --check 通过；mock Docker 测试包含 8 个同秒并发备份、搬移校验和、gzip、失败清理与 0700/0600 权限。
+- npm：Vitest 升级到 5.0.4 后完整 npm audit 已知漏洞 0（含开发依赖）。不覆盖 Go、镜像或业务逻辑。
+- Go 漏洞扫描：官方数据库请求返回 Forbidden，govulncheck 未完成，不能认定 Go 无漏洞。镜像安全扫描也未完成。
+
+发布脚本仅构建准确 Git 提交；两次构建比对及实际 SHA-256 由提交后的发布目录 `BUILD.json`、`SHA256SUMS` 和最终维护报告记录，源码文档不自证自己尚未生成的归档。发布包不自动包含测试日志。根 LICENSE/README 和原项目 README 保留原文。
+
+原生 systemd/nginx 样例未在目标主机安装，真实域名/TLS、容量、监控告警、异地灾备尚待验证；没有真实支付/邮件/控制器、外部生产部署、生产客户数据或生产认证。GitHub Release 创建/上传工具未暴露，gh 身份无效；本地候选归档不能称为 GitHub 已发布。开发分支和草稿 PR 保持可审查，不合并。
+
+## 以下为原始交付的历史验证
+
 ## 部署部分
 
 已准备：多阶段 Dockerfile、非 root API/nginx、同源反向代理、安全头、独立 MySQL 网络与持久卷、健康检查、迁移先行、随机秘密初始化脚本、备份模板与隔离恢复说明。
