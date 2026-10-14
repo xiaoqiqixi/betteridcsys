@@ -51,7 +51,7 @@ class BrowserDemoTest(unittest.TestCase):
         (frontend / "tests/e2e.mjs").write_text('const config={chromiumSandbox: true}; await shot("fixture");\n')
         (frontend / "node_modules/vite/bin/vite.js").write_text("// fixture\n")
         self.chrome = self.root / "trusted-chrome"
-        executable(self.chrome, "#!/bin/sh\nexit 99\n")
+        executable(self.chrome, "#!/bin/sh\nprintf 'Google Chrome 154.0.0.0\\n'\n")
         self.output = self.root / "new-evidence"
         self.tools = self.root / "tools"
         self.tools.mkdir()
@@ -178,6 +178,7 @@ class BrowserDemoTest(unittest.TestCase):
         self.assertTrue(summary["passed"])
         self.assertEqual(summary["source_commit"], "a" * 40)
         self.assertEqual(summary["stage"], "complete")
+        self.assertEqual(summary["browser_version"], "Google Chrome 154.0.0.0")
         self.assertEqual({p.name for p in self.output.iterdir()}, {"summary.json", "screenshots"})
         self.assertEqual((self.output / "screenshots/fixture.png").read_bytes(), PNG)
         self.assertIsNone(foreign.poll(), "unrelated process was terminated")
@@ -191,6 +192,16 @@ class BrowserDemoTest(unittest.TestCase):
         self.assertEqual(summary["stage"], "browser")
         self.assertIn("no sandbox bypass", summary["reason"])
         self.assertFalse((self.output / "screenshots").exists())
+
+    def test_untrusted_browser_is_never_executed_even_for_version(self):
+        marker = self.root / "untrusted-browser-ran"
+        executable(self.chrome, "#!/usr/bin/env python3\nfrom pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n")
+        self.chrome.chmod(0o777)
+        result = subprocess.run(self.command(), env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("mode=0777", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.output.exists())
 
     def test_build_failure_starts_no_demo_or_browser(self):
         self.mode.write_text("build-fail")

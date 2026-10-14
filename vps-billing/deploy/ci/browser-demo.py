@@ -379,6 +379,15 @@ def run(repo, chromium, output):
         clean_before = processes.start([git,"status","--porcelain","--untracked-files=normal"],repo,env,before_log)
         if processes.wait(clean_before,10)!=0 or before_log.stat().st_size!=0:
             raise Failure("Source must have no tracked changes or nonignored untracked files before browser acceptance")
+        summary["stage"] = "browser-version"
+        version_log = scratch / "browser-version.log"
+        version = processes.start([str(chromium), "--version"], scratch, env, version_log)
+        if processes.wait(version, 10) != 0 or version_log.stat().st_size > 256:
+            raise Failure("The validated Chrome executable could not report its version")
+        chrome_version = version_log.read_text(encoding="ascii").strip()
+        if not re.fullmatch(r"(?:Google Chrome|Chromium) [0-9]{1,4}(?:\.[0-9]{1,4}){3}", chrome_version):
+            raise Failure("The validated Chrome executable reported an unexpected version")
+        summary["browser_version"] = chrome_version
         summary["stage"] = "build-api"
         build = processes.start([go, "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", str(binary), "./cmd/server"],
                                 repo / "vps-billing/backend", env, scratch / "build.log")

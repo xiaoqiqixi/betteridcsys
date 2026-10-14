@@ -43,7 +43,6 @@ jobs:
       - name: Sandboxed browser acceptance with the loopback demo
         run: |
           chrome_path=/opt/google/chrome/chrome
-          "$chrome_path" --version
           python3 -I vps-billing/deploy/ci/browser-demo.py --repo-root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/browser-acceptance" --chromium-path "$chrome_path"
       - name: Workflow syntax and expression checks
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/release-build.yml .github/workflows/release-publish.yml
