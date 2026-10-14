@@ -209,6 +209,21 @@ class BrowserDemoTest(unittest.TestCase):
         self.assertFalse(self.api_pid.exists())
         self.assertFalse(self.preview_pid.exists())
 
+    def test_version_stderr_warning_is_not_treated_as_version_or_published(self):
+        executable(self.chrome, "#!/bin/sh\nprintf 'private startup warning\\n' >&2\nprintf 'Google Chrome 154.0.8037.97\\n'\n")
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(summary["browser_version"], "Google Chrome 154.0.8037.97")
+        self.assertNotIn("private startup warning", result.stdout + result.stderr + json.dumps(summary))
+        self.assertEqual({p.name for p in self.output.iterdir()}, {"summary.json", "screenshots"})
+
+    def test_version_on_stderr_without_stdout_is_rejected(self):
+        executable(self.chrome, "#!/bin/sh\nprintf 'Google Chrome 154.0.8037.97\\n' >&2\n")
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(summary["stage"], "browser-version")
+        self.assertFalse(self.api_pid.exists())
+
     def test_untrusted_browser_is_never_executed_even_for_version(self):
         marker = self.root / "untrusted-browser-ran"
         executable(self.chrome, "#!/usr/bin/env python3\nfrom pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n")

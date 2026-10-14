@@ -197,11 +197,15 @@ class Processes:
                 return True
         return False
 
-    def start(self, arguments, cwd, env, log):
+    def start(self, arguments, cwd, env, log, error_log=None):
         stream = log.open("xb")
         self.logs.append(stream)
+        errors = subprocess.STDOUT
+        if error_log is not None:
+            errors = error_log.open("xb")
+            self.logs.append(errors)
         process = subprocess.Popen(arguments, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                   stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+                                   stdout=stream, stderr=errors, start_new_session=True)
         self.children.append(process)
         self.sample()
         return process
@@ -381,8 +385,11 @@ def run(repo, chromium, output):
             raise Failure("Source must have no tracked changes or nonignored untracked files before browser acceptance")
         summary["stage"] = "browser-version"
         version_log = scratch / "browser-version.log"
-        version = processes.start([str(chromium), "--version"], scratch, env, version_log)
-        if processes.wait(version, 10) != 0 or version_log.stat().st_size > 256:
+        version_errors = scratch / "browser-version-errors.log"
+        # Chrome can emit startup warnings on stderr even for --version. Only
+        # stdout is its version interface; keep diagnostics private and separate.
+        version = processes.start([str(chromium), "--version"], scratch, env, version_log, version_errors)
+        if processes.wait(version, 10) != 0 or version_log.stat().st_size > 256 or version_errors.stat().st_size > 65536:
             raise Failure("The validated Chrome executable could not report its version")
         chrome_version = version_log.read_text(encoding="ascii").strip()
         # Upstream HandleVersionSwitches prints GetChannelName after the version.
