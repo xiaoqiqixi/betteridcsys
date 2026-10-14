@@ -137,7 +137,10 @@ class NativeMySQLFixtureTest(unittest.TestCase):
             import sys
             import time
             assert sys.argv[1:3] == ['--no-defaults', '--no-login-paths']
-            assert '--host=127.0.0.1' in sys.argv and '--user=aster_ci' in sys.argv
+            assert '--protocol=SOCKET' in sys.argv and '--user=aster_ci' in sys.argv
+            assert not any(arg.startswith(('--host=', '--port=', '--ssl-mode=')) for arg in sys.argv)
+            socket_path = Path(next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--socket=')))
+            assert socket_path.name == 'mysql.sock' and socket_path.parent.parent == Path(os.environ['RUNNER_TEMP'])
             assert os.environ['MYSQL_PWD'] == 'AsterCiFixtureOnly2026'
             assert 'MYSQL_TEST_LOGIN_FILE' not in os.environ
             if not Path(os.environ['CI_FIXTURE_MYSQL_PID']).exists():
@@ -161,7 +164,8 @@ class NativeMySQLFixtureTest(unittest.TestCase):
             import sys
             import time
             import subprocess
-            assert re.fullmatch(r'aster_ci:AsterCiFixtureOnly2026@tcp\\(127\\.0\\.0\\.1:[0-9]+\\)/aster_ci_test\\?parseTime=true', os.environ['ASTER_MYSQL_TEST_DSN'])
+            expected_dsn = 'aster_ci:AsterCiFixtureOnly2026@unix(' + os.environ['ASTER_NATIVE_MYSQL_SOCKET'] + ')/aster_ci_test?parseTime=true'
+            assert os.environ['ASTER_MYSQL_TEST_DSN'] == expected_dsn
             assert 'MYSQL_PWD' not in os.environ
             assert 'MYSQL_TEST_LOGIN_FILE' not in os.environ
             fixture = Path(os.environ['ASTER_NATIVE_MYSQL_FIXTURE_ROOT'])
