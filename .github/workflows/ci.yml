@@ -37,6 +37,20 @@ jobs:
         run: npm audit --audit-level=high
       - name: Workflow syntax and expression checks
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/release-build.yml .github/workflows/release-publish.yml
+  go-vulnerability:
+    # Keep this scan independent of database provisioning so network failures
+    # and vulnerability findings remain visible even when another gate fails.
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
       - name: Go vulnerability gate (network failures fail the check)
         working-directory: vps-billing/backend
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format=text -show=version ./...
