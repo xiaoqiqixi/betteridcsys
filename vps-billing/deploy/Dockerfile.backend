@@ -1,0 +1,15 @@
+ARG GO_IMAGE=golang:1.26-alpine
+ARG RUNTIME_IMAGE=alpine:3.23
+FROM ${GO_IMAGE} AS build
+WORKDIR /src
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/aster-api ./cmd/server
+FROM ${RUNTIME_IMAGE}
+RUN apk add --no-cache ca-certificates && addgroup -S -g 10001 aster && adduser -S -D -H -u 10001 -G aster aster
+COPY --from=build /out/aster-api /usr/local/bin/aster-api
+USER 10001:10001
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/aster-api"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/readyz || exit 1

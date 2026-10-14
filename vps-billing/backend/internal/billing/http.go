@@ -1,0 +1,490 @@
+package billing
+
+import (
+	"aster/billing/internal/integrations"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"golang.org/x/crypto/bcrypt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+)
+
+type Config struct {
+	Demo              bool
+	Origin            string
+	Secret            string
+	SecureCookie      bool
+	TrustedProxyCIDRs []string
+}
+type bucket struct {
+	Count int
+	Start time.Time
+}
+type App struct {
+	Integrations *integrations.Registry
+	Store        Store
+	Config       Config
+	limiterMu    sync.Mutex
+	attempts     map[string]bucket
+	dummyHash    []byte
+}
+
+func NewApp(s Store, c Config) *App {
+	return NewAppWithIntegrations(s, c, integrations.Default())
+}
+
+// NewAppWithIntegrations injects a validated immutable registry. Nil fails closed.
+func NewAppWithIntegrations(s Store, c Config, registry *integrations.Registry) *App {
+	if registry == nil {
+		registry = integrations.Default()
+	}
+	h, _ := bcrypt.GenerateFromPassword([]byte(ID()), bcrypt.DefaultCost)
+	return &App{Integrations: registry, Store: s, Config: c, attempts: map[string]bucket{}, dummyHash: h}
+}
+func (a *App) cookieName() string {
+	if a.Config.SecureCookie {
+		return "__Host-aster_session"
+	}
+	return "aster_demo_session"
+}
+func digest(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
+func (a *App) csrf(v string) string {
+	h := hmac.New(sha256.New, []byte(a.Config.Secret))
+	h.Write([]byte("csrf:" + v))
+	return hex.EncodeToString(h.Sum(nil))
+}
+func (a *App) setCookie(w http.ResponseWriter, v string) {
+	http.SetCookie(w, &http.Cookie{Name: a.cookieName(), Value: v, Path: "/", HttpOnly: true, Secure: a.Config.SecureCookie, SameSite: http.SameSiteStrictMode, MaxAge: 28800})
+}
+func (a *App) token(r *http.Request) string {
+	c, e := r.Cookie(a.cookieName())
+	if e != nil || len(c.Value) != 64 {
+		return ""
+	}
+	return c.Value
+}
+func (a *App) current(r *http.Request) (User, error) {
+	t := a.token(r)
+	if t == "" {
+		return User{}, ErrNotFound
+	}
+	s, e := a.Store.Session(r.Context(), digest(t))
+	if e != nil {
+		return User{}, e
+	}
+	return a.Store.UserByID(r.Context(), s.UserID)
+}
+func jsonOut(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": v})
+}
+func fail(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": msg, "request_id": w.Header().Get("X-Request-ID")}})
+}
+func (a *App) internal(w http.ResponseWriter, r *http.Request, e error) {
+	slog.Error("request failed", "request_id", w.Header().Get("X-Request-ID"), "error_type", errorKind(e))
+	fail(w, r, 500, "INTERNAL_ERROR", "暂时无法完成请求，请稍后重试")
+}
+func errorKind(e error) string {
+	if errors.Is(e, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "storage_error"
+}
+func body(w http.ResponseWriter, r *http.Request, v any) bool {
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		fail(w, r, 415, "JSON_REQUIRED", "请使用 JSON 请求")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if e := d.Decode(v); e != nil {
+		fail(w, r, 400, "INVALID_BODY", "请求格式不正确或包含不支持的字段")
+		return false
+	}
+	if e := d.Decode(&struct{}{}); e != io.EOF {
+		fail(w, r, 400, "INVALID_BODY", "仅允许一个 JSON 对象")
+		return false
+	}
+	return true
+}
+func (a *App) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-ID", ID())
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		if a.Config.SecureCookie {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		r = r.WithContext(ctx)
+		defer func() {
+			if recover() != nil {
+				slog.Error("request panic", "request_id", w.Header().Get("X-Request-ID"))
+				fail(w, r, 500, "INTERNAL_ERROR", "暂时无法完成请求")
+			}
+		}()
+		a.serve(w, r)
+	})
+}
+func (a *App) serve(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Path
+	if p != "/healthz" && p != "/readyz" {
+		origin, _ := url.Parse(a.Config.Origin)
+		allowed := strings.EqualFold(r.Host, origin.Host)
+		if a.Config.Demo {
+			host := r.Host
+			if h, _, e := net.SplitHostPort(host); e == nil {
+				host = h
+			}
+			ip := net.ParseIP(host)
+			allowed = allowed || strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())
+		}
+		if !allowed {
+			fail(w, r, 421, "INVALID_HOST", "请求主机不匹配")
+			return
+		}
+	}
+
+	if p == "/healthz" && r.Method == "GET" {
+		jsonOut(w, 200, map[string]string{"status": "ok"})
+		return
+	}
+	if p == "/readyz" && r.Method == "GET" {
+		if e := a.Store.Ping(r.Context()); e != nil {
+			fail(w, r, 503, "NOT_READY", "服务尚未就绪")
+		} else {
+			jsonOut(w, 200, map[string]string{"status": "ready"})
+		}
+		return
+	}
+	if !strings.HasPrefix(p, "/api/v1/") {
+		fail(w, r, 404, "NOT_FOUND", "未找到此资源")
+		return
+	}
+	p = strings.TrimPrefix(p, "/api/v1")
+	if r.Method != "GET" && r.Method != "POST" {
+		fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
+		return
+	}
+	if r.Method == "POST" {
+		t := a.token(r)
+		origin := r.Header.Get("Origin")
+		if t == "" || !hmac.Equal([]byte(r.Header.Get("X-CSRF-Token")), []byte(a.csrf(t))) || (origin != "" && origin != a.Config.Origin) {
+			fail(w, r, 403, "CSRF_INVALID", "安全令牌无效，请刷新页面后重试")
+			return
+		}
+	}
+	if p == "/session" && r.Method == "GET" {
+		t := a.token(r)
+		var user any
+		u, e := a.current(r)
+		if e == nil {
+			user = u
+		} else if !errors.Is(e, ErrNotFound) {
+			a.internal(w, r, e)
+			return
+		}
+		if t == "" {
+			t = ID() + ID()
+			a.setCookie(w, t)
+		}
+		jsonOut(w, 200, map[string]any{"user": user, "csrf_token": a.csrf(t), "demo_mode": a.Config.Demo})
+		return
+	}
+	if p == "/auth/login" && r.Method == "POST" {
+		a.login(w, r)
+		return
+	}
+	if p == "/auth/logout" && r.Method == "POST" {
+		if e := a.Store.DeleteSession(r.Context(), digest(a.token(r))); e != nil {
+			a.internal(w, r, e)
+			return
+		}
+		t := ID() + ID()
+		a.setCookie(w, t)
+		jsonOut(w, 200, map[string]any{"user": nil, "csrf_token": a.csrf(t)})
+		return
+	}
+	if p == "/plans" && r.Method == "GET" {
+		v, e := a.Store.Plans(r.Context())
+		if e != nil {
+			a.internal(w, r, e)
+		} else {
+			jsonOut(w, 200, v)
+		}
+		return
+	}
+	u, e := a.current(r)
+	if errors.Is(e, ErrNotFound) {
+		fail(w, r, 401, "AUTH_REQUIRED", "请先登录")
+		return
+	}
+	if e != nil {
+		a.internal(w, r, e)
+		return
+	}
+	admin := strings.HasPrefix(p, "/admin/")
+	if admin && u.Role != "admin" {
+		fail(w, r, 403, "FORBIDDEN", "没有权限执行此操作")
+		return
+	}
+	uid := u.ID
+	if admin {
+		uid = ""
+	}
+	if r.Method == "POST" && p == "/orders" {
+		a.createOrder(w, r, u)
+		return
+	}
+	if strings.HasPrefix(p, "/invoices/") {
+		id := strings.TrimPrefix(p, "/invoices/")
+		checkout := strings.HasSuffix(id, "/checkout")
+		if checkout {
+			id = strings.TrimSuffix(id, "/checkout")
+		}
+		if (checkout && r.Method != "POST") || (!checkout && r.Method != "GET") {
+			fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
+			return
+		}
+		invoice, e := a.Store.Invoice(r.Context(), u.ID, id)
+		if errors.Is(e, ErrNotFound) {
+			fail(w, r, 404, "NOT_FOUND", "未找到此账单")
+			return
+		}
+		if e != nil {
+			a.internal(w, r, e)
+			return
+		}
+		if checkout {
+			a.checkout(w, r, invoice)
+		} else {
+			jsonOut(w, 200, invoice)
+		}
+		return
+	}
+	if r.Method != "GET" {
+		fail(w, r, 404, "NOT_FOUND", "未找到此资源")
+		return
+	}
+	switch p {
+	case "/admin/integrations":
+		jsonOut(w, 200, map[string]any{"items": a.Integrations.Summaries()})
+	case "/services":
+		v, e := a.Store.Services(r.Context(), uid)
+		a.result(w, r, v, e)
+	case "/orders", "/admin/orders":
+		v, e := a.Store.Orders(r.Context(), uid)
+		a.result(w, r, v, e)
+	case "/invoices", "/admin/invoices":
+		v, e := a.Store.Invoices(r.Context(), uid)
+		a.result(w, r, v, e)
+	case "/audit":
+		if u.Role == "admin" {
+			uid = ""
+		}
+		v, e := a.Store.Audits(r.Context(), uid)
+		a.result(w, r, v, e)
+	case "/admin/customers":
+		v, e := a.Store.Users(r.Context())
+		out := []User{}
+		for _, x := range v {
+			if x.Role == "customer" {
+				out = append(out, x)
+			}
+		}
+		a.result(w, r, out, e)
+	case "/overview", "/admin/overview":
+		a.overview(w, r, uid, admin)
+	default:
+		fail(w, r, 404, "NOT_FOUND", "未找到此资源")
+	}
+}
+func (a *App) result(w http.ResponseWriter, r *http.Request, v any, e error) {
+	if e != nil {
+		a.internal(w, r, e)
+	} else {
+		jsonOut(w, 200, v)
+	}
+}
+func (a *App) allowLogin(key string) bool {
+	a.limiterMu.Lock()
+	defer a.limiterMu.Unlock()
+	now := time.Now()
+	if len(a.attempts) > 10000 {
+		for k, v := range a.attempts {
+			if now.Sub(v.Start) > 15*time.Minute {
+				delete(a.attempts, k)
+			}
+		}
+		if len(a.attempts) > 10000 {
+			return false
+		}
+	}
+	b := a.attempts[key]
+	if now.Sub(b.Start) > 15*time.Minute {
+		b = bucket{Start: now}
+	}
+	b.Count++
+	a.attempts[key] = b
+	return b.Count <= 20
+}
+func (a *App) login(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if !body(w, r, &v) {
+		return
+	}
+	v.Email = strings.ToLower(strings.TrimSpace(v.Email))
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	for _, cidr := range a.Config.TrustedProxyCIDRs {
+		_, network, e := net.ParseCIDR(cidr)
+		if e == nil && network.Contains(net.ParseIP(ip)) {
+			forwarded := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+			if net.ParseIP(forwarded) != nil {
+				ip = forwarded
+			}
+			break
+		}
+	}
+	if !a.allowLogin("ip:"+ip) || !a.allowLogin("email:"+v.Email) {
+		w.Header().Set("Retry-After", "900")
+		fail(w, r, 429, "RATE_LIMITED", "尝试次数过多，请稍后再试")
+		return
+	}
+	if len(v.Email) > 254 || len(v.Password) > 72 {
+		fail(w, r, 401, "INVALID_CREDENTIALS", "邮箱或密码不正确")
+		return
+	}
+	u, e := a.Store.UserByEmail(r.Context(), v.Email)
+	hash := a.dummyHash
+	if e == nil {
+		hash = []byte(u.PasswordHash)
+	} else if !errors.Is(e, ErrNotFound) {
+		a.internal(w, r, e)
+		return
+	}
+	valid := bcrypt.CompareHashAndPassword(hash, []byte(v.Password)) == nil
+	if !valid || e != nil {
+		fail(w, r, 401, "INVALID_CREDENTIALS", "邮箱或密码不正确")
+		return
+	}
+	token := ID() + ID()
+	if e = a.Store.PutSession(r.Context(), Session{Hash: digest(token), UserID: u.ID, Expires: time.Now().UTC().Add(8 * time.Hour)}); e != nil {
+		a.internal(w, r, e)
+		return
+	}
+	if e = a.Store.DeleteSession(r.Context(), digest(a.token(r))); e != nil {
+		_ = a.Store.DeleteSession(r.Context(), digest(token))
+		a.internal(w, r, e)
+		return
+	}
+	a.setCookie(w, token)
+	jsonOut(w, 200, map[string]any{"user": u, "csrf_token": a.csrf(token), "demo_mode": a.Config.Demo})
+}
+
+var hostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var keyPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{8,128}$`)
+
+func (a *App) createOrder(w http.ResponseWriter, r *http.Request, u User) {
+	var v struct {
+		PlanID   string `json:"plan_id"`
+		Hostname string `json:"hostname"`
+	}
+	if !body(w, r, &v) {
+		return
+	}
+	v.Hostname = strings.ToLower(strings.TrimSpace(v.Hostname))
+	if !hostnamePattern.MatchString(v.Hostname) || len(v.PlanID) > 64 || v.PlanID == "" {
+		fail(w, r, 400, "VALIDATION_ERROR", "请选择套餐，并填写 1–63 位字母、数字或连字符主机名")
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if !keyPattern.MatchString(key) {
+		fail(w, r, 400, "IDEMPOTENCY_KEY_REQUIRED", "请提供 8–128 位幂等请求标识")
+		return
+	}
+	raw, _ := json.Marshal(v)
+	o, replayed, e := a.Store.CreateOrder(r.Context(), u, v.PlanID, v.Hostname, key, digest(string(raw)))
+	if errors.Is(e, ErrConflict) {
+		fail(w, r, 409, "IDEMPOTENCY_CONFLICT", "该请求标识已用于不同订单")
+		return
+	}
+	if errors.Is(e, ErrUnavailable) {
+		fail(w, r, 409, "PLAN_UNAVAILABLE", "该套餐当前不可订购")
+		return
+	}
+	if e != nil {
+		a.internal(w, r, e)
+		return
+	}
+	status := 201
+	if replayed {
+		status = 200
+		w.Header().Set("Idempotency-Replayed", "true")
+	}
+	jsonOut(w, status, o)
+}
+func (a *App) overview(w http.ResponseWriter, r *http.Request, uid string, admin bool) {
+	s, e := a.Store.Summary(r.Context(), uid)
+	if e != nil {
+		a.internal(w, r, e)
+		return
+	}
+	if admin {
+		jsonOut(w, 200, map[string]any{"customers": s.Customers, "total_services": s.TotalServices, "unpaid_invoices": s.PendingInvoices, "revenue_minor": s.Revenue, "currency": "USD"})
+		return
+	}
+	os, e := a.Store.Orders(r.Context(), uid)
+	if e != nil {
+		a.internal(w, r, e)
+		return
+	}
+	if len(os) > 5 {
+		os = os[:5]
+	}
+	jsonOut(w, 200, map[string]any{"active_services": s.ActiveServices, "pending_invoices": s.PendingInvoices, "monthly_total_minor": s.MonthlyTotal, "currency": "USD", "recent_orders": os})
+}
+
+// Checkout reads authoritative invoice values and never settles invoices/orders.
+func (a *App) checkout(w http.ResponseWriter, r *http.Request, invoice Invoice) {
+	if invoice.Status != "unpaid" || invoice.AmountMinor <= 0 || invoice.PaidAt != nil {
+		fail(w, r, 409, "INVOICE_NOT_PAYABLE", "当前账单不可支付")
+		return
+	}
+	out, err := a.Integrations.CreateCheckout(r.Context(), integrations.CheckoutRequest{
+		InvoiceID: invoice.ID, OrderID: invoice.OrderID, AccountID: invoice.UserID,
+		AmountMinor: invoice.AmountMinor, Currency: invoice.Currency,
+		IdempotencyKey: "invoice:" + invoice.ID,
+	})
+	if errors.Is(err, integrations.ErrUnavailable) {
+		fail(w, r, 503, "PAYMENT_NOT_CONFIGURED", "支付渠道尚未接入，不会产生扣款")
+		return
+	}
+	if err != nil {
+		// Do not expose provider errors, credentials, callback data or payment URLs.
+		fail(w, r, 502, "PAYMENT_PROVIDER_ERROR", "暂时无法创建支付会话，请稍后重试")
+		return
+	}
+	jsonOut(w, 200, out)
+}

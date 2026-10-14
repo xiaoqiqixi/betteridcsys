@@ -1,0 +1,25 @@
+name: aster-billing-demo
+services:
+  api:
+    build: {context: .., dockerfile: deploy/Dockerfile.backend}
+    environment:
+      APP_MODE: demo
+      APP_ORIGIN: http://localhost:8080
+      LISTEN_ADDR: 0.0.0.0:8080
+    networks: [app]
+    read_only: true
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  web:
+    build: {context: .., dockerfile: deploy/Dockerfile.frontend}
+    ports: ["127.0.0.1:8080:8080"]
+    networks: [app]
+    depends_on:
+      api: {condition: service_healthy}
+    read_only: true
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+networks:
+  app: {}

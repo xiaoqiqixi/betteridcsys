@@ -1,0 +1,16 @@
+test_admin_read_access (__main__.SecuritySmoke.test_admin_read_access) ... ok
+test_concurrent_duplicate_orders (__main__.SecuritySmoke.test_concurrent_duplicate_orders) ... ok
+test_customer_admin_boundary (__main__.SecuritySmoke.test_customer_admin_boundary) ... ok
+test_integration_manifest_is_admin_only_readonly_and_redacted (__main__.SecuritySmoke.test_integration_manifest_is_admin_only_readonly_and_redacted) ... ok
+test_login_requires_csrf (__main__.SecuritySmoke.test_login_requires_csrf) ... ok
+test_logout_invalidates_cookie (__main__.SecuritySmoke.test_logout_invalidates_cookie) ... ok
+test_order_idempotency_price_checkout_and_ownership (__main__.SecuritySmoke.test_order_idempotency_price_checkout_and_ownership) ... ok
+test_origin_and_csrf_on_order (__main__.SecuritySmoke.test_origin_and_csrf_on_order) ... ok
+test_session_cookie_and_login_rotation (__main__.SecuritySmoke.test_session_cookie_and_login_rotation) ... ok
+test_unauthenticated_data_and_admin_denied (__main__.SecuritySmoke.test_unauthenticated_data_and_admin_denied) ... ok
+test_unknown_host_rejected (__main__.SecuritySmoke.test_unknown_host_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.677s
+
+OK
