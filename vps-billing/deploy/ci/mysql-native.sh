@@ -288,7 +288,7 @@ while ((SECONDS < readiness_deadline)); do
   fi
   if actual_version=$(MYSQL_PWD="$fixture_password" timeout --signal=TERM --kill-after=1s 2s \
     "$mysql_root/bin/mysql" --no-defaults --no-login-paths \
-    --protocol=TCP --host=127.0.0.1 --port="$mysql_port" --user=aster_ci --ssl-mode=DISABLED \
+    --protocol=SOCKET --socket="$socket_path" --user=aster_ci \
     --connect-timeout=1 --batch --skip-column-names --execute='SELECT VERSION()' 2>"$fixture_tmp/readiness.log"); then
     [[ $actual_version == "$mysql_version" ]] || fail 'Running MySQL version does not match the reviewed manifest.'
     ready=true
@@ -302,8 +302,10 @@ if [[ $ready != true ]]; then
 fi
 running_job "$mysql_pid" || fail 'The owned native MySQL exited; refusing to run tests against another process.'
 rm -- "$fixture_tmp/bootstrap.sql"
-printf 'Native MySQL %s ready on an isolated loopback fixture.\n' "$mysql_version"
-export ASTER_MYSQL_TEST_DSN="aster_ci:$fixture_password@tcp(127.0.0.1:$mysql_port)/aster_ci_test?parseTime=true"
+printf 'Native MySQL %s ready through its private Unix socket.\n' "$mysql_version"
+# Unix sockets are secure local transport for caching_sha2_password. Use the
+# existing localhost fixture account without changing authentication or TLS rules.
+export ASTER_MYSQL_TEST_DSN="aster_ci:$fixture_password@unix($socket_path)/aster_ci_test?parseTime=true"
 printf '[client]\nuser=aster_ci\npassword=%s\n' "$fixture_password" >"$fixture_tmp/admin.cnf"
 export ASTER_NATIVE_MYSQL_ROOT="$mysql_root"
 export ASTER_NATIVE_MYSQL_SOCKET="$socket_path"
