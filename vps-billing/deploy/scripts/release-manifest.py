@@ -41,8 +41,29 @@ def notices(source, target):
     return copied
 
 
+def go_dependency_notices(entry, target, linked_modules):
+    linked = entry["Path"] in linked_modules
+    if not linked:
+        # Treat graph-only nodes identically whether a shared cache happens to
+        # contain their source or not. They are not included in this binary.
+        return {"linked_in_binary": False, "source_status": "module_graph_only", "notice_files": []}
+    directory = entry.get("Dir")
+    if not directory:
+        raise SystemExit("Linked Go dependency source unavailable: " + entry["Path"])
+    return {"linked_in_binary": True, "source_status": "source_available", "notice_files": notices(Path(directory), target)}
+
+
+def go_dependency_metadata(entry, linked_modules):
+    # GoVersion and Sum for lazy unlinked nodes can depend on what was downloaded
+    # by unrelated builds. Record only the graph's authoritative path/version.
+    keys = ("Path", "Version") if not entry.get("Main") and entry["Path"] not in linked_modules else ("Path", "Version", "Sum", "GoVersion", "Main")
+    return {key: entry[key] for key in keys if key in entry}
+
+
 def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
     project = source / "vps-billing"
+    build_lines = build_path.read_text().splitlines()
+    linked_modules = {fields[1] for line in build_lines if len(fields := line.split()) >= 2 and fields[0] == "dep"}
     modules = []
     decoder = json.JSONDecoder()
     raw = modules_path.read_text()
@@ -51,10 +72,10 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
         raw = raw.lstrip()[end:]
         if entry.get("Replace"):
             raise SystemExit("Release disallows local/replacement Go modules; review and update recipe first")
-        item = {key: entry[key] for key in ("Path", "Version", "Sum", "GoVersion", "Main") if key in entry}
+        item = go_dependency_metadata(entry, linked_modules)
         if not entry.get("Main"):
             dest = bundle / "licenses/go" / (entry["Path"].replace("/", "__") + "@" + entry["Version"])
-            item["notice_files"] = notices(Path(entry["Dir"]), dest)
+            item.update(go_dependency_notices(entry, dest, linked_modules))
         modules.append(item)
     npm = []
     for path in sorted((project / "frontend/node_modules").rglob("package.json")):
@@ -73,7 +94,6 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
     write_json(bundle / "manifests/go-dependencies.json", sorted(modules, key=lambda v: v["Path"]))
     write_json(bundle / "manifests/npm-installed-dependencies.json", sorted(npm, key=lambda v: (v["name"], v["version"])))
     # First line from `go version -m` contains a random staging path. Remove it.
-    build_lines = build_path.read_text().splitlines()
     (bundle / "manifests/go-build.txt").write_text("aster-api: " + build_lines[0].split(":", 1)[-1].strip() + "\n" + "\n".join(build_lines[1:]) + "\n")
     inputs = {}
     for relative in ("LICENSE", "README.md", "vps-billing/backend/go.mod", "vps-billing/backend/go.sum", "vps-billing/frontend/package.json", "vps-billing/frontend/package-lock.json"):
@@ -86,12 +106,13 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
         "frontend_build": ["npm ci --no-audit --no-fund", "npm run build"],
         "input_sha256": inputs,
         "source_archive": "Git commit paths LICENSE, README.md, vps-billing; local secrets, build/dependency directories and recorded test outputs excluded",
-        "dependency_inventory": "Go resolved modules and npm installed package metadata plus original lockfiles; not a complete SPDX/CycloneDX SBOM or license compliance certification",
+        "dependency_inventory": "Go module graph (unlinked nodes explicitly marked) and npm installed package metadata plus original lockfiles; not a complete SPDX/CycloneDX SBOM or license compliance certification",
         "release_status": "review candidate; disabled payment/email; no deployment or publication performed",
     }
     write_json(bundle / "manifests/BUILD.json", info)
     (bundle / "licenses/README.txt").write_text(
-        "Dependency notices copied from top-level LICENSE/COPYING/NOTICE/COPYRIGHT files of resolved Go modules, Go runtime and installed npm packages.\n"
+        "Dependency notices copied from top-level LICENSE/COPYING/NOTICE/COPYRIGHT files of linked Go modules, Go runtime and installed npm packages.\n"
+        "Unlinked Go graph entries are marked module_graph_only with path/version only and no copied notices, independently of cache contents; linked dependencies must have source available.\n"
         "Original package license metadata and lockfiles are in manifests/. Build-only npm packages may be included.\n"
         "Nested, generated, nonstandard or missing license notices require manual review. This inventory is not a complete SBOM or a legal determination.\n"
         "The repository LICENSE is preserved unchanged at the archive root.\n"
