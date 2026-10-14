@@ -193,6 +193,22 @@ class BrowserDemoTest(unittest.TestCase):
         self.assertIn("no sandbox bypass", summary["reason"])
         self.assertFalse((self.output / "screenshots").exists())
 
+    def test_direct_binary_unknown_channel_is_retained_without_environment_override(self):
+        executable(self.chrome, "#!/bin/sh\nprintf 'Google Chrome 155.0.8059.39 unknown\\n'\n")
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(summary["browser_version"], "Google Chrome 155.0.8059.39 unknown")
+        self.assertTrue(summary["sandbox_required"])
+
+    def test_malformed_version_is_rejected_before_demo_services_start(self):
+        executable(self.chrome, "#!/bin/sh\nprintf 'Google Chrome 155.0.8059.39 unknown\\nextra line\\n'\n")
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(summary["stage"], "browser-version")
+        self.assertIn("unexpected version", summary["reason"])
+        self.assertFalse(self.api_pid.exists())
+        self.assertFalse(self.preview_pid.exists())
+
     def test_untrusted_browser_is_never_executed_even_for_version(self):
         marker = self.root / "untrusted-browser-ran"
         executable(self.chrome, "#!/usr/bin/env python3\nfrom pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n")

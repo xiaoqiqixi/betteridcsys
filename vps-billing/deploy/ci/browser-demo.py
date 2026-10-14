@@ -385,8 +385,11 @@ def run(repo, chromium, output):
         if processes.wait(version, 10) != 0 or version_log.stat().st_size > 256:
             raise Failure("The validated Chrome executable could not report its version")
         chrome_version = version_log.read_text(encoding="ascii").strip()
-        if not re.fullmatch(r"(?:Google Chrome|Chromium) [0-9]{1,4}(?:\.[0-9]{1,4}){3}", chrome_version):
-            raise Failure("The validated Chrome executable reported an unexpected version")
+        # Upstream HandleVersionSwitches prints GetChannelName after the version.
+        # Direct execution without the wrapper's CHROME_VERSION_EXTRA reports
+        # 'unknown'; preserve that honest channel label instead of inventing one.
+        if not re.fullmatch(r"(?:Google Chrome|Chromium) [0-9]{1,8}(?:\.[0-9]{1,8}){3}(?: (?:unknown|extended|beta|dev|canary))?", chrome_version):
+            raise Failure("The validated Chrome executable reported an unexpected version: " + ascii(chrome_version[:160]))
         summary["browser_version"] = chrome_version
         summary["stage"] = "build-api"
         build = processes.start([go, "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", str(binary), "./cmd/server"],
