@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tighten only the installed Chrome tree on a disposable hosted CI runner.
+"""Tighten the installed Chrome tree and its fixed /opt ancestors in hosted CI.
 
 Protected dpkg metadata supplies a local installed-content consistency check,
 not a fresh package signature or download. No browser is executed, installed or
@@ -39,25 +39,32 @@ def same_inode(first, second):
     return (first.st_dev, first.st_ino, first.st_uid, first.st_gid) == (second.st_dev, second.st_ino, second.st_uid, second.st_gid)
 
 
+def path_state(name, info):
+    return f"{name[:512]} (uid={info.st_uid}, mode={stat.S_IMODE(info.st_mode):04o})"
+
+
 def protected(info, name, directory=False):
     expected = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
     if (not expected or info.st_uid != ROOT_UID or info.st_mode & 0o022
             or (not directory and info.st_nlink != 1)):
-        raise Failure("Unprotected installed-package path: " + name)
+        raise Failure("Unprotected installed-package path: " + path_state(name, info))
 
 
 def tighten(descriptor, name, directory=False):
     before = os.fstat(descriptor)
     expected = stat.S_ISDIR(before.st_mode) if directory else stat.S_ISREG(before.st_mode)
     if not expected or before.st_uid != ROOT_UID or (not directory and before.st_nlink != 1):
-        raise Failure("Unsafe Chrome ownership, type or hardlink: " + name)
+        raise Failure("Unsafe Chrome ownership, type or hardlink: " + path_state(name, before))
     old_mode = stat.S_IMODE(before.st_mode)
     new_mode = old_mode & ~0o022
     if new_mode != old_mode:
-        os.fchmod(descriptor, new_mode)
+        try:
+            os.fchmod(descriptor, new_mode)
+        except OSError:
+            raise Failure("Cannot tighten Chrome path: " + path_state(name, before)) from None
     after = os.fstat(descriptor)
     if not same_inode(before, after) or stat.S_IMODE(after.st_mode) != new_mode or after.st_nlink != before.st_nlink:
-        raise Failure("Chrome identity or mode changed during tightening: " + name)
+        raise Failure("Chrome identity or mode changed during tightening: " + path_state(name, after))
     return new_mode != old_mode
 
 
@@ -143,6 +150,8 @@ def parse_metadata(md5_raw, list_raw):
         raise Failure("Installed-package metadata has too many entries")
     if not digests or not registered or not set(digests).issubset(registered):
         raise Failure("Installed checksum paths are absent from package file list")
+    if "/opt" not in registered:
+        raise Failure("Chrome package file list does not register /opt")
     selected = {path: digest for path, digest in digests.items() if path.startswith(TREE + "/")}
     members = {path for path in registered if path == TREE or path.startswith(TREE + "/")}
     if not CORE.issubset(selected) or TREE not in members or "/opt/google" not in registered:
@@ -284,12 +293,13 @@ def prepare(root):
         finally:
             os.close(binary_directory)
         version = package_identity(root, dpkg, query)
-        opt, _ = open_directory(root, "opt", "/opt")
+        opt, opt_changed = open_directory(root, "opt", "/opt", repair=True)
         google, google_changed = open_directory(opt, "google", "/opt/google", repair=True)
         chrome, chrome_changed = open_directory(google, "chrome", TREE, repair=True)
         deadline = time.monotonic() + MAX_SECONDS
         first = verify_tree(chrome, expected, members, deadline, repair=True)
         final = verify_tree(chrome, expected, members, deadline, repair=False)
+        protected(os.fstat(opt), "/opt", directory=True)
         protected(os.fstat(google), "/opt/google", directory=True)
         protected(os.fstat(chrome), TREE, directory=True)
         if (read_protected(dpkg, "status", "/var/lib/dpkg/status", MAX_STATUS) != status_before
@@ -298,7 +308,7 @@ def prepare(root):
             raise Failure("Installed-package metadata changed during Chrome preparation")
         return {"passed": True, "package": PACKAGE, "version": version, "architecture": "amd64",
                 "files_verified": final["files"], "bytes_verified": final["bytes"],
-                "tightened_entries": first["tightened_entries"] + google_changed + chrome_changed,
+                "tightened_entries": first["tightened_entries"] + opt_changed + google_changed + chrome_changed,
                 "verification": "protected installed-package MD5 consistency; no new package authentication",
                 "sandbox_changed": False, "browser_executed": False}
     finally:

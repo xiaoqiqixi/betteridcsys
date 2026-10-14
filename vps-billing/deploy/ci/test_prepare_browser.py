@@ -76,6 +76,16 @@ class PrepareBrowserTest(unittest.TestCase):
         return prepare_browser.prepare(self.root_fd)
 
     def test_modes_only_tighten_and_foreign_paths_are_untouched(self):
+        opt = self.root / "opt"
+        opt.chmod(0o777)
+        cache = opt / "hostedtoolcache/tool/version"
+        cache.mkdir(parents=True)
+        cached_tool = cache / "tool"
+        cached_tool.write_bytes(b"foreign cached tool")
+        for path in (opt / "hostedtoolcache", cache.parent, cache, cached_tool):
+            path.chmod(0o777)
+        cache_before = {path: (path.stat().st_mode, path.stat().st_uid, path.stat().st_gid)
+                        for path in (opt / "hostedtoolcache", cache.parent, cache, cached_tool)}
         foreign = self.root / "opt/google/another-product"
         foreign.write_bytes(b"foreign file")
         foreign.chmod(0o777)
@@ -84,7 +94,7 @@ class PrepareBrowserTest(unittest.TestCase):
         def tracked_chmod(descriptor, mode):
             path = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
             before = os.fstat(descriptor)
-            self.assertTrue(path == self.root / "opt/google" or path.is_relative_to(self.tree))
+            self.assertTrue(path in (opt, self.root / "opt/google") or path.is_relative_to(self.tree))
             self.assertEqual(mode, stat.S_IMODE(before.st_mode) & ~0o022)
             original_chmod(descriptor, mode)
             after = os.fstat(descriptor)
@@ -101,7 +111,10 @@ class PrepareBrowserTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE((self.tree / "libEGL.so").stat().st_mode), 0o644)
         self.assertEqual(stat.S_IMODE(foreign.stat().st_mode), 0o777)
         self.assertEqual(foreign.read_bytes(), b"foreign file")
-        self.assertEqual(stat.S_IMODE((self.root / "opt").stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(opt.stat().st_mode), 0o755)
+        for path, before in cache_before.items():
+            self.assertEqual((path.stat().st_mode, path.stat().st_uid, path.stat().st_gid), before)
+        self.assertEqual(cached_tool.read_bytes(), b"foreign cached tool")
         with mock.patch.object(os, "fchmod") as chmod:
             self.assertEqual(self.prepare()["tightened_entries"], 0)
             chmod.assert_not_called()
@@ -127,14 +140,72 @@ class PrepareBrowserTest(unittest.TestCase):
                     chmod.assert_not_called()
                 path.chmod(original)
 
-    def test_unprotected_opt_is_rejected_without_repair(self):
+    def test_unprotected_root_is_rejected_without_repair(self):
+        self.root.chmod(0o777)
+        with mock.patch.object(os, "fchmod") as chmod:
+            with self.assertRaisesRegex(prepare_browser.Failure, r"path: / \(uid=\d+, mode=0777\)"):
+                self.prepare()
+            chmod.assert_not_called()
+        self.assertEqual(stat.S_IMODE(self.root.stat().st_mode), 0o777)
+
+    def test_opt_must_be_registered_before_any_mode_change(self):
+        self.members.remove("/opt")
+        self.write_metadata()
         opt = self.root / "opt"
         opt.chmod(0o777)
         with mock.patch.object(os, "fchmod") as chmod:
-            with self.assertRaises(prepare_browser.Failure):
+            with self.assertRaisesRegex(prepare_browser.Failure, "does not register /opt"):
                 self.prepare()
             chmod.assert_not_called()
         self.assertEqual(stat.S_IMODE(opt.stat().st_mode), 0o777)
+
+    def test_nonroot_opt_is_rejected_before_any_mode_change(self):
+        opt = self.root / "opt"
+        opt.chmod(0o777)
+        original_stat = os.fstat
+        def wrong_owner(descriptor):
+            info = original_stat(descriptor)
+            if Path(os.readlink(f"/proc/self/fd/{descriptor}")) == opt:
+                fields = list(info)
+                fields[4] = os.geteuid() + 1
+                return os.stat_result(fields)
+            return info
+        with mock.patch.object(os, "fstat", side_effect=wrong_owner), mock.patch.object(os, "fchmod") as chmod:
+            with self.assertRaisesRegex(prepare_browser.Failure, rf"/opt \(uid={os.geteuid() + 1}, mode=0777\)"):
+                self.prepare()
+            chmod.assert_not_called()
+        self.assertEqual(stat.S_IMODE(opt.stat().st_mode), 0o777)
+
+    def test_opt_symlink_is_rejected_without_touching_target(self):
+        opt = self.root / "opt"
+        target = self.root / "foreign-opt"
+        opt.rename(target)
+        target.chmod(0o777)
+        opt.symlink_to(target, target_is_directory=True)
+        with mock.patch.object(os, "fchmod") as chmod:
+            with self.assertRaises(OSError):
+                self.prepare()
+            chmod.assert_not_called()
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o777)
+
+    def test_opt_preserves_existing_other_mode_bits(self):
+        opt = self.root / "opt"
+        opt.chmod(0o1777)
+        self.prepare()
+        self.assertEqual(stat.S_IMODE(opt.stat().st_mode), 0o1755)
+        self.assertFalse(opt.stat().st_mode & stat.S_ISUID)
+
+    def test_opt_is_rechecked_after_content_verification(self):
+        original = prepare_browser.verify_tree
+        opt = self.root / "opt"
+        def changed(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if kwargs["repair"] is False:
+                opt.chmod(0o777)
+            return result
+        with mock.patch.object(prepare_browser, "verify_tree", side_effect=changed):
+            with self.assertRaisesRegex(prepare_browser.Failure, r"path: /opt \(uid=\d+, mode=0777\)"):
+                self.prepare()
 
     def test_metadata_symlinks_and_hardlinks_are_rejected(self):
         original = self.md5_path.read_bytes()
