@@ -43,7 +43,7 @@ sudo python3 /opt/aster/current/deploy/scripts/update-manager.py status \
   --state-directory /var/lib/aster-updates --request-id REQUEST_ID
 ```
 
-私有仓库可能需要独立的只读 GitHub 凭据。只有确实需要且已经由获准秘密管理途径提供时，追加 `--github-token-file /root/aster-github-read-token`，使用受限 root 普通文件；不要写入参数值、环境变量、网页或日志，不为此创建长期高权限凭据。无访问权限/受限 API 返回拒绝时报告不可用，不能关闭 TLS 或改成未知镜像绕过。
+私有仓库可能需要独立的只读 GitHub 凭据。来源核验读取本库 Contents（标签/Release/资产）和 Actions（构建运行）；凭据应只授权这些必要读取，不能赋予发行或仓库写权限。只有确实需要且已经由获准秘密管理途径提供时，追加 `--github-token-file /root/aster-github-read-token`，使用受限 root 普通文件；不要写入参数值、环境变量、网页或日志，不为此创建长期高权限凭据。无访问权限/受限 API 返回拒绝时报告不可用，不能关闭 TLS 或改成未知镜像绕过。
 
 ## 备份、前置条件与实际应用
 

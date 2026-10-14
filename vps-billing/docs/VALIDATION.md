@@ -2,11 +2,36 @@
 
 验证日期：2026-10-14 UTC。结果绑定实际执行时的提交与 GitHub run；后续源码或界面修改不沿用旧提交的通过结论。
 
-## 运行时插件版本的证据要求
+## Core 0.4.0 / SMTP 1.0.0 正式交付
 
-Core `0.4.0` / SMTP `1.0.0` 使用独立程序、不同 UID/systemd、root 审批与 Unix RPC。下列 rc 阶段结果是历史证据，**不证明新的独立程序安装、版本替换/回退、插件崩溃恢复或公开发布已通过**。当前版本需以其实际 Actions run、`BUILD.json`、`PROVENANCE.json`、包摘要和脱敏插件验收记录核对。
+交付源码：`b7699f98d926458f2b96c809c3be3ce66920f4be`。[完整 CI 38608932956](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38608932956)的[应用、真实数据库、原生与浏览器检查](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38608932956/job/116006961638)和[独立 Go 扫描](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38608932956/job/116006961025)均成功。以下数量属于该提交，历史 rc 结果不计入。
 
-新验收必须记录 Core 二进制 SHA/PID在插件安装、替换、回退、崩溃前后保持不变，核心健康与业务响应、实际插件版本/策略 revision、不同 UID、秘密不可读、socket/握手/目标限制和清理结果。回环合成 SMTP/TLS 的接受仅证明测试传输，不证明外部邮件或收件箱投递。没有实际 run 的项目不能填写通过；暂存草稿、Actions artifact 和最终正常 Release 状态分开记录。
+| 检查 | 实际结果与范围 |
+|---|---|
+| Go / MySQL | race 91 个顶层与 125 个子测试，0 失败、0 跳过；包含真实 MySQL 更新交接审计，vet 与 Linux amd64 编译通过 |
+| 前端 | 123 项测试、类型、格式与生产构建通过 |
+| 工具与编排 | Python CI 193 项，插件安装工具 34 项，更新暂存工具 30 项通过；另有清单 8、配置 9、演示 HTTP 13 项 |
+| 原生业务 / 恢复 | 原库和恢复库各通过 21 项 HTTPS 检查；13 张表完整数据哈希一致，加密 SMTP 设置保持关闭并可解密；同 schema A→B→A 与 API 重启保留 4 个订单 |
+| 独立插件 | 8 项检查、11 个 Core 不变检查阶段通过；实际安装、替换、回退、危险审批拒绝和一次受控崩溃恢复 |
+| 浏览器 | Chrome 155.0.8059.39，沙箱开启；桌面/手机交互及更新页本地版本状态通过，14 张合成截图与 SHA-256 留存在该 run 的浏览器 artifact；未逐张人工视觉审阅 |
+| 清理与扫描 | 原生和浏览器自有资源清理成功；npm 审计 0；Go 可达函数 0、导入包 0、模块级告警 19（未导入的 SSH/OpenPGP 代码），不能概括为全部依赖零漏洞 |
+
+插件验收中 Core UID `999`、worker UID `995` 为一次性测试身份。11 个阶段的 Core PID 均为 `25987`；磁盘文件及 `/proc/25987/exe` 的 SHA-256 均为 `b0be65091026923573d33ee416c8bbbc5e5aa36001fcb3e254bb17c4f3300057`，健康与已认证订单接口持续正常。Core 没有因插件安装、`1.0.0 → 1.0.1 → 1.0.0` 替换/回退或崩溃重编、重启。`1.0.1` 是同一受审源码的测试版本，未作为官方 Release 发布。
+
+原生检查实际证明额外非 CLOEXEC 描述符未传入插件、环境被清除、错误 peer UID 被拒绝、API 秘密不可读、未知程序被动发现不执行、安装不自动启用、已有版本不可覆盖，以及软链接策略/改动程序摘要被拒绝。回环 TLS 夹具只接受两封固定合成消息，没有外部转发。第二次发送到达 DATA 后杀死 worker 一次，Core 报告投递不确定且未重发，systemd 出现新 worker PID；三次/60 秒及五秒重启参数保留，未实测反复崩溃耗尽启动次数。
+
+上述 Core 摘要来自原生脚本编译的 API，未带正式包的 `-ldflags='-s -w'`；**不是最终 Release 内程序的摘要，也不是以最终归档完成原生安装的证明**。正式包另以同一冻结源码双构建，检查静态 ELF、版本、许可证、复制文件和全部四项产物字节一致性。两种构建的证据分别记录，不混用 SHA。
+
+| 正式 Release | 成功构建 / 公开核验 | Linux amd64 程序归档 SHA-256 |
+|---|---|---|
+| [Core v0.4.0](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.4.0) | [构建 38609890466](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38609890466) / [发布 38610823637](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38610823637) | `ab6b9e7a91a9058b360d202e287c2e64135d157d69b7eb6620696b5a181eb662` |
+| [SMTP smtp-v1.0.0](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/smtp-v1.0.0) | [构建 38611074961](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38611074961) / [发布 38612615460](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38612615460) | `719d2047f24433bf9141ecad6222a5f974cda6306bbbf06741e48ecd691fdb81` |
+
+两个 Release 已经 API 核对 `draft=false`、`prerelease=false`、相同交付源码及精确四项附件：对应程序包、`BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`。Core 先公开并保持 latest，SMTP 未取得 latest。没有手动上传新源码归档，历史标签和附件保持原样。正式发行是版本交付状态，不是生产就绪结论。
+
+更新接口和真实 MySQL 审计、隔离 HTTP/资产回归已通过；浏览器仅检查本地版本页，主机工具只核验、锁定和暂存，**未执行用户主机安装、迁移或自动回退**。文件备份 SHA/gzip/metadata 检查不证明数据库内容或隔离恢复。当前工作区不带凭据的正式客户端实读返回不可用，独立 DNS 查询无法解析固定 `api.github.com`；未改 DNS/代理/传输策略，也不把该实读写为成功。来源一致性和 TLS 不是独立发行签名，具体边界见 [UPDATES.md](UPDATES.md)。
+
+此前 [a48cee8 CI 38606157488](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38606157488) 在描述符 canary 身份阶段失败，未放行发布。修复隔离测试身份、启动与诊断后，重新以 `b7699f9` 完成上述检查；旧失败不重写为通过。下列 rc 记录仍作为历史证据保留。
 
 已纠正的历史测试缺陷：旧 `test-backup-native.sh` 在 `if rg ...` 中把缺失工具的退出码 127 当成“无匹配”，因此此前该夹具输出的泄露扫描 PASS 不能作为扫描已执行的证据。此问题不替代或否定独立原生恢复中记录的表数据哈希，但相关泄露扫描必须在修复后重新执行并以新 run 为准。
 
