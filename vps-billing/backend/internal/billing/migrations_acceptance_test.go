@@ -166,7 +166,7 @@ func TestMySQLMigrationFreshAndRepeat(t *testing.T) {
 	if err = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM plan_prices WHERE available=TRUE").Scan(&sellable); err != nil {
 		t.Fatal(err)
 	}
-	if err = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM plan_prices WHERE currency NOT IN ('CNY','USD') OR amount_minor<=0").Scan(&unsupported); err != nil {
+	if err = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM plan_prices WHERE currency <> 'CNY' OR amount_minor<=0").Scan(&unsupported); err != nil {
 		t.Fatal(err)
 	}
 	if err = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&users); err != nil {
@@ -181,7 +181,7 @@ func TestMySQLMigrationFreshAndRepeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	migrationExec(t, ctx, m.DB, "UPDATE site_settings SET document=? WHERE id=1", raw)
-	migrationExec(t, ctx, m.DB, "UPDATE plan_prices SET amount_minor=1777 WHERE plan_id='starter' AND currency='USD'")
+	migrationExec(t, ctx, m.DB, "UPDATE plan_prices SET amount_minor=1777 WHERE plan_id='starter' AND currency='CNY'")
 	before := migrationHistory(t, ctx, m)
 	if err = m.Migrate(ctx); err != nil {
 		t.Fatal("repeat migration", err)
@@ -194,7 +194,7 @@ func TestMySQLMigrationFreshAndRepeat(t *testing.T) {
 		t.Fatal("repeat migration overwrote operator settings", err)
 	}
 	var price int64
-	if err = m.DB.QueryRowContext(ctx, "SELECT amount_minor FROM plan_prices WHERE plan_id='starter' AND currency='USD'").Scan(&price); err != nil || price != 1777 {
+	if err = m.DB.QueryRowContext(ctx, "SELECT amount_minor FROM plan_prices WHERE plan_id='starter' AND currency='CNY'").Scan(&price); err != nil || price != 1777 {
 		t.Fatal("repeat migration overwrote operator price", price, err)
 	}
 }
@@ -238,8 +238,8 @@ func TestMySQLMigrationHistoricalUSD(t *testing.T) {
 			}
 			migrationExec(t, ctx, m.DB, "UPDATE orders SET currency='CNY' WHERE id=?", orderID)
 			migrationExec(t, ctx, m.DB, "UPDATE invoices SET currency='CNY' WHERE id=?", invoiceID)
-			if _, err := m.DB.ExecContext(ctx, "UPDATE invoices SET currency='EUR' WHERE id=?", invoiceID); err == nil {
-				t.Fatal("unsupported invoice currency accepted by schema")
+			if _, err := m.DB.ExecContext(ctx, "UPDATE invoices SET currency='usd' WHERE id=?", invoiceID); err == nil {
+				t.Fatal("noncanonical invoice currency accepted by schema")
 			}
 		})
 	}
@@ -247,6 +247,9 @@ func TestMySQLMigrationHistoricalUSD(t *testing.T) {
 
 func TestMySQLMigrationInterruptedRecovery(t *testing.T) {
 	for index, source := range schemaVersions {
+		if index == 6 {
+			continue
+		} // Migration 7 has its own exact-resumption boundary suite.
 		statements := migrationStatements(source)
 		boundaries := []int{0, len(statements) / 2, len(statements)}
 		previous := -1

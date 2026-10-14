@@ -31,15 +31,19 @@ def elf_bytes():
     return bytes(data)
 
 
-def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=()):
-    version = '0.4.0' if kind == 'core' else '1.0.0'
+def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False):
+    version = ('0.5.0' if kind == 'core' else '1.1.0') if raw else ('0.4.0' if kind == 'core' else '1.0.0')
     tag = ('v' if kind == 'core' else 'smtp-v') + version
     root = ('aster' if kind == 'core' else 'aster-smtp') + '-' + version + '-linux-amd64'
+    if raw: root = pipeline.resources_asset(version, kind)[:-7]
     license_bytes = (Path(__file__).resolve().parents[3] / 'LICENSE').read_bytes()
     inputs = {path: ('input fixture ' + path + '\n').encode() for path in pipeline.CURRENT_INPUT_PATHS}
     inputs.update({'LICENSE': license_bytes, 'README.md': '# updated repository README\n'.encode(),
                    'vps-billing/backend/pkg/pluginapi/protocol.go': b'package pluginapi\nconst CoreVersion = "0.4.0"\n',
                    'vps-billing/backend/plugins/smtp/VERSION': b'1.0.0\n'})
+    if raw:
+        inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = b'package pluginapi\nconst CoreVersion = "0.5.0"\n'
+        inputs['vps-billing/backend/plugins/smtp/VERSION'] = b'1.1.0\n'
     copies = {'LICENSE': 'LICENSE'}
     binaries = {'bin/aster-api': elf_bytes(), 'bin/aster-plugin-host': elf_bytes()} if kind == 'core' else {'plugin': elf_bytes()}
     bundle = {'LICENSE': license_bytes, **binaries}
@@ -51,6 +55,10 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
         for source in pipeline.INPUT_PATHS[2:]:
             copies['manifests/' + source.rsplit('/', 1)[-1]] = source
         inputs['vps-billing/README.md'] = b'# project fixture\n'
+        if raw:
+            for name in ('001_core.sql', '007_currency_registry.sql'):
+                copies['migrations/' + name] = 'vps-billing/backend/migrations/' + name
+                inputs[copies['migrations/' + name]] = ('-- Reviewed fixture migration ' + name + '\n').encode()
         bundle.update({path: inputs[source] for path, source in copies.items()})
         bundle.update({'web/index.html': b'<!doctype html><title>core fixture</title>',
                        'manifests/go-dependencies.json': b'[]\n',
@@ -62,7 +70,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
         inputs[copies["README.md"]] = b"# independent SMTP fixture\n"
         notice = b'Original Go runtime license fixture\n'
         bundle.update({'manifest.json': json_bytes({'schema': 1, 'id': 'email.smtp', 'version': version,
-                        'protocol': 'aster.smtp/1', 'core_min': '0.4.0', 'core_max_exclusive': '0.5.0',
+                        'protocol': 'aster.smtp/1', 'core_min': '0.4.0', 'core_max_exclusive': '0.6.0' if raw else '0.5.0',
                         'capabilities': ['smtp.send'], 'executable': 'plugin', 'sha256': pipeline.sha256(bundle['plugin'])}),
                        'README.md': b'# independent SMTP fixture\n',
                        'THIRD_PARTY_NOTICES.json': json_bytes({'schema': 1, 'notices': [{'path': 'go-runtime/LICENSE',
@@ -74,6 +82,8 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
              'smtp_core_compatibility': {'min': '0.4.0', 'max_exclusive': '0.5.0'},
              'input_sha256': {path: pipeline.sha256(inputs[path]) for path in pipeline.CURRENT_INPUT_PATHS},
              'source_files': copies, 'binary_sha256': {path: pipeline.sha256(data) for path, data in binaries.items()}}
+    if raw:
+        build.update(schema=3, distribution_format="raw-binaries-v1", component_versions={"core": "0.5.0", "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=pipeline.binary_assets(version, kind), resources_asset=pipeline.resources_asset(version, kind))
     build.update(build_override or {})
     build_raw = json_bytes(build)
     if kind == 'core':
@@ -83,6 +93,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
         bundle.pop(name)
     # Helper defaults chmod only aster-api; set explicit modes for each runtime binary/script.
     import io, tarfile
+    raw_assets = {asset: bundle.pop(path) for path, asset in pipeline.binary_assets(version, kind).items()} if raw else {}
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode='w:gz', format=tarfile.GNU_FORMAT) as archive:
         for name, data in sorted(bundle.items()):
@@ -90,13 +101,13 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
             item.mode = 0o755 if name in set(binaries) | {'deploy/scripts/plugin-manager.py', 'deploy/scripts/backup-native.sh', 'deploy/scripts/update-manager.py'} else 0o644
             item.size = len(data)
             archive.addfile(item, io.BytesIO(data))
-    files = refresh_checksums({'BUILD.json': build_raw, root + '.tar.gz': output.getvalue()})
+    files = refresh_checksums({'BUILD.json': build_raw, root + '.tar.gz': output.getvalue(), **raw_assets})
     return tag, version, files, inputs, bundle
 
 
-def normal_flow(kind='core'):
+def normal_flow(kind='core', raw=False):
     api, env, event, policy, _, _ = flow_fixture()
-    tag, version, files, inputs, _ = runtime_fixture(kind)
+    tag, version, files, inputs, _ = runtime_fixture(kind, raw=raw)
     run = api.responses[('GET', PREFIX + f'/actions/runs/{RUN_ID}')]
     old_tag = run['head_branch']
     run['head_branch'] = tag
@@ -230,6 +241,79 @@ class RuntimeReleaseTests(unittest.TestCase):
             covered = pipeline.checksum_inventory(final["SHA256SUMS"], {"BUILD.json", "PROVENANCE.json", "aster-0.4.0-linux-amd64.tar.gz"})
             self.assertTrue(all(pipeline.sha256(final[name]) == digest for name, digest in covered.items()))
             pipeline.validate_package({k: v for k, v in final.items() if k != "PROVENANCE.json"}, SHA, version, "core", final["PROVENANCE.json"])
+
+    def test_raw_core_smtp_asset_count_no_elf_resources_and_publication(self):
+        for kind, count in (("core", 6), ("smtp", 5)):
+            api, env, event, files, artifact, _, version = normal_flow(kind, raw=True)
+            policy = pipeline.prepare_publish(api, env, event)
+            pipeline.publish(api, policy, artifact)
+            self.assertEqual(len(api.uploads), count)
+            resources = pipeline.tar_files(files[pipeline.resources_asset(version, kind)], pipeline.resources_asset(version, kind)[:-7])
+            self.assertFalse(any(data.startswith(b"\x7fELF") for data in resources.values()))
+            self.assertTrue(all(name in files for name in pipeline.binary_assets(version, kind).values()))
+
+    def test_raw_sealing_covers_every_asset_without_resource_hash_cycle(self):
+        import tempfile
+        for kind, count in (("core", 6), ("smtp", 5)):
+            tag, version, files, _, _ = runtime_fixture(kind, raw=True)
+            _, _, _, policy, _, _ = flow_fixture()
+            policy.update(tag=tag, version=version)
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                for name, data in files.items():
+                    (directory / name).write_bytes(data)
+                provenance = pipeline.seal_build(policy, directory)
+                final = {path.name: path.read_bytes() for path in directory.iterdir()}
+                self.assertEqual(len(final), count)
+                self.assertEqual(set(provenance["assets"]), set(final) - {"PROVENANCE.json", "SHA256SUMS"})
+                covered = pipeline.checksum_inventory(final["SHA256SUMS"], set(final) - {"SHA256SUMS"})
+                self.assertTrue(all(pipeline.sha256(final[name]) == digest for name, digest in covered.items()))
+                self.assertFalse(set(pipeline.strict_json(final["BUILD.json"])) & {"resources_sha256", "resources_size"})
+                pipeline.validate_package({k: v for k, v in final.items() if k != "PROVENANCE.json"}, SHA, version, kind, final["PROVENANCE.json"])
+
+    def test_raw_missing_extra_mixed_layout_type_and_binary_tampering_rejected(self):
+        for kind in ("core", "smtp"):
+            _, version, files, _, _ = runtime_fixture(kind, raw=True)
+            for change in ("missing", "extra", "tamper", "legacy", "mapping", "format"):
+                modified = dict(files)
+                if change == "missing": modified.pop(next(iter(pipeline.binary_assets(version, kind).values())))
+                elif change == "extra": modified["unexpected"] = b"unexpected"
+                elif change == "tamper": modified[next(iter(pipeline.binary_assets(version, kind).values()))] = b"bad executable"
+                elif change == "legacy": modified["aster-" + version + "-linux-amd64.tar.gz"] = b"unexpected archive"
+                else:
+                    build = pipeline.strict_json(modified["BUILD.json"])
+                    build["binary_assets" if change == "mapping" else "distribution_format"] = []
+                    modified["BUILD.json"] = json_bytes(build)
+                refresh_checksums(modified)
+                with self.subTest(kind=kind, change=change), self.assertRaises(pipeline.GuardError):
+                    pipeline.validate_package(modified, SHA, version, kind)
+
+    def test_raw_resource_executable_and_self_hash_metadata_rejected(self):
+        for kind in ("core", "smtp"):
+            _, version, files, _, _ = runtime_fixture(kind, raw=True, binary_override={"extra-elf": elf_bytes()})
+            with self.assertRaises(pipeline.GuardError): pipeline.validate_package(files, SHA, version, kind)
+            _, version, files, _, _ = runtime_fixture(kind, raw=True, build_override={"resources_sha256": "a" * 64})
+            with self.assertRaises(pipeline.GuardError): pipeline.validate_package(files, SHA, version, kind)
+
+    def test_raw_core_omitted_tagged_migration_rejected_before_publication(self):
+        api, env, event, original, _, _, version = normal_flow('core', raw=True)
+        policy = pipeline.prepare_publish(api, env, event)
+        copies = pipeline.strict_json(original['BUILD.json'])['source_files']
+        copies.pop('migrations/001_core.sql')
+        _, _, files, _, _ = runtime_fixture(raw=True, build_override={'source_files': copies}, remove_members=('migrations/001_core.sql',))
+        # Even replacement metadata/checksums matching the incomplete resources
+        # cannot omit a migration retained in the immutable selected source.
+        assets = pipeline.validate_package(files, SHA, version, 'core')
+        provenance = pipeline.strict_json(original['PROVENANCE.json'])
+        provenance['assets'] = {name: meta for name, meta in assets.items() if name != 'SHA256SUMS'}
+        files['PROVENANCE.json'] = json_bytes(provenance)
+        files['SHA256SUMS'] = ''.join(pipeline.sha256(data) + '  ' + name + '\n' for name, data in sorted(files.items()) if name != 'SHA256SUMS').encode()
+        artifact = zip_bytes(files)
+        policy['artifact'].update(size_in_bytes=len(artifact), digest='sha256:' + pipeline.sha256(artifact))
+        with self.assertRaisesRegex(pipeline.GuardError, 'complete tagged migration inventory'):
+            pipeline.publish(api, policy, artifact)
+        self.assertFalse(api.mutations)
+        self.assertFalse(api.uploads)
 
     def test_partial_upload_never_reaches_public_patch(self):
         api, env, event, _, archive, _, _ = normal_flow()

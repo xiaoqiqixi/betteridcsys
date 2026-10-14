@@ -1,8 +1,9 @@
+import { isCurrencyCode } from "./currencies";
 // Only declared display fields cross this boundary. Secrets/provider settings
 // never belong in this model, and neither URL causes a server-side fetch.
 export interface PublicSiteSettings {
   default_locale: "zh-CN" | "en";
-  default_currency: "CNY" | "USD";
+  default_currency: string;
   site_name: string;
   company_name: string;
   logo: "star" | "cloud" | "server";
@@ -151,11 +152,12 @@ export function validateSiteSettings(value: SiteSettings): SettingsIssue[] {
     ["logo", ["star", "cloud", "server"]],
     ["theme", ["blue", "teal", "violet"]],
     ["default_locale", ["zh-CN", "en"]],
-    ["default_currency", ["CNY", "USD"]],
   ] as const) {
     if (!(choices as readonly unknown[]).includes(value[field]))
       issues.push({ field, reason: "choice" });
   }
+  if (!isCurrencyCode(value.default_currency))
+    issues.push({ field: "default_currency", reason: "choice" });
   if (!Number.isSafeInteger(value.revision) || value.revision < 1)
     issues.push({ field: "revision", reason: "revision" });
   if (

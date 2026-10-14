@@ -34,7 +34,7 @@ def elf():
 
 def contents(version="1.0.0"):
     binary = elf()
-    manifest = {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": hashlib.sha256(binary).hexdigest()}
+    manifest = {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.6.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": hashlib.sha256(binary).hexdigest()}
     return {"plugin": binary, "manifest.json": json.dumps(manifest).encode(), "LICENSE": b"Preserved project license\n", "README.md": b"Independent SMTP plugin\n", "THIRD_PARTY_NOTICES.json": b'{"go_runtime":{"license":"Preserved runtime license"}}'}
 
 
@@ -111,6 +111,84 @@ class ManagerTest(unittest.TestCase):
                 self.assertEqual(package.manifest["version"], "1.0.0")
                 self.assertFalse(self.root.exists())
                 self.assertFalse(self.policy.exists())
+
+    def raw_inputs(self, version="1.1.0", extra=None):
+        installed = contents(version)
+        installed["SHA256SUMS"] = "".join(hashlib.sha256(data).hexdigest() + "  " + name + "\n" for name, data in sorted(installed.items())).encode()
+        binary = installed.pop("plugin")
+        if extra:
+            installed.update(extra)
+        resource = archive(files=installed, version=version, root="aster-smtp-" + version + "-linux-amd64-resources")
+        path, pin = self.package(resource)
+        binary_path = self.base / ("raw-" + version)
+        binary_path.write_bytes(binary)
+        binary_path.chmod(0o755)
+        return path, pin, binary_path, hashlib.sha256(binary).hexdigest()
+
+    def test_raw_resources_and_protected_binary_assemble_without_core_or_policy_change(self):
+        path, pin, binary, binary_pin = self.raw_inputs()
+        core = self.base / "aster-api"
+        core.write_bytes(b"existing core remains unchanged")
+        before = hashlib.sha256(core.read_bytes()).hexdigest()
+        package = manager.verify_package(str(path), pin, trust=self.trust, binary=str(binary), binary_sha256=binary_pin)
+        self.assertEqual(set(package.files), manager.FILES)
+        manager.install_package(str(self.root), package, self.trust)
+        self.assertEqual((self.root / "email.smtp/1.1.0/plugin").read_bytes(), elf())
+        self.assertEqual(hashlib.sha256(core.read_bytes()).hexdigest(), before)
+        self.assertFalse(self.policy.exists())
+        with self.assertRaises(manager.Rejected):
+            manager.install_package(str(self.root), package, self.trust)
+
+    def test_raw_binary_flag_pairs_hash_and_resource_binary_mix_rejected(self):
+        path, pin, binary, binary_pin = self.raw_inputs()
+        for options in ({"binary": str(binary)}, {"binary_sha256": binary_pin}, {"binary": str(binary), "binary_sha256": "0" * 64}, {}):
+            with self.subTest(options=options), self.assertRaises(manager.Rejected):
+                manager.verify_package(str(path), pin, trust=self.trust, **options)
+        legacy, legacy_pin = self.package()
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(legacy), legacy_pin, trust=self.trust, binary=str(binary), binary_sha256=binary_pin)
+        mixed, mixed_pin, binary, binary_pin = self.raw_inputs(extra={"plugin": elf()})
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(mixed), mixed_pin, trust=self.trust, binary=str(binary), binary_sha256=binary_pin)
+
+    def test_raw_binary_symlink_hardlink_write_and_tampering_rejected(self):
+        path, pin, binary, binary_pin = self.raw_inputs()
+        link = self.base / "binary-link"
+        link.symlink_to(binary)
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(path), pin, trust=self.trust, binary=str(link), binary_sha256=binary_pin)
+        link.unlink(); os.link(binary, link)
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(path), pin, trust=self.trust, binary=str(binary), binary_sha256=binary_pin)
+        link.unlink(); binary.chmod(0o777)
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(path), pin, trust=self.trust, binary=str(binary), binary_sha256=binary_pin)
+        binary.chmod(0o755); binary.write_bytes(b"changed executable")
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(path), pin, trust=self.trust, binary=str(binary), binary_sha256=binary_pin)
+
+    def test_raw_resource_elf_disguised_as_utf8_readme_with_correct_dual_pins_rejected(self):
+        files = contents("1.1.0")
+        files["README.md"] = b"\x7fELF" + b"\x00" * 64
+        files["README.md"].decode("utf-8")
+        files["SHA256SUMS"] = "".join(hashlib.sha256(data).hexdigest() + "  " + name + "\n" for name, data in sorted(files.items())).encode()
+        binary_bytes = files.pop("plugin")
+        raw = archive(files=files, version="1.1.0", root="aster-smtp-1.1.0-linux-amd64-resources")
+        path, pin = self.package(raw)
+        binary = self.base / "approved-raw-binary"
+        binary.write_bytes(binary_bytes); binary.chmod(0o755)
+        with self.assertRaisesRegex(manager.Rejected, "Resource archives cannot contain ELF"):
+            manager.verify_package(str(path), pin, trust=self.trust, binary=str(binary), binary_sha256=hashlib.sha256(binary_bytes).hexdigest())
+
+    def test_legacy_original_compatibility_and_old_archive_bytes_still_supported(self):
+        files = contents()
+        manifest = json.loads(files["manifest.json"]); manifest["core_max_exclusive"] = "0.5.0"
+        files["manifest.json"] = json.dumps(manifest).encode()
+        path, pin = self.package(files=files)
+        package = manager.verify_package(str(path), pin, core="0.4.0", trust=self.trust)
+        self.assertEqual(package.manifest["version"], "1.0.0")
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(path), pin, core="0.5.0", trust=self.trust)
 
     def test_outer_hash_required_and_bound(self):
         path, digest = self.package()
@@ -194,7 +272,7 @@ class ManagerTest(unittest.TestCase):
                 self.verify(files=files)
 
     def test_manifest_capability_protocol_and_compatibility(self):
-        for key, value in (("id", "email.other"), ("protocol", "aster.smtp/2"), ("capabilities", ["smtp.send", "filesystem"]), ("executable", "../plugin"), ("core_min", "0.5.0"), ("core_max_exclusive", "0.4.0"), ("version", "1.0.0-rc.1")):
+        for key, value in (("id", "email.other"), ("protocol", "aster.smtp/2"), ("capabilities", ["smtp.send", "filesystem"]), ("executable", "../plugin"), ("core_min", "0.6.0"), ("core_max_exclusive", "0.4.0"), ("version", "1.0.0-rc.1")):
             files = contents()
             manifest = json.loads(files["manifest.json"])
             manifest[key] = value

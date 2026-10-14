@@ -47,9 +47,10 @@ python3 "$script_dir/release-manifest.py" prune "$snapshot"
 build="$snapshot/vps-billing"
 # Versions originate in selected source, never an arbitrary release label.
 python3 "$script_dir/release-manifest.py" version "$snapshot" "$kind" "$version"
-if [[ $kind == core ]]; then bundle_name="aster-${version}-linux-amd64"; else bundle_name="aster-smtp-${version}-linux-amd64"; fi
+if [[ $kind == core ]]; then bundle_name="aster-core-${version}-linux-amd64-resources"; else bundle_name="aster-smtp-${version}-linux-amd64-resources"; fi
 bundle="$tmp/$bundle_name"
-mkdir -p "$bundle"
+binary_root="$tmp/binaries"
+mkdir -p "$bundle" "$binary_root"
 (
   cd "$build/backend"
   go mod download
@@ -57,16 +58,16 @@ mkdir -p "$bundle"
   go list -mod=readonly -m -json all > "$tmp/go-modules.json"
   export CGO_ENABLED=0 GOOS=linux GOARCH=amd64
   if [[ $kind == core ]]; then
-    mkdir -p "$bundle/bin"
-    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' -o "$bundle/bin/aster-api" ./cmd/server
-    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' -o "$bundle/bin/aster-plugin-host" ./cmd/plugin-host
-    go version -m "$bundle/bin/aster-api" > "$tmp/go-build.txt"
-    go version -m "$bundle/bin/aster-plugin-host" > "$tmp/go-host-build.txt"
+    mkdir -p "$binary_root/bin"
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' -o "$binary_root/bin/aster-api" ./cmd/server
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' -o "$binary_root/bin/aster-plugin-host" ./cmd/plugin-host
+    go version -m "$binary_root/bin/aster-api" > "$tmp/go-build.txt"
+    go version -m "$binary_root/bin/aster-plugin-host" > "$tmp/go-host-build.txt"
     # The shipped core cannot import the independent SMTP transport.
     go list -mod=readonly -buildvcs=false -deps ./cmd/server | python3 -c 'import sys; deps=set(sys.stdin.read().splitlines()); sys.exit(1 if "aster/billing/plugins/smtp" in deps or "net/smtp" in deps or "os/exec" in deps else 0)'
   else
-    go build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$version" -o "$bundle/plugin" ./plugins/smtp/cmd/plugin
-    go version -m "$bundle/plugin" > "$tmp/go-build.txt"
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$version" -o "$binary_root/plugin" ./plugins/smtp/cmd/plugin
+    go version -m "$binary_root/plugin" > "$tmp/go-build.txt"
   fi
 )
 cp "$snapshot/LICENSE" "$bundle/LICENSE"
@@ -79,6 +80,8 @@ if [[ $kind == core ]]; then
   mkdir -p "$bundle/web" "$bundle/manifests" "$bundle/licenses" "$bundle/deploy/scripts"
   cp -R "$build/frontend/dist/." "$bundle/web/"
   cp -R "$build/docs" "$bundle/docs"
+  mkdir -p "$bundle/migrations"
+  cp "$build/backend/migrations/"*.sql "$bundle/migrations/"
   cp -R "$build/deploy/systemd" "$bundle/deploy/systemd"
   cp "$build/deploy/nginx.native.conf" "$bundle/deploy/"
   cp "$build/deploy/scripts/backup-native.sh" "$build/deploy/scripts/plugin-manager.py" "$build/deploy/scripts/update-manager.py" "$bundle/deploy/scripts/"
@@ -87,23 +90,28 @@ if [[ $kind == core ]]; then
   cp "$build/backend/go.mod" "$build/backend/go.sum" "$bundle/manifests/"
   cp "$build/frontend/package.json" "$build/frontend/package-lock.json" "$bundle/manifests/"
 fi
-python3 "$script_dir/release-manifest.py" manifest "$snapshot" "$bundle" "$tmp/go-modules.json" "$tmp/go-build.txt" "$commit" "$version" "$epoch" "$kind" "$tmp/BUILD.json"
+python3 "$script_dir/release-manifest.py" manifest "$snapshot" "$bundle" "$tmp/go-modules.json" "$tmp/go-build.txt" "$commit" "$version" "$epoch" "$kind" "$tmp/BUILD.json" "$binary_root"
+find "$binary_root" -type f -exec chmod 755 {} +
 find "$bundle" -type d -exec chmod 755 {} +
 find "$bundle" -type f -exec chmod 644 {} +
 if [[ $kind == core ]]; then
-  chmod 755 "$bundle/bin/aster-api" "$bundle/bin/aster-plugin-host" "$bundle/deploy/scripts/backup-native.sh" "$bundle/deploy/scripts/plugin-manager.py" "$bundle/deploy/scripts/update-manager.py"
-else
-  chmod 755 "$bundle/plugin"
+  chmod 755 "$bundle/deploy/scripts/backup-native.sh" "$bundle/deploy/scripts/plugin-manager.py" "$bundle/deploy/scripts/update-manager.py"
 fi
 mkdir -p "$(dirname "$output")"
 publish=$(mktemp -d "$(dirname "$output")/.aster-package.XXXXXXXX")
 trap 'rm -rf "$tmp" "$publish"' EXIT
-# One runtime archive only: GitHub's automatic source downloads remain separate.
+# Resources contain no ELF executables. Raw binary assets remain independently verifiable.
+if [[ $kind == core ]]; then
+  cp "$binary_root/bin/aster-api" "$publish/aster-api-${version}-linux-amd64"
+  cp "$binary_root/bin/aster-plugin-host" "$publish/aster-plugin-host-${version}-linux-amd64"
+else
+  cp "$binary_root/plugin" "$publish/aster-smtp-${version}-linux-amd64"
+fi
 tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --format=gnu -C "$tmp" -cf - "$bundle_name" | gzip -n > "$publish/$bundle_name.tar.gz"
 cp "$tmp/BUILD.json" "$publish/BUILD.json"
 (
   cd "$publish"
-  sha256sum BUILD.json ./*.tar.gz > SHA256SUMS
+  sha256sum BUILD.json ./aster-* > SHA256SUMS
   sha256sum -c SHA256SUMS
 )
 mv -T "$publish" "$output"

@@ -157,30 +157,48 @@ def timestamp(value):
         raise Rejected("Invalid request timestamp.") from exc
 
 
-def archive_name(component, version):
+def binary_assets(component, version):
+    require(component in {"core", "smtp"}, "Unsupported release component.")
+    stable(version)
+    return ({"bin/aster-api": "aster-api-" + version + "-linux-amd64", "bin/aster-plugin-host": "aster-plugin-host-" + version + "-linux-amd64"} if component == "core" else {"plugin": "aster-smtp-" + version + "-linux-amd64"})
+
+
+def archive_name(component, version, distribution_format="archive-v1"):
     require(isinstance(component, str) and component in {"core", "smtp"}, "Unsupported release component.")
     stable(version)
+    require(isinstance(distribution_format, str) and distribution_format in {"archive-v1", "raw-binaries-v1"}, "Unsupported distribution format.")
+    if distribution_format == "raw-binaries-v1":
+        return ("aster-smtp-" if component == "smtp" else "aster-core-") + version + "-linux-amd64-resources.tar.gz"
     return ("aster-smtp-" if component == "smtp" else "aster-") + version + "-linux-amd64.tar.gz"
 
 
-def asset_inventory(value, component, version):
-    require(isinstance(value, list) and len(value) == 4, "Exactly four official binary release assets are required.")
+def asset_limit(name):
+    return MAX_ARCHIVE if name.endswith(".tar.gz") else MAX_FILE if name.endswith("-linux-amd64") else MAX_JSON
+
+
+def asset_inventory(value, component, version, distribution_format="archive-v1"):
+    expected = {archive_name(component, version, distribution_format), "BUILD.json", "PROVENANCE.json", "SHA256SUMS"}
+    if distribution_format == "raw-binaries-v1":
+        expected.update(binary_assets(component, version).values())
+    require(isinstance(value, list) and len(value) == len(expected), "The exact declared official release assets are required.")
     result, ids = {}, set()
     for item in value:
         require(isinstance(item, dict) and set(item) == {"name", "id", "size", "sha256"}, "Invalid handoff asset fields.")
         name = item["name"]
-        require(isinstance(name, str) and name not in result and positive(item["id"]) and item["id"] not in ids and positive(item["size"]) and item["size"] <= (MAX_ARCHIVE if name.endswith(".tar.gz") else MAX_JSON) and isinstance(item["sha256"], str) and HASH.fullmatch(item["sha256"]), "Invalid or duplicate asset metadata.")
+        require(isinstance(name, str) and name in expected and name not in result and positive(item["id"]) and item["id"] not in ids and positive(item["size"]) and item["size"] <= asset_limit(name) and isinstance(item["sha256"], str) and HASH.fullmatch(item["sha256"]), "Invalid or duplicate asset metadata.")
         result[name] = item
         ids.add(item["id"])
-    require(set(result) == {archive_name(component, version), "BUILD.json", "PROVENANCE.json", "SHA256SUMS"}, "Unsupported release asset inventory.")
+    require(set(result) == expected, "Unsupported release asset inventory.")
     return result
 
 
 def validate_handoff(raw, current_core, current_plugin, now=None):
     envelope = strict_json(raw, 32 << 10)
-    require(isinstance(envelope, dict) and set(envelope) == {"schema", "status", "intent"} and type(envelope["schema"]) is int and envelope["schema"] == 1 and envelope["status"] == "awaiting_host_operator", "Unsupported update handoff envelope.")
+    require(isinstance(envelope, dict) and set(envelope) == {"schema", "status", "intent"} and type(envelope["schema"]) is int and envelope["schema"] in {1, 2} and envelope["status"] == "awaiting_host_operator", "Unsupported update handoff envelope.")
     value = envelope["intent"]
-    require(isinstance(value, dict) and set(value) == INTENT_KEYS and type(value["schema"]) is int and value["schema"] == 1 and isinstance(value["request_id"], str) and REQUEST.fullmatch(value["request_id"]) and isinstance(value["actor_id"], str) and REQUEST.fullmatch(value["actor_id"]), "Invalid update request identity.")
+    schema = envelope["schema"]
+    keys = INTENT_KEYS | {"distribution_format"} if schema == 2 else INTENT_KEYS
+    require(isinstance(value, dict) and set(value) == keys and type(value["schema"]) is int and value["schema"] == schema and isinstance(value["request_id"], str) and REQUEST.fullmatch(value["request_id"]) and isinstance(value["actor_id"], str) and REQUEST.fullmatch(value["actor_id"]), "Invalid update request identity.")
     require(value["repository"] == REPOSITORY and type(value["repository_id"]) is int and value["repository_id"] == REPOSITORY_ID and isinstance(value["component"], str) and value["component"] in {"core", "smtp"}, "Only the fixed official repository is supported.")
     stable(value["version"])
     require(value["tag"] == ("smtp-v" if value["component"] == "smtp" else "v") + value["version"] and isinstance(value["source_sha"], str) and SHA.fullmatch(value["source_sha"]) and positive(value["release_id"]) and positive(value["run_id"]) and positive(value["run_attempt"]), "Invalid release tag or build identity.")
@@ -192,7 +210,7 @@ def validate_handoff(raw, current_core, current_plugin, now=None):
     created, expires = timestamp(value["created_at"]), timestamp(value["expires_at"])
     now = time.time() if now is None else now
     require(created <= now + 30 and 0 < expires - created <= 1800 and created >= now - 1800 and expires > now, "The update handoff has expired or has an invalid lifetime.")
-    asset_inventory(value["assets"], value["component"], value["version"])
+    asset_inventory(value["assets"], value["component"], value["version"], value.get("distribution_format", "archive-v1"))
     return value
 
 
@@ -286,8 +304,8 @@ def release_assets(api, intent):
     for item in release["assets"]:
         require(isinstance(item, dict) and item.get("state") == "uploaded" and isinstance(item.get("digest"), str) and re.fullmatch(r"sha256:[a-f0-9]{64}", item["digest"]), "Official asset lacks a complete GitHub SHA-256 digest.")
         assets.append({"name": item.get("name"), "id": item.get("id"), "size": item.get("size"), "sha256": item["digest"][7:]})
-    actual = asset_inventory(assets, intent["component"], intent["version"])
-    require(actual == asset_inventory(intent["assets"], intent["component"], intent["version"]), "Release assets changed; request a new update check.")
+    actual = asset_inventory(assets, intent["component"], intent["version"], intent.get("distribution_format", "archive-v1"))
+    require(actual == asset_inventory(intent["assets"], intent["component"], intent["version"], intent.get("distribution_format", "archive-v1")), "Release assets changed; request a new update check.")
     return actual
 
 
@@ -377,12 +395,23 @@ def verify_source(api, build, bundle, source, provenance):
     require(isinstance(tree, dict) and tree.get("truncated") is False and isinstance(tree.get("tree"), list) and len(tree["tree"]) <= 20000, "Complete tagged source tree is required.")
     require(all(isinstance(path, str) and path.startswith((".github/", "vps-billing/")) and not any(part in {"", ".", ".."} for part in path.split("/")) for path in trusted_blobs), "Invalid trusted build policy paths.")
     needed = set(build["source_files"].values()) | INPUTS | set(trusted_blobs)
-    selected = {}
+    selected, migrations = {}, {}
+    raw_core = build.get("distribution_format") == "raw-binaries-v1" and build["release_kind"] == "core"
+    migration_prefix = "vps-billing/backend/migrations/"
     for item in tree["tree"]:
         require(isinstance(item, dict), "Invalid Git tree member.")
+        path = item.get("path")
+        require(isinstance(path, str), "Invalid Git tree path.")
+        if raw_core and path.startswith(migration_prefix) and path.endswith(".sql") and "/" not in path[len(migration_prefix):]:
+            require(path not in migrations and item.get("type") == "blob" and item.get("mode") in {"100644", "100755"} and isinstance(item.get("sha"), str) and SHA.fullmatch(item["sha"]), "Invalid tagged SQL migration inventory.")
+            migrations[path] = item["sha"]
         if item.get("path") in needed:
             require(item["path"] not in selected and item.get("type") == "blob" and item.get("mode") in {"100644", "100755"} and isinstance(item.get("sha"), str) and SHA.fullmatch(item["sha"]), "Selected source contains links or duplicate members.")
             selected[item["path"]] = item["sha"]
+    if raw_core:
+        expected_migrations = {"migrations/" + path[len(migration_prefix):]: path for path in migrations}
+        copied_migrations = {path: source_path for path, source_path in build["source_files"].items() if path.startswith("migrations/")}
+        require(expected_migrations and copied_migrations == expected_migrations and {path for path in bundle if path.startswith("migrations/")} == set(expected_migrations), "Core SQL resources must contain the complete tagged migration inventory.")
     require(set(selected) == needed, "Selected source inventory is incomplete.")
     require(all(selected[path] == value for path, value in trusted_blobs.items()), "Build policy differs from tagged source.")
     for policy_commit in {provenance["default_sha"], provenance["run_head_sha"]} - {source}:
@@ -414,7 +443,7 @@ def verify_source(api, build, bundle, source, provenance):
 
 
 def verify_downloads(api, intent, files, current_core):
-    assets = asset_inventory(intent["assets"], intent["component"], intent["version"])
+    assets = asset_inventory(intent["assets"], intent["component"], intent["version"], intent.get("distribution_format", "archive-v1"))
     require(set(files) == set(assets) and all(len(files[name]) == item["size"] and digest(files[name]) == item["sha256"] for name, item in assets.items()), "Downloaded assets differ from GitHub SHA-256 metadata.")
     sums = checksums(files["SHA256SUMS"], set(files) - {"SHA256SUMS"})
     require(all(digest(files[name]) == value for name, value in sums.items()), "Release checksum mismatch.")
@@ -434,12 +463,25 @@ def verify_downloads(api, intent, files, current_core):
     require(provenance["event"] != "workflow_dispatch" or run.get("head_branch") == "main", "Manual build was not from main.")
     build = strict_json(files["BUILD.json"])
     component, version = intent["component"], intent["version"]
-    require(isinstance(build, dict) and type(build.get("schema")) is int and build["schema"] == 2 and build.get("release_kind") == component and build.get("release_label") == version and build.get("source_commit") == intent["source_sha"] and build.get("target") == "linux/amd64" and build.get("cgo_enabled") is False, "Release build component or platform mismatch.")
+    format = intent.get("distribution_format", "archive-v1")
+    raw_distribution = format == "raw-binaries-v1"
+    require(isinstance(build, dict) and type(build.get("schema")) is int and build["schema"] == (3 if raw_distribution else 2) and build.get("release_kind") == component and build.get("release_label") == version and build.get("source_commit") == intent["source_sha"] and build.get("target") == "linux/amd64" and build.get("cgo_enabled") is False, "Release build component or platform mismatch.")
     versions = build.get("component_versions")
     require(isinstance(versions, dict) and set(versions) == {"core", "smtp"} and versions[component] == version, "Release component inventory mismatch.")
     stable(versions["core"]); stable(versions["smtp"])
-    require(build.get("plugin_protocol") == "aster.smtp/1" and build.get("smtp_core_compatibility") == {"min": "0.4.0", "max_exclusive": "0.5.0"} and (0, 4, 0) <= stable(versions["core"]) < (0, 5, 0) and (0, 4, 0) <= stable(current_core if component == "smtp" else version) < (0, 5, 0), "Plugin/core compatibility requires manual review.")
-    bundle = unpack_archive(files[archive_name(component, version)], archive_name(component, version)[:-7])
+    maximum = "0.6.0" if raw_distribution else "0.5.0"
+    require(build.get("plugin_protocol") == "aster.smtp/1" and build.get("smtp_core_compatibility") == {"min": "0.4.0", "max_exclusive": maximum} and (0, 4, 0) <= stable(versions["core"]) < stable(maximum) and (0, 4, 0) <= stable(current_core if component == "smtp" else version) < stable(maximum), "Official plugin/core compatibility requires manual review.")
+    if raw_distribution:
+        require(build.get("distribution_format") == format and build.get("binary_assets") == binary_assets(component, version) and build.get("resources_asset") == archive_name(component, version, format) and not set(build).intersection({"resources_sha256", "resources_size", "resource_sha256", "resource_size"}), "Raw distribution layout or self-hash metadata is invalid.")
+    else:
+        require("distribution_format" not in build and "binary_assets" not in build and "resources_asset" not in build, "Legacy/raw build metadata cannot be mixed.")
+    resource_name = archive_name(component, version, format)
+    bundle = unpack_archive(files[resource_name], resource_name[:-7])
+    if raw_distribution:
+        require(not any(value[0].startswith(b"\x7fELF") for value in bundle.values()), "Resource archives cannot contain ELF executables.")
+        for path, name in binary_assets(component, version).items():
+            require(path not in bundle, "Resource/raw executable collision.")
+            bundle[path] = (files[name], 0o755)
     require("LICENSE" in bundle and digest(bundle["LICENSE"][0]) == LICENSE_SHA256, "Preserved root LICENSE mismatch.")
     inputs, copies, binaries = build.get("input_sha256"), build.get("source_files"), build.get("binary_sha256")
     require(isinstance(inputs, dict) and set(inputs) == INPUTS and all(isinstance(v, str) and HASH.fullmatch(v) for v in inputs.values()) and inputs["LICENSE"] == LICENSE_SHA256, "Build input inventory mismatch.")
@@ -455,6 +497,10 @@ def verify_downloads(api, intent, files, current_core):
         executable = required | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"}
         exact_copies = {"LICENSE": "LICENSE", "REPOSITORY-README.md": "README.md", "PROJECT-README.md": "vps-billing/README.md", "manifests/go.mod": "vps-billing/backend/go.mod", "manifests/go.sum": "vps-billing/backend/go.sum", "manifests/package.json": "vps-billing/frontend/package.json", "manifests/package-lock.json": "vps-billing/frontend/package-lock.json"}
         exact_copies.update({path: "vps-billing/" + path for path in required_deploy})
+        if raw_distribution:
+            migrations = {path for path in copies if path.startswith("migrations/")}
+            require(migrations and all(re.fullmatch(r"migrations/[0-9]{3}_[a-z0-9_]+\.sql", path) and copies[path] == "vps-billing/backend/" + path for path in migrations), "Core migration resources must bind to tagged SQL.")
+            exact_copies.update({path: copies[path] for path in migrations})
         require(all(copies.get(path) == source for path, source in exact_copies.items()) and all(path in exact_copies or path.startswith(("docs/", "deploy/systemd/")) and source == "vps-billing/" + path for path, source in copies.items()), "Core source copy paths differ from the reviewed runtime layout.")
         require(required_deploy <= set(copies) and allowed <= set(bundle) and bundle["manifests/BUILD.json"][0] == files["BUILD.json"] and "web/index.html" in bundle, "Core archive is missing required runtime files.")
         require(all(path in allowed or path.startswith(("web/", "licenses/")) for path in bundle), "Core archive contains unexpected project source.")
@@ -463,7 +509,7 @@ def verify_downloads(api, intent, files, current_core):
         inventory = {"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"}
         require(set(bundle) == inventory and copies == {"LICENSE": "LICENSE", "README.md": "vps-billing/backend/plugins/smtp/README.md"} and all(mode == (0o755 if path == "plugin" else 0o644) for path, (_, mode) in bundle.items()), "SMTP archive must contain its exact independent inventory.")
         manifest = strict_json(bundle["manifest.json"][0], 8192)
-        require(manifest == {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": binaries["plugin"]} and type(manifest.get("schema")) is int, "SMTP manifest identity mismatch.")
+        require(manifest == {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": maximum, "capabilities": ["smtp.send"], "executable": "plugin", "sha256": binaries["plugin"]} and type(manifest.get("schema")) is int, "SMTP manifest identity mismatch.")
         inner = checksums(bundle["SHA256SUMS"][0], inventory - {"SHA256SUMS"})
         require(all(digest(bundle[path][0]) == value for path, value in inner.items()), "SMTP member checksum mismatch.")
         notices = strict_json(bundle["THIRD_PARTY_NOTICES.json"][0])
@@ -575,7 +621,7 @@ def stage(handoff, state_directory, current_core, current_plugin="", api=None, b
                 raise Rejected("This request already has a checkpoint; inspect status instead of overwriting it.") from exc
             os.fsync(root)
             request_fd = os.open(request_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=root)
-            journal = {"schema": 1, "request_id": request_id, "actor_id": intent["actor_id"], "component": intent["component"], "tag": intent["tag"], "source_sha": intent["source_sha"], "handoff_sha256": digest(raw), "status": "staged", "history": ["staged"], "installation_changed": False, "service_action": "none", "database_action": "none", "authorization": "explicit_root_operator_invocation", "web_origin_signature_verified": False}
+            journal = {"schema": 1, "request_id": request_id, "actor_id": intent["actor_id"], "component": intent["component"], "tag": intent["tag"], "source_sha": intent["source_sha"], "handoff_sha256": digest(raw), "distribution_format": intent.get("distribution_format", "archive-v1"), "status": "staged", "history": ["staged"], "installation_changed": False, "service_action": "none", "database_action": "none", "authorization": "explicit_root_operator_invocation", "web_origin_signature_verified": False}
             atomic_json(request_fd, "JOURNAL.json", journal)
             try:
                 audit(root, request_id, "staged", trust)
@@ -583,7 +629,7 @@ def stage(handoff, state_directory, current_core, current_plugin="", api=None, b
                 official_assets = release_assets(api, intent)
                 files = {}
                 for name, item in sorted(official_assets.items()):
-                    limit = MAX_ARCHIVE if name.endswith(".tar.gz") else MAX_JSON
+                    limit = asset_limit(name)
                     files[name] = api.asset(item["id"], min(limit, item["size"]))
                 verified = verify_downloads(api, intent, files, current_core)
                 require(release_assets(api, intent) == official_assets, "Official release changed during staging.")
@@ -597,7 +643,10 @@ def stage(handoff, state_directory, current_core, current_plugin="", api=None, b
                 evidence = backup_evidence(backup, backup_sha256, backup_metadata, current_core, trust) if backup else None
                 journal["backup"] = evidence if evidence is not None else {"supplied": False}
                 journal["required_operator_checks"] = (["maintenance_window_and_stop_writes", "fresh_database_backup", "isolated_restore_and_business_verification", "schema_and_migration_checksums", "configuration_and_secret_compatibility", "installed_plugin_manifest_compatibility", "retain_old_release_and_approved_recovery_plan", "manual_install_migrate_switch_and_readiness"] if intent["component"] == "core" else ["retain_current_root_plugin_policy_and_revision", "review_approved_uid_socket_and_targets", "explicit_plugin_install_select_enable_and_worker_restart", "verify_handshake_and_core_health", "retain_previous_compatible_plugin_for_rollback"])
-                journal["status"] = "backup_required" if intent["component"] == "core" and evidence is None else "awaiting_host_operator"
+                journal["installed_plugin_compatibility_verified"] = not (intent["component"] == "core" and current_plugin)
+                if intent["component"] == "core" and current_plugin:
+                    journal["required_operator_checks"].append("independently_verify_root_approved_plugin_policy_manifest_hash_uid_revision_and_core_bounds")
+                journal["status"] = "backup_required" if intent["component"] == "core" and evidence is None else "compatibility_review_required" if intent["component"] == "core" and current_plugin else "awaiting_host_operator"
                 journal["history"].append(journal["status"])
                 atomic_json(request_fd, "JOURNAL.json", journal)
                 audit(root, request_id, journal["status"], trust)
@@ -624,14 +673,14 @@ def status(state_directory, request_id, trust=_Trust()):
         with locked(root, trust):
             raw = read_protected(exact_path(state_directory) + "/" + request_id + "/JOURNAL.json", 32 << 10, trust, True)
             result = strict_json(raw, 32 << 10)
-            require(isinstance(result, dict) and result.get("request_id") == request_id and result.get("installation_changed") is False and isinstance(result.get("status"), str) and result["status"] in {"staged", "verified", "backup_required", "awaiting_host_operator", "rejected"}, "Invalid update checkpoint.")
-            if result["status"] in {"verified", "backup_required", "awaiting_host_operator"}:
+            require(isinstance(result, dict) and result.get("request_id") == request_id and result.get("installation_changed") is False and isinstance(result.get("status"), str) and result["status"] in {"staged", "verified", "backup_required", "compatibility_review_required", "awaiting_host_operator", "rejected"}, "Invalid update checkpoint.")
+            if result["status"] in {"verified", "backup_required", "compatibility_review_required", "awaiting_host_operator"}:
                 component = result.get("component")
                 require(isinstance(component, str) and component in {"core", "smtp"} and isinstance(result.get("tag"), str), "Invalid update checkpoint component.")
                 version = result["tag"][6:] if component == "smtp" else result["tag"][1:]
-                assets = asset_inventory(result.get("assets"), component, version)
+                assets = asset_inventory(result.get("assets"), component, version, result.get("distribution_format", "archive-v1"))
                 for name, item in assets.items():
-                    data = read_protected(state_directory + "/" + request_id + "/" + name, MAX_ARCHIVE if name.endswith(".tar.gz") else MAX_JSON, trust, True)
+                    data = read_protected(state_directory + "/" + request_id + "/" + name, asset_limit(name), trust, True)
                     require(len(data) == item["size"] and digest(data) == item["sha256"], "Staged assets changed after verification.")
             result["operator_notice"] = "No program was installed or executed. Interrupted checkpoints require review; never infer successful application."
             return result

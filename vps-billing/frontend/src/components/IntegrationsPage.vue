@@ -378,7 +378,12 @@ onBeforeUnmount(() => {
           <p>
             {{
               selected.supported_currencies.length
-                ? selected.supported_currencies.join(" / ")
+                ? selected.supported_currencies
+                    .map(
+                      (code) =>
+                        `${code} · ${selected?.currency_decimal_places[code]} ${tr("位小数", "decimal places")}`,
+                    )
+                    .join(" / ")
                 : tr("无可用支付币种", "No payment currencies available")
             }}
           </p>

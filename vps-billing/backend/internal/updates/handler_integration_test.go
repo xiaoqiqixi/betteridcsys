@@ -137,7 +137,7 @@ func TestUpdateHTTPHandoffWithOfficialProtocolLoopbackFixture(t *testing.T) {
 		clone.Host = "api.github.com"
 		return http.DefaultTransport.RoundTrip(clone)
 	})
-	current := updates.Current{CoreVersion: "0.4.0", SMTPVersion: "1.0.0", SMTPStatus: "approved", PluginPolicyRevision: 3}
+	current := updates.Current{CoreVersion: "0.4.0", SMTPVersion: "1.0.0", SMTPStatus: "approved", SMTPProtocol: "aster.smtp/1", SMTPCoreMin: "0.4.0", SMTPCoreMaxExclusive: "0.5.0", PluginPolicyRevision: 3}
 	service := updates.NewForTransportTest("synthetic-never-real-read-token", func() updates.Current { return current }, transport)
 	m := billing.NewMemory()
 	beforeSettings, _ := m.EmailSettings(context.Background())
@@ -196,5 +196,96 @@ func TestUpdateHTTPHandoffWithOfficialProtocolLoopbackFixture(t *testing.T) {
 	}
 	if status, _ := admin.request("GET", "/healthz", nil, ""); status != 200 {
 		t.Fatal("core failed after handoff", status)
+	}
+}
+
+func TestDistributionHTTPCheckAndAuditedSchema2Handoff(t *testing.T) {
+	for _, component := range []string{"core", "smtp"} {
+		for _, format := range []string{updates.ArchiveDistribution, updates.RawDistribution} {
+			t.Run(component+"/"+format, func(t *testing.T) {
+				payloads, forbidden := updates.DistributionHTTPFixtureForTest(component, format)
+				var mu sync.Mutex
+				programFetches := 0
+				provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					mu.Lock()
+					defer mu.Unlock()
+					if r.Method != "GET" || r.Host != "api.github.com" {
+						http.Error(w, "unapproved provider request", 500)
+						return
+					}
+					if forbidden[r.URL.RequestURI()] {
+						programFetches++
+						http.Error(w, "program and resource downloads forbidden", 500)
+						return
+					}
+					raw, ok := payloads[r.URL.RequestURI()]
+					if !ok {
+						http.NotFound(w, r)
+						return
+					}
+					w.Write(raw)
+				}))
+				defer provider.Close()
+				loopback, _ := url.Parse(provider.URL)
+				transport := updateRoundTrip(func(r *http.Request) (*http.Response, error) {
+					if r.Method != "GET" || r.URL.Scheme != "https" || r.URL.Host != "api.github.com" {
+						return nil, errors.New("official source changed")
+					}
+					clone := r.Clone(r.Context())
+					u := *r.URL
+					u.Scheme, u.Host = loopback.Scheme, loopback.Host
+					clone.URL = &u
+					clone.Host = "api.github.com"
+					return http.DefaultTransport.RoundTrip(clone)
+				})
+				current := updates.Current{CoreVersion: "0.4.0", SMTPVersion: "1.0.0", SMTPStatus: "approved", SMTPProtocol: "aster.smtp/1", SMTPCoreMin: "0.4.0", SMTPCoreMaxExclusive: "0.6.0", PluginPolicyRevision: 3}
+				service := updates.NewForTransportTest("synthetic-read-credential-never-real", func() updates.Current { return current }, transport)
+				store := billing.NewMemory()
+				beforeEmail, _ := store.EmailSettings(context.Background())
+				app := billing.NewApp(store, billing.Config{Updates: service, Demo: true, Origin: "http://localhost", Secret: "synthetic-local-fixture-session-secret-0123456789"})
+				srv := httptest.NewServer(app.Handler())
+				defer srv.Close()
+				admin := newIntegrationClient(t, srv.URL)
+				status, out := admin.request("POST", "/api/v1/admin/updates/check", map[string]any{}, "")
+				if status != 200 {
+					t.Fatal(status, out)
+				}
+				candidate := out["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
+				if candidate["distribution_format"] != format {
+					t.Fatal("distribution lost", candidate)
+				}
+				input := map[string]any{"component": candidate["component"], "tag": candidate["tag"], "source_sha": candidate["source_sha"], "release_id": candidate["release_id"], "catalog_sha256": candidate["catalog_sha256"], "acknowledge_manual_handoff": true}
+				status, out = admin.request("POST", "/api/v1/admin/updates/handoff", input, "")
+				if status != 202 {
+					t.Fatal(status, out)
+				}
+				handoff := out["data"].(map[string]any)
+				intent := handoff["intent"].(map[string]any)
+				expected := 4
+				if format == updates.RawDistribution {
+					expected = 6
+					if component == "smtp" {
+						expected = 5
+					}
+				}
+				if handoff["schema"] != float64(2) || intent["schema"] != float64(2) || intent["distribution_format"] != format || handoff["status"] != "awaiting_host_operator" || len(intent["assets"].([]any)) != expected {
+					t.Fatal(handoff)
+				}
+				audits, err := store.Audits(context.Background(), "")
+				if err != nil || len(audits) != expected+1 {
+					t.Fatal("audit schema/layout mismatch", len(audits), err)
+				}
+				afterEmail, _ := store.EmailSettings(context.Background())
+				mu.Lock()
+				fetched := programFetches
+				mu.Unlock()
+				if beforeEmail != afterEmail || fetched != 0 {
+					t.Fatal("update handoff performed an external email or program download")
+				}
+				if status, _ := admin.request("GET", "/healthz", nil, ""); status != 200 {
+					t.Fatal("core not healthy after handoff")
+				}
+			})
+		}
 	}
 }

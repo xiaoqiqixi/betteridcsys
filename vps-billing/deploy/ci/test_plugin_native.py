@@ -264,13 +264,24 @@ class NativeIndependentPackageTests(unittest.TestCase):
     def test_real_independent_smtp_build_fixture_matches_production_installer_contract(self):
         source = HERE.parents[2]
         with tempfile.TemporaryDirectory(prefix="aster-plugin-package-") as directory:
-            package, manifest = NATIVE.fixture_package(source, Path(directory), "1.0.1")
+            package, binary, manifest = NATIVE.fixture_package(source, Path(directory), "1.1.1")
             trust = INSTALLER._Trust(owner=os.geteuid(), ancestor=os.stat("/").st_uid)
-            verified = INSTALLER.verify_package(str(package), hashlib.sha256(package.read_bytes()).hexdigest(), trust=trust)
+            resources_pin = hashlib.sha256(package.read_bytes()).hexdigest()
+            binary_pin = hashlib.sha256(binary.read_bytes()).hexdigest()
+            verified = INSTALLER.verify_package(str(package), resources_pin, "0.5.0", trust=trust,
+                binary=str(binary), binary_sha256=binary_pin)
             self.assertEqual(verified.manifest, manifest)
             self.assertEqual(set(verified.files), INSTALLER.FILES)
-            self.assertEqual(manifest["version"], "1.0.1")
+            self.assertEqual(manifest["version"], "1.1.1")
             self.assertIn(b"never publish", verified.files["README.md"])
+            self.assertEqual((manifest["core_min"], manifest["core_max_exclusive"]), ("0.4.0", "0.6.0"))
+            for raw_pin, metadata_pin in (("0" * 64, resources_pin), (binary_pin, "0" * 64)):
+                with self.subTest(raw_pin_matches=raw_pin == binary_pin), self.assertRaises(INSTALLER.Rejected):
+                    INSTALLER.verify_package(str(package), metadata_pin, "0.5.0", trust=trust,
+                        binary=str(binary), binary_sha256=raw_pin)
+            import tarfile
+            with tarfile.open(package, "r:gz") as archive:
+                self.assertNotIn("plugin", [Path(name).name for name in archive.getnames()])
 
 
 if __name__ == "__main__":

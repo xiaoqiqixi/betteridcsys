@@ -7,7 +7,7 @@ import (
 )
 
 func TestStrictWireFormat(t *testing.T) {
-	valid := `{"protocol":"aster.smtp/1","core_version":"0.4.0","nonce":"` + strings.Repeat("a", 64) + `"}`
+	valid := `{"protocol":"aster.smtp/1","core_version":"0.5.0","nonce":"` + strings.Repeat("a", 64) + `"}`
 	var hello Hello
 	if err := DecodeStrict([]byte(valid), MaxRequestBytes, &hello); err != nil {
 		t.Fatal(err)
@@ -38,13 +38,13 @@ func TestStrictWireFormat(t *testing.T) {
 }
 
 func TestManifestCompatibility(t *testing.T) {
-	manifest := Manifest{Schema: 1, ID: "email.smtp", Version: "1.0.0", Protocol: SMTPProtocol, CoreMin: "0.4.0", CoreMaxExclusive: "0.5.0", Capabilities: []string{SMTPCapability}, Executable: "plugin", SHA256: strings.Repeat("a", 64)}
-	for _, core := range []string{"0.4.0", "0.4.999"} {
+	manifest := Manifest{Schema: 1, ID: "email.smtp", Version: "1.1.0", Protocol: SMTPProtocol, CoreMin: "0.4.0", CoreMaxExclusive: "0.6.0", Capabilities: []string{SMTPCapability}, Executable: "plugin", SHA256: strings.Repeat("a", 64)}
+	for _, core := range []string{"0.4.0", "0.4.999", "0.5.0", "0.5.999"} {
 		if manifest.Validate(core) != nil {
 			t.Fatal(core)
 		}
 	}
-	for _, core := range []string{"0.3.99", "0.5.0", "0.4.0-rc.1", "v0.4.0", "00.4.0", "1000000.0.0"} {
+	for _, core := range []string{"0.3.99", "0.6.0", "0.4.0-rc.1", "v0.4.0", "00.4.0", "1000000.0.0"} {
 		if manifest.Validate(core) == nil {
 			t.Fatal(core)
 		}
@@ -58,6 +58,13 @@ func TestManifestCompatibility(t *testing.T) {
 	}
 	if got, err := CompareVersion("0.4.10", "0.4.2"); err != nil || got != 1 {
 		t.Fatal(got, err)
+	}
+}
+
+func TestLegacySMTPRangeIsNotGuessedForCurrentCore(t *testing.T) {
+	legacy := Manifest{Schema: 1, ID: "email.smtp", Version: "1.0.0", Protocol: SMTPProtocol, CoreMin: "0.4.0", CoreMaxExclusive: "0.5.0", Capabilities: []string{SMTPCapability}, Executable: "plugin", SHA256: strings.Repeat("a", 64)}
+	if legacy.Validate("0.4.0") != nil || legacy.Validate(CoreVersion) == nil {
+		t.Fatal("legacy SMTP compatibility was broadened without its manifest approval")
 	}
 }
 

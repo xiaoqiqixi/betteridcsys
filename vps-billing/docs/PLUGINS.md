@@ -1,6 +1,6 @@
 # 独立插件安装、替换与使用
 
-Core `0.4.0` 支持一个运行时 SMTP 插槽。官方 `email.smtp` 插件版本为 `1.0.0`，使用 `aster.smtp/1`，支持 Core `>=0.4.0,<0.5.0`。它是独立程序与独立 Release，可在已编译的 Core 上安装、更新和回退；Core 没有内置 SMTP 传输回退。不提供通用执行接口、网页插件上传或自动下载。
+Core `0.5.0` 支持一个运行时 SMTP 插槽。官方 `email.smtp` 插件版本为 `1.1.0`，使用 `aster.smtp/1`，支持 Core `>=0.4.0,<0.6.0`。它是独立程序与独立 Release，可在已编译的 Core 上安装、更新和回退；Core 没有内置 SMTP 传输回退。不提供通用执行接口、网页插件上传或自动下载。
 
 支付适配器仍为禁用实现，支付、主控、被控、SMS 和对象存储尚无运行时插件。SMTP 只支持管理员配置与单封固定测试邮件，没有业务通知、邮箱验证、找回密码或发送队列。插件框架不会自动补齐这些业务。
 
@@ -9,7 +9,7 @@ Core `0.4.0` 支持一个运行时 SMTP 插槽。官方 `email.smtp` 插件版�
 ```text
 /opt/aster/current/bin/aster-api
 /opt/aster/current/bin/aster-plugin-host
-/opt/aster/plugins/email.smtp/1.0.0/{plugin,manifest.json,...}
+/opt/aster/plugins/email.smtp/1.1.0/{plugin,manifest.json,...}
 /etc/aster/plugins.json
 /run/aster-smtp/plugin.sock
 ```
@@ -22,7 +22,7 @@ Core 只被动发现版本化 manifest，不执行未知文件、不运行其 `-
 
 ## 1. 安装独立包
 
-先完成 [Core 安装](INSTALL.md)，核对版本与 [Release 来源](RELEASE.md)。从 SMTP Release 取得 `aster-smtp-1.0.0-linux-amd64.tar.gz`、BUILD、PROVENANCE 和 SHA256SUMS；**不要**把 Core 包或 GitHub 自动源码归档当作插件包。核对独立包的来源提交、兼容区间、外层 SHA-256 和许可证。
+先完成 [Core 安装](INSTALL.md)，核对版本与 [Release 来源](RELEASE.md)。从 SMTP Release 取得原始程序 `aster-smtp-1.1.0-linux-amd64`、资源 `aster-smtp-1.1.0-linux-amd64-resources.tar.gz`，以及 BUILD、PROVENANCE 和 SHA256SUMS；**不要**把 Core 包或 GitHub 自动源码归档当作插件包。核对独立包的来源提交、兼容区间、外层 SHA-256 和许可证。
 
 Core 首次安装已创建 `aster-plugins` 组并授予 API socket 访问。先核对组与 API 账号，再创建独立无登录插件身份；升级自旧 Core 时按 [升级说明](UPGRADE.md)先准备共享组。已有 `aster-smtp` 账号时先核对其 UID、组关系和既有用途，不能覆盖或改用其他业务身份：
 
@@ -37,18 +37,20 @@ id aster-smtp
 
 API unit 中的 `SupplementaryGroups=aster-plugins` 需要该组已经存在；首次启用这项 unit/环境配置需重启 API，使进程取得组访问权。之后只更新插件无需重启 API。检查插件不能读 `/etc/aster/api.env`、会话/数据库秘密和 SMTP 加密密钥；不能为连通 socket 给这些文件开放读取。
 
-在非网页目录完成下载验证，插件管理程序以下命令由 root 执行。输入归档须为 root 所有、普通文件、无额外链接且不可组/其他用户写入；所有祖先目录也受 root 管理。可在确认未覆盖既有暂存文件后，将已核对的包放在 `/var/lib/aster-install/`（root:root 0755），文件 root:root 0644。不可直接指向普通下载用户可改写的文件。SHA 是从可信发布信息核对的完整 64 位摘要，不能从未经验证的未知包自行计算后当作来源证明；下列 `PLUGIN_ARCHIVE_SHA256` 必须替换：
+在非网页目录完成下载验证，插件管理程序以下命令由 root 执行。输入归档须为 root 所有、普通文件、无额外链接且不可组/其他用户写入；所有祖先目录也受 root 管理。可在确认未覆盖既有暂存文件后，将已核对的包放在 `/var/lib/aster-install/`（root:root 0755），文件 root:root 0644。不可直接指向普通下载用户可改写的文件。SHA 是从可信发布信息核对的完整 64 位摘要，不能从未经验证的未知包自行计算后当作来源证明；资源与程序均须放入上述受保护路径；下列 `RESOURCE_SHA256`、`BINARY_SHA256` 必须分别替换为经核实的摘要：
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.4.0 \
-  verify /var/lib/aster-install/aster-smtp-1.0.0-linux-amd64.tar.gz --sha256 PLUGIN_ARCHIVE_SHA256
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  verify /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
+  --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.4.0 \
-  install /var/lib/aster-install/aster-smtp-1.0.0-linux-amd64.tar.gz --sha256 PLUGIN_ARCHIVE_SHA256
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  install /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
+  --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 ```
 
-`verify` 只读检查，`install` 只安装新版本，不批准、不启用、不执行程序、不管理服务。包只有六个普通文件：`plugin`、`manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。安装器验证外层与包内摘要、清单、静态 Linux amd64 ELF、版本/协议兼容、路径和大小；拒绝额外文件、重复项、软/硬链接、穿越、特殊归档扩展和已有版本覆盖。每版目录不可原地更新，旧版本保留用于回退。
+`verify` 只读检查，`install` 只安装新版本，不批准、不启用、不执行程序、不管理服务。资源包只有五个普通文件，不含程序；安装器与原始程序组装后，版本目录只有六个普通文件：`plugin`、`manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。安装器分别验证资源及原始程序的外层摘要、包内摘要、清单、静态 Linux amd64 ELF、版本/协议兼容、路径和大小；拒绝额外文件、重复项、软/硬链接、穿越、特殊归档扩展和已有版本覆盖。每版目录不可原地更新，旧版本保留用于回退。
 
 ## 2. 选择、批准与启动
 
@@ -74,10 +76,10 @@ sudo systemctl restart aster-api
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.4.0 status
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 status
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.4.0 \
-  select --id email.smtp --version 1.0.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  select --id email.smtp --version 1.1.0 \
   --worker-uid "$(id -u aster-smtp)" --client-uid "$(id -u aster)" \
   --socket /run/aster-smtp/plugin.sock --target SMTP_HOST:SMTP_PORT --revision 0
 ```
@@ -86,7 +88,7 @@ sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.4.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
   enable --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 sudo systemctl status aster-smtp --no-pager
@@ -104,10 +106,12 @@ sudo systemctl status aster-smtp --no-pager
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.4.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
   rollback --version OLD_PLUGIN_VERSION --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 ```
+
+旧 SMTP 1.0.0 仅支持 Core `<0.5.0`，不能继续用于 Core 0.5.0。SMTP 1.1.0 兼容 Core 0.4.x 与 0.5.x，可作为升级桥接版本；但已发布的 Core 0.4.0 管理工具不支持新拆分输入，桥接前须独立核验并使用新版管理工具，不能假定旧工具自动得到新能力。旧公开资产保持不变。
 
 Core 和 SMTP 版本不一一对应；独立补丁版可以在 manifest 声明的范围内替换。超出 `core_max_exclusive` 必须停止调用，先审查新 Core/协议/插件兼容关系。不得放宽校验、改 manifest 后自称原包或用 symlink 选择插件版本。
 
@@ -119,7 +123,7 @@ Core 和 SMTP 版本不一一对应；独立补丁版可以在 manifest 声明�
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.4.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
   disable --revision CURRENT_REVISION
 sudo systemctl stop aster-smtp
 ```
@@ -154,4 +158,4 @@ Core 不自动重试 RPC。SMTP 传输仅对 MAIL 前已明确的暂时失败最
 
 保留 `PAYMENT_PROVIDER=payment.disabled`、`EMAIL_PROVIDER=email.disabled`；后者是旧注册表选择，不是 SMTP 总开关，也不能改成 `email.smtp`。旧 `INTEGRATIONS_CONFIG_FILE` 只供已审查的编译期适配器配置，不安装运行时插件；未知 ID/字段、重复键、null、非字符串或超过 64 KiB 都拒绝，秘密使用受限引用，不直接填秘密值。
 
-Checkout 核验会话、CSRF、Host、账单所有权与待付正金额后，只传核心保存的金额/币种与业务 ID；当前返回 503 `PAYMENT_NOT_CONFIGURED`，不改变支付状态。未来支付必须独立完成原始回调验签、时效/重放、精确金额币种/商户绑定、持久化双重唯一去重、事务内结算/审计/outbox、对账与退款，然后单独授权真实支付/开通。当前没有这些实现，order.created outbox 也没有消费者。
+Checkout 核验会话、CSRF、Host、账单所有权与待付正金额后，只传核心保存的金额/币种与业务 ID；当前返回 503 `PAYMENT_NOT_CONFIGURED`，不改变支付状态。当前未实现结算、对账和退款，order.created outbox 也没有消费者。本阶段仅进行财务核心审计，不接入支付渠道或资源开通。

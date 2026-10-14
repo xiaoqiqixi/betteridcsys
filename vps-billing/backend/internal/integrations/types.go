@@ -14,7 +14,11 @@ var ErrUnsupportedCurrency = errors.New("currency not supported by provider")
 
 const maxMinor int64 = 9007199254740991
 
-func supportedCurrency(c string) bool { return c == "CNY" || c == "USD" }
+func supportedCurrency(c string) bool {
+	return len(c) == 3 && c[0] >= 'A' && c[0] <= 'Z' && c[1] >= 'A' && c[1] <= 'Z' && c[2] >= 'A' && c[2] <= 'Z'
+}
+
+func validCurrencyPrecision(n int) bool { return n >= 0 && n <= 6 }
 
 type Kind string
 
@@ -31,14 +35,17 @@ type ConfigurationField struct {
 	Secret   bool   `json:"secret"`
 }
 type Manifest struct {
-	SupportedCurrencies []string             `json:"supported_currencies"`
-	ID                  string               `json:"id"`
-	Kind                Kind                 `json:"kind"`
-	Name                string               `json:"name"`
-	Description         string               `json:"description"`
-	Capabilities        []string             `json:"capabilities"`
-	ConfigurationFields []ConfigurationField `json:"configuration_fields"`
-	Limitations         []string             `json:"limitations"`
+	// Explicit integer-unit precision for every supported code. Providers must
+	// match the core-owned invoice snapshot; they never infer or convert it.
+	CurrencyDecimalPlaces map[string]int       `json:"currency_decimal_places"`
+	SupportedCurrencies   []string             `json:"supported_currencies"`
+	ID                    string               `json:"id"`
+	Kind                  Kind                 `json:"kind"`
+	Name                  string               `json:"name"`
+	Description           string               `json:"description"`
+	Capabilities          []string             `json:"capabilities"`
+	ConfigurationFields   []ConfigurationField `json:"configuration_fields"`
+	Limitations           []string             `json:"limitations"`
 }
 type Summary struct {
 	Manifest
@@ -53,6 +60,7 @@ type Summary struct {
 // with ResolveSecret; neither Config nor resolved values belong in API output.
 type Config map[string]string
 type CheckoutRequest struct {
+	CurrencyDecimalPlaces         int
 	InvoiceID, OrderID, AccountID string
 	AmountMinor                   int64
 	Currency                      string
@@ -74,6 +82,7 @@ type CallbackRequest struct {
 // It is not permission to mark paid. Core must independently validate all fields
 // and atomically deduplicate ProviderID+EventID AND ProviderID+TransactionID.
 type VerifiedPayment struct {
+	CurrencyDecimalPlaces                                 int
 	ProviderID, EventID, TransactionID, MerchantAccountID string
 	AccountID, OrderID, InvoiceID                         string
 	AmountMinor                                           int64

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { defaultCurrencyRegistry } from "../src/lib/currencies";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -584,6 +585,8 @@ describe("SMTP integration and account boundaries", () => {
     });
     const fetcher = vi.fn(async (path: string, options: RequestInit) => {
       if (path.endsWith("/site-settings")) return response(defaultSiteSettings);
+      if (path.endsWith("/currencies"))
+        return response(defaultCurrencyRegistry);
       if (path.endsWith("/session")) return response(session);
       if (path.endsWith("/admin/integrations"))
         return response({ items: [smtp] });

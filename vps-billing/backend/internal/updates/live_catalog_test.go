@@ -79,21 +79,23 @@ func TestOfficialPublishedReleaseCatalogSmoke(t *testing.T) {
 		if candidate.Component == "smtp" {
 			prefixTag = "smtp-v"
 		}
-		if (candidate.Component != "core" && candidate.Component != "smtp") || seen[candidate.Component] || !validTag(candidate.Tag, candidate.Component) || !pluginapi.ValidVersion(candidate.Version) || candidate.Tag != prefixTag+candidate.Version || !commitPattern.MatchString(candidate.SourceSHA) || !hashPattern.MatchString(candidate.CatalogSHA256) || candidate.ReleaseURL != officialURL(candidate.Tag) || candidate.ReleaseID <= 0 || candidate.RunID <= 0 || candidate.RunAttempt <= 0 || len(candidate.Assets) != 4 {
+		if (candidate.Component != "core" && candidate.Component != "smtp") || seen[candidate.Component] || !validTag(candidate.Tag, candidate.Component) || !pluginapi.ValidVersion(candidate.Version) || candidate.Tag != prefixTag+candidate.Version || !commitPattern.MatchString(candidate.SourceSHA) || !hashPattern.MatchString(candidate.CatalogSHA256) || candidate.ReleaseURL != officialURL(candidate.Tag) || candidate.ReleaseID <= 0 || candidate.RunID <= 0 || candidate.RunAttempt <= 0 {
 			evidence.SafeReason = "unexpected_official_release_identity"
 			t.Fatal("official release identity is incomplete")
 		}
 		seen[candidate.Component] = true
-		prefix := "aster-"
-		if candidate.Component == "smtp" {
-			prefix = "aster-smtp-"
+		layout, err := releaseLayout(candidate.Component, candidate.Version, candidate.DistributionFormat)
+		if err != nil || len(candidate.Assets) != len(layout.Assets) {
+			evidence.SafeReason = "unexpected_official_distribution"
+			t.Fatal("official release distribution is unsupported")
 		}
-		expected := map[string]bool{prefix + candidate.Version + "-linux-amd64.tar.gz": true, "BUILD.json": true, "PROVENANCE.json": true, "SHA256SUMS": true}
+		expected := layout.Assets
+
 		assetIDs := map[int64]bool{}
 		for _, asset := range candidate.Assets {
 			if !expected[asset.Name] || asset.ID <= 0 || assetIDs[asset.ID] || asset.Size <= 0 || asset.Size > 80<<20 || !hashPattern.MatchString(asset.SHA256) {
 				evidence.SafeReason = "unexpected_official_asset_inventory"
-				t.Fatal("official release must contain exactly four bounded program/metadata assets")
+				t.Fatal("official release must contain its exact bounded program/resource/metadata assets")
 			}
 			delete(expected, asset.Name)
 			assetIDs[asset.ID] = true
@@ -114,7 +116,7 @@ func TestOfficialPublishedReleaseCatalogSmoke(t *testing.T) {
 		}
 		// Compatibility is recorded, never assumed true: newer main source can
 		// precede a matching release or intentionally change the protocol range.
-		evidence.Components = append(evidence.Components, map[string]any{"component": candidate.Component, "tag": candidate.Tag, "version": candidate.Version, "source_sha": candidate.SourceSHA, "release_id": candidate.ReleaseID, "run_id": candidate.RunID, "run_attempt": candidate.RunAttempt, "compatible": candidate.Compatible, "update_available": candidate.UpdateAvailable, "catalog_sha256": candidate.CatalogSHA256, "assets": candidate.Assets})
+		evidence.Components = append(evidence.Components, map[string]any{"distribution_format": candidate.DistributionFormat, "component": candidate.Component, "tag": candidate.Tag, "version": candidate.Version, "source_sha": candidate.SourceSHA, "release_id": candidate.ReleaseID, "run_id": candidate.RunID, "run_attempt": candidate.RunAttempt, "compatible": candidate.Compatible, "update_available": candidate.UpdateAvailable, "catalog_sha256": candidate.CatalogSHA256, "assets": candidate.Assets})
 	}
 	evidence.Status = "passed"
 	t.Log("Verified normal official core and SMTP metadata using the production client; no update was applied.")

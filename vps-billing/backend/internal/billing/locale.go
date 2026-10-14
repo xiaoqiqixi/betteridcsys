@@ -54,6 +54,15 @@ var englishErrors = map[string]string{
 	"SMTP_KEY_UNAVAILABLE":         "The SMTP encryption key is unavailable. Contact the server administrator.",
 	"SMTP_UNAVAILABLE":             "The SMTP server did not confirm acceptance. Check configuration and server status.",
 	"SMTP_DELIVERY_UNCERTAIN":      "Delivery outcome is uncertain. Check SMTP server records before any manual retry.",
+	"INVALID_CURRENCY_CONFIG":      "Check currency fields; the default must be enabled and existing codes cannot be removed.",
+	"CURRENCY_CONFLICT":            "Currency settings changed. Reload before editing.",
+	"CURRENCY_PRECISION_LOCKED":    "Decimal places cannot change after prices or billing records exist.",
+	"CURRENCY_DISABLED":            "This currency is disabled for new orders.",
+	"UNSUPPORTED_CURRENCY":         "This currency has not been configured.",
+	"INVALID_PLAN_PRICES":          "Use a positive exact price within the currency precision; conversion and rounding are not supported.",
+	"PRICE_CHANGED":                "The quote changed. Review the current price and confirm again before ordering.",
+	"INVALID_QUOTE":                "Provide the complete quoted amount, decimal places, price revision and explicit currency.",
+	"PRICE_CONFLICT":               "Plan prices changed. Reload before editing.",
 	"INTERNAL_ERROR":               "Unable to complete the request. Please try again later.",
 	"JSON_REQUIRED":                "Use an application/json request.",
 	"INVALID_BODY":                 "Invalid JSON object or unsupported fields.",
@@ -72,7 +81,7 @@ var englishErrors = map[string]string{
 	"IDEMPOTENCY_KEY_REQUIRED":     "Provide an idempotency key of 8–128 supported characters.",
 	"IDEMPOTENCY_CONFLICT":         "This request key was already used for a different order.",
 	"PLAN_UNAVAILABLE":             "This plan is not available in the selected currency.",
-	"INVALID_CURRENCY":             "Only CNY and USD are supported.",
+	"INVALID_CURRENCY":             "Currency codes must contain exactly three uppercase ASCII letters.",
 	"INVOICE_NOT_PAYABLE":          "This invoice cannot be paid in its current state.",
 	"PAYMENT_NOT_CONFIGURED":       "Payments are not connected. No charge will be made.",
 	"PAYMENT_CURRENCY_UNSUPPORTED": "The payment provider does not support this invoice currency.",
@@ -82,23 +91,27 @@ var englishErrors = map[string]string{
 func (a *App) queryCurrency(w http.ResponseWriter, r *http.Request) (string, bool) {
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		fail(w, r, 400, "INVALID_CURRENCY", "请检查币种参数，仅支持 CNY 和 USD")
+		fail(w, r, 400, "INVALID_CURRENCY", "请检查币种参数")
 		return "", false
 	}
-	values, supplied := query["currency"]
-	if supplied {
-		if len(values) != 1 || !SupportedCurrency(values[0]) {
-			fail(w, r, 400, "INVALID_CURRENCY", "仅支持 CNY 和 USD")
-			return "", false
-		}
-		return values[0], true
-	}
-	settings, err := a.Store.Settings(r.Context())
-	if err != nil || !SupportedCurrency(settings.DefaultCurrency) {
+	config, err := a.Store.Currencies(r.Context(), false)
+	if err != nil {
 		a.internal(w, r, err)
 		return "", false
 	}
-	return settings.DefaultCurrency, true
+	code := config.DefaultCurrency
+	if values, supplied := query["currency"]; supplied {
+		if len(values) != 1 || !validCurrencyCode(values[0]) {
+			fail(w, r, 400, "INVALID_CURRENCY", "币种代码必须是三个大写英文字母")
+			return "", false
+		}
+		code = values[0]
+	}
+	if _, known := config.find(code); !known {
+		a.currencyError(w, r, ErrCurrency)
+		return "", false
+	}
+	return code, true
 }
 
 // Operator-authored product text and historical snapshots are never translated

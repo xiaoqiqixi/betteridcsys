@@ -26,6 +26,9 @@ type Current struct {
 	CoreVersion          string `json:"core_version"`
 	SMTPVersion          string `json:"smtp_version"`
 	SMTPStatus           string `json:"smtp_status"`
+	SMTPProtocol         string `json:"smtp_protocol"`
+	SMTPCoreMin          string `json:"smtp_core_min"`
+	SMTPCoreMaxExclusive string `json:"smtp_core_max_exclusive"`
 	PluginPolicyRevision uint64 `json:"plugin_policy_revision"`
 }
 type Source struct {
@@ -39,21 +42,22 @@ type Asset struct {
 	SHA256 string `json:"sha256"`
 }
 type Candidate struct {
-	Component       string   `json:"component"`
-	Tag             string   `json:"tag"`
-	Version         string   `json:"version"`
-	ReleaseURL      string   `json:"release_url"`
-	Notes           string   `json:"notes"`
-	PublishedAt     string   `json:"published_at"`
-	SourceSHA       string   `json:"source_sha"`
-	ReleaseID       int64    `json:"release_id"`
-	RunID           int64    `json:"run_id"`
-	RunAttempt      int64    `json:"run_attempt"`
-	Compatible      bool     `json:"compatible"`
-	UpdateAvailable bool     `json:"update_available"`
-	Preconditions   []string `json:"preconditions"`
-	Assets          []Asset  `json:"assets"`
-	CatalogSHA256   string   `json:"catalog_sha256"`
+	DistributionFormat string   `json:"distribution_format"`
+	Component          string   `json:"component"`
+	Tag                string   `json:"tag"`
+	Version            string   `json:"version"`
+	ReleaseURL         string   `json:"release_url"`
+	Notes              string   `json:"notes"`
+	PublishedAt        string   `json:"published_at"`
+	SourceSHA          string   `json:"source_sha"`
+	ReleaseID          int64    `json:"release_id"`
+	RunID              int64    `json:"run_id"`
+	RunAttempt         int64    `json:"run_attempt"`
+	Compatible         bool     `json:"compatible"`
+	UpdateAvailable    bool     `json:"update_available"`
+	Preconditions      []string `json:"preconditions"`
+	Assets             []Asset  `json:"assets"`
+	CatalogSHA256      string   `json:"catalog_sha256"`
 }
 type View struct {
 	Current   Current     `json:"current"`
@@ -64,6 +68,7 @@ type View struct {
 }
 type Intent struct {
 	Schema               int     `json:"schema"`
+	DistributionFormat   string  `json:"distribution_format"`
 	RequestID            string  `json:"request_id"`
 	ActorID              string  `json:"actor_id"`
 	CreatedAt            string  `json:"created_at"`
@@ -184,7 +189,7 @@ func (s *Service) Prepare(ctx context.Context, actor, component, tag, sourceSHA 
 			return Handoff{}, ErrUnavailable
 		}
 		now := time.Now().UTC().Truncate(time.Second)
-		return Handoff{Schema: 1, Status: "awaiting_host_operator", Intent: Intent{Schema: 1, RequestID: hex.EncodeToString(nonce[:]), ActorID: actor, CreatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(30 * time.Minute).Format(time.RFC3339), Repository: Repository, RepositoryID: RepositoryID, Component: component, Tag: tag, Version: candidate.Version, SourceSHA: candidate.SourceSHA, ReleaseID: candidate.ReleaseID, RunID: candidate.RunID, RunAttempt: candidate.RunAttempt, CurrentCoreVersion: v.Current.CoreVersion, CurrentPluginVersion: v.Current.SMTPVersion, PluginPolicyRevision: v.Current.PluginPolicyRevision, Assets: candidate.Assets}}, nil
+		return Handoff{Schema: 2, Status: "awaiting_host_operator", Intent: Intent{Schema: 2, DistributionFormat: candidate.DistributionFormat, RequestID: hex.EncodeToString(nonce[:]), ActorID: actor, CreatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(30 * time.Minute).Format(time.RFC3339), Repository: Repository, RepositoryID: RepositoryID, Component: component, Tag: tag, Version: candidate.Version, SourceSHA: candidate.SourceSHA, ReleaseID: candidate.ReleaseID, RunID: candidate.RunID, RunAttempt: candidate.RunAttempt, CurrentCoreVersion: v.Current.CoreVersion, CurrentPluginVersion: v.Current.SMTPVersion, PluginPolicyRevision: v.Current.PluginPolicyRevision, Assets: candidate.Assets}}, nil
 	}
 	return Handoff{}, ErrStale
 }
@@ -193,13 +198,14 @@ func catalogDigest(candidate Candidate) string {
 	// Bind all executable identity facts shown by the previous explicit check.
 	// Release note text may change without changing the selected executable.
 	raw, _ := json.Marshal(struct {
-		Component  string
-		Tag        string
-		SourceSHA  string
-		ReleaseID  int64
-		RunID      int64
-		RunAttempt int64
-		Assets     []Asset
-	}{candidate.Component, candidate.Tag, candidate.SourceSHA, candidate.ReleaseID, candidate.RunID, candidate.RunAttempt, candidate.Assets})
+		DistributionFormat string
+		Component          string
+		Tag                string
+		SourceSHA          string
+		ReleaseID          int64
+		RunID              int64
+		RunAttempt         int64
+		Assets             []Asset
+	}{candidate.DistributionFormat, candidate.Component, candidate.Tag, candidate.SourceSHA, candidate.ReleaseID, candidate.RunID, candidate.RunAttempt, candidate.Assets})
 	return digestBytes(raw)
 }

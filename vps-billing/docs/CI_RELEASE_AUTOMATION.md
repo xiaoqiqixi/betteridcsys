@@ -25,7 +25,7 @@
 工具链与锁文件绑定所选源码，当前基线 Go `1.27.2`、Node.js `24.19.0`，实际 npm 与扫描版本由来源及 job 日志记录。Core/SMTP 标签入口都先执行要求的源码验证：
 
 - Go race/vet、真实 `_test` MySQL、前端测试/类型/格式/生产构建、HTTP/config 与发布负向测试。
-- 一次性 Ubuntu 24.04 runner 上的真实 systemd/Nginx、localhost 私有测试 CA HTTPS、运行/迁移身份分离、API 重启、同 schema A→B→A 与 13 表备份/恢复检查。
+- 一次性 Ubuntu 24.04 runner 上的真实 systemd/Nginx、localhost 私有测试 CA HTTPS、运行/迁移身份分离、API 重启、同 schema A→B→A 与迁移 007 后 14 张基础表的备份/恢复检查。
 - 运行时插件：根目录/策略/程序哈希、握手/身份/大小/错误/时限守卫；独立 UID 的实际安装/替换/回退与故障恢复，Core 程序哈希/PID 和业务继续响应证据。
 - 开启沙箱的云端 Chrome，合成订单的桌面/手机回归。不可用则失败，不关闭浏览器安全策略。
 - npm、独立 Go 漏洞扫描及固定 actionlint 工作流检查。网络失败不跳过；报告可达函数、导入包和模块级告警各自范围。
@@ -38,7 +38,7 @@ Chrome 执行前验证预装包记录和文件权限；一次性 runner 中只�
 
 ## 资产与公开发布
 
-每种包的 artifact 只包含对应程序归档、`BUILD.json`、`PROVENANCE.json` 与 `SHA256SUMS`。不手动上传源码包；GitHub 自带源码附件不由该程序产生。Core 包有 API、插件宿主、网页与部署工具；SMTP 包有独立程序、manifest 与版权材料。文件集合按包种类严格校验，拒绝多余/重复/穿越路径、链接、超限内容、错误摘要和不匹配来源。
+新分发的 artifact 为 Core 六资产或 SMTP 五资产：对应原始 Linux amd64 ELF、单独资源包、`BUILD.json`、`PROVENANCE.json` 与 `SHA256SUMS`，精确文件名见 [发布清单](RELEASE.md)。BUILD schema 3 / `raw-binaries-v1` 绑定逻辑程序与原始文件；资源包不含 ELF。旧四资产归档读取路径兼容保留，已公开文件不改写。不手动上传源码包；GitHub 自带源码附件不由该程序产生。Core 的两个原始程序与网页/迁移/部署资源共同组成安装；SMTP 的原始程序与五文件资源经核验组装。文件集合按包种类严格校验，拒绝多余/重复/穿越路径、链接、超限内容、错误摘要和不匹配来源。
 
 两次构建比对完整输出；来源记录绑定精确 commit、标签、run/attempt、控制文件、大小与 SHA-256。发布器验证完所有资产才公开：暂存阶段 `draft=true`，全部上传并核实后执行限定的状态修改，最终 `draft=false`、`prerelease=false`。Core 可以更新 latest，SMTP 不能抢占 Core latest。任何最终状态或资产复查失败都需报告真实失败/不确定状态，不把中间 artifact 或草稿视为发布成功。
 

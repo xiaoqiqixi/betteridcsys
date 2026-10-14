@@ -129,13 +129,13 @@ func updateBody(w http.ResponseWriter, r *http.Request, target any) bool {
 }
 
 func updateAudits(actor User, intent updates.Intent) ([]Audit, error) {
-	if actor.Role != "admin" || actor.ID != intent.ActorID || intent.Schema != 1 || intent.Repository != updates.Repository || intent.RepositoryID != updates.RepositoryID || len(intent.RequestID) != 32 {
+	if actor.Role != "admin" || actor.ID != intent.ActorID || intent.Schema != 2 || intent.Repository != updates.Repository || intent.RepositoryID != updates.RepositoryID || len(intent.RequestID) != 32 || !updates.ValidDistributionAssets(intent.Component, intent.Version, intent.DistributionFormat, intent.Assets) {
 		return nil, errors.New("invalid update audit")
 	}
 	assets := intent.Assets
 	intent.Assets = nil
 	raw, err := json.Marshal(intent)
-	if err != nil || len(raw) > 1000 || len(assets) != 4 {
+	if err != nil || len(raw) > 1000 {
 		return nil, errors.New("invalid update audit")
 	}
 	// All executable identity facts remain in the durable audit. No tokens,

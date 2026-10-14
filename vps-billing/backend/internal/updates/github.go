@@ -313,10 +313,8 @@ func (g *githubClient) tagCommit(ctx context.Context, tag string) (string, error
 func (g *githubClient) verify(ctx context.Context, release map[string]any, component string, current Current) (Candidate, error) {
 	tag := text(release, "tag_name")
 	prefix := "v"
-	archivePrefix := "aster-"
 	if component == "smtp" {
 		prefix = "smtp-v"
-		archivePrefix = "aster-smtp-"
 	}
 	version := strings.TrimPrefix(tag, prefix)
 	if !validTag(tag, component) || !isFalse(release, "draft") || !isFalse(release, "prerelease") || number(release, "id") <= 0 || text(release, "html_url") != officialURL(tag) {
@@ -330,31 +328,54 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 	if len(notes) > 16<<10 || !utf8.ValidString(notes) || strings.IndexByte(notes, 0) >= 0 {
 		return Candidate{}, ErrUnavailable
 	}
-	archive := archivePrefix + version + "-linux-amd64.tar.gz"
-	expected := map[string]bool{archive: true, "BUILD.json": true, "PROVENANCE.json": true, "SHA256SUMS": true}
-	assets := []Asset{}
-	metadata := map[string][]byte{}
-	if len(array(release, "assets")) != 4 {
+	legacyLayout, err := releaseLayout(component, version, ArchiveDistribution)
+	if err != nil {
 		return Candidate{}, ErrUnavailable
 	}
-	for _, value := range array(release, "assets") {
+	rawLayout, err := releaseLayout(component, version, RawDistribution)
+	if err != nil {
+		return Candidate{}, ErrUnavailable
+	}
+	allowed := map[string]bool{}
+	for name := range legacyLayout.Assets {
+		allowed[name] = true
+	}
+	for name := range rawLayout.Assets {
+		allowed[name] = true
+	}
+	assets := []Asset{}
+	metadata := map[string][]byte{}
+	inventory := array(release, "assets")
+	if len(inventory) != len(legacyLayout.Assets) && len(inventory) != len(rawLayout.Assets) {
+		return Candidate{}, ErrUnavailable
+	}
+	seenIDs := map[int64]bool{}
+	for _, value := range inventory {
 		asset, ok := value.(map[string]any)
 		if !ok {
 			return Candidate{}, ErrUnavailable
 		}
 		name := text(asset, "name")
-		if !expected[name] {
+		if !allowed[name] {
 			return Candidate{}, ErrUnavailable
 		}
-		delete(expected, name)
+		delete(allowed, name)
 		hash := strings.TrimPrefix(text(asset, "digest"), "sha256:")
 		id := number(asset, "id")
 		size := number(asset, "size")
-		if !strings.HasPrefix(text(asset, "digest"), "sha256:") || !hashPattern.MatchString(hash) || id <= 0 || size <= 0 || size > 80<<20 || text(asset, "state") != "uploaded" || text(asset, "url") != apiRoot+"/releases/assets/"+strconv.FormatInt(id, 10) || text(asset, "browser_download_url") != "https://github.com/"+Repository+"/releases/download/"+tag+"/"+name {
+		if !strings.HasPrefix(text(asset, "digest"), "sha256:") || !hashPattern.MatchString(hash) || id <= 0 || seenIDs[id] || size <= 0 || size > 80<<20 || text(asset, "state") != "uploaded" || text(asset, "url") != apiRoot+"/releases/assets/"+strconv.FormatInt(id, 10) || text(asset, "browser_download_url") != "https://github.com/"+Repository+"/releases/download/"+tag+"/"+name {
 			return Candidate{}, ErrUnavailable
 		}
+		seenIDs[id] = true
+		for _, binary := range rawLayout.BinaryAssets {
+			if name == binary && size > 64<<20 {
+				return Candidate{}, ErrUnavailable
+			}
+		}
 		assets = append(assets, Asset{Name: name, ID: id, Size: size, SHA256: hash})
-		if name != archive {
+		// This exact metadata allowlist is independent of distribution format.
+		// Neither raw executables nor either type of resource/archive is fetched.
+		if name == "BUILD.json" || name == "PROVENANCE.json" || name == "SHA256SUMS" {
 			bound := int64(128 << 10)
 			if name == "BUILD.json" {
 				bound = maxJSON
@@ -373,8 +394,26 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 		}
 	}
 	sort.Slice(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
+	decodedBuild, err := strictJSON(metadata["BUILD.json"])
+	build, ok := decodedBuild.(map[string]any)
+	if err != nil || !ok {
+		return Candidate{}, ErrUnavailable
+	}
+	format, err := buildDistribution(build)
+	if err != nil {
+		return Candidate{}, ErrUnavailable
+	}
+	layout, err := releaseLayout(component, version, format)
+	if err != nil || len(assets) != len(layout.Assets) {
+		return Candidate{}, ErrUnavailable
+	}
+	for _, asset := range assets {
+		if !layout.Assets[asset.Name] {
+			return Candidate{}, ErrUnavailable
+		}
+	}
 	checksums := strings.Split(strings.TrimSuffix(string(metadata["SHA256SUMS"]), "\n"), "\n")
-	if len(checksums) != 3 {
+	if len(checksums) != len(assets)-1 {
 		return Candidate{}, ErrUnavailable
 	}
 	seen := map[string]bool{}
@@ -394,11 +433,6 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 			return Candidate{}, ErrUnavailable
 		}
 	}
-	decodedBuild, err := strictJSON(metadata["BUILD.json"])
-	build, ok := decodedBuild.(map[string]any)
-	if err != nil || !ok {
-		return Candidate{}, ErrUnavailable
-	}
 	decodedProv, err := strictJSON(metadata["PROVENANCE.json"])
 	prov, ok := decodedProv.(map[string]any)
 	if err != nil || !ok {
@@ -409,9 +443,20 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 	attempt := number(prov, "run_attempt")
 	versions := obj(build, "component_versions")
 	compat := obj(build, "smtp_core_compatibility")
-	if number(build, "schema") != 2 || text(build, "release_kind") != component || text(build, "release_label") != version || text(build, "source_commit") != source || text(build, "target") != "linux/amd64" || !isFalse(build, "cgo_enabled") || !exactKeys(versions, "core", "smtp") || text(versions, component) != version || !pluginapi.ValidVersion(text(versions, "core")) || !pluginapi.ValidVersion(text(versions, "smtp")) || text(build, "plugin_protocol") != pluginapi.SMTPProtocol || !exactKeys(compat, "min", "max_exclusive") || !pluginapi.ValidVersion(text(compat, "min")) || !pluginapi.ValidVersion(text(compat, "max_exclusive")) {
+	if text(build, "release_kind") != component || text(build, "release_label") != version || text(build, "source_commit") != source || text(build, "target") != "linux/amd64" || !isFalse(build, "cgo_enabled") || !exactKeys(versions, "core", "smtp") || text(versions, component) != version || !pluginapi.ValidVersion(text(versions, "core")) || !pluginapi.ValidVersion(text(versions, "smtp")) || text(build, "plugin_protocol") != pluginapi.SMTPProtocol || !exactKeys(compat, "min", "max_exclusive") || text(compat, "min") != "0.4.0" {
 		return Candidate{}, ErrUnavailable
 	}
+	max := "0.5.0"
+	if format == RawDistribution {
+		max = "0.6.0"
+	}
+	if text(compat, "max_exclusive") != max {
+		return Candidate{}, ErrUnavailable
+	}
+	if format == RawDistribution && !validateRawBinaryMetadata(build, layout, assets) {
+		return Candidate{}, ErrUnavailable
+	}
+
 	if !exactKeys(prov, "schema", "repository", "repository_id", "run_id", "run_attempt", "event", "tag", "version", "source_sha", "run_head_sha", "workflow_sha", "workflow_path", "default_branch", "default_sha", "trusted_blobs", "artifact_name", "assets") || number(prov, "schema") != 1 || number(prov, "repository_id") != RepositoryID || text(prov, "repository") != Repository || text(prov, "tag") != tag || text(prov, "version") != version || !commitPattern.MatchString(source) || runID <= 0 || attempt <= 0 || text(prov, "workflow_path") != ".github/workflows/release-build.yml" || text(prov, "workflow_sha") != text(prov, "run_head_sha") || !commitPattern.MatchString(text(prov, "workflow_sha")) || text(prov, "default_branch") != "main" || !commitPattern.MatchString(text(prov, "default_sha")) || text(prov, "artifact_name") != "candidate-"+strconv.FormatInt(runID, 10)+"-"+strconv.FormatInt(attempt, 10) {
 		return Candidate{}, ErrUnavailable
 	}
@@ -426,11 +471,11 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 		}
 	}
 	provAssets := obj(prov, "assets")
-	if !exactKeys(provAssets, archive, "BUILD.json") {
+	if len(provAssets) != len(assets)-2 {
 		return Candidate{}, ErrUnavailable
 	}
 	for _, asset := range assets {
-		if asset.Name != archive && asset.Name != "BUILD.json" {
+		if asset.Name == "PROVENANCE.json" || asset.Name == "SHA256SUMS" {
 			continue
 		}
 		meta := obj(provAssets, asset.Name)
@@ -438,6 +483,7 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 			return Candidate{}, ErrUnavailable
 		}
 	}
+
 	actual, err := g.tagCommit(ctx, tag)
 	if err != nil || actual != source {
 		return Candidate{}, ErrUnavailable
@@ -457,7 +503,7 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 	if err != nil || number(workflow, "id") != number(run, "workflow_id") || text(workflow, "path") != ".github/workflows/release-build.yml" || text(workflow, "state") != "active" {
 		return Candidate{}, ErrUnavailable
 	}
-	min, max := text(compat, "min"), text(compat, "max_exclusive")
+	min := text(compat, "min")
 	low, e1 := pluginapi.CompareVersion(min, max)
 	if e1 != nil || low >= 0 {
 		return Candidate{}, ErrUnavailable
@@ -469,13 +515,16 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 	lower, e1 := pluginapi.CompareVersion(compatibleVersion, min)
 	upper, e2 := pluginapi.CompareVersion(compatibleVersion, max)
 	compatible := e1 == nil && e2 == nil && lower >= 0 && upper < 0
-	// Installed plugins use the current protocol support range. Crossing it is
-	// a manual compatibility review rather than an automatically approved update.
+	// A selected plugin constrains Core updates by its actual validated manifest,
+	// not by the plugin version number or the candidate's bundled SMTP version.
 	if component == "core" && current.SMTPVersion != "" {
-		a, _ := pluginapi.CompareVersion(version, "0.4.0")
-		b, _ := pluginapi.CompareVersion(version, "0.5.0")
-		compatible = compatible && a >= 0 && b < 0
+		validRange := current.SMTPProtocol == pluginapi.SMTPProtocol && pluginapi.ValidVersion(current.SMTPCoreMin) && pluginapi.ValidVersion(current.SMTPCoreMaxExclusive)
+		lower, errLower := pluginapi.CompareVersion(version, current.SMTPCoreMin)
+		upper, errUpper := pluginapi.CompareVersion(version, current.SMTPCoreMaxExclusive)
+		order, errOrder := pluginapi.CompareVersion(current.SMTPCoreMin, current.SMTPCoreMaxExclusive)
+		compatible = compatible && validRange && errLower == nil && errUpper == nil && errOrder == nil && order < 0 && lower >= 0 && upper < 0
 	}
+
 	installed := current.CoreVersion
 	if component == "smtp" {
 		installed = current.SMTPVersion
@@ -489,7 +538,7 @@ func (g *githubClient) verify(ctx context.Context, release map[string]any, compo
 	if component == "smtp" {
 		preconditions = append(preconditions, "plugin_approval_required")
 	}
-	candidate := Candidate{Component: component, Tag: tag, Version: version, ReleaseURL: officialURL(tag), Notes: notes, PublishedAt: published, SourceSHA: source, ReleaseID: number(release, "id"), RunID: runID, RunAttempt: attempt, Compatible: compatible, UpdateAvailable: newer, Preconditions: preconditions, Assets: assets}
+	candidate := Candidate{DistributionFormat: format, Component: component, Tag: tag, Version: version, ReleaseURL: officialURL(tag), Notes: notes, PublishedAt: published, SourceSHA: source, ReleaseID: number(release, "id"), RunID: runID, RunAttempt: attempt, Compatible: compatible, UpdateAvailable: newer, Preconditions: preconditions, Assets: assets}
 	candidate.CatalogSHA256 = catalogDigest(candidate)
 	return candidate, nil
 }

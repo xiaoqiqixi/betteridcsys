@@ -176,7 +176,7 @@ func main() {
 	}
 	updateService := updates.New(releaseToken, func() updates.Current {
 		state := plugins.State()
-		return updates.Current{CoreVersion: pluginapi.CoreVersion, SMTPVersion: state.Version, SMTPStatus: state.Status, PluginPolicyRevision: state.PolicyRevision}
+		return updates.Current{CoreVersion: pluginapi.CoreVersion, SMTPVersion: state.Version, SMTPStatus: state.Status, PluginPolicyRevision: state.PolicyRevision, SMTPProtocol: state.SMTPProtocol, SMTPCoreMin: state.SMTPCoreMin, SMTPCoreMaxExclusive: state.SMTPCoreMaxExclusive}
 	})
 	app := billing.NewAppWithIntegrations(store, billing.Config{Updates: updateService, Plugins: plugins, SMTPKey: smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: proxyCIDRs}, registry)
 	server := &http.Server{Addr: listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}

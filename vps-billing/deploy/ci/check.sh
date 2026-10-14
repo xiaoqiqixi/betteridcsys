@@ -190,7 +190,7 @@ api_running || fail 'The owned demo API exited; refusing to send smoke-test writ
 TEST_CUSTOMER_EMAIL=demo@aster.local TEST_CUSTOMER_PASSWORD='DemoCustomer!2026' \
   TEST_ADMIN_EMAIL=admin@aster.local TEST_ADMIN_PASSWORD='DemoAdmin!2026' \
   TEST_SECOND_EMAIL=other@aster.local TEST_SECOND_PASSWORD='DemoOther!2026' \
-  python3 "$project_root/tests/security_smoke.py" --base "$api_base" --origin "$api_base"
+  python3 "$project_root/tests/security_smoke.py" --base "$api_base" --origin "$api_base" --expect-fresh-cny
 api_running || fail 'The owned demo API exited during HTTP regression tests.'
 
 step 'All required checks passed (browser, live providers and deployment not exercised)'

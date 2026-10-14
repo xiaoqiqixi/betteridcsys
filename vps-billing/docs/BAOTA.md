@@ -49,6 +49,8 @@ npm run build
 /etc/aster/secrets/
 ```
 
+Core 0.5.0 需将原始 API、插件宿主与同版资源按 [安装手册](INSTALL.md#1-核对来源与归档)组装后上传；资源归档不含 ELF，单个可执行文件不是完整站点。网页仍只取已编译 `web/`，不要把资源根目录作为站点根。
+
 版本目录、文件和链接由 root 管理；API 与 Nginx 仅读取。网站根目录只使用 `/opt/aster/current/web`。不要把完整源码、压缩包、数据库备份或 `/etc/aster` 放入可下载目录，也不要把版本目录递归改成面板 Web 用户所有。新前端与后端按同一提交一同发布；自定义前端构建不得继续使用官方包原有校验和声称内容未变。
 
 ## 3. MySQL、秘密与 systemd
@@ -169,7 +171,7 @@ curl --fail --show-error https://billing.example.com/readyz
 curl --fail --show-error --head https://billing.example.com/
 ```
 
-核对浏览器证书可信、静态资源和 SPA 刷新、登录/注销、Cookie/CSRF、客户隔离、管理员设置及 CNY/USD 独立价格。更改展示域名不会修改 `APP_ORIGIN`。API 和数据库不公开监听，支付保持禁用；未使用 SMTP 时不配置其加密密钥。SMTP 配置不依赖面板邮件插件，不安装或修改面板邮局服务；测试仅连接已获准且证书有效的 SMTP 目标。具体项目见 [验收范围](ACCEPTANCE.md)。
+核对浏览器证书可信、静态资源和 SPA 刷新、登录/注销、Cookie/CSRF、客户隔离、管理员设置及 运营者已配置币种的独立价格和历史格式快照。更改展示域名不会修改 `APP_ORIGIN`。API 和数据库不公开监听，支付保持禁用；未使用 SMTP 时不配置其加密密钥。SMTP 配置不依赖面板邮件插件，不安装或修改面板邮局服务；测试仅连接已获准且证书有效的 SMTP 目标。具体项目见 [验收范围](ACCEPTANCE.md)。
 
 后台版本入口可检查官方 Release 并创建审计交接，见 [UPDATES.md](UPDATES.md)。它不调用面板 root、文件管理或进程守护接口，也不替换面板 Nginx/MySQL；主机工具完成核验与暂存后，仍由运维按下面流程应用，不能把后台“待运维处理”当作面板更新已经完成。
 

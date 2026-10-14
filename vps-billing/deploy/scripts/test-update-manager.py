@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import shutil
 import struct
 import subprocess
 import sys
@@ -49,8 +50,8 @@ def elf():
     return bytes(raw)
 
 
-def archive(files, component, version, edit=None, extras=()):
-    root = manager.archive_name(component, version)[:-7]
+def archive(files, component, version, edit=None, extras=(), distribution_format="archive-v1"):
+    root = manager.archive_name(component, version, distribution_format)[:-7]
     directories = {root}
     for name in files:
         parts = name.split("/")
@@ -73,13 +74,18 @@ def archive(files, component, version, edit=None, extras=()):
 
 
 class Fixture:
-    def __init__(self, component="smtp"):
+    def __init__(self, component="smtp", raw=False):
+        self.format = "raw-binaries-v1" if raw else "archive-v1"
         self.component = component
         self.version = "1.0.1" if component == "smtp" else "0.4.1"
+        if raw: self.version = "1.1.0" if component == "smtp" else "0.5.0"
         self.tag = ("smtp-v" if component == "smtp" else "v") + self.version
         self.source = {path: (REPO / path).read_bytes() for path in manager.INPUTS}
         self.source["vps-billing/backend/pkg/pluginapi/protocol.go"] = b'package pluginapi\nconst CoreVersion = "0.4.1"\n'
         self.source["vps-billing/backend/plugins/smtp/VERSION"] = b"1.0.1\n"
+        if raw:
+            self.source["vps-billing/backend/pkg/pluginapi/protocol.go"] = b'package pluginapi\nconst CoreVersion = "0.5.0"\n'
+            self.source["vps-billing/backend/plugins/smtp/VERSION"] = b"1.1.0\n"
         for path in manager.TRUSTED_PATHS:
             self.source[path] = b"Reviewed policy fixture " + path.encode() + b"\n"
         binaries = {"plugin": elf()} if component == "smtp" else {"bin/aster-api": elf(), "bin/aster-plugin-host": elf()}
@@ -88,7 +94,7 @@ class Fixture:
         if component == "smtp":
             copies["README.md"] = "vps-billing/backend/plugins/smtp/README.md"
             self.source[copies["README.md"]] = b"Independent fixture SMTP; no message is sent.\n"
-            self.bundle["manifest.json"] = (encoded({"schema": 1, "id": "email.smtp", "version": self.version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": manager.digest(elf())}), 0o644)
+            self.bundle["manifest.json"] = (encoded({"schema": 1, "id": "email.smtp", "version": self.version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.6.0" if raw else "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": manager.digest(elf())}), 0o644)
             self.bundle["THIRD_PARTY_NOTICES.json"] = (encoded({"schema": 1, "notices": [{"path": "go-runtime/LICENSE", "sha256": manager.digest(b"Fixture original runtime notice\n"), "text": "Fixture original runtime notice\n"}]}), 0o644)
         else:
             copies.update({"REPOSITORY-README.md": "README.md", "PROJECT-README.md": "vps-billing/README.md"})
@@ -99,9 +105,15 @@ class Fixture:
                 self.source[copies[path]] = b"Reviewed fixture deployment file\n"
             for path in ("manifests/go-dependencies.json", "manifests/npm-installed-dependencies.json", "manifests/aster-api-build.txt", "manifests/aster-plugin-host-build.txt", "web/index.html"):
                 self.bundle[path] = (b"Fixture runtime metadata\n", 0o644)
+        if raw and component == "core":
+            for name in ("001_core.sql", "007_currency_registry.sql"):
+                copies["migrations/" + name] = "vps-billing/backend/migrations/" + name
+                self.source[copies["migrations/" + name]] = ("-- Reviewed fixture SQL migration " + name + "\n").encode()
         for destination, source in copies.items():
             self.bundle[destination] = (self.source[source], 0o755 if destination.startswith("deploy/scripts/") else 0o644)
         self.build = {"schema": 2, "release_kind": component, "release_label": self.version, "source_commit": SOURCE, "target": "linux/amd64", "cgo_enabled": False, "component_versions": {"core": "0.4.1", "smtp": "1.0.1"}, "plugin_protocol": "aster.smtp/1", "smtp_core_compatibility": {"min": "0.4.0", "max_exclusive": "0.5.0"}, "input_sha256": {path: manager.digest(raw) for path, raw in self.source.items() if path in manager.INPUTS}, "source_files": copies, "binary_sha256": {path: manager.digest(raw) for path, raw in binaries.items()}}
+        if raw:
+            self.build.update(schema=3, distribution_format=self.format, component_versions={"core": "0.5.0", "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=manager.binary_assets(component, self.version), resources_asset=manager.archive_name(component, self.version, self.format))
         self.files = {}
         self.refresh()
         self.calls = []
@@ -111,13 +123,19 @@ class Fixture:
             self.bundle["SHA256SUMS"] = ("".join(manager.digest(raw) + "  " + path + "\n" for path, (raw, _) in sorted(self.bundle.items()) if path != "SHA256SUMS").encode(), 0o644)
         else:
             self.bundle["manifests/BUILD.json"] = (encoded(self.build), 0o644)
-        self.files = {"BUILD.json": encoded(self.build), manager.archive_name(self.component, self.version): archive(self.bundle, self.component, self.version)}
+        resources = dict(self.bundle)
+        raw_assets = {}
+        if self.format == "raw-binaries-v1":
+            for path, name in manager.binary_assets(self.component, self.version).items():
+                raw_assets[name] = resources.pop(path)[0]
+        self.files = {"BUILD.json": encoded(self.build), manager.archive_name(self.component, self.version, self.format): archive(resources, self.component, self.version, distribution_format=self.format), **raw_assets}
         self.provenance = {"schema": 1, "repository": manager.REPOSITORY, "repository_id": manager.REPOSITORY_ID, "run_id": 1234, "run_attempt": 1, "event": "push", "tag": self.tag, "version": self.version, "source_sha": SOURCE, "run_head_sha": SOURCE, "workflow_sha": SOURCE, "workflow_path": manager.WORKFLOW, "default_branch": "main", "default_sha": SOURCE, "trusted_blobs": {path: manager.blob_sha(self.source[path]) for path in manager.TRUSTED_PATHS}, "artifact_name": "candidate-1234-1", "assets": {path: {"size": len(raw), "sha256": manager.digest(raw)} for path, raw in self.files.items()}}
         self.files["PROVENANCE.json"] = encoded(self.provenance)
         self.files["SHA256SUMS"] = "".join(manager.digest(raw) + "  " + path + "\n" for path, raw in sorted(self.files.items())).encode()
         self.assets = [{"name": path, "id": index + 100, "size": len(raw), "sha256": manager.digest(raw)} for index, (path, raw) in enumerate(sorted(self.files.items()))]
         self.intent = {"schema": 1, "request_id": "a" * 32, "actor_id": "b" * 32, "created_at": "2026-10-14T17:00:00Z", "expires_at": "2026-10-14T17:30:00Z", "repository": manager.REPOSITORY, "repository_id": manager.REPOSITORY_ID, "component": self.component, "tag": self.tag, "version": self.version, "source_sha": SOURCE, "release_id": 5678, "run_id": 1234, "run_attempt": 1, "current_core_version": "0.4.0", "current_plugin_version": "1.0.0", "plugin_policy_revision": 7, "assets": copy.deepcopy(self.assets)}
-        self.envelope = {"schema": 1, "status": "awaiting_host_operator", "intent": self.intent}
+        if self.format == "raw-binaries-v1": self.intent.update(schema=2, distribution_format=self.format)
+        self.envelope = {"schema": self.intent["schema"], "status": "awaiting_host_operator", "intent": self.intent}
         identity = {"id": manager.REPOSITORY_ID, "full_name": manager.REPOSITORY}
         self.responses = {"/git/ref/tags/" + self.tag: {"ref": "refs/tags/" + self.tag, "object": {"type": "commit", "sha": SOURCE}}, "/compare/" + SOURCE + "...main": {"status": "identical", "merge_base_commit": {"sha": SOURCE}}, "/releases/tags/" + self.tag: {"id": 5678, "tag_name": self.tag, "draft": False, "prerelease": False, "target_commitish": SOURCE, "assets": [dict(name=a["name"], id=a["id"], size=a["size"], digest="sha256:" + a["sha256"], state="uploaded") for a in self.assets]}, "/actions/workflows/release-build.yml": {"id": 33, "path": manager.WORKFLOW, "state": "active"}, "/actions/runs/1234": {"id": 1234, "run_attempt": 1, "workflow_id": 33, "path": manager.WORKFLOW, "status": "completed", "conclusion": "success", "event": "push", "head_sha": SOURCE, "head_branch": self.tag, "repository": identity, "head_repository": identity}, "/git/trees/" + SOURCE + "?recursive=1": {"truncated": False, "tree": [{"path": path, "type": "blob", "mode": "100644", "sha": manager.blob_sha(raw)} for path, raw in self.source.items()]}}
         for raw in self.source.values():
@@ -195,6 +213,49 @@ class HandoffTest(unittest.TestCase):
         for path in (self.state / ("a" * 32)).iterdir():
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    def test_raw_core_and_smtp_stage_exact_assets_without_execution(self):
+        for component in ("core", "smtp"):
+            self.fixture = Fixture(component, raw=True)
+            self.save_handoff()
+            journal = self.run_stage()
+            self.assertEqual(journal["distribution_format"], "raw-binaries-v1")
+            self.assertFalse(journal["installation_changed"])
+            self.assertEqual(journal["status"], "backup_required" if component == "core" else "awaiting_host_operator")
+            self.assertEqual(len(journal["assets"]), 6 if component == "core" else 5)
+            manager.status(str(self.state), "a" * 32, self.trust)
+            shutil.rmtree(self.state / ("a" * 32))
+
+    def test_schema2_format_asset_mixing_and_raw_tampering_rejected(self):
+        for component in ("core", "smtp"):
+            fixture = Fixture(component, raw=True)
+            valid = encoded(fixture.envelope)
+            manager.validate_handoff(valid, "0.4.0", "1.0.0", NOW)
+            for field, bad in (("distribution_format", "unknown"), ("distribution_format", "archive-v1"), ("distribution_format", []), ("distribution_format", {}), ("distribution_format", True), ("schema", 1)):
+                altered = copy.deepcopy(fixture.envelope); altered["intent"][field] = bad
+                with self.subTest(component=component, field=field), self.assertRaises(manager.Rejected):
+                    manager.validate_handoff(encoded(altered), "0.4.0", "1.0.0", NOW)
+            name = next(iter(manager.binary_assets(component, fixture.version).values()))
+            fixture.files[name] = b"modified executable"
+            with self.assertRaises(manager.Rejected):
+                manager.verify_downloads(fixture, fixture.intent, fixture.files, "0.4.0")
+
+    def test_raw_core_omitted_tagged_migration_rejected_without_staging_assets(self):
+        self.fixture = Fixture("core", raw=True)
+        # The official source tree still contains 001 and 007; refreshed asset
+        # hashes and BUILD copies deliberately omit only the initial migration.
+        self.fixture.bundle.pop("migrations/001_core.sql")
+        self.fixture.build["source_files"].pop("migrations/001_core.sql")
+        self.fixture.refresh()
+        self.save_handoff()
+        with self.assertRaisesRegex(manager.Rejected, "complete tagged migration inventory"):
+            self.run_stage()
+        request = self.state / ("a" * 32)
+        self.assertEqual({path.name for path in request.iterdir()}, {"JOURNAL.json"})
+        journal = manager.status(str(self.state), "a" * 32, self.trust)
+        self.assertEqual(journal["status"], "rejected")
+        self.assertEqual(journal["history"], ["staged", "rejected"])
+        self.assertFalse(journal["installation_changed"])
+
     def test_core_without_backup_does_not_claim_ready_or_apply(self):
         self.fixture = Fixture("core")
         self.save_handoff()
@@ -207,7 +268,8 @@ class HandoffTest(unittest.TestCase):
         self.fixture = Fixture("core")
         self.save_handoff()
         result = self.run_stage(**self.backup())
-        self.assertEqual(result["status"], "awaiting_host_operator")
+        self.assertEqual(result["status"], "compatibility_review_required")
+        self.assertFalse(result["installed_plugin_compatibility_verified"])
         self.assertTrue(result["backup"]["gzip_integrity_verified"])
         self.assertFalse(result["backup"]["isolated_restore_verified"])
         self.assertFalse(result["backup"]["database_contents_verified"])

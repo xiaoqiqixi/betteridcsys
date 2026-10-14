@@ -2,6 +2,7 @@ package billing
 
 import (
 	"aster/billing/internal/updates"
+	"aster/billing/pkg/pluginapi"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,7 +32,7 @@ func updateFixture() *fakeUpdates {
 	assets := []updates.Asset{{Name: "BUILD.json", ID: 201, Size: 100, SHA256: strings.Repeat("a", 64)}, {Name: "PROVENANCE.json", ID: 202, Size: 100, SHA256: strings.Repeat("b", 64)}, {Name: "SHA256SUMS", ID: 203, Size: 300, SHA256: strings.Repeat("c", 64)}, {Name: "aster-0.4.1-linux-amd64.tar.gz", ID: 200, Size: 1024, SHA256: strings.Repeat("d", 64)}}
 	now := time.Now().UTC().Truncate(time.Second)
 	current := updates.Current{CoreVersion: "0.4.0", SMTPVersion: "1.0.0", SMTPStatus: "approved", PluginPolicyRevision: 3}
-	return &fakeUpdates{view: updates.View{Current: current, Source: updates.Source{Repository: updates.Repository, Status: "available"}, CheckedAt: now.Format(time.RFC3339), Mode: "manual_host_handoff", Items: []updates.Candidate{}}, handoff: updates.Handoff{Schema: 1, Status: "awaiting_host_operator", Intent: updates.Intent{Schema: 1, RequestID: ID(), CreatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(30 * time.Minute).Format(time.RFC3339), Repository: updates.Repository, RepositoryID: updates.RepositoryID, Component: "core", Tag: "v0.4.1", Version: "0.4.1", SourceSHA: strings.Repeat("a", 40), ReleaseID: 80, RunID: 100, RunAttempt: 2, CurrentCoreVersion: current.CoreVersion, CurrentPluginVersion: current.SMTPVersion, PluginPolicyRevision: current.PluginPolicyRevision, Assets: assets}}}
+	return &fakeUpdates{view: updates.View{Current: current, Source: updates.Source{Repository: updates.Repository, Status: "available"}, CheckedAt: now.Format(time.RFC3339), Mode: "manual_host_handoff", Items: []updates.Candidate{}}, handoff: updates.Handoff{Schema: 2, Status: "awaiting_host_operator", Intent: updates.Intent{Schema: 2, DistributionFormat: updates.ArchiveDistribution, RequestID: ID(), CreatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(30 * time.Minute).Format(time.RFC3339), Repository: updates.Repository, RepositoryID: updates.RepositoryID, Component: "core", Tag: "v0.4.1", Version: "0.4.1", SourceSHA: strings.Repeat("a", 40), ReleaseID: 80, RunID: 100, RunAttempt: 2, CurrentCoreVersion: current.CoreVersion, CurrentPluginVersion: current.SMTPVersion, PluginPolicyRevision: current.PluginPolicyRevision, Assets: assets}}}
 }
 func updateRequest() map[string]any {
 	return map[string]any{"component": "core", "tag": "v0.4.1", "source_sha": strings.Repeat("a", 40), "release_id": 80, "catalog_sha256": strings.Repeat("f", 64), "acknowledge_manual_handoff": true}
@@ -168,7 +169,7 @@ func TestUpdateUnavailableDefaultDoesNotBreakCore(t *testing.T) {
 		t.Fatal(status, out)
 	}
 	view := out["data"].(map[string]any)
-	if view["source"].(map[string]any)["status"] != "unavailable" || view["current"].(map[string]any)["core_version"] != "0.4.0" {
+	if view["source"].(map[string]any)["status"] != "unavailable" || view["current"].(map[string]any)["core_version"] != pluginapi.CoreVersion {
 		t.Fatal(out)
 	}
 	if status, _ := admin.request("POST", "/api/v1/admin/updates/check", map[string]any{}, ""); status != 503 {
@@ -211,5 +212,56 @@ func TestMySQLUpdateAuditAtomicWithinExistingSchema(t *testing.T) {
 	var count int
 	if err := m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_events WHERE target=? OR id=?", intent.RequestID, intent.RequestID).Scan(&count); err != nil || count != 0 {
 		t.Fatal("failed actor left partial audit", count, err)
+	}
+}
+
+func TestUpdateAuditAcceptsOnlySchema2ExactDistributionLayouts(t *testing.T) {
+	actor := User{ID: ID(), Role: "admin", Email: "update-layout@example.invalid"}
+	for _, component := range []string{"core", "smtp"} {
+		intent := updateFixture().handoff.Intent
+		intent.ActorID = actor.ID
+		intent.Component = component
+		intent.DistributionFormat = updates.RawDistribution
+		intent.Version = "0.5.0"
+		intent.Tag = "v0.5.0"
+		names := []string{"aster-api-0.5.0-linux-amd64", "aster-plugin-host-0.5.0-linux-amd64", "aster-core-0.5.0-linux-amd64-resources.tar.gz", "BUILD.json", "PROVENANCE.json", "SHA256SUMS"}
+		if component == "smtp" {
+			intent.Version = "1.1.0"
+			intent.Tag = "smtp-v1.1.0"
+			names = []string{"aster-smtp-1.1.0-linux-amd64", "aster-smtp-1.1.0-linux-amd64-resources.tar.gz", "BUILD.json", "PROVENANCE.json", "SHA256SUMS"}
+		}
+		intent.Assets = []updates.Asset{}
+		for i, name := range names {
+			intent.Assets = append(intent.Assets, updates.Asset{Name: name, ID: int64(200 + i), Size: 100, SHA256: strings.Repeat("a", 64)})
+		}
+		audits, err := updateAudits(actor, intent)
+		if err != nil || len(audits) != len(names)+1 || !strings.Contains(audits[0].Detail, `"distribution_format":"raw-binaries-v1"`) {
+			t.Fatal(component, audits, err)
+		}
+		for _, defect := range []string{"schema1", "format_archive", "format_unknown", "missing", "extra", "name", "hash", "duplicate_id"} {
+			changed := intent
+			changed.Assets = append([]updates.Asset{}, intent.Assets...)
+			switch defect {
+			case "schema1":
+				changed.Schema = 1
+			case "format_archive":
+				changed.DistributionFormat = updates.ArchiveDistribution
+			case "format_unknown":
+				changed.DistributionFormat = "run-script-v1"
+			case "missing":
+				changed.Assets = changed.Assets[1:]
+			case "extra":
+				changed.Assets = append(changed.Assets, updates.Asset{Name: "project-source.tar.gz", ID: 900, Size: 100, SHA256: strings.Repeat("a", 64)})
+			case "name":
+				changed.Assets[0].Name = "arbitrary-program"
+			case "hash":
+				changed.Assets[0].SHA256 = "invalid"
+			case "duplicate_id":
+				changed.Assets[0].ID = changed.Assets[1].ID
+			}
+			if _, err := updateAudits(actor, changed); err == nil {
+				t.Fatal("invalid update request persisted", component, defect)
+			}
+		}
 	}
 }

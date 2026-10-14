@@ -13,28 +13,32 @@ type memoRequest struct {
 	Order       Order
 }
 type Memory struct {
-	emailSettings EmailSettingsRecord
-	settings      SiteSettings
-	mu            sync.Mutex
-	users         map[string]User
-	sessions      map[string]Session
-	plans         []Plan
-	prices        map[string]map[string]PlanPrice
-	orders        []Order
-	invoices      []Invoice
-	services      []Service
-	audits        []Audit
-	requests      map[string]memoRequest
+	currencies     CurrencyConfiguration
+	pricesRevision int64
+	emailSettings  EmailSettingsRecord
+	settings       SiteSettings
+	mu             sync.Mutex
+	users          map[string]User
+	sessions       map[string]Session
+	plans          []Plan
+	prices         map[string]map[string]PlanPrice
+	orders         []Order
+	invoices       []Invoice
+	services       []Service
+	audits         []Audit
+	requests       map[string]memoRequest
 }
 
 func NewMemory() *Memory {
 	m := &Memory{users: map[string]User{}, sessions: map[string]Session{}, plans: Catalog(), orders: []Order{}, invoices: []Invoice{}, services: []Service{}, audits: []Audit{}, requests: map[string]memoRequest{}}
 	m.settings = DefaultSettings()
+	m.currencies = DefaultCurrencyConfiguration()
+	m.pricesRevision = 1
 	m.emailSettings = DefaultEmailSettings()
 	m.prices = map[string]map[string]PlanPrice{
-		"starter":     {"CNY": {3900, true}, "USD": {600, true}},
-		"standard":    {"CNY": {7900, true}, "USD": {1200, true}},
-		"performance": {"CNY": {15900, true}, "USD": {2400, true}},
+		"starter":     {"CNY": {3900, true}},
+		"standard":    {"CNY": {7900, true}},
+		"performance": {"CNY": {15900, true}},
 	}
 	for _, v := range []struct{ email, name, role, password string }{{"demo@aster.local", "林先生", "customer", "DemoCustomer!2026"}, {"admin@aster.local", "演示管理员", "admin", "DemoAdmin!2026"}, {"other@aster.local", "另一位客户", "customer", "DemoOther!2026"}} {
 		h, _ := bcrypt.GenerateFromPassword([]byte(v.password), bcrypt.DefaultCost)
@@ -112,14 +116,20 @@ func (m *Memory) DeleteSession(_ context.Context, k string) error {
 func (m *Memory) Plans(_ context.Context, currency string) ([]Plan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !SupportedCurrency(currency) {
+	cur, known := m.currencies.find(currency)
+	if !known {
 		return nil, ErrCurrency
 	}
 	out := append([]Plan{}, m.plans...)
 	for n := range out {
 		price := m.prices[out[n].ID][currency]
+		if price.AmountMinor < 0 || price.AmountMinor > MaxMinor {
+			return nil, ErrPlanPrices
+		}
 		out[n].Currency, out[n].PriceMinor = currency, price.AmountMinor
-		out[n].Available = out[n].Available && price.Available && validAmount(price.AmountMinor)
+		out[n].CurrencyFormat = cur.CurrencyFormat
+		out[n].PriceRevision = m.pricesRevision
+		out[n].Available = cur.Enabled && out[n].Available && price.Available && validAmount(price.AmountMinor)
 	}
 	return out, nil
 }
@@ -170,11 +180,17 @@ func (m *Memory) Audits(_ context.Context, uid string) ([]Audit, error) {
 	}
 	return r, nil
 }
-func (m *Memory) CreateOrder(_ context.Context, u User, pid, host, key, currency string) (Order, bool, error) {
+func (m *Memory) CreateOrder(ctx context.Context, u User, pid, host, key, currency string) (Order, bool, error) {
+	return m.CreateQuotedOrder(ctx, u, pid, host, key, currency, nil)
+}
+func (m *Memory) CreateQuotedOrder(_ context.Context, u User, pid, host, key, currency string, quote *PriceQuote) (Order, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if currency != "" && !SupportedCurrency(currency) {
 		return Order{}, false, ErrCurrency
+	}
+	if quote != nil && (currency == "" || !quote.valid()) {
+		return Order{}, false, ErrInvalidQuote
 	}
 	fp := orderFingerprint(pid, host, currency)
 	k := u.ID + ":" + key
@@ -187,8 +203,12 @@ func (m *Memory) CreateOrder(_ context.Context, u User, pid, host, key, currency
 	if currency == "" {
 		currency = m.settings.DefaultCurrency
 	}
-	if !SupportedCurrency(currency) {
+	cur, known := m.currencies.find(currency)
+	if !known {
 		return Order{}, false, ErrCurrency
+	}
+	if !cur.Enabled {
+		return Order{}, false, ErrCurrencyDisabled
 	}
 	var p Plan
 	for _, v := range m.plans {
@@ -198,8 +218,12 @@ func (m *Memory) CreateOrder(_ context.Context, u User, pid, host, key, currency
 	}
 	price := m.prices[pid][currency]
 	p.PriceMinor, p.Currency = price.AmountMinor, currency
+	p.CurrencyFormat = cur.CurrencyFormat
 	if !p.Available || !price.Available || !validAmount(price.AmountMinor) {
 		return Order{}, false, ErrUnavailable
+	}
+	if quote != nil && !quote.matches(price.AmountMinor, cur.DecimalPlaces, m.pricesRevision) {
+		return Order{}, false, ErrPriceChanged
 	}
 	o, i, a := newRecords(u, p, host)
 	i.Issuer = m.settings.Identity()
@@ -227,7 +251,7 @@ func (m *Memory) Summary(_ context.Context, uid, currency string) (Summary, erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out Summary
-	if !SupportedCurrency(currency) {
+	if _, known := m.currencies.find(currency); !known {
 		return out, ErrCurrency
 	}
 	for _, s := range m.services {
@@ -281,6 +305,17 @@ func (m *Memory) UpdateSettings(_ context.Context, actor User, settings SiteSett
 	if settings.Revision != m.settings.Revision || settings.Revision == MaxMinor {
 		return SiteSettings{}, ErrSettingsConflict
 	}
+	cur, known := m.currencies.find(settings.DefaultCurrency)
+	if !known || !cur.Enabled {
+		return SiteSettings{}, ErrCurrency
+	}
+	if settings.DefaultCurrency != m.currencies.DefaultCurrency {
+		if m.currencies.Revision == MaxMinor {
+			return SiteSettings{}, ErrCurrencyConflict
+		}
+		m.currencies.DefaultCurrency = settings.DefaultCurrency
+		m.currencies.Revision++
+	}
 	settings.Revision++
 	m.settings = settings
 	m.audits = append(m.audits, settingsAudit(actor))
@@ -294,7 +329,14 @@ func cloneIdentity(i *InvoiceIdentity) *InvoiceIdentity {
 	copy := *i
 	return &copy
 }
-func cloneOrder(o Order) Order { o.Issuer = cloneIdentity(o.Issuer); return o }
+func cloneOrder(o Order) Order {
+	o.Issuer = cloneIdentity(o.Issuer)
+	if o.PlanSnapshot != nil {
+		snapshot := *o.PlanSnapshot
+		o.PlanSnapshot = &snapshot
+	}
+	return o
+}
 func cloneInvoice(i Invoice) Invoice {
 	i.Issuer = cloneIdentity(i.Issuer)
 	if i.PaidAt != nil {

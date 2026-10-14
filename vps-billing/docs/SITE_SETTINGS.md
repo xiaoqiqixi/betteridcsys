@@ -10,7 +10,7 @@
 | 标志、主题 | star/cloud/server 预设；blue/teal/violet 主题 | 预览后保存；没有文件上传、自定义 HTML/CSS/脚本或远程图片 |
 | 支持邮箱、支持链接 | 邮箱地址；经验证的 HTTPS 地址 | 展示与跳转，不由服务器抓取内容 |
 | 展示地址 | HTTPS 来源 | 只展示；不会申请域名、修改 DNS、证书、APP_ORIGIN 或邮件发件域 |
-| 默认语言、币种 | zh-CN / en；CNY / USD | 无个人偏好的首次访问使用；两项独立选择 |
+| 默认语言、币种 | zh-CN / en；运营者已配置的启用币种 | 无个人偏好的首次访问使用；默认币种在“财务设置”统一管理 |
 | 账单抬头、地址 | 纯文本 | 新订单/账单创建时保存快照；历史记录不改 |
 | 邮件署名 | 纯文本 | 保存供未来邮件模板使用；SMTP 管理员测试使用固定正文，不采用此署名 |
 
@@ -20,46 +20,15 @@
 
 没有自定义上传标志、无限主题编辑器、任意域名绑定、发票 PDF/税票系统或所见即所得邮件模板。SMTP 凭据在独立管理员页面加密保存，不属于站点展示设置。保存署名或公司名不代表发信或税票能力已经可用。
 
-## 语言和币种分别控制什么
+## 语言、币种和价格
 
-语言选择只控制界面文案、日期与金额格式，支持简体中文和 English，回退语言为简体中文。用户输入的公司名、产品名、地址和历史记录不会自动翻译。
+语言只控制界面文案、日期及区域格式，支持简体中文/English。公司名、产品名、地址和历史记录不会自动翻译，币种的代码、前后缀和精度不由语言决定。
 
-币种选择控制该币种的套餐报价及相应统计。CNY 和 USD 都使用整数最小单位，100 分对应 1 CNY，100 美分对应 1 USD；金额必须是 JavaScript 可精确表示范围内的整数（最大 9007199254740991）。这里没有汇率表、自动兑换或币种间余额转移。切换币种不会替换既有订单的币种符号。
+全新安装仅启用 CNY；新增币种、默认币种、停用及 0–6 位精度由管理员“财务设置”管理。既有 USD 价格和历史在升级时保留，不能通过改默认币种转换金额。历史订单、账单和服务按各自保存的币种格式显示。
 
-新下单明确带币种，API 只读取该套餐对应 plan_prices 的独立定价，并检查套餐及该币种价格均已启用。缺少报价或被禁用时不能下单，不会悄悄使用另一币种价格。幂等指纹包括币种；同一个键改币种重试属于冲突。网络结果不确定时保留原请求体和原键重试。
+套餐价格有独立后台编辑入口，按每个币种分别保存十进制报价、报价开关及套餐总开关。不要再使用旧 SQL 示例修改 `plans.price_minor/currency`；那两个字段不决定新订单价格，直接 SQL 会绕过应用审计及财务约束。缺价、币种停用、报价关闭或套餐关闭均不可购买。
 
-概览的金额、服务数和账单数按选择币种查询；客户总数仍是全局数量。订单、账单历史保留各自原币种，最近订单可出现多种币种，每条都单独标明。不要把 CNY 和 USD 相加生成一个“总金额”，也不要把截断到 1,000 条的列表当作完整财务导出。
-
-## 套餐价格的受控管理
-
-当前提供站点设置后台，**没有套餐定价编辑器**。真实运营价格必须由负责人分别审核 CNY 与 USD 的产品、税务、容量和销售政策，再由授权数据库操作人员更新。plans.price_minor / plans.currency 是旧版兼容字段，新下单权威价格是 plan_prices。不应继续仅更新旧字段。
-
-初始迁移中的示例套餐不可售，新增 CNY 示例价也不可售。升级可能继承原 USD 可售状态，操作前逐项检查：
-
-```sql
-SELECT p.id, p.name, p.available AS plan_available,
-       pp.currency, pp.amount_minor, pp.available AS price_available
-FROM plans AS p LEFT JOIN plan_prices AS pp ON pp.plan_id = p.id
-ORDER BY p.id, pp.currency;
-```
-
-下面是**仅供隔离测试库使用的合成价格示例**，不是建议售价、汇率或正式上线授权。实际金额要独立审批；如只允许一个币种，不启用另一个币种行。
-
-```sql
-START TRANSACTION;
-SELECT id, available FROM plans WHERE id = 'starter' FOR UPDATE;
--- 示例为 CNY 39.00 和 USD 6.00，两者分别定价。
-INSERT INTO plan_prices(plan_id,currency,amount_minor,available)
-VALUES ('starter','CNY',3900,FALSE), ('starter','USD',600,FALSE)
-ON DUPLICATE KEY UPDATE amount_minor = VALUES(amount_minor), available = FALSE;
--- 先复核以上待启用值，再按批准的币种开启。
-UPDATE plan_prices SET available = TRUE
-WHERE plan_id = 'starter' AND currency IN ('CNY','USD');
-UPDATE plans SET available = TRUE WHERE id = 'starter';
-COMMIT;
-```
-
-执行前确认影响行数，失败时回滚，不在未知状态下盲目重跑。直接 SQL 不是站点设置 API，不会自动生成应用审计事件；需要数据库操作工单、前后查询结果和独立运维审计。优先在停写窗口完成价格调整并用新幂等键验证新订单；现有订单/账单的金额、币种与 issuer 快照必须保持不变。
+完整字段、金额上限、精度锁定、停用义务及快照边界见 [财务模型](FINANCIAL_MODEL.md)，API 见 [接口契约](CONTRACT.md)。价格、币种和站点设置分别采用 revision；其他管理员更改默认币种后，旧站点表单应重新读取再保存。
 
 ## 支付插件边界
 

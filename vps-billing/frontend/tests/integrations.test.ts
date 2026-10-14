@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import IntegrationsPage from "../src/components/IntegrationsPage.vue";
+import { defaultCurrencyRegistry } from "../src/lib/currencies";
 import { defaultSiteSettings } from "../src/lib/settings";
 import { restorePreferences, setLocale } from "../src/lib/i18n";
 import App from "../src/App.vue";
@@ -134,6 +135,42 @@ describe("read-only integrations registry", () => {
     );
     wrapper.unmount();
   });
+  it("accepts declared arbitrary currency precision and rejects incomplete or ambiguous maps", async () => {
+    const item = {
+      ...manifest()[0]!,
+      supported_currencies: ["JPY", "KWD"],
+      currency_decimal_places: { JPY: 0, KWD: 3 },
+    };
+    expect(
+      readIntegrationManifest({ items: [item] })[0]!.currency_decimal_places,
+    ).toEqual({ JPY: 0, KWD: 3 });
+    for (const precision of [
+      { JPY: 0 },
+      { JPY: 0, KWD: 7 },
+      { JPY: 0, KWD: 1.5 },
+      { JPY: 0, KWD: 3, USD: 2 },
+    ]) {
+      expect(() =>
+        readIntegrationManifest({
+          items: [{ ...item, currency_decimal_places: precision }],
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      readIntegrationManifest({
+        items: [{ ...item, supported_currencies: ["JPY", "JPY"] }],
+      }),
+    ).toThrow();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply({ items: [item] })));
+    const wrapper = mount(IntegrationsPage, {
+      props: { preview: false, refreshToken: 0 },
+    });
+    await flushPromises();
+    await wrapper.find(".integration-card button").trigger("click");
+    expect(wrapper.text()).toContain("JPY · 0 位小数");
+    expect(wrapper.text()).toContain("KWD · 3 位小数");
+    wrapper.unmount();
+  });
   it("rejects malformed or undocumented manifests", () => {
     for (const data of [
       {},
@@ -194,6 +231,7 @@ describe("admin-only integrations route", () => {
     const fetcher = vi.fn(async (path: string) => {
       const data: Record<string, unknown> = {
         "/site-settings": defaultSiteSettings,
+        "/currencies": defaultCurrencyRegistry,
         "/session": {
           user: { ...fixtures.previewUser, role },
           csrf_token: "test",

@@ -71,6 +71,8 @@ def main():
     urllib.request.build_opener = isolated_opener
     original_args = sys.argv
     sys.argv = ["security_smoke.py", "--base", origin, "--origin", origin]
+    if not args.expect_smtp_settings:
+        sys.argv.append("--expect-fresh-cny")
     spec = importlib.util.spec_from_file_location(
         "native_existing_security_smoke", Path(args.project) / "tests/security_smoke.py"
     )
@@ -271,6 +273,7 @@ def main():
         "verified_tls": result.wasSuccessful() and not result.skipped,
         "production_mode": result.wasSuccessful() and not result.skipped,
         "live_providers": False,
+        "financial_fixture": NativeHTTPSAcceptance.financial_fixture,
     }
     Path(args.report).write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
     if not result.wasSuccessful() or result.skipped:

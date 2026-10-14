@@ -44,6 +44,7 @@ import {
   statusLabel,
   statusTone,
   readCheckoutSession,
+  readOrderQuote,
 } from "./lib/api";
 import type {
   Session,
@@ -56,10 +57,13 @@ import type {
   Overview,
   AdminOverview,
   CheckoutSession,
+  OrderQuote,
 } from "./lib/api";
 import SettingsPage from "./components/SettingsPage.vue";
 import UpdatesPage from "./components/UpdatesPage.vue";
 import PlansPage from "./components/PlansPage.vue";
+import FinancialSettingsPage from "./components/FinancialSettingsPage.vue";
+import { readCurrencyRegistry, type CurrencyRegistry } from "./lib/currencies";
 import {
   defaultSiteSettings,
   readPublicSiteSettings,
@@ -75,6 +79,9 @@ import {
   setLocale,
   setCurrency,
   applyDefaults,
+  applyCurrencyRegistry,
+  enabledCurrencies,
+  currencyRegistry,
 } from "./lib/i18n";
 import IntegrationsPage from "./components/IntegrationsPage.vue";
 import * as fixture from "./lib/preview";
@@ -98,7 +105,13 @@ function selectLocale(event: Event) {
   setLocale((event.target as HTMLSelectElement).value);
 }
 function selectCurrency(event: Event) {
-  setCurrency((event.target as HTMLSelectElement).value);
+  const code = (event.target as HTMLSelectElement).value;
+  if (isAdmin.value) {
+    if (!currencyRegistry.value.currencies.some((item) => item.code === code))
+      return;
+    reportCurrency.value = code;
+    void load();
+  } else setCurrency(code);
 }
 const integrationRefresh = ref(0);
 const error = ref(""),
@@ -133,6 +146,22 @@ const checkoutHost = computed(() =>
     : "",
 );
 const isAdmin = computed(() => session.value.user?.role === "admin");
+const reportCurrency = ref("");
+const displayCurrency = computed(() =>
+  isAdmin.value &&
+  currencyRegistry.value.currencies.some(
+    (item) => item.code === reportCurrency.value,
+  )
+    ? reportCurrency.value
+    : currency.value,
+);
+const viewCurrencies = computed(() =>
+  isAdmin.value
+    ? [...currencyRegistry.value.currencies].sort(
+        (a, b) => a.sort_order - b.sort_order || a.code.localeCompare(b.code),
+      )
+    : enabledCurrencies.value,
+);
 const page = computed(() => route.path.split("/")[1] || "overview");
 const nav = computed(() =>
   isAdmin.value
@@ -158,6 +187,11 @@ const nav = computed(() =>
           id: "integrations",
           label: tr("扩展中心", "Integrations"),
           icon: Puzzle,
+        },
+        {
+          id: "finance",
+          label: tr("财务设置", "Financial settings"),
+          icon: ReceiptText,
         },
         {
           id: "settings",
@@ -209,10 +243,10 @@ const unpaid = computed(() =>
   ),
 );
 const currencyServices = computed(() =>
-  services.value.filter((s) => s.currency === currency.value),
+  services.value.filter((s) => s.currency === displayCurrency.value),
 );
 const currencyUnpaid = computed(() =>
-  unpaid.value.filter((i) => i.currency === currency.value),
+  unpaid.value.filter((i) => i.currency === displayCurrency.value),
 );
 const unpaidTotal = computed(() =>
   isAdmin.value
@@ -248,10 +282,12 @@ async function init() {
   booting.value = true;
   loginError.value = "";
   try {
-    const [site, currentSession] = await Promise.all([
+    const [site, currentSession, registry] = await Promise.all([
       api<unknown>("/site-settings"),
       api<Session>("/session"),
+      api<unknown>("/currencies"),
     ]);
+    applyCurrencyRegistry(readCurrencyRegistry(registry));
     applyBranding(readPublicSiteSettings(site));
     session.value = currentSession;
     setCsrf(session.value.csrf_token);
@@ -331,6 +367,17 @@ function startPreview(admin = false) {
   load();
 }
 let loadGeneration = 0;
+let applyingRegistry = false;
+function applyFinancialSettings(registry: CurrencyRegistry) {
+  applyingRegistry = true;
+  try {
+    applyCurrencyRegistry(registry);
+    branding.value.default_currency = currencyRegistry.value.default_currency;
+  } finally {
+    applyingRegistry = false;
+  }
+  void load();
+}
 async function load() {
   integrationRefresh.value++;
   const generation = ++loadGeneration;
@@ -367,21 +414,38 @@ async function load() {
           0,
         ),
         revenue_minor: invoices.value
-          .filter((i) => i.currency === currency.value && i.status === "paid")
+          .filter(
+            (i) => i.currency === displayCurrency.value && i.status === "paid",
+          )
           .reduce((sum, i) => sum + i.amount_minor, 0),
         currency: currency.value,
       };
       return;
     }
+    const registry = readCurrencyRegistry(await api<unknown>("/currencies"));
+    if (generation !== loadGeneration) return;
+    applyingRegistry = true;
+    try {
+      applyCurrencyRegistry(registry);
+    } finally {
+      applyingRegistry = false;
+    }
+    const requestedCurrency = displayCurrency.value;
     if (isAdmin.value) {
       const [a, b, c, d, e] = await Promise.all([
-        api<AdminOverview>("/admin/overview?currency=" + currency.value),
+        api<AdminOverview>(
+          "/admin/overview?currency=" + encodeURIComponent(requestedCurrency),
+        ),
         api<User[]>("/admin/customers"),
         api<Order[]>("/admin/orders"),
         api<Invoice[]>("/admin/invoices"),
         api<Audit[]>("/audit"),
       ]);
-      if (generation !== loadGeneration) return;
+      if (
+        generation !== loadGeneration ||
+        requestedCurrency !== displayCurrency.value
+      )
+        return;
       adminOverview.value = a;
       customers.value = b;
       orders.value = c;
@@ -389,14 +453,20 @@ async function load() {
       audit.value = e;
     } else {
       const [a, b, c, d, e, f] = await Promise.all([
-        api<Overview>("/overview?currency=" + currency.value),
+        api<Overview>(
+          "/overview?currency=" + encodeURIComponent(requestedCurrency),
+        ),
         api<Service[]>("/services"),
-        api<Plan[]>("/plans?currency=" + currency.value),
+        api<Plan[]>("/plans?currency=" + encodeURIComponent(requestedCurrency)),
         api<Order[]>("/orders"),
         api<Invoice[]>("/invoices"),
         api<Audit[]>("/audit"),
       ]);
-      if (generation !== loadGeneration) return;
+      if (
+        generation !== loadGeneration ||
+        requestedCurrency !== displayCurrency.value
+      )
+        return;
       overview.value = a;
       services.value = b;
       plans.value = c;
@@ -421,6 +491,7 @@ interface PendingOrder {
   plan: Plan;
   hostname: string;
   uncertain?: boolean;
+  quote: OrderQuote;
 }
 // Keep an ambiguous attempt with its account during session expiry/re-login.
 // Another account must never inherit its payload or idempotency key.
@@ -445,7 +516,12 @@ async function openOrder(plan: Plan) {
     return;
   }
   if (!plan.available || plan.currency !== currency.value) return;
-  selectedPlan.value = { ...plan };
+  selectedPlan.value = {
+    ...plan,
+    ...(plan.currency_format
+      ? { currency_format: { ...plan.currency_format } }
+      : {}),
+  };
   orderCatalogChanged.value = false;
   hostname.value = "";
   agreed.value = false;
@@ -467,12 +543,15 @@ function invalidateChangedOrder() {
     "disk_gb",
     "transfer_tb",
     "price_minor",
+    "price_revision",
     "currency",
   ];
   if (
     current?.available &&
     current.currency === currency.value &&
-    fields.every((field) => current[field] === draft[field])
+    fields.every((field) => current[field] === draft[field]) &&
+    JSON.stringify(current.currency_format) ===
+      JSON.stringify(draft.currency_format)
   )
     return false;
   orderDialog.value?.close();
@@ -493,12 +572,22 @@ async function createOrder() {
   )
     return;
   if (invalidateChangedOrder()) return;
-  if (!pendingOrder.value)
-    pendingOrder.value = {
-      key: orderKey.value,
-      plan: { ...selectedPlan.value },
-      hostname: hostname.value,
-    };
+  if (!pendingOrder.value) {
+    try {
+      pendingOrder.value = {
+        key: orderKey.value,
+        plan: { ...selectedPlan.value },
+        hostname: hostname.value,
+        quote: readOrderQuote(selectedPlan.value),
+      };
+    } catch {
+      modalError.value = tr(
+        "报价信息不完整，请重新读取套餐后再确认。",
+        "The quote is incomplete. Reload plans before confirming an order.",
+      );
+      return;
+    }
+  }
   const attempt = pendingOrder.value;
   const accountId = session.value.user?.id;
   saving.value = true;
@@ -523,6 +612,7 @@ async function createOrder() {
         plan_id: attempt.plan.id,
         hostname: attempt.hostname,
         currency: attempt.plan.currency,
+        quote: attempt.quote,
       },
       { "Idempotency-Key": attempt.key },
     );
@@ -538,10 +628,25 @@ async function createOrder() {
     if (
       e instanceof ApiError &&
       !attempt.uncertain &&
+      e.code === "PRICE_CHANGED"
+    ) {
+      pendingOrder.value = undefined;
+      orderDialog.value?.close();
+      selectedPlan.value = undefined;
+      agreed.value = false;
+      hostname.value = "";
+      orderKey.value = "";
+      orderCatalogChanged.value = true;
+      await load();
+    } else if (
+      e instanceof ApiError &&
+      !attempt.uncertain &&
       [
         "INVALID_INPUT",
         "VALIDATION_ERROR",
         "INVALID_CURRENCY",
+        "CURRENCY_DISABLED",
+        "UNSUPPORTED_CURRENCY",
         "PLAN_UNAVAILABLE",
         "IDEMPOTENCY_KEY_REQUIRED",
       ].includes(e.code)
@@ -645,6 +750,7 @@ function downloadInvoices() {
       tr("状态", "Status"),
       tr("币种", "Currency"),
       tr("金额（最小单位）", "Amount (minor units)"),
+      tr("记录金额", "Recorded amount"),
       tr("出账日期", "Issued on"),
       tr("到期日期", "Due on"),
     ],
@@ -653,6 +759,7 @@ function downloadInvoices() {
       statusLabel(i.status),
       i.currency,
       i.amount_minor,
+      money(i.amount_minor, i.currency, i.currency_format),
       i.issued_at,
       i.due_at,
     ]),
@@ -674,6 +781,7 @@ watch(
   (next, previous) => {
     if (next === previous) return;
     loadGeneration++;
+    reportCurrency.value = "";
     closeInvoice();
     orderDialog.value?.close();
     selectedPlan.value = undefined;
@@ -707,12 +815,16 @@ watch(
   },
   { immediate: true },
 );
-watch(currency, () => {
-  plans.value = [];
-  overview.value = undefined;
-  adminOverview.value = undefined;
-  if (!booting.value && session.value.user) void load();
-});
+watch(
+  currency,
+  () => {
+    plans.value = [];
+    overview.value = undefined;
+    adminOverview.value = undefined;
+    if (!booting.value && session.value.user && !applyingRegistry) void load();
+  },
+  { flush: "sync" },
+);
 watch(
   [plans, currency],
   () => {
@@ -763,13 +875,19 @@ onMounted(init);
       <label
         ><span>{{ tr("币种", "Currency") }}</span
         ><select
-          :value="currency"
+          :value="displayCurrency"
           @change="selectCurrency"
           :aria-label="tr('币种', 'Currency')"
           :disabled="saving"
         >
-          <option value="CNY">CNY</option>
-          <option value="USD">USD</option>
+          <option
+            v-for="item in viewCurrencies"
+            :key="item.code"
+            :value="item.code"
+          >
+            {{ item.code }} · {{ item.name
+            }}{{ !item.enabled ? tr("（仅历史）", " (history only)") : "" }}
+          </option>
         </select></label
       >
     </div>
@@ -1042,13 +1160,21 @@ onMounted(init);
             <label
               ><span>{{ tr("币种", "Currency") }}</span
               ><select
-                :value="currency"
+                :value="displayCurrency"
                 @change="selectCurrency"
                 :aria-label="tr('币种', 'Currency')"
                 :disabled="saving"
               >
-                <option value="CNY">CNY</option>
-                <option value="USD">USD</option>
+                <option
+                  v-for="item in viewCurrencies"
+                  :key="item.code"
+                  :value="item.code"
+                >
+                  {{ item.code }} · {{ item.name
+                  }}{{
+                    !item.enabled ? tr("（仅历史）", " (history only)") : ""
+                  }}
+                </option>
               </select></label
             >
           </div>
@@ -1291,9 +1417,16 @@ onMounted(init);
                     ? money(
                         adminOverview?.revenue_minor || 0,
                         adminOverview?.currency,
+                        adminOverview?.currency_format,
                       )
-                    : money(monthly, overview?.currency)
-                }}<span>{{ isAdmin ? currency : tr("/ 月", "/ month") }}</span>
+                    : money(
+                        monthly,
+                        overview?.currency,
+                        overview?.currency_format,
+                      )
+                }}<span>{{
+                  isAdmin ? displayCurrency : tr("/ 月", "/ month")
+                }}</span>
               </div>
               <div class="stat-foot">
                 {{
@@ -1346,7 +1479,12 @@ onMounted(init);
               }}</b>
               <p>
                 {{ unpaid[0]?.number }}<span>·</span
-                >{{ money(unpaid[0]?.amount_minor || 0, unpaid[0]?.currency)
+                >{{
+                  money(
+                    unpaid[0]?.amount_minor || 0,
+                    unpaid[0]?.currency,
+                    unpaid[0]?.currency_format,
+                  )
                 }}<span>·</span>{{ date(unpaid[0]?.due_at || "") }}
                 {{ tr("到期", "due") }}
               </p>
@@ -1407,7 +1545,13 @@ onMounted(init);
                     <span class="badge" :class="statusTone(service.status)"
                       ><i />{{ statusLabel(service.status) }}</span
                     ><small
-                      >{{ money(service.price_minor, service.currency) }}
+                      >{{
+                        money(
+                          service.price_minor,
+                          service.currency,
+                          service.currency_format,
+                        )
+                      }}
                       {{ tr("/ 月", "/ month") }}
                     </small>
                   </div>
@@ -1444,7 +1588,13 @@ onMounted(init);
                     >
                   </div>
                   <div class="service-row-meta">
-                    <b>{{ money(order.total_minor, order.currency) }}</b
+                    <b>{{
+                      money(
+                        order.total_minor,
+                        order.currency,
+                        order.currency_format,
+                      )
+                    }}</b
                     ><span class="badge" :class="statusTone(order.status)">{{
                       statusLabel(order.status)
                     }}</span>
@@ -1501,7 +1651,7 @@ onMounted(init);
                     }}
                   </p>
                 </div>
-                <span class="tiny-tag">{{ currency }}</span>
+                <span class="tiny-tag">{{ displayCurrency }}</span>
               </div>
               <div v-if="isAdmin" class="admin-summary">
                 <div>
@@ -1522,7 +1672,7 @@ onMounted(init);
                   ><b
                     >{{
                       invoices.filter(
-                        (invoice) => invoice.currency === currency,
+                        (invoice) => invoice.currency === displayCurrency,
                       ).length
                     }}
                     <small> {{ tr("笔", " invoices") }} </small></b
@@ -1530,7 +1680,15 @@ onMounted(init);
                 </div>
                 <div>
                   <span> {{ tr("待收金额", "Amount outstanding") }} </span
-                  ><b>{{ money(unpaidTotal ?? Number.NaN, currency) }}</b>
+                  ><b>{{
+                    money(
+                      unpaidTotal ?? Number.NaN,
+                      displayCurrency,
+                      isAdmin
+                        ? adminOverview?.currency_format
+                        : overview?.currency_format,
+                    )
+                  }}</b>
                 </div>
                 <p>
                   <LockKeyhole :size="14" />
@@ -1544,7 +1702,12 @@ onMounted(init);
               </div>
               <template v-else
                 ><div class="cost-total">
-                  {{ money(monthly, overview?.currency)
+                  {{
+                    money(
+                      monthly,
+                      overview?.currency,
+                      overview?.currency_format,
+                    )
                   }}<span> {{ tr("/ 月", "/ month") }} </span>
                 </div>
                 <div
@@ -1554,7 +1717,13 @@ onMounted(init);
                 >
                   <div>
                     <span>{{ service.name }}</span
-                    ><b>{{ money(service.price_minor, service.currency) }}</b>
+                    ><b>{{
+                      money(
+                        service.price_minor,
+                        service.currency,
+                        service.currency_format,
+                      )
+                    }}</b>
                   </div>
                   <div class="cost-track">
                     <span
@@ -1629,7 +1798,13 @@ onMounted(init);
                     <td>{{ order.plan_name }}</td>
                     <td class="muted">{{ date(order.created_at) }}</td>
                     <td class="numeric">
-                      {{ money(order.total_minor, order.currency) }}
+                      {{
+                        money(
+                          order.total_minor,
+                          order.currency,
+                          order.currency_format,
+                        )
+                      }}
                     </td>
                     <td>
                       <span class="badge" :class="statusTone(order.status)">{{
@@ -1737,7 +1912,12 @@ onMounted(init);
               </dl>
               <div class="service-card-footer">
                 <b
-                  >{{ money(service.price_minor, service.currency)
+                  >{{
+                    money(
+                      service.price_minor,
+                      service.currency,
+                      service.currency_format,
+                    )
                   }}<small> {{ tr("/ 月", "/ month") }} </small></b
                 ><span> {{ tr("账务记录", "Billing record") }} </span>
               </div>
@@ -1786,8 +1966,15 @@ onMounted(init);
             <div>
               <span> {{ tr("待付款金额", "Amount unpaid") }} </span
               ><b
-                >{{ money(unpaidTotal ?? Number.NaN, currency)
-                }}<small>{{ currency }}</small></b
+                >{{
+                  money(
+                    unpaidTotal ?? Number.NaN,
+                    displayCurrency,
+                    isAdmin
+                      ? adminOverview?.currency_format
+                      : overview?.currency_format,
+                  )
+                }}<small>{{ displayCurrency }}</small></b
               >
             </div>
             <div>
@@ -1861,10 +2048,37 @@ onMounted(init);
                 <tbody>
                   <tr v-for="order in filteredOrders" :key="order.id">
                     <td class="mono strong">{{ order.number }}</td>
-                    <td>{{ order.plan_name }}</td>
+                    <td>
+                      <strong>{{
+                        order.plan_snapshot?.name || order.plan_name
+                      }}</strong>
+                      <div class="muted" v-if="order.plan_snapshot">
+                        {{ order.plan_snapshot.cpu }} vCPU ·
+                        {{ order.plan_snapshot.memory_gb }} GB ·
+                        {{ order.plan_snapshot.disk_gb }} GB ·
+                        {{ order.plan_snapshot.transfer_tb }} TB<br />{{
+                          order.plan_snapshot.region
+                        }}
+                        · {{ tr("月付", "Monthly") }}
+                      </div>
+                      <div class="muted" v-else>
+                        {{
+                          tr(
+                            "未保存成交规格",
+                            "Order specifications were not recorded",
+                          )
+                        }}
+                      </div>
+                    </td>
                     <td class="muted">{{ date(order.created_at) }}</td>
                     <td class="numeric">
-                      {{ money(order.total_minor, order.currency) }}
+                      {{
+                        money(
+                          order.total_minor,
+                          order.currency,
+                          order.currency_format,
+                        )
+                      }}
                     </td>
                     <td>
                       <span class="badge" :class="statusTone(order.status)">{{
@@ -1905,7 +2119,13 @@ onMounted(init);
                     <td class="muted">{{ date(invoice.issued_at) }}</td>
                     <td class="muted">{{ date(invoice.due_at) }}</td>
                     <td class="numeric">
-                      {{ money(invoice.amount_minor, invoice.currency) }}
+                      {{
+                        money(
+                          invoice.amount_minor,
+                          invoice.currency,
+                          invoice.currency_format,
+                        )
+                      }}
                     </td>
                     <td>
                       <span class="badge" :class="statusTone(invoice.status)">{{
@@ -2032,6 +2252,12 @@ onMounted(init);
             }}
           </p></template
         >
+        <FinancialSettingsPage
+          v-else-if="page === 'finance' && isAdmin"
+          :preview="preview"
+          @saved="applyFinancialSettings"
+          @prices-saved="load"
+        />
         <SettingsPage
           v-else-if="page === 'settings' && isAdmin"
           :preview="preview"
@@ -2247,7 +2473,12 @@ onMounted(init);
           </p>
         </div>
         <strong
-          >{{ money(selectedPlan.price_minor, selectedPlan.currency)
+          >{{
+            money(
+              selectedPlan.price_minor,
+              selectedPlan.currency,
+              selectedPlan.currency_format,
+            )
           }}<small> {{ tr("/ 月", "/ month") }} </small></strong
         >
       </div>
@@ -2282,7 +2513,13 @@ onMounted(init);
         <div>
           <dt>{{ tr("首期订单金额", "Initial order amount") }}</dt>
           <dd>
-            {{ money(selectedPlan?.price_minor || 0, selectedPlan?.currency) }}
+            {{
+              money(
+                selectedPlan?.price_minor || 0,
+                selectedPlan?.currency,
+                selectedPlan?.currency_format,
+              )
+            }}
           </dd>
         </div>
       </dl>
@@ -2411,7 +2648,13 @@ onMounted(init);
             class="invoice-line"
           >
             <span>{{ item.description }}</span
-            ><b>{{ money(item.amount_minor, selectedInvoice.currency) }}</b>
+            ><b>{{
+              money(
+                item.amount_minor,
+                selectedInvoice.currency,
+                selectedInvoice.currency_format,
+              )
+            }}</b>
           </div></template
         >
         <div v-else class="invoice-line">
@@ -2425,13 +2668,21 @@ onMounted(init);
             }}</small>
           </div>
           <b>{{
-            money(selectedInvoice.amount_minor, selectedInvoice.currency)
+            money(
+              selectedInvoice.amount_minor,
+              selectedInvoice.currency,
+              selectedInvoice.currency_format,
+            )
           }}</b>
         </div>
         <div class="invoice-total">
           <span> {{ tr("账单总额", "Invoice total") }} </span
           ><strong>{{
-            money(selectedInvoice.amount_minor, selectedInvoice.currency)
+            money(
+              selectedInvoice.amount_minor,
+              selectedInvoice.currency,
+              selectedInvoice.currency_format,
+            )
           }}</strong>
         </div>
         <p v-if="selectedInvoice.paid_at" class="paid-caption">

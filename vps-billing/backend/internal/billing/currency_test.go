@@ -9,6 +9,7 @@ import (
 
 func TestCurrencyPricingAndImmutableReplay(t *testing.T) {
 	m := NewMemory()
+	legacyMemoryFixture(t, m)
 	u, _ := m.UserByEmail(t.Context(), "demo@aster.local")
 	admin, _ := m.UserByEmail(t.Context(), "admin@aster.local")
 	cny, _, err := m.CreateOrder(t.Context(), u, "starter", "test", "default-key", "")
@@ -64,6 +65,7 @@ func TestCurrencyPricingAndImmutableReplay(t *testing.T) {
 
 func TestCurrencyScopedSummaryAndExactAmounts(t *testing.T) {
 	m := NewMemory()
+	legacyMemoryFixture(t, m)
 	u, _ := m.UserByEmail(t.Context(), "demo@aster.local")
 	m.services = []Service{{UserID: u.ID, Status: "active", PriceMinor: 3900, Currency: "CNY"}, {UserID: u.ID, Status: "active", PriceMinor: 600, Currency: "USD"}}
 	m.invoices = []Invoice{{UserID: u.ID, Status: "paid", AmountMinor: 1234, Currency: "CNY"}, {UserID: u.ID, Status: "paid", AmountMinor: 567, Currency: "USD"}, {UserID: u.ID, Status: "unpaid", AmountMinor: 100, Currency: "USD"}}
@@ -91,6 +93,7 @@ func TestCurrencyScopedSummaryAndExactAmounts(t *testing.T) {
 
 func TestCurrencyHTTPValidationAndLocaleIndependence(t *testing.T) {
 	m := NewMemory()
+	legacyMemoryFixture(t, m)
 	app := NewApp(m, Config{Demo: true, Origin: "http://localhost", Secret: ID() + ID()})
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
@@ -125,7 +128,7 @@ func TestCurrencyHTTPValidationAndLocaleIndependence(t *testing.T) {
 	r.Header.Set("Accept-Language", "en")
 	w = httptest.NewRecorder()
 	app.Handler().ServeHTTP(w, r)
-	if w.Code != 400 || w.Header().Get("Content-Language") != "en" || !strings.Contains(w.Body.String(), "Only CNY and USD") || !strings.Contains(w.Body.String(), "INVALID_CURRENCY") {
+	if w.Code != 400 || w.Header().Get("Content-Language") != "en" || !strings.Contains(w.Body.String(), "has not been configured") || !strings.Contains(w.Body.String(), "UNSUPPORTED_CURRENCY") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }

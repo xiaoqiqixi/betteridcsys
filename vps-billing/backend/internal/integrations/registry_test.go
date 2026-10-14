@@ -26,7 +26,7 @@ func (p testPayment) VerifyCallback(context.Context, CallbackRequest) (VerifiedP
 }
 
 func TestCallbackNormalizedMoneyBounds(t *testing.T) {
-	valid := VerifiedPayment{ProviderID: "payment.test", EventID: "event", TransactionID: "transaction", MerchantAccountID: "merchant", AccountID: "a", OrderID: "o", InvoiceID: "i", AmountMinor: 100, Currency: "CNY", Status: "settled", SettledAt: time.Now()}
+	valid := VerifiedPayment{ProviderID: "payment.test", EventID: "event", TransactionID: "transaction", MerchantAccountID: "merchant", AccountID: "a", OrderID: "o", InvoiceID: "i", AmountMinor: 100, Currency: "CNY", CurrencyDecimalPlaces: 2, Status: "settled", SettledAt: time.Now()}
 	for _, tc := range []struct {
 		currency string
 		amount   int64
@@ -48,7 +48,7 @@ func TestCallbackNormalizedMoneyBounds(t *testing.T) {
 	}
 }
 func definition() Definition {
-	return Definition{Manifest: Manifest{ID: "payment.test", Kind: Payment, Name: "Test only", Description: "Never registered by server", Capabilities: []string{"checkout"}, SupportedCurrencies: []string{"CNY", "USD"}, ConfigurationFields: []ConfigurationField{{Key: "api_key", Label: "API key reference", Type: "secret_ref", Required: true, Secret: true}}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, Config) (PaymentProvider, error) {
+	return Definition{Manifest: Manifest{ID: "payment.test", Kind: Payment, Name: "Test only", Description: "Never registered by server", Capabilities: []string{"checkout"}, SupportedCurrencies: []string{"CNY", "USD"}, CurrencyDecimalPlaces: map[string]int{"CNY": 2, "USD": 2}, ConfigurationFields: []ConfigurationField{{Key: "api_key", Label: "API key reference", Type: "secret_ref", Required: true, Secret: true}}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, Config) (PaymentProvider, error) {
 		return testPayment{checkout: Checkout{ProviderID: "payment.test", SessionID: "s1", URL: "https://checkout.example.com/session/1", ExpiresAt: time.Now().Add(time.Hour)}}, nil
 	}}
 }
@@ -101,7 +101,7 @@ func TestRegistryValidationAndRedaction(t *testing.T) {
 func TestDisabledNeverSucceeds(t *testing.T) {
 	r := Default()
 	ctx := context.Background()
-	if _, e := r.CreateCheckout(ctx, CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", IdempotencyKey: "key"}); !errors.Is(e, ErrUnavailable) {
+	if _, e := r.CreateCheckout(ctx, CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", CurrencyDecimalPlaces: 2, IdempotencyKey: "key"}); !errors.Is(e, ErrUnavailable) {
 		t.Fatal(e)
 	}
 	if _, e := r.SendEmail(ctx, EmailMessage{}); !errors.Is(e, ErrUnavailable) {
@@ -123,6 +123,7 @@ func TestCurrencyCapabilitiesAndSafeMoney(t *testing.T) {
 		}
 	}
 	d.Manifest.SupportedCurrencies = []string{"USD"}
+	d.Manifest.CurrencyDecimalPlaces = map[string]int{"USD": 2}
 	r, err := New(context.Background(), []Definition{d}, Options{PaymentID: d.Manifest.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +131,7 @@ func TestCurrencyCapabilitiesAndSafeMoney(t *testing.T) {
 	d.Manifest.SupportedCurrencies[0] = "CNY"
 	summaries := r.Summaries()
 	summaries[2].SupportedCurrencies[0] = "CNY"
-	request := CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", IdempotencyKey: "test-key"}
+	request := CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", CurrencyDecimalPlaces: 2, IdempotencyKey: "test-key"}
 	if _, err = r.CreateCheckout(context.Background(), request); err != nil {
 		t.Fatal("mutable capabilities", err)
 	}
@@ -139,7 +140,7 @@ func TestCurrencyCapabilitiesAndSafeMoney(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Currency = "EUR"
-	if _, err = r.CreateCheckout(context.Background(), request); !errors.Is(err, ErrInvalidResult) {
+	if _, err = r.CreateCheckout(context.Background(), request); !errors.Is(err, ErrUnsupportedCurrency) {
 		t.Fatal(err)
 	}
 	request.Currency = "USD"
@@ -150,6 +151,76 @@ func TestCurrencyCapabilitiesAndSafeMoney(t *testing.T) {
 	for _, summary := range Default().Summaries() {
 		if len(summary.SupportedCurrencies) != 0 {
 			t.Fatal("disabled capabilities", summary)
+		}
+	}
+}
+
+type precisionPayment struct {
+	checkoutCalls int
+	verified      VerifiedPayment
+}
+
+func (p *precisionPayment) CreateCheckout(_ context.Context, _ CheckoutRequest) (Checkout, error) {
+	p.checkoutCalls++
+	return Checkout{ProviderID: "payment.test", SessionID: "test-only", URL: "https://checkout.example.com/session/test", ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func (p *precisionPayment) VerifyCallback(context.Context, CallbackRequest) (VerifiedPayment, error) {
+	return p.verified, nil
+}
+
+// Currency scale is part of the financial meaning of a minor-unit amount. A
+// provider's capability must explicitly match that scale before any checkout.
+func TestCurrencyPrecisionCapabilities(t *testing.T) {
+	d := definition()
+	d.Manifest.ConfigurationFields = nil
+	d.Manifest.SupportedCurrencies = []string{"JPY", "KWD"}
+	d.Manifest.CurrencyDecimalPlaces = map[string]int{"JPY": 0, "KWD": 3}
+	provider := &precisionPayment{}
+	d.PaymentFactory = func(context.Context, Config) (PaymentProvider, error) { return provider, nil }
+	r, err := New(context.Background(), []Definition{d}, Options{PaymentID: d.Manifest.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mutating a supplied manifest or its returned summary cannot change the
+	// precision the registry validated at startup.
+	d.Manifest.CurrencyDecimalPlaces["JPY"] = 2
+	r.Summaries()[2].CurrencyDecimalPlaces["KWD"] = 2
+	for _, tc := range []struct {
+		code      string
+		precision int
+		want      error
+	}{{"JPY", 0, nil}, {"KWD", 3, nil}, {"JPY", 2, ErrUnsupportedCurrency}, {"KWD", 2, ErrUnsupportedCurrency}, {"CNY", 2, ErrUnsupportedCurrency}, {"JPY", -1, ErrInvalidResult}, {"KWD", 7, ErrInvalidResult}} {
+		before := provider.checkoutCalls
+		_, err = r.CreateCheckout(context.Background(), CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 1234, Currency: tc.code, CurrencyDecimalPlaces: tc.precision, IdempotencyKey: "test-only"})
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%s/%d: got %v, want %v", tc.code, tc.precision, err, tc.want)
+		}
+		if tc.want != nil && provider.checkoutCalls != before {
+			t.Fatal("incompatible money reached provider")
+		}
+	}
+	for _, tc := range []struct {
+		code      string
+		precision int
+		valid     bool
+	}{{"JPY", 0, true}, {"KWD", 3, true}, {"JPY", 2, false}, {"KWD", 0, false}, {"EUR", 2, false}} {
+		provider.verified = VerifiedPayment{ProviderID: "payment.test", EventID: "e", TransactionID: "t", MerchantAccountID: "m", AccountID: "a", OrderID: "o", InvoiceID: "i", AmountMinor: 1234, Currency: tc.code, CurrencyDecimalPlaces: tc.precision, Status: "settled", SettledAt: time.Now()}
+		_, err := r.VerifyCallback(context.Background(), CallbackRequest{})
+		if tc.valid != (err == nil) {
+			t.Fatalf("callback %s/%d: %v", tc.code, tc.precision, err)
+		}
+	}
+}
+
+func TestManifestRequiresExplicitCurrencyPrecision(t *testing.T) {
+	for _, precisions := range []map[string]int{nil, {"JPY": 0}, {"JPY": 0, "KWD": -1}, {"JPY": 0, "KWD": 7}, {"JPY": 0, "KWD": 3, "USD": 2}} {
+		d := definition()
+		d.Manifest.ConfigurationFields = nil
+		d.Manifest.SupportedCurrencies = []string{"JPY", "KWD"}
+		d.Manifest.CurrencyDecimalPlaces = precisions
+		if _, err := New(context.Background(), []Definition{d}, Options{}); err == nil {
+			t.Fatalf("accepted missing or unsafe precision: %v", precisions)
 		}
 	}
 }
@@ -165,7 +236,7 @@ func TestCheckoutURLValidation(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			_, e = r.CreateCheckout(context.Background(), CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", IdempotencyKey: "key"})
+			_, e = r.CreateCheckout(context.Background(), CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", CurrencyDecimalPlaces: 2, IdempotencyKey: "key"})
 			if !errors.Is(e, ErrInvalidResult) {
 				t.Fatal(e)
 			}
@@ -185,17 +256,28 @@ func TestSecretResolution(t *testing.T) {
 }
 
 func TestSettlementValidationDoesNotTrustClaims(t *testing.T) {
-	want := SettlementExpectation{ProviderID: "payment.test", MerchantAccountID: "merchant", AccountID: "account", OrderID: "order", InvoiceID: "invoice", AmountMinor: 600, Currency: "USD"}
-	valid := VerifiedPayment{ProviderID: want.ProviderID, MerchantAccountID: want.MerchantAccountID, AccountID: want.AccountID, OrderID: want.OrderID, InvoiceID: want.InvoiceID, AmountMinor: want.AmountMinor, Currency: want.Currency, EventID: "event", TransactionID: "transaction", Status: "settled", SettledAt: time.Now()}
+	want := SettlementExpectation{ProviderID: "payment.test", MerchantAccountID: "merchant", AccountID: "account", OrderID: "order", InvoiceID: "invoice", AmountMinor: 600, Currency: "USD", CurrencyDecimalPlaces: 2}
+	valid := VerifiedPayment{ProviderID: want.ProviderID, MerchantAccountID: want.MerchantAccountID, AccountID: want.AccountID, OrderID: want.OrderID, InvoiceID: want.InvoiceID, AmountMinor: want.AmountMinor, Currency: want.Currency, CurrencyDecimalPlaces: want.CurrencyDecimalPlaces, EventID: "event", TransactionID: "transaction", Status: "settled", SettledAt: time.Now()}
 	if e := ValidateSettlement(valid, want); e != nil {
 		t.Fatal(e)
 	}
-	for _, currency := range []string{"CNY", "USD", "EUR"} {
+	for _, currency := range []string{"CNY", "USD", "EUR", "JPY", "KWD", "usd", "US", "U5D"} {
 		expected, actual := want, valid
 		expected.Currency, actual.Currency = currency, currency
 		err := ValidateSettlement(actual, expected)
-		if (currency == "EUR") != (err != nil) {
+		if supportedCurrency(currency) != (err == nil) {
 			t.Fatal("settlement currency", currency, err)
+		}
+	}
+	for _, precision := range []int{0, 3, 6} {
+		expected, actual := want, valid
+		expected.CurrencyDecimalPlaces, actual.CurrencyDecimalPlaces = precision, precision
+		if err := ValidateSettlement(actual, expected); err != nil {
+			t.Fatal("matching financial precision", precision, err)
+		}
+		actual.CurrencyDecimalPlaces = (precision + 1) % 7
+		if err := ValidateSettlement(actual, expected); err == nil {
+			t.Fatal("accepted differently scaled settlement", precision)
 		}
 	}
 	unsafeExpected, unsafeActual := want, valid
@@ -203,7 +285,7 @@ func TestSettlementValidationDoesNotTrustClaims(t *testing.T) {
 	if ValidateSettlement(unsafeActual, unsafeExpected) == nil {
 		t.Fatal("unsafe settlement amount")
 	}
-	for _, change := range []func(*VerifiedPayment){func(v *VerifiedPayment) { v.AmountMinor = 1 }, func(v *VerifiedPayment) { v.Currency = "EUR" }, func(v *VerifiedPayment) { v.AccountID = "other" }, func(v *VerifiedPayment) { v.OrderID = "other" }, func(v *VerifiedPayment) { v.InvoiceID = "other" }, func(v *VerifiedPayment) { v.MerchantAccountID = "other" }, func(v *VerifiedPayment) { v.ProviderID = "other" }, func(v *VerifiedPayment) { v.EventID = "" }, func(v *VerifiedPayment) { v.TransactionID = "" }, func(v *VerifiedPayment) { v.Status = "pending" }} {
+	for _, change := range []func(*VerifiedPayment){func(v *VerifiedPayment) { v.AmountMinor = 1 }, func(v *VerifiedPayment) { v.CurrencyDecimalPlaces = 0 }, func(v *VerifiedPayment) { v.Currency = "EUR" }, func(v *VerifiedPayment) { v.AccountID = "other" }, func(v *VerifiedPayment) { v.OrderID = "other" }, func(v *VerifiedPayment) { v.InvoiceID = "other" }, func(v *VerifiedPayment) { v.MerchantAccountID = "other" }, func(v *VerifiedPayment) { v.ProviderID = "other" }, func(v *VerifiedPayment) { v.EventID = "" }, func(v *VerifiedPayment) { v.TransactionID = "" }, func(v *VerifiedPayment) { v.Status = "pending" }} {
 		v := valid
 		change(&v)
 		if e := ValidateSettlement(v, want); e == nil {
@@ -292,7 +374,7 @@ func TestProviderDeadline(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = r.CreateCheckout(context.Background(), CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", IdempotencyKey: "key"})
+	_, e = r.CreateCheckout(context.Background(), CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", CurrencyDecimalPlaces: 2, IdempotencyKey: "key"})
 	if !errors.Is(e, context.DeadlineExceeded) {
 		t.Fatal(e)
 	}

@@ -1,6 +1,6 @@
 # 运行时插件协议与信任边界
 
-实现目标为 Linux amd64 的 Core `0.4.0` 与独立 SMTP `1.0.0`。安装/操作见 [PLUGINS.md](PLUGINS.md)，实际执行结果见 [VALIDATION.md](VALIDATION.md) 和对应 Release 来源。本文件说明协议与边界，不能替代原生进程/版本替换的实际验收。
+实现目标为 Linux amd64 的 Core `0.5.0` 与独立 SMTP `1.1.0`。安装/操作见 [PLUGINS.md](PLUGINS.md)，实际执行结果见 [VALIDATION.md](VALIDATION.md) 和对应 Release 来源。本文件说明协议与边界，不能替代原生进程/版本替换的实际验收。
 
 ## 被动发现与明确批准
 
@@ -12,16 +12,16 @@ Core 读取 `PLUGIN_DIRECTORY` 下的 `<id>/<version>/manifest.json`，最多 32
 
 ## Manifest、策略与版本
 
-Manifest schema 1 包含：
+协议仍为 `aster.smtp/1`，manifest schema 仍为 1；分发改为原始程序和资源，不改变 RPC。SMTP 1.1.0 的兼容范围为 `>=0.4.0,<0.6.0`，旧 1.0.0 的 `<0.5.0` 上界保持原样。Manifest 包含：
 
 ```json
 {
   "schema": 1,
   "id": "email.smtp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "protocol": "aster.smtp/1",
   "core_min": "0.4.0",
-  "core_max_exclusive": "0.5.0",
+  "core_max_exclusive": "0.6.0",
   "capabilities": ["smtp.send"],
   "executable": "plugin",
   "sha256": "<真实程序的64位小写SHA-256>"

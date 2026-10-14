@@ -84,6 +84,8 @@ def source_copies(source, bundle, kind):
             for path in sorted((source / "vps-billing" / prefix).rglob("*")):
                 if path.is_file():
                     copies[str(path.relative_to(source / "vps-billing"))] = str(path.relative_to(source))
+        for path in sorted((source / "vps-billing/backend/migrations").glob("*.sql")):
+            copies["migrations/" + path.name] = str(path.relative_to(source))
         for path in ("deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"):
             copies[path] = "vps-billing/" + path
         for path in ("backend/go.mod", "backend/go.sum", "frontend/package.json", "frontend/package-lock.json"):
@@ -102,8 +104,9 @@ def embedded_notices(bundle):
     return texts
 
 
-def manifest(source, bundle, modules_path, build_path, commit, version, epoch, kind="core", output=None):
+def manifest(source, bundle, modules_path, build_path, commit, version, epoch, kind="core", output=None, binary_root=None):
     verify_version(source, kind, version)
+    binary_root = bundle if binary_root is None else Path(binary_root)
     project = source / "vps-billing"
     build_lines = build_path.read_text().splitlines()
     host_path = build_path.with_name("go-host-build.txt")
@@ -143,15 +146,17 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch, k
     if kind == "core":
         build_info["aster-plugin-host"] = "\n".join(["aster-plugin-host: " + host_lines[0].split(":", 1)[-1].strip(), *host_lines[1:]]) + "\n"
     info = {
-        "schema": 2, "release_kind": kind, "release_label": version, "source_commit": commit, "source_date_epoch": int(epoch),
-        "component_versions": selected_versions(source), "plugin_protocol": "aster.smtp/1", "smtp_core_compatibility": {"min": "0.4.0", "max_exclusive": "0.5.0"},
+        "schema": 3, "distribution_format": "raw-binaries-v1", "release_kind": kind, "release_label": version, "source_commit": commit, "source_date_epoch": int(epoch),
+        "component_versions": selected_versions(source), "plugin_protocol": "aster.smtp/1", "smtp_core_compatibility": {"min": "0.4.0", "max_exclusive": "0.6.0"},
         "target": "linux/amd64", "cgo_enabled": False,
         "deployment_model": "single-server native Linux; independently managed nonprivileged Unix-RPC SMTP worker; external target-host validation pending",
         "tools": {"go": tool("go", "version"), "tar": tool("tar", "--version").splitlines()[0], "gzip": tool("gzip", "--version").splitlines()[0], "python": tool("python3", "--version")},
         "go_build_flags": ["-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w"] + (["-X main.version=" + version] if kind == "smtp" else []),
         "frontend_build": ["npm ci --no-audit --no-fund", "npm run build"] if kind == "core" else [],
         "input_sha256": inputs, "source_files": source_copies(source, bundle, kind),
-        "binary_sha256": {path: hashlib.sha256((bundle / path).read_bytes()).hexdigest() for path in binaries},
+        "binary_sha256": {path: hashlib.sha256((binary_root / path).read_bytes()).hexdigest() for path in binaries},
+        "binary_assets": ({"bin/aster-api": "aster-api-" + version + "-linux-amd64", "bin/aster-plugin-host": "aster-plugin-host-" + version + "-linux-amd64"} if kind == "core" else {"plugin": "aster-smtp-" + version + "-linux-amd64"}),
+        "resources_asset": ("aster-core-" if kind == "core" else "aster-smtp-") + version + "-linux-amd64-resources.tar.gz",
         "go_build_info": build_info,
         "source_delivery": "No manually uploaded project source archive; source remains in Git and GitHub automatic source downloads",
         "dependency_inventory": "Go module graph, linked module and runtime original notice texts; core also includes npm installed metadata/lockfiles; not a full SPDX/CycloneDX SBOM or legal certification",
@@ -168,9 +173,9 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch, k
     else:
         write_json(bundle / "THIRD_PARTY_NOTICES.json", {"schema": 1, "go_modules": sorted(modules, key=lambda v: v["Path"]), "go_runtime": tool("go", "version"), "notices": embedded_notices(bundle), "scope": "Original top-level linked-module and Go runtime license/notice texts; not a complete SPDX/CycloneDX SBOM or legal determination"})
         shutil.rmtree(bundle / "licenses")
-        write_json(bundle / "manifest.json", {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": info["binary_sha256"]["plugin"]})
+        write_json(bundle / "manifest.json", {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.6.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": info["binary_sha256"]["plugin"]})
         shutil.copyfile(project / "backend/plugins/smtp/README.md", bundle / "README.md")
-        sums = "".join(hashlib.sha256((bundle / name).read_bytes()).hexdigest() + "  " + name + "\n" for name in ("LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "manifest.json", "plugin"))
+        sums = "".join(hashlib.sha256(((binary_root if name == "plugin" else bundle) / name).read_bytes()).hexdigest() + "  " + name + "\n" for name in ("LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "manifest.json", "plugin"))
         (bundle / "SHA256SUMS").write_text(sums)
     if output is not None:
         write_json(Path(output), info)

@@ -66,6 +66,24 @@ describe("plan selection and order summary", () => {
     wrapper.unmount();
   });
 
+  it("does not offer checkout when the server omits authoritative quote metadata", () => {
+    const plan = previewPlans("CNY")[0]!;
+    const wrapper = setup({
+      plans: [
+        { ...plan, currency_format: undefined },
+        { ...plan, id: "no-revision", price_revision: undefined },
+      ],
+    });
+    expect(
+      wrapper
+        .findAll(".plan-select")
+        .every((button) => button.attributes("disabled") !== undefined),
+    ).toBe(true);
+    expect(
+      wrapper.find(".purchase-review").attributes("disabled"),
+    ).toBeDefined();
+    wrapper.unmount();
+  });
   it("keeps missing prices and wrong-currency plans unavailable without presenting them as free", async () => {
     const plans = previewPlans("CNY");
     const wrapper = setup({

@@ -91,7 +91,7 @@ func fixtureService(f *catalogFixture, current *Current) *Service {
 
 func TestCatalogAndExplicitPinnedHandoff(t *testing.T) {
 	f := newFixture("core")
-	current := Current{CoreVersion: "0.4.0", SMTPVersion: "1.0.0", SMTPStatus: "approved", PluginPolicyRevision: 3}
+	current := Current{CoreVersion: "0.4.0", SMTPVersion: "1.0.0", SMTPStatus: "approved", SMTPProtocol: "aster.smtp/1", SMTPCoreMin: "0.4.0", SMTPCoreMaxExclusive: "0.5.0", PluginPolicyRevision: 3}
 	s := fixtureService(f, &current)
 	if snapshot := s.Snapshot(); snapshot.Source.Status != "not_checked" || len(f.calls) != 0 {
 		t.Fatal("snapshot triggered network", snapshot)

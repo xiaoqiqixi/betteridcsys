@@ -3,6 +3,7 @@ import { tr } from "./i18n";
 
 export const officialRepository = "xiaoqiqixi/betteridcsys";
 export type UpdateComponent = "core" | "smtp";
+export type DistributionFormat = "archive-v1" | "raw-binaries-v1";
 export type PluginStatus =
   "not_installed" | "disabled" | "unavailable" | "approved";
 export interface UpdateAsset {
@@ -12,6 +13,7 @@ export interface UpdateAsset {
   sha256: string;
 }
 export interface UpdateCandidate {
+  distribution_format: DistributionFormat;
   component: UpdateComponent;
   tag: string;
   version: string;
@@ -33,6 +35,9 @@ export interface UpdateStatus {
     core_version: string;
     smtp_version: string;
     smtp_status: PluginStatus;
+    smtp_protocol?: string;
+    smtp_core_min?: string;
+    smtp_core_max_exclusive?: string;
     plugin_policy_revision: number;
   };
   source: {
@@ -44,10 +49,11 @@ export interface UpdateStatus {
   mode: "manual_host_handoff";
 }
 export interface UpdateHandoff {
-  schema: 1;
+  schema: 1 | 2;
   status: "awaiting_host_operator";
   intent: {
-    schema: 1;
+    distribution_format?: DistributionFormat;
+    schema: 1 | 2;
     request_id: string;
     actor_id: string;
     created_at: string;
@@ -128,18 +134,39 @@ function hash(value: unknown): string {
   if (!digest.test(result)) return invalid();
   return result;
 }
+function distributionFormat(value: unknown): DistributionFormat {
+  if (value === undefined) return "archive-v1";
+  if (value !== "archive-v1" && value !== "raw-binaries-v1") return invalid();
+  return value;
+}
 function readAssets(
   value: unknown,
   component: UpdateComponent,
   itemVersion: string,
+  format: DistributionFormat,
 ): UpdateAsset[] {
-  if (!Array.isArray(value) || value.length !== 4) return invalid();
+  const programs =
+    format === "archive-v1"
+      ? [
+          `${component === "core" ? "aster" : "aster-smtp"}-${itemVersion}-linux-amd64.tar.gz`,
+        ]
+      : component === "core"
+        ? [
+            `aster-api-${itemVersion}-linux-amd64`,
+            `aster-plugin-host-${itemVersion}-linux-amd64`,
+            `aster-core-${itemVersion}-linux-amd64-resources.tar.gz`,
+          ]
+        : [
+            `aster-smtp-${itemVersion}-linux-amd64`,
+            `aster-smtp-${itemVersion}-linux-amd64-resources.tar.gz`,
+          ];
   const required = new Set([
-    `${component === "core" ? "aster" : "aster-smtp"}-${itemVersion}-linux-amd64.tar.gz`,
+    ...programs,
     "BUILD.json",
     "PROVENANCE.json",
     "SHA256SUMS",
   ]);
+  if (!Array.isArray(value) || value.length !== required.size) return invalid();
   const result = value.map((entry) => {
     const asset = record(entry);
     const name = text(asset.name, 100);
@@ -167,6 +194,7 @@ export function readUpdateCandidate(value: unknown): UpdateCandidate {
   const item = record(value);
   if (item.component !== "core" && item.component !== "smtp") return invalid();
   const component = item.component;
+  const format = distributionFormat(item.distribution_format);
   const itemVersion = version(item.version);
   const tag = text(item.tag, 48);
   if (tag !== `${component === "core" ? "v" : "smtp-v"}${itemVersion}`)
@@ -185,6 +213,7 @@ export function readUpdateCandidate(value: unknown): UpdateCandidate {
   if (new Set(preconditions).size !== preconditions.length) return invalid();
   return {
     component,
+    distribution_format: format,
     tag,
     version: itemVersion,
     release_url: releaseURL,
@@ -197,7 +226,7 @@ export function readUpdateCandidate(value: unknown): UpdateCandidate {
     compatible: boolean(item.compatible),
     update_available: boolean(item.update_available),
     preconditions,
-    assets: readAssets(item.assets, component, itemVersion),
+    assets: readAssets(item.assets, component, itemVersion, format),
     catalog_sha256: hash(item.catalog_sha256),
   };
 }
@@ -211,10 +240,21 @@ export function readUpdateHandoff(
 ): UpdateHandoff {
   const result = record(value);
   const intent = record(result.intent);
+  const schema = result.schema;
+  if (schema !== 1 && schema !== 2) return invalid();
+  const format =
+    schema === 1
+      ? "archive-v1"
+      : distributionFormat(intent.distribution_format);
   if (
-    result.schema !== 1 ||
+    (schema === 1 && intent.distribution_format !== undefined) ||
+    (schema === 2 && intent.distribution_format === undefined) ||
+    format !== candidate.distribution_format
+  )
+    return invalid();
+  if (
     result.status !== "awaiting_host_operator" ||
-    intent.schema !== 1 ||
+    intent.schema !== schema ||
     intent.repository !== officialRepository ||
     intent.repository_id !== 1418618420 ||
     intent.component !== candidate.component ||
@@ -241,6 +281,7 @@ export function readUpdateHandoff(
     intent.assets,
     candidate.component,
     candidate.version,
+    format,
   );
   const sameAsset = (asset: UpdateAsset) =>
     candidate.assets.some(
@@ -252,10 +293,11 @@ export function readUpdateHandoff(
     );
   if (!assets.every(sameAsset)) return invalid();
   return {
-    schema: 1,
+    schema,
     status: "awaiting_host_operator",
     intent: {
-      schema: 1,
+      schema,
+      ...(schema === 2 ? { distribution_format: format } : {}),
       request_id: requestID,
       actor_id: actorID,
       created_at: createdAt,
@@ -305,6 +347,20 @@ export function readUpdateStatus(value: unknown): UpdateStatus {
       core_version: version(current.core_version),
       smtp_version: version(current.smtp_version, true),
       smtp_status: current.smtp_status as PluginStatus,
+      ...(current.smtp_protocol !== undefined
+        ? { smtp_protocol: text(current.smtp_protocol, 80) }
+        : {}),
+      ...(current.smtp_core_min !== undefined
+        ? { smtp_core_min: version(current.smtp_core_min, true) }
+        : {}),
+      ...(current.smtp_core_max_exclusive !== undefined
+        ? {
+            smtp_core_max_exclusive: version(
+              current.smtp_core_max_exclusive,
+              true,
+            ),
+          }
+        : {}),
       plugin_policy_revision: integer(current.plugin_policy_revision, 0),
     },
     source: {

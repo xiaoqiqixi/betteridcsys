@@ -25,7 +25,7 @@ func (p *checkoutRecorder) VerifyCallback(context.Context, integrations.Callback
 }
 func TestInjectedCheckoutBoundary(t *testing.T) {
 	recorder := &checkoutRecorder{}
-	registry, e := integrations.New(context.Background(), []integrations.Definition{{Manifest: integrations.Manifest{ID: "payment.test", Kind: integrations.Payment, Name: "Test", Description: "Test only", Capabilities: []string{"checkout"}, SupportedCurrencies: []string{"CNY", "USD"}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, integrations.Config) (integrations.PaymentProvider, error) { return recorder, nil }}}, integrations.Options{PaymentID: "payment.test"})
+	registry, e := integrations.New(context.Background(), []integrations.Definition{{Manifest: integrations.Manifest{ID: "payment.test", Kind: integrations.Payment, Name: "Test", Description: "Test only", Capabilities: []string{"checkout"}, SupportedCurrencies: []string{"CNY", "USD"}, CurrencyDecimalPlaces: map[string]int{"CNY": 2, "USD": 2}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, integrations.Config) (integrations.PaymentProvider, error) { return recorder, nil }}}, integrations.Options{PaymentID: "payment.test"})
 	if e != nil {
 		t.Fatal(e)
 	}

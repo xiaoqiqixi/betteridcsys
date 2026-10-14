@@ -1,8 +1,10 @@
-# 官方独立 SMTP 插件 1.0.0
+# 官方独立 SMTP 插件 1.1.0
 
-此 Linux amd64 程序单独编译、安装和发布，标签为 `smtp-v1.0.0`，协议为 `aster.smtp/1`，支持 Core `>=0.4.0,<0.5.0`。核心通过受限 Unix socket RPC 调用，经独立用户和握手验证后才传入本次凭据。安装或替换插件不需要重新编译核心，文件出现不会自动执行。
+此 Linux amd64 程序单独编译、安装和发布，标签为 `smtp-v1.1.0`，协议为 `aster.smtp/1`，支持 Core `>=0.4.0,<0.6.0`。核心通过受限 Unix socket RPC 调用，经独立用户和握手验证后才传入本次凭据。安装或替换插件不需要重新编译核心，文件出现不会自动执行。
 
-归档目录 `aster-smtp-1.0.0-linux-amd64/` 只含 `plugin`、`manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。先从独立可信的发布记录核对外层 SHA-256，再使用核心包 `plugin-manager.py` 安装；安装本身不启用插件。主机管理员必须批准固定版本、清单哈希、不同非特权 UID、socket 和精确 SMTP 主机/端口，并单独管理 `aster-smtp.service`。升级采用不可变版本目录和原子策略切换，失败时显式选择已验证旧版本。详细安装和回退见核心 [PLUGINS.md](https://github.com/xiaoqiqixi/betteridcsys/blob/main/vps-billing/docs/PLUGINS.md)、[PLUGIN_PROTOCOL.md](https://github.com/xiaoqiqixi/betteridcsys/blob/main/vps-billing/docs/PLUGIN_PROTOCOL.md)。
+发布同时提供原始可执行文件 `aster-smtp-1.1.0-linux-amd64`、资源包 `aster-smtp-1.1.0-linux-amd64-resources.tar.gz`，以及 BUILD、PROVENANCE、SHA256SUMS。资源目录只含 `manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`，不含 ELF。先核对两类资产独立摘要，再用新版 `plugin-manager.py verify/install` 的 `--binary` 和 `--binary-sha256` 参数组装；安装本身不启用程序。
+
+主机管理员必须批准固定版本、清单哈希、不同非特权 UID、socket 和精确 SMTP 主机/端口，并单独管理 `aster-smtp.service`。升级采用不可覆盖目录和原子策略切换。旧公开 1.0.0 资产不改写，其 Core 上界仍为 `<0.5.0`；1.1.0 保持协议不变并声明 `<0.6.0`，旧 Core 管理工具不自动获得拆分安装能力。详细安装、核验及回退见 [PLUGINS.md](https://github.com/xiaoqiqixi/betteridcsys/blob/main/vps-billing/docs/PLUGINS.md)、[PLUGIN_PROTOCOL.md](https://github.com/xiaoqiqixi/betteridcsys/blob/main/vps-billing/docs/PLUGIN_PROTOCOL.md)。
 
 本程序只负责 SMTP 传输。核心负责管理员授权、CSRF、已保存设置、凭据加密、版本冲突、发送限速和审计；插件不读取核心配置、加密密钥或账务数据库，也不记录凭据、邮件内容或 SMTP 原始回复。当前核心只接入管理员主动测试邮件，未接入通知、邮箱验证或密码找回。
 

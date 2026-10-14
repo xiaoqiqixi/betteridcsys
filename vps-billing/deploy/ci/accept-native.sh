@@ -224,6 +224,9 @@ origin="https://localhost:$tls_port"
 cli_env=(env -i APP_MODE=production "APP_ORIGIN=$origin" "SESSION_SECRET_FILE=$scratch/session" MYSQL_ALLOW_INSECURE=true PAYMENT_PROVIDER=payment.disabled EMAIL_PROVIDER=email.disabled)
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate > "$scratch/migrate.log" 2>&1
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate >> "$scratch/migrate.log" 2>&1
+migration_count=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM schema_migrations')
+[[ $migration_count == 7 ]] || fail 'The current source did not apply exactly seven reviewed migrations.'
+[[ $("${mysql_cmd[@]}" "$db" --execute="SELECT COUNT(*) FROM plan_prices WHERE currency='USD'") == 0 ]] || fail 'Fresh migration installed unapproved USD prices.'
 for role in admin customer second; do
   account_role=customer; [[ $role != admin ]] || account_role=admin
   "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/runtime.dsn" "BOOTSTRAP_EMAIL=$role@native-ci.invalid" "BOOTSTRAP_NAME=Native CI $role" "BOOTSTRAP_ROLE=$account_role" "BOOTSTRAP_PASSWORD_FILE=$scratch/$role" "$opt/releases/a/bin/aster-api" -create-user >> "$scratch/bootstrap.log" 2>&1
@@ -368,6 +371,7 @@ restore_finished=$(monotonic_ns)
 source_tables=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
 restored_tables=$("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
 [[ $source_tables =~ ^[0-9]+$ && $source_tables -gt 0 && $restored_tables == "$source_tables" ]] || fail 'Restored table count does not match the nonempty source schema.'
+[[ $source_tables == 14 ]] || fail 'The current schema is missing its expected fourteen tables.'
 for target in "$db" "$restored"; do
   "$mysql_root/bin/mysqldump" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --single-transaction --no-tablespaces --set-gtid-purged=OFF --hex-blob --no-create-info --skip-comments --compact --skip-extended-insert --order-by-primary --skip-triggers "$target" 2> "$scratch/compare.log" | sha256sum | cut -d' ' -f1 > "$scratch/$target.sha256"
 done
@@ -376,12 +380,12 @@ sudo -n install -o root -g "$api_user" -m 640 "$scratch/restore_runtime.service.
 sudo -n systemctl start "$api_unit"
 wait_ready
 python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --expect-smtp-settings --report "$evidence/restored-https-tests.json"
-python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" <<'PY'
+python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" "$migration_count" <<'PY'
 import json
 from pathlib import Path
 import subprocess
 import sys
-out, source, count, source_tables, restored_tables, backup_started, backup_finished, restore_started, restore_finished = sys.argv[1:]
+out, source, count, source_tables, restored_tables, backup_started, backup_finished, restore_started, restore_finished, migration_count = sys.argv[1:]
 summary = {
     'source_commit': subprocess.check_output(['git','-C',source,'rev-parse','HEAD'],text=True).strip(),
     'environment': 'isolated Ubuntu 24.04 GitHub-hosted runner',
@@ -392,6 +396,8 @@ summary = {
     'smtp_synthetic_loopback_only_no_external_delivery': True,
     'same_schema_release_a_b_a': True, 'persisted_orders_before_restart': int(count),
     'source_table_count': int(source_tables), 'restored_table_count': int(restored_tables),
+    'schema_migration_count': int(migration_count),
+    'fresh_cny_only_before_explicit_admin_currency_approval': True,
     'backup_elapsed_seconds': round((int(backup_finished) - int(backup_started)) / 1e9, 3),
     'restore_import_elapsed_seconds': round((int(restore_finished) - int(restore_started)) / 1e9, 3),
     'timing_scope': 'isolated small-fixture exercise; backup includes archive verification, restore measures SQL import only',

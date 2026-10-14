@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing reviewed normal runtime tag: v0.4.0 or smtp-v1.0.0; dispatch from main'
+        description: 'Existing reviewed raw runtime tag: v0.5.0 or smtp-v1.1.0; dispatch from main'
         required: true
         type: string
 

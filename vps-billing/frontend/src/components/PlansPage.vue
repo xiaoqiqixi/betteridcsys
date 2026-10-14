@@ -8,7 +8,7 @@ import {
   LoaderCircle,
   Server,
 } from "@lucide/vue";
-import { money, type Plan } from "../lib/api";
+import { money, readOrderQuote, type Plan } from "../lib/api";
 import { tr, type Currency } from "../lib/i18n";
 
 const props = defineProps<{
@@ -31,8 +31,15 @@ const visiblePlans = computed(() =>
     (plan) => region.value === null || plan.region === region.value,
   ),
 );
-const available = (plan: Plan) =>
-  plan.available && plan.currency === props.currency;
+const available = (plan: Plan) => {
+  if (!plan.available || plan.currency !== props.currency) return false;
+  try {
+    readOrderQuote(plan);
+    return true;
+  } catch {
+    return false;
+  }
+};
 const selected = computed(() =>
   visiblePlans.value.find(
     (plan) => plan.id === selectedId.value && available(plan),
@@ -208,7 +215,11 @@ function review() {
                 <div class="plan-price">
                   {{
                     available(plan)
-                      ? money(plan.price_minor, plan.currency)
+                      ? money(
+                          plan.price_minor,
+                          plan.currency,
+                          plan.currency_format,
+                        )
                       : tr("暂不可售", "Unavailable")
                   }}<span v-if="available(plan)">{{
                     tr("/ 月", "/ month")
@@ -290,7 +301,11 @@ function review() {
             <div class="purchase-total">
               <span>{{ tr("首期订单金额", "Initial order amount") }}</span
               ><strong>{{
-                money(summary.price_minor, summary.currency)
+                money(
+                  summary.price_minor,
+                  summary.currency,
+                  summary.currency_format,
+                )
               }}</strong>
             </div>
           </template>

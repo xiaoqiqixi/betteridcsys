@@ -19,7 +19,7 @@ import struct
 import sys
 import zlib
 
-CORE_VERSION = "0.4.0"
+CORE_VERSION = "0.5.0"
 FILES = frozenset({"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"})
 MAX_ARCHIVE = 80 << 20
 MAX_BINARY = 64 << 20
@@ -176,7 +176,7 @@ def tar_number(raw):
     return int(value, 8)
 
 
-def unpack_archive(compressed):
+def unpack_archive(compressed, raw_resources=False):
     """Parse only bounded plain USTAR/GNU regular records; no extension records."""
     try:
         decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
@@ -185,6 +185,8 @@ def unpack_archive(compressed):
             raise Rejected("Archive expansion or gzip framing is invalid.")
     except zlib.error as exc:
         raise Rejected("Invalid gzip archive.") from exc
+    expected_files = FILES - {"plugin"} if raw_resources else FILES
+    suffix = "-resources" if raw_resources else ""
     files, root, offset, directory_seen = {}, None, 0, False
     while offset + 512 <= len(raw):
         block = raw[offset:offset + 512]
@@ -213,7 +215,7 @@ def unpack_archive(compressed):
             raise Rejected("Archive contains an unsafe path.")
         if root is None:
             root = parts[0]
-        if parts[0] != root or not re.fullmatch(r"aster-smtp-(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})-linux-amd64", root):
+        if parts[0] != root or not re.fullmatch(r"aster-smtp-(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})-linux-amd64" + suffix, root):
             raise Rejected("Archive root does not identify the SMTP package.")
         data_start = offset + 512
         offset = data_start + (size + 511) // 512 * 512
@@ -224,7 +226,7 @@ def unpack_archive(compressed):
                 raise Rejected("Unsupported archive directory.")
             directory_seen = True
             continue
-        if len(parts) != 2 or name.endswith("/") or parts[1] not in FILES or parts[1] in files or mode != (0o755 if parts[1] == "plugin" else 0o644):
+        if len(parts) != 2 or name.endswith("/") or parts[1] not in expected_files or parts[1] in files or mode != (0o755 if parts[1] == "plugin" else 0o644):
             raise Rejected("Archive inventory or file mode is invalid.")
         maximum = {"plugin": MAX_BINARY, "manifest.json": 8192, "THIRD_PARTY_NOTICES.json": 4 << 20}.get(parts[1], 256 << 10)
         if not 0 < size <= maximum:
@@ -232,20 +234,31 @@ def unpack_archive(compressed):
         files[parts[1]] = raw[data_start:data_start + size]
     else:
         raise Rejected("Archive is missing terminal records.")
-    if not directory_seen or set(files) != FILES:
-        raise Rejected("Archive must contain the exact six-file SMTP inventory.")
+    if not directory_seen or set(files) != expected_files:
+        raise Rejected("Archive must contain the exact declared SMTP inventory.")
     return root, files
 
 
-def verify_package(path, expected, core=CORE_VERSION, trust=_Trust()):
+def verify_package(path, expected, core=CORE_VERSION, trust=_Trust(), *, binary=None, binary_sha256=None):
     if not isinstance(expected, str) or not DIGEST.fullmatch(expected):
         raise Rejected("An explicit lowercase SHA-256 is required.")
+    raw_resources = binary is not None or binary_sha256 is not None
+    if raw_resources and (not isinstance(binary, str) or not binary or not isinstance(binary_sha256, str) or not DIGEST.fullmatch(binary_sha256)):
+        raise Rejected("Both a protected raw binary path and its explicit SHA-256 are required.")
     compressed = read_protected(path, MAX_ARCHIVE, trust)
     if hashlib.sha256(compressed).hexdigest() != expected:
         raise Rejected("Archive SHA-256 does not match the approved value.")
-    root, files = unpack_archive(compressed)
+    root, files = unpack_archive(compressed, raw_resources)
+    if raw_resources:
+        if any(value.startswith(b"\x7fELF") for value in files.values()):
+            raise Rejected("Resource archives cannot contain ELF executables.")
+        raw_binary = read_protected(binary, MAX_BINARY, trust)
+        if hashlib.sha256(raw_binary).hexdigest() != binary_sha256:
+            raise Rejected("Raw binary SHA-256 does not match the approved value.")
+        validate_elf(raw_binary)
+        files["plugin"] = raw_binary
     manifest = validate_manifest(strict_json(files["manifest.json"], 8192), core)
-    if root != "aster-smtp-" + manifest["version"] + "-linux-amd64":
+    if root != "aster-smtp-" + manifest["version"] + "-linux-amd64" + ("-resources" if raw_resources else ""):
         raise Rejected("Manifest version does not match archive root.")
     expected_lines = {}
     try:
@@ -535,6 +548,8 @@ def main(argv=None):
         command = commands.add_parser(name)
         command.add_argument("package")
         command.add_argument("--sha256", required=True)
+        command.add_argument("--binary")
+        command.add_argument("--binary-sha256")
     commands.add_parser("status")
     for name in ("select", "enable", "disable", "rollback"):
         command = commands.add_parser(name)
@@ -556,8 +571,9 @@ def main(argv=None):
         absolute(options.root)
         absolute(options.policy)
         if options.action in ("install", "verify"):
-            package = verify_package(absolute(options.package), options.sha256, options.core_version)
+            package = verify_package(absolute(options.package), options.sha256, options.core_version, binary=options.binary, binary_sha256=options.binary_sha256)
             result = install_package(options.root, package) if options.action == "install" else {"verified": True, "id": package.manifest["id"], "version": package.manifest["version"], "archive_sha256": package.archive_sha256, "service_action": "none"}
+            result.update(distribution_format="raw-binaries-v1" if options.binary is not None else "archive-v1", binary_sha256=package.manifest["sha256"])
         elif options.action == "status":
             result = read_policy(options.policy, _Trust())
         else:

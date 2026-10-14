@@ -33,11 +33,14 @@ type Manager struct {
 func New(root, policy string) *Manager { return &Manager{root: root, policy: policy} }
 
 type State struct {
-	Status         string `json:"status"`
-	ID             string `json:"id"`
-	Version        string `json:"version"`
-	Protocol       string `json:"protocol"`
-	PolicyRevision uint64 `json:"policy_revision"`
+	Status               string `json:"status"`
+	ID                   string `json:"id"`
+	Version              string `json:"version"`
+	Protocol             string `json:"protocol"`
+	PolicyRevision       uint64 `json:"policy_revision"`
+	SMTPProtocol         string `json:"smtp_protocol"`
+	SMTPCoreMin          string `json:"smtp_core_min"`
+	SMTPCoreMaxExclusive string `json:"smtp_core_max_exclusive"`
 }
 
 func (m *Manager) State() State {
@@ -59,6 +62,9 @@ func (m *Manager) State() State {
 	}
 	defer a.Close()
 	state.Status, state.ID, state.Version, state.PolicyRevision = "approved", a.Manifest.ID, a.Manifest.Version, a.PolicyRevision
+	// Compatibility comes only from the pinned manifest and verified binary.
+	// Disabled or unavailable selections deliberately leave these fields empty.
+	state.SMTPProtocol, state.SMTPCoreMin, state.SMTPCoreMaxExclusive = a.Manifest.Protocol, a.Manifest.CoreMin, a.Manifest.CoreMaxExclusive
 	return state
 }
 

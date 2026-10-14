@@ -1,3 +1,4 @@
+import { isCurrencyCode } from "./currencies";
 import { tr } from "./i18n";
 import { ApiError } from "./api";
 
@@ -10,7 +11,8 @@ export interface IntegrationSummary {
   configured: boolean;
   status: "disabled" | "ready" | "unavailable";
   capabilities: string[];
-  supported_currencies: ("CNY" | "USD")[];
+  supported_currencies: string[];
+  currency_decimal_places: Record<string, number>;
   configuration_fields: {
     key: string;
     label: string;
@@ -57,13 +59,34 @@ export function readIntegrationManifest(data: unknown): IntegrationSummary[] {
       !["environment", "admin_api"].includes(v.configuration_mode as string) ||
       !strings(v.capabilities) ||
       !strings(v.supported_currencies) ||
-      !v.supported_currencies.every(
-        (currency) => currency === "CNY" || currency === "USD",
-      ) ||
+      !v.supported_currencies.every((currency) => isCurrencyCode(currency)) ||
       !strings(v.limitations) ||
       !Array.isArray(v.configuration_fields)
     )
       return invalid();
+    const precision = v.currency_decimal_places;
+    if (
+      !precision ||
+      typeof precision !== "object" ||
+      Array.isArray(precision) ||
+      v.supported_currencies.length > 32 ||
+      new Set(v.supported_currencies).size !== v.supported_currencies.length ||
+      Object.keys(precision).length !== v.supported_currencies.length ||
+      v.supported_currencies.some(
+        (code) =>
+          !Object.hasOwn(precision, code) ||
+          !Number.isInteger((precision as Record<string, unknown>)[code]) ||
+          ((precision as Record<string, number>)[code] ?? -1) < 0 ||
+          ((precision as Record<string, number>)[code] ?? 7) > 6,
+      )
+    )
+      return invalid();
+    const currencyDecimalPlaces = Object.fromEntries(
+      v.supported_currencies.map((code) => [
+        code,
+        (precision as Record<string, number>)[code]!,
+      ]),
+    ) as Record<string, number>;
     const fields = v.configuration_fields.map((field: unknown) => {
       if (!field || typeof field !== "object") return invalid();
       const f = field as Record<string, unknown>;
@@ -94,7 +117,8 @@ export function readIntegrationManifest(data: unknown): IntegrationSummary[] {
       configuration_mode:
         v.configuration_mode as IntegrationSummary["configuration_mode"],
       capabilities: v.capabilities,
-      supported_currencies: v.supported_currencies as ("CNY" | "USD")[],
+      supported_currencies: v.supported_currencies as string[],
+      currency_decimal_places: currencyDecimalPlaces,
       limitations: v.limitations,
       configuration_fields: fields,
     };
@@ -112,6 +136,7 @@ export const previewIntegrations: IntegrationSummary[] = [
     status: "disabled",
     capabilities: [],
     supported_currencies: [],
+    currency_decimal_places: {},
     configuration_fields: [],
     configuration_mode: "environment",
     limitations: ["只读样例，未连接支付服务。"],
@@ -126,6 +151,7 @@ export const previewIntegrations: IntegrationSummary[] = [
     status: "disabled",
     capabilities: [],
     supported_currencies: [],
+    currency_decimal_places: {},
     configuration_fields: [],
     configuration_mode: "environment",
     limitations: ["只读样例，未连接邮件服务。"],
@@ -170,6 +196,7 @@ export function localizedPreviewIntegrations(): IntegrationSummary[] {
       status: "disabled",
       capabilities: [],
       supported_currencies: [],
+      currency_decimal_places: {},
       configuration_fields: [],
       configuration_mode: "admin_api",
       limitations: [

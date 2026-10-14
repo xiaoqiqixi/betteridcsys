@@ -1,7 +1,9 @@
+import { previewPlans } from "../src/lib/preview";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   api,
   readCheckoutSession,
+  readOrderQuote,
   ApiError,
   date,
   money,
@@ -9,6 +11,24 @@ import {
   statusLabel,
   statusTone,
 } from "../src/lib/api";
+import { defaultCurrencyRegistry } from "../src/lib/currencies";
+const twoCurrencies = () => ({
+  ...structuredClone(defaultCurrencyRegistry),
+  default_currency: "USD",
+  currencies: [
+    ...structuredClone(defaultCurrencyRegistry.currencies),
+    {
+      code: "USD",
+      name: "US Dollar",
+      prefix: "$",
+      suffix: "",
+      decimal_places: 2,
+      enabled: true,
+      sort_order: 1,
+      precision_locked: true,
+    },
+  ],
+});
 import {
   restorePreferences,
   setLocale,
@@ -16,9 +36,41 @@ import {
   applyDefaults,
   locale,
   currency,
+  applyCurrencyRegistry,
 } from "../src/lib/i18n";
 beforeEach(() => restorePreferences());
 afterEach(() => vi.unstubAllGlobals());
+it("builds a complete exact quote and refuses missing precision or unsafe revisions", () => {
+  for (const [code, decimal_places] of [
+    ["JPY", 0],
+    ["KWD", 3],
+  ] as const) {
+    const plan = {
+      ...previewPlans("CNY")[0]!,
+      currency: code,
+      price_minor: Number.MAX_SAFE_INTEGER,
+      price_revision: 7,
+      currency_format: {
+        code,
+        name: code,
+        prefix: "",
+        suffix: "",
+        decimal_places,
+      },
+    };
+    expect(readOrderQuote(plan)).toEqual({
+      price_minor: Number.MAX_SAFE_INTEGER,
+      decimal_places,
+      price_revision: 7,
+    });
+    expect(() =>
+      readOrderQuote({ ...plan, currency_format: undefined }),
+    ).toThrow();
+    for (const price_revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])
+      expect(() => readOrderQuote({ ...plan, price_revision })).toThrow();
+  }
+});
+
 describe("exact money and status presentation", () => {
   it("formats integer cents without inventing precision", () => {
     expect(money(1201, "USD")).toBe("USD\u00a012.01");
@@ -138,6 +190,7 @@ describe("independent validated browser preferences", () => {
     expect([locale.value, currency.value]).toEqual(["zh-CN", "CNY"]);
     expect(setLocale("fr")).toBe(false);
     expect(setCurrency("JPY")).toBe(false);
+    applyCurrencyRegistry(twoCurrencies());
     applyDefaults("en", "USD");
     expect([locale.value, currency.value]).toEqual(["en", "USD"]);
     setLocale("zh-CN");
@@ -157,6 +210,7 @@ describe("independent validated browser preferences", () => {
     });
     expect(() => restorePreferences()).not.toThrow();
     expect(setLocale("en")).toBe(true);
+    applyCurrencyRegistry(twoCurrencies());
     expect(setCurrency("USD")).toBe(true);
     expect([locale.value, currency.value]).toEqual(["en", "USD"]);
   });

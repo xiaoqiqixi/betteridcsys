@@ -28,7 +28,7 @@ describe("settings trust boundary", () => {
   it("rejects unsupported enums, remote logos, malformed records and unsafe revisions", () => {
     for (const patch of [
       { default_locale: "zh-TW" },
-      { default_currency: "EUR" },
+      { default_currency: "usd" },
       { logo: "https://remote.example/logo.svg" },
       { theme: "body{color:red}" },
       { site_name: null },

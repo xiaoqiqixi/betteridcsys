@@ -81,7 +81,7 @@ func TestSettingsValidation(t *testing.T) {
 		t.Fatal("invalid default")
 	}
 	for _, mutate := range []func(*SiteSettings){
-		func(s *SiteSettings) { s.DefaultLocale = "fr" }, func(s *SiteSettings) { s.DefaultCurrency = "EUR" },
+		func(s *SiteSettings) { s.DefaultLocale = "fr" }, func(s *SiteSettings) { s.DefaultCurrency = "eur" },
 		func(s *SiteSettings) { s.SupportURL = "javascript:alert(1)" }, func(s *SiteSettings) { s.SupportURL = "https://user:secret@example.com" },
 		func(s *SiteSettings) { s.DisplayURL = "https://example.com/path" }, func(s *SiteSettings) { s.Logo = "https://remote.example/logo.svg" },
 		func(s *SiteSettings) { s.Theme = "body {color:red}" }, func(s *SiteSettings) { s.SupportEmail = "Name <test@example.com>" },

@@ -42,7 +42,7 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	return &MySQL{db}, nil
 }
 
-var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings}
+var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry}
 
 func (m *MySQL) Ping(ctx context.Context) error {
 	rows, err := m.DB.QueryContext(ctx, "SELECT version,checksum FROM schema_migrations ORDER BY version")
@@ -132,7 +132,15 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 				}
 			}
 		}
+		if version == 7 {
+			if err = migrateCurrencyRegistry(ctx, conn); err != nil {
+				return fmt.Errorf("migration 7 failed: %w", err)
+			}
+		}
 		for _, q := range strings.Split(source, ";") {
+			if version == 7 {
+				break
+			}
 			q = strings.TrimSpace(q)
 			if q == "" {
 				continue
@@ -151,7 +159,7 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 		}
 		if version == 1 {
 			for _, p := range Catalog() {
-				_, err = conn.ExecContext(ctx, "INSERT IGNORE INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available) VALUES(?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, p.PriceMinor, p.Currency, false)
+				_, err = conn.ExecContext(ctx, "INSERT IGNORE INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available) VALUES(?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, 0, "USD", false)
 				if err != nil {
 					return err
 				}
@@ -233,33 +241,62 @@ func scanPlan(s interface{ Scan(...any) error }) (Plan, error) {
 const planColumns = "id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available"
 
 func (m *MySQL) Plans(c context.Context, currency string) ([]Plan, error) {
-	if !SupportedCurrency(currency) {
+	tx, err := m.DB.BeginTx(c, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	config, priceRevision, err := readCurrencies(c, tx, "")
+	if err != nil {
+		return nil, err
+	}
+	cur, known := config.find(currency)
+	if !known {
 		return nil, ErrCurrency
 	}
-	r, e := m.DB.QueryContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,COALESCE(pp.amount_minor,0),?,(p.available AND COALESCE(pp.available,FALSE) AND COALESCE(pp.amount_minor,0)>0) FROM plans p LEFT JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? ORDER BY COALESCE(pp.amount_minor,0),p.id", currency, currency)
-	if e != nil {
-		return nil, e
+	rows, err := tx.QueryContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,COALESCE(pp.amount_minor,0),?,(p.available AND COALESCE(pp.available,FALSE) AND COALESCE(pp.amount_minor,0)>0) FROM plans p LEFT JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? ORDER BY COALESCE(pp.amount_minor,0),p.id", currency, currency)
+	if err != nil {
+		return nil, err
 	}
-	defer r.Close()
 	out := []Plan{}
-	for r.Next() {
-		p, e := scanPlan(r)
-		if e != nil {
-			return nil, e
+	for rows.Next() {
+		p, err := scanPlan(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
 		}
+		if p.PriceMinor < 0 || p.PriceMinor > MaxMinor {
+			rows.Close()
+			return nil, ErrPlanPrices
+		}
+		p.CurrencyFormat = cur.CurrencyFormat
+		p.PriceRevision = priceRevision
+		p.Available = p.Available && cur.Enabled && validAmount(p.PriceMinor)
 		out = append(out, p)
 	}
-	return out, r.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	err = tx.Commit()
+	return out, err
 }
 
-const orderColumns = "id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot"
+const orderColumns = "id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot,currency_snapshot,plan_snapshot"
 
 func scanOrder(s interface{ Scan(...any) error }) (Order, error) {
 	var o Order
-	var raw []byte
-	e := s.Scan(&o.ID, &o.Number, &o.UserID, &o.PlanName, &o.Status, &o.TotalMinor, &o.Currency, &o.CreatedAt, &o.Hostname, &raw)
+	var raw, currencyRaw, planRaw []byte
+	e := s.Scan(&o.ID, &o.Number, &o.UserID, &o.PlanName, &o.Status, &o.TotalMinor, &o.Currency, &o.CreatedAt, &o.Hostname, &raw, &currencyRaw, &planRaw)
 	if e == nil && len(raw) > 0 {
 		e = json.Unmarshal(raw, &o.Issuer)
+	}
+	if e == nil {
+		o.CurrencyFormat, e = decodeCurrencySnapshot(currencyRaw, o.Currency)
+	}
+	if e == nil && len(planRaw) > 0 {
+		e = json.Unmarshal(planRaw, &o.PlanSnapshot)
 	}
 	return o, e
 }
@@ -288,7 +325,7 @@ func (m *MySQL) Orders(c context.Context, uid string) ([]Order, error) {
 }
 func (m *MySQL) Invoices(c context.Context, uid string) ([]Invoice, error) {
 	w, a := filter(uid)
-	r, e := m.DB.QueryContext(c, "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at,issuer_snapshot FROM invoices"+w+" ORDER BY issued_at DESC LIMIT 1000", a...)
+	r, e := m.DB.QueryContext(c, "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at,issuer_snapshot,currency_snapshot FROM invoices"+w+" ORDER BY issued_at DESC LIMIT 1000", a...)
 	if e != nil {
 		return nil, e
 	}
@@ -296,8 +333,8 @@ func (m *MySQL) Invoices(c context.Context, uid string) ([]Invoice, error) {
 	out := []Invoice{}
 	for r.Next() {
 		var i Invoice
-		var issuerRaw []byte
-		e = r.Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt, &issuerRaw)
+		var issuerRaw, currencyRaw []byte
+		e = r.Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt, &issuerRaw, &currencyRaw)
 		if e != nil {
 			return nil, e
 		}
@@ -306,13 +343,17 @@ func (m *MySQL) Invoices(c context.Context, uid string) ([]Invoice, error) {
 				return nil, e
 			}
 		}
+		i.CurrencyFormat, e = decodeCurrencySnapshot(currencyRaw, i.Currency)
+		if e != nil {
+			return nil, e
+		}
 		out = append(out, i)
 	}
 	return out, r.Err()
 }
 func (m *MySQL) Services(c context.Context, uid string) ([]Service, error) {
 	w, a := filter(uid)
-	r, e := m.DB.QueryContext(c, "SELECT id,user_id,name,plan_name,region,ipv4,status,next_due_at,price_minor,currency,cpu,memory_gb,disk_gb FROM services"+w+" ORDER BY next_due_at LIMIT 1000", a...)
+	r, e := m.DB.QueryContext(c, "SELECT id,user_id,name,plan_name,region,ipv4,status,next_due_at,price_minor,currency,cpu,memory_gb,disk_gb,currency_snapshot FROM services"+w+" ORDER BY next_due_at LIMIT 1000", a...)
 	if e != nil {
 		return nil, e
 	}
@@ -320,7 +361,11 @@ func (m *MySQL) Services(c context.Context, uid string) ([]Service, error) {
 	out := []Service{}
 	for r.Next() {
 		var s Service
-		e = r.Scan(&s.ID, &s.UserID, &s.Name, &s.PlanName, &s.Region, &s.IPv4, &s.Status, &s.NextDueAt, &s.PriceMinor, &s.Currency, &s.CPU, &s.MemoryGB, &s.DiskGB)
+		var currencyRaw []byte
+		e = r.Scan(&s.ID, &s.UserID, &s.Name, &s.PlanName, &s.Region, &s.IPv4, &s.Status, &s.NextDueAt, &s.PriceMinor, &s.Currency, &s.CPU, &s.MemoryGB, &s.DiskGB, &currencyRaw)
+		if e == nil {
+			s.CurrencyFormat, e = decodeCurrencySnapshot(currencyRaw, s.Currency)
+		}
 		if e != nil {
 			return nil, e
 		}
@@ -346,7 +391,7 @@ func (m *MySQL) Audits(c context.Context, uid string) ([]Audit, error) {
 	}
 	return out, r.Err()
 }
-func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, currency, fp string) (Order, bool, error) {
+func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, currency, fp string, quote *PriceQuote) (Order, bool, error) {
 	tx, e := m.DB.BeginTx(c, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if e != nil {
 		return Order{}, false, e
@@ -373,6 +418,10 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, curre
 		e = tx.Commit()
 		return o, true, e
 	}
+	config, priceRevision, e := readCurrencies(c, tx, " FOR SHARE")
+	if e != nil {
+		return Order{}, false, e
+	}
 	var settingsRaw []byte
 	if e = tx.QueryRowContext(c, "SELECT document FROM site_settings WHERE id=1 FOR SHARE").Scan(&settingsRaw); e != nil {
 		return Order{}, false, e
@@ -381,14 +430,18 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, curre
 	if e = json.Unmarshal(settingsRaw, &settings); e != nil {
 		return Order{}, false, e
 	}
-	if !ValidateSettings(settings) {
+	if !ValidateSettings(settings) || settings.DefaultCurrency != config.DefaultCurrency {
 		return Order{}, false, errors.New("invalid stored site settings")
 	}
 	if currency == "" {
 		currency = settings.DefaultCurrency
 	}
-	if !SupportedCurrency(currency) {
+	cur, known := config.find(currency)
+	if !known {
 		return Order{}, false, ErrCurrency
+	}
+	if !cur.Enabled {
+		return Order{}, false, ErrCurrencyDisabled
 	}
 	p, e := scanPlan(tx.QueryRowContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,pp.amount_minor,pp.currency,(p.available AND pp.available) FROM plans p JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? WHERE p.id=? FOR SHARE", currency, pid))
 	if errors.Is(e, sql.ErrNoRows) || (e == nil && (!p.Available || !validAmount(p.PriceMinor))) {
@@ -397,15 +450,21 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, curre
 	if e != nil {
 		return Order{}, false, e
 	}
+	if quote != nil && !quote.matches(p.PriceMinor, cur.DecimalPlaces, priceRevision) {
+		return Order{}, false, ErrPriceChanged
+	}
+	p.CurrencyFormat = cur.CurrencyFormat
 	o, i, a := newRecords(u, p, host)
 	i.Issuer = settings.Identity()
 	o.Issuer = settings.Identity()
 	issuerRaw, _ := json.Marshal(i.Issuer)
-	_, e = tx.ExecContext(c, "INSERT INTO orders(id,number,user_id,plan_id,plan_name,hostname,status,total_minor,currency,created_at,issuer_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?)", o.ID, o.Number, u.ID, pid, p.Name, host, o.Status, o.TotalMinor, o.Currency, o.CreatedAt, issuerRaw)
+	currencyRaw, _ := json.Marshal(cur.CurrencyFormat)
+	planRaw, _ := json.Marshal(o.PlanSnapshot)
+	_, e = tx.ExecContext(c, "INSERT INTO orders(id,number,user_id,plan_id,plan_name,hostname,status,total_minor,currency,created_at,issuer_snapshot,currency_snapshot,plan_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", o.ID, o.Number, u.ID, pid, p.Name, host, o.Status, o.TotalMinor, o.Currency, o.CreatedAt, issuerRaw, currencyRaw, planRaw)
 	if e != nil {
 		return Order{}, false, e
 	}
-	_, e = tx.ExecContext(c, "INSERT INTO invoices(id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,issuer_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?)", i.ID, i.Number, u.ID, o.ID, i.Status, i.AmountMinor, i.Currency, i.IssuedAt, i.DueAt, issuerRaw)
+	_, e = tx.ExecContext(c, "INSERT INTO invoices(id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,issuer_snapshot,currency_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?)", i.ID, i.Number, u.ID, o.ID, i.Status, i.AmountMinor, i.Currency, i.IssuedAt, i.DueAt, issuerRaw, currencyRaw)
 	if e != nil {
 		return Order{}, false, e
 	}
@@ -428,16 +487,19 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, curre
 
 func (m *MySQL) Invoice(c context.Context, uid, id string) (Invoice, error) {
 	var i Invoice
-	var issuerRaw []byte
-	query := "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at,issuer_snapshot FROM invoices WHERE id=?"
+	var issuerRaw, currencyRaw []byte
+	query := "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at,issuer_snapshot,currency_snapshot FROM invoices WHERE id=?"
 	args := []any{id}
 	if uid != "" {
 		query += " AND user_id=?"
 		args = append(args, uid)
 	}
-	e := m.DB.QueryRowContext(c, query, args...).Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt, &issuerRaw)
+	e := m.DB.QueryRowContext(c, query, args...).Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt, &issuerRaw, &currencyRaw)
 	if e == nil && len(issuerRaw) > 0 {
 		e = json.Unmarshal(issuerRaw, &i.Issuer)
+	}
+	if e == nil {
+		i.CurrencyFormat, e = decodeCurrencySnapshot(currencyRaw, i.Currency)
 	}
 	if errors.Is(e, sql.ErrNoRows) {
 		e = ErrNotFound
@@ -446,7 +508,11 @@ func (m *MySQL) Invoice(c context.Context, uid, id string) (Invoice, error) {
 }
 func (m *MySQL) Summary(c context.Context, uid, currency string) (Summary, error) {
 	var s Summary
-	if !SupportedCurrency(currency) {
+	config, err := m.Currencies(c, false)
+	if err != nil {
+		return s, err
+	}
+	if _, known := config.find(currency); !known {
 		return s, ErrCurrency
 	}
 	tx, e := m.DB.BeginTx(c, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
@@ -481,12 +547,18 @@ func (m *MySQL) Summary(c context.Context, uid, currency string) (Summary, error
 }
 
 func (m *MySQL) CreateOrder(c context.Context, u User, pid, host, key, currency string) (Order, bool, error) {
+	return m.CreateQuotedOrder(c, u, pid, host, key, currency, nil)
+}
+func (m *MySQL) CreateQuotedOrder(c context.Context, u User, pid, host, key, currency string, quote *PriceQuote) (Order, bool, error) {
 	if currency != "" && !SupportedCurrency(currency) {
 		return Order{}, false, ErrCurrency
 	}
+	if quote != nil && (currency == "" || !quote.valid()) {
+		return Order{}, false, ErrInvalidQuote
+	}
 	fp := orderFingerprint(pid, host, currency)
 	for n := 0; n < 3; n++ {
-		o, replay, e := m.createOrderOnce(c, u, pid, host, key, currency, fp)
+		o, replay, e := m.createOrderOnce(c, u, pid, host, key, currency, fp, quote)
 		var me *mysql.MySQLError
 		if !errors.As(e, &me) || (me.Number != 1213 && me.Number != 1205) {
 			return o, replay, e
@@ -522,6 +594,14 @@ func (m *MySQL) UpdateSettings(ctx context.Context, actor User, settings SiteSet
 		return SiteSettings{}, err
 	}
 	defer tx.Rollback()
+	config, priceRevision, err := readCurrencies(ctx, tx, " FOR UPDATE")
+	if err != nil {
+		return SiteSettings{}, err
+	}
+	cur, known := config.find(settings.DefaultCurrency)
+	if !known || !cur.Enabled {
+		return SiteSettings{}, ErrCurrency
+	}
 	var raw []byte
 	var old SiteSettings
 	if err = tx.QueryRowContext(ctx, "SELECT document FROM site_settings WHERE id=1 FOR UPDATE").Scan(&raw); err != nil {
@@ -532,6 +612,16 @@ func (m *MySQL) UpdateSettings(ctx context.Context, actor User, settings SiteSet
 	}
 	if settings.Revision != old.Revision || settings.Revision == MaxMinor {
 		return SiteSettings{}, ErrSettingsConflict
+	}
+	if settings.DefaultCurrency != config.DefaultCurrency {
+		if config.Revision == MaxMinor {
+			return SiteSettings{}, ErrCurrencyConflict
+		}
+		config.DefaultCurrency = settings.DefaultCurrency
+		config.Revision++
+		if err = writeCurrencies(ctx, tx, config, priceRevision); err != nil {
+			return SiteSettings{}, err
+		}
 	}
 	settings.Revision++
 	raw, _ = json.Marshal(settings)

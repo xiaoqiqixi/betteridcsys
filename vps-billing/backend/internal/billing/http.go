@@ -244,6 +244,10 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, 200, map[string]any{"user": nil, "csrf_token": a.csrf(t)})
 		return
 	}
+	if p == "/currencies" && r.Method == "GET" {
+		a.currenciesHTTP(w, r, User{}, false)
+		return
+	}
 	if p == "/plans" && r.Method == "GET" {
 		currency, ok := a.queryCurrency(w, r)
 		if !ok {
@@ -291,6 +295,14 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.createOrder(w, r, u)
 		return
 	}
+	if p == "/admin/currencies" {
+		a.currenciesHTTP(w, r, u, true)
+		return
+	}
+	if p == "/admin/plan-prices" {
+		a.planPricesHTTP(w, r, u)
+		return
+	}
 	if p == "/admin/site-settings" {
 		if r.Method == "GET" {
 			settings, err := a.Store.Settings(r.Context())
@@ -310,7 +322,11 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			fail(w, r, 409, "SETTINGS_CONFLICT", "设置已被其他管理员修改，请重新读取后再编辑")
 			return
 		}
-		a.result(w, r, updated, err)
+		if err != nil {
+			a.currencyError(w, r, err)
+		} else {
+			jsonOut(w, 200, updated)
+		}
 		return
 	}
 	if p == "/admin/email-settings" || p == "/admin/email-settings/test" {
@@ -537,6 +553,7 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request, u User) {
 		PlanID   string          `json:"plan_id"`
 		Hostname string          `json:"hostname"`
 		Currency json.RawMessage `json:"currency"`
+		Quote    json.RawMessage `json:"quote"`
 	}
 	if !body(w, r, &v) {
 		return
@@ -544,7 +561,16 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request, u User) {
 	currency := ""
 	if v.Currency != nil {
 		if err := json.Unmarshal(v.Currency, &currency); err != nil || !SupportedCurrency(currency) {
-			fail(w, r, 400, "INVALID_CURRENCY", "仅支持 CNY 和 USD")
+			fail(w, r, 400, "INVALID_CURRENCY", "币种代码必须是三个大写英文字母")
+			return
+		}
+	}
+	var quote *PriceQuote
+	if v.Quote != nil {
+		var err error
+		quote, err = decodePriceQuote(v.Quote)
+		if err != nil || currency == "" {
+			a.currencyError(w, r, ErrInvalidQuote)
 			return
 		}
 	}
@@ -558,9 +584,13 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, r, 400, "IDEMPOTENCY_KEY_REQUIRED", "请提供 8–128 位幂等请求标识")
 		return
 	}
-	o, replayed, e := a.Store.CreateOrder(r.Context(), u, v.PlanID, v.Hostname, key, currency)
+	o, replayed, e := a.Store.CreateQuotedOrder(r.Context(), u, v.PlanID, v.Hostname, key, currency, quote)
 	if errors.Is(e, ErrConflict) {
 		fail(w, r, 409, "IDEMPOTENCY_CONFLICT", "该请求标识已用于不同订单")
+		return
+	}
+	if errors.Is(e, ErrCurrency) || errors.Is(e, ErrCurrencyDisabled) || errors.Is(e, ErrPriceChanged) || errors.Is(e, ErrInvalidQuote) {
+		a.currencyError(w, r, e)
 		return
 	}
 	if errors.Is(e, ErrUnavailable) {
@@ -588,8 +618,18 @@ func (a *App) overview(w http.ResponseWriter, r *http.Request, uid string, admin
 		a.internal(w, r, e)
 		return
 	}
+	config, err := a.Store.Currencies(r.Context(), false)
+	if err != nil {
+		a.internal(w, r, err)
+		return
+	}
+	cur, known := config.find(currency)
+	if !known {
+		a.currencyError(w, r, ErrCurrency)
+		return
+	}
 	if admin {
-		jsonOut(w, 200, map[string]any{"customers": s.Customers, "total_services": s.TotalServices, "unpaid_invoices": s.PendingInvoices, "revenue_minor": s.Revenue, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "customers_scope": "all"})
+		jsonOut(w, 200, map[string]any{"currency_format": cur.CurrencyFormat, "customers": s.Customers, "total_services": s.TotalServices, "unpaid_invoices": s.PendingInvoices, "revenue_minor": s.Revenue, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "customers_scope": "all"})
 		return
 	}
 	os, e := a.Store.Orders(r.Context(), uid)
@@ -600,18 +640,28 @@ func (a *App) overview(w http.ResponseWriter, r *http.Request, uid string, admin
 	if len(os) > 5 {
 		os = os[:5]
 	}
-	jsonOut(w, 200, map[string]any{"active_services": s.ActiveServices, "pending_invoices": s.PendingInvoices, "monthly_total_minor": s.MonthlyTotal, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "recent_orders": os, "recent_orders_scope": "all"})
+	jsonOut(w, 200, map[string]any{"currency_format": cur.CurrencyFormat, "active_services": s.ActiveServices, "pending_invoices": s.PendingInvoices, "monthly_total_minor": s.MonthlyTotal, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "recent_orders": os, "recent_orders_scope": "all"})
 }
 
 // Checkout reads authoritative invoice values and never settles invoices/orders.
 func (a *App) checkout(w http.ResponseWriter, r *http.Request, invoice Invoice) {
-	if invoice.Status != "unpaid" || !validAmount(invoice.AmountMinor) || !SupportedCurrency(invoice.Currency) || invoice.PaidAt != nil {
+	if invoice.Status != "unpaid" || !validAmount(invoice.AmountMinor) || !validCurrencyFormat(invoice.CurrencyFormat) || invoice.CurrencyFormat.Code != invoice.Currency || invoice.PaidAt != nil {
 		fail(w, r, 409, "INVOICE_NOT_PAYABLE", "当前账单不可支付")
+		return
+	}
+	config, err := a.Store.Currencies(r.Context(), false)
+	if err != nil {
+		a.internal(w, r, err)
+		return
+	}
+	registered, known := config.find(invoice.Currency)
+	if !known || !registered.Enabled || registered.DecimalPlaces != invoice.CurrencyFormat.DecimalPlaces {
+		fail(w, r, 409, "INVOICE_NOT_PAYABLE", "当前账单币种配置与历史精度不匹配")
 		return
 	}
 	out, err := a.Integrations.CreateCheckout(r.Context(), integrations.CheckoutRequest{
 		InvoiceID: invoice.ID, OrderID: invoice.OrderID, AccountID: invoice.UserID,
-		AmountMinor: invoice.AmountMinor, Currency: invoice.Currency,
+		AmountMinor: invoice.AmountMinor, Currency: invoice.Currency, CurrencyDecimalPlaces: invoice.CurrencyFormat.DecimalPlaces,
 		IdempotencyKey: "invoice:" + invoice.ID,
 	})
 	if errors.Is(err, integrations.ErrUnsupportedCurrency) {

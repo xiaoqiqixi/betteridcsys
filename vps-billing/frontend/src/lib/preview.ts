@@ -18,6 +18,14 @@ export const plans: Plan[] = [
     region: "新加坡 · Singapore",
     price_minor: 600,
     currency: "USD",
+    price_revision: 1,
+    currency_format: {
+      code: "USD",
+      name: "US Dollar",
+      prefix: "",
+      suffix: "",
+      decimal_places: 2,
+    },
     available: true,
   },
   {
@@ -31,6 +39,14 @@ export const plans: Plan[] = [
     region: "新加坡 · Singapore",
     price_minor: 1200,
     currency: "USD",
+    price_revision: 1,
+    currency_format: {
+      code: "USD",
+      name: "US Dollar",
+      prefix: "",
+      suffix: "",
+      decimal_places: 2,
+    },
     available: true,
   },
   {
@@ -44,6 +60,14 @@ export const plans: Plan[] = [
     region: "东京 · Tokyo",
     price_minor: 2400,
     currency: "USD",
+    price_revision: 1,
+    currency_format: {
+      code: "USD",
+      name: "US Dollar",
+      prefix: "",
+      suffix: "",
+      decimal_places: 2,
+    },
     available: true,
   },
 ];
@@ -160,6 +184,7 @@ const cnySamplePrices: Record<string, number> = {
   p3: 15900,
 };
 export function previewPlans(currency: Currency): Plan[] {
+  if (currency !== "CNY" && currency !== "USD") return [];
   const descriptions = [
     tr(
       "适合个人网站和测试环境。",
@@ -175,6 +200,13 @@ export function previewPlans(currency: Currency): Plan[] {
     ...plan,
     description: descriptions[index]!,
     currency,
+    currency_format: {
+      code: currency,
+      name: currency,
+      prefix: "",
+      suffix: "",
+      decimal_places: 2,
+    },
     price_minor:
       currency === "CNY" ? cnySamplePrices[plan.id]! : plan.price_minor,
   }));

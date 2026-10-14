@@ -150,7 +150,7 @@ def command_name(arguments):
     # are replaced, rather than trusting arbitrary argv text as a diagnostic.
     allowed = {"go", "git", "python3", "systemctl", "systemd-analyze", "install", "test",
                "sha256sum", "stat", "cat", "mv", "ln", "rm", "journalctl", "kill", "timeout",
-               "aster-plugin-host", "smtp-1.0.0", "smtp-1.0.1"}
+               "aster-plugin-host", "smtp-1.1.0", "smtp-1.1.1"}
     if name not in allowed:
         name = "fixture-command"
     subcommands = {"go": {"build", "version"}, "git": {"rev-parse"},
@@ -186,9 +186,9 @@ def privileged(*arguments, expected=0, timeout=30):
 
 
 def fixture_package(source, scratch, version):
-    """Build an independent real executable; test 1.0.1 is never published."""
+    """Build an independent real executable; test 1.1.1 is never published."""
     project = source / "vps-billing"
-    executable = scratch / ("smtp-" + version)
+    executable = scratch / ("aster-smtp-" + version + "-linux-amd64")
     environment = dict(os.environ, CGO_ENABLED="0", GOOS="linux", GOARCH="amd64",
                        GOENV="off", GOFLAGS="", GOWORK="off", GOTOOLCHAIN="local")
     arguments = [
@@ -204,7 +204,7 @@ def fixture_package(source, scratch, version):
     require(command([str(executable), "--version"]).strip() == ("Aster SMTP plugin " + version).encode(),
             "Independent SMTP fixture version differs")
     manifest = {"schema": 1, "id": "email.smtp", "version": version,
-                "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0",
+                "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.6.0",
                 "capabilities": ["smtp.send"], "executable": "plugin",
                 "sha256": hashlib.sha256(binary).hexdigest()}
     files = {"plugin": binary, "manifest.json": json.dumps(manifest, sort_keys=True).encode() + b"\n",
@@ -216,8 +216,12 @@ def fixture_package(source, scratch, version):
              }, sort_keys=True).encode() + b"\n"}
     files["SHA256SUMS"] = "".join(hashlib.sha256(value).hexdigest() + "  " + name + "\n"
                                  for name, value in sorted(files.items())).encode()
-    package = scratch / ("smtp-" + version + ".tar.gz")
-    base = "aster-smtp-" + version + "-linux-amd64"
+    # Checksums describe the logical installed six-file plugin. The resources
+    # archive itself deliberately contains no ELF; the raw binary has its own
+    # independently approved outer SHA-256 pin.
+    del files["plugin"]
+    base = "aster-smtp-" + version + "-linux-amd64-resources"
+    package = scratch / (base + ".tar.gz")
     with package.open("wb") as output, gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as zipped:
         with tarfile.open(fileobj=zipped, mode="w", format=tarfile.GNU_FORMAT) as archive:
             directory = tarfile.TarInfo(base)
@@ -226,10 +230,10 @@ def fixture_package(source, scratch, version):
             archive.addfile(directory)
             for name, value in sorted(files.items()):
                 member = tarfile.TarInfo(base + "/" + name)
-                member.mode = 0o755 if name == "plugin" else 0o644
+                member.mode = 0o644
                 member.size = len(value)
                 archive.addfile(member, io.BytesIO(value))
-    return package, manifest
+    return package, executable, manifest
 
 
 class API:
@@ -356,7 +360,7 @@ class NativePluginAcceptance:
         action = str(arguments[0]) if arguments else "missing"
         DIAGNOSTICS.enter("plugin_manager_" + action)
         execution = ["sudo", "-n", "python3", str(self.installer), "--root", str(self.root),
-            "--policy", str(self.policy), "--core-version", "0.4.0", *map(str, arguments)]
+            "--policy", str(self.policy), "--core-version", "0.5.0", *map(str, arguments)]
         expected = 0 if succeeds else "nonzero"
         DIAGNOSTICS.last_command = {"command": "plugin-manager " + action, "expected_exit_code": expected,
                                     "actual_exit_code": None}
@@ -475,7 +479,7 @@ class NativePluginAcceptance:
         privileged("install", "-d", "-m", "755", directory)
         trap = self.scratch / "never-execute"
         trap.write_text("#!/bin/sh\nprintf 'EXECUTED' >> '" + str(marker) + "'\n")
-        manifest = dict(self.manifests["1.0.0"], id="email.trap", version="9.9.9",
+        manifest = dict(self.manifests["1.1.0"], id="email.trap", version="9.9.9",
                         sha256=hashlib.sha256(trap.read_bytes()).hexdigest())
         local = self.scratch / "trap-manifest.json"
         local.write_text(json.dumps(manifest))
@@ -520,7 +524,7 @@ class NativePluginAcceptance:
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 try:
-                    self.check("1.0.0")
+                    self.check("1.1.0")
                     break
                 except (AcceptanceFailure, urllib.error.URLError):
                     time.sleep(0.1)
@@ -553,24 +557,38 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
         package_directory = self.opt / "plugin-test-packages"
         DIAGNOSTICS.enter("prepare_protected_test_package_directory")
         privileged("install", "-d", "-m", "755", package_directory)
-        for version in ("1.0.0", "1.0.1"):
+        for version in ("1.1.0", "1.1.1"):
             DIAGNOSTICS.enter("compile_independent_smtp_fixture_" + version)
-            built_package, self.manifests[version] = fixture_package(self.source, self.scratch, version)
-            packages[version] = package_directory / built_package.name
-            privileged("install", "-m", "644", built_package, packages[version])
-        require(self.manifests["1.0.0"]["sha256"] != self.manifests["1.0.1"]["sha256"],
+            built_package, built_binary, self.manifests[version] = fixture_package(self.source, self.scratch, version)
+            resources, executable = package_directory / built_package.name, package_directory / built_binary.name
+            privileged("install", "-m", "644", built_package, resources)
+            privileged("install", "-m", "755", built_binary, executable)
+            packages[version] = (resources, executable)
+        require(self.manifests["1.1.0"]["sha256"] != self.manifests["1.1.1"]["sha256"],
                 "Independent plugin upgrade did not change the plugin executable")
         self.start_fixture_and_unit()
         self.unchanged_core("before_plugin_install")
         self.unknown_discovery()
-        for version, package in packages.items():
-            self.manager("install", package, "--sha256", hashlib.sha256(package.read_bytes()).hexdigest())
-        self.manager("install", packages["1.0.0"], "--sha256", hashlib.sha256(packages["1.0.0"].read_bytes()).hexdigest(),
-                     succeeds=False)
+        resources, executable = packages["1.1.0"]
+        metadata_pin = hashlib.sha256(resources.read_bytes()).hexdigest()
+        binary_pin = hashlib.sha256(executable.read_bytes()).hexdigest()
+        # Both independent pins must be approved before any version is created.
+        self.manager("install", resources, "--sha256", "0" * 64, "--binary", executable,
+                     "--binary-sha256", binary_pin, succeeds=False)
+        self.manager("install", resources, "--sha256", metadata_pin, "--binary", executable,
+                     "--binary-sha256", "0" * 64, succeeds=False)
+        privileged("test", "-e", self.root / "email.smtp/1.1.0", expected=1)
+        self.checks.append("raw_plugin_resources_and_binary_dual_pins_reject_mismatch_before_install")
+        for version, (resources, executable) in packages.items():
+            self.manager("install", resources, "--sha256", hashlib.sha256(resources.read_bytes()).hexdigest(),
+                         "--binary", executable, "--binary-sha256", hashlib.sha256(executable.read_bytes()).hexdigest())
+        resources, executable = packages["1.1.0"]
+        self.manager("install", resources, "--sha256", metadata_pin,
+                     "--binary", executable, "--binary-sha256", binary_pin, succeeds=False)
         require(not self.policy.exists(), "Installing a package activated a selection")
         privileged("test", "-S", self.socket, expected=1)
         self.unchanged_core("install_without_activation")
-        self.selection("1.0.0")
+        self.selection("1.1.0")
         DIAGNOSTICS.enter("reject_execution_of_disabled_selection")
         disabled = self.api.request("/api/v1/admin/plugins")["smtp"]
         require(disabled["status"] == "disabled", "Selecting a plugin implicitly enabled it")
@@ -580,11 +598,11 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
         self.checks.append("install_immutable_no_overwrite_selection_disabled_explicit_enable")
         self.manager("enable", "--revision", self.revision())
         self.inherited_descriptor_canary()
-        DIAGNOSTICS.enter("start_approved_smtp_1.0.0_unit")
+        DIAGNOSTICS.enter("start_approved_smtp_1.1.0_unit")
         privileged("systemctl", "start", self.worker_unit)
-        pid = self.wait_worker("1.0.0")
-        self.verify_worker_isolation("1.0.0", pid)
-        self.unchanged_core("smtp_1.0.0_active")
+        pid = self.wait_worker("1.1.0")
+        self.verify_worker_isolation("1.1.0", pid)
+        self.unchanged_core("smtp_1.1.0_active")
         self.initial_settings = self.api.request("/api/v1/admin/email-settings")
         DIAGNOSTICS.enter("save_enabled_synthetic_smtp_configuration")
         body = {key: self.initial_settings[key] for key in ("host", "port", "tls_mode", "from_address", "from_name")}
@@ -598,22 +616,22 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
                 "Independent plugin did not complete the verified loopback TLS SMTP transaction")
         first_sent = time.monotonic()
         self.checks.append("real_loopback_tls_authenticated_fixed_message_accepted_no_external_relay")
-        self.selection("1.0.1")
+        self.selection("1.1.1")
         privileged("systemctl", "stop", self.worker_unit)
         self.manager("enable", "--revision", self.revision())
         privileged("systemctl", "start", self.worker_unit)
-        self.wait_worker("1.0.1")
-        self.unchanged_core("smtp_1.0.1_independent_upgrade")
-        self.manager("rollback", "--version", "1.0.0", "--revision", self.revision())
+        self.wait_worker("1.1.1")
+        self.unchanged_core("smtp_1.1.1_independent_upgrade")
+        self.manager("rollback", "--version", "1.1.0", "--revision", self.revision())
         self.check()  # The still-running newer identity cannot satisfy old policy.
         self.unchanged_core("rollback_rejects_previous_running_identity")
         privileged("systemctl", "restart", self.worker_unit)
-        self.wait_worker("1.0.0")
+        self.wait_worker("1.1.0")
         # Planned operator install/upgrade/rollback starts are distinct from
         # the crash-recovery burst exercise. Keep the production restart limits
         # and explicitly reset only this owned unit's start counter here.
         privileged("systemctl", "reset-failed", self.worker_unit)
-        self.unchanged_core("smtp_1.0.0_independent_rollback")
+        self.unchanged_core("smtp_1.1.0_independent_rollback")
         # Symlinked approval and modified installed files fail closed while the
         # API PID and unrelated authenticated business routes remain healthy.
         saved_policy = self.config / "plugin-policy.saved"
@@ -625,7 +643,7 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
         finally:
             privileged("rm", self.policy)
             privileged("mv", saved_policy, self.policy)
-        binary = self.root / "email.smtp/1.0.0/plugin"
+        binary = self.root / "email.smtp/1.1.0/plugin"
         original = self.scratch / "approved-plugin-original"
         original.write_bytes(binary.read_bytes())
         altered = self.scratch / "modified-plugin"
@@ -636,7 +654,7 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
             self.unchanged_core("modified_binary_rejected")
         finally:
             privileged("install", "-m", "755", original, binary)
-        self.check("1.0.0")
+        self.check("1.1.0")
         self.checks.append("approval_symlink_and_modified_hash_rejected_while_core_healthy")
         # Respect the real administrator 30-second rate limit; keep verifying
         # the unchanged live core during the bounded wait.
@@ -656,7 +674,7 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
             require(response["error"]["code"] == "SMTP_DELIVERY_UNCERTAIN",
                     "Plugin crash after DATA was not reported conservatively")
         self.fixture.release_reply.set()
-        new_pid = self.wait_worker("1.0.0", previous=crash_pid)
+        new_pid = self.wait_worker("1.1.0", previous=crash_pid)
         require(new_pid != crash_pid and self.fixture.report()["accepted"] == 2,
                 "Plugin crash recovered incorrectly or replayed a synthetic message")
         self.unchanged_core("plugin_crash_restart_no_core_restart_no_delivery_retry")
@@ -684,9 +702,10 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
             "core_recompiled_for_plugin_install_upgrade_rollback": False,
             "core_restarted_for_plugin_install_upgrade_rollback_crash": False,
             "core_uid": self.api_uid, "plugin_uid": self.worker_uid,
-            "plugin_versions_exercised": ["1.0.0", "1.0.1", "1.0.0"],
+            "plugin_versions_exercised": ["1.1.0", "1.1.1", "1.1.0"],
             "plugin_binary_sha256": {version: manifest["sha256"] for version, manifest in self.manifests.items()},
-            "test_only_unpublished_upgrade_version": "1.0.1", "smtp_fixture": self.fixture.report(),
+            "test_only_unpublished_upgrade_version": "1.1.1", "smtp_fixture": self.fixture.report(),
+            "plugin_install_input": "separate raw ELF and resources archive with independent SHA-256 pins",
             "plugin_process_restarted_after_crash": True, "external_email_or_payment": False,
             "production_deployment": False, "skipped": 0, "failures": 0}
         (self.evidence / "plugin-native.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")

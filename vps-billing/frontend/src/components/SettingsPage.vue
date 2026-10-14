@@ -408,25 +408,25 @@ onBeforeUnmount(() => {
               <label for="settings-currency">{{
                 tr("默认币种", "Default currency")
               }}</label>
-              <select
+              <input
                 id="settings-currency"
-                v-model="form.default_currency"
                 name="default_currency"
-              >
-                <option value="CNY">
-                  {{ tr("CNY · 人民币", "CNY · Chinese yuan") }}
-                </option>
-                <option value="USD">
-                  {{ tr("USD · 美元", "USD · US dollar") }}
-                </option>
-              </select>
+                :value="form.default_currency"
+                readonly
+              />
+              <a class="text-button" href="/finance">{{
+                tr(
+                  "前往财务设置管理币种",
+                  "Manage currencies in financial settings",
+                )
+              }}</a>
             </div>
           </div>
           <p class="settings-help">
             {{
               tr(
-                "套餐需分别设置 CNY 和 USD 价格。本页不会修改套餐价格或历史账单。",
-                "Plans require separate CNY and USD prices. This page does not change plan prices or existing invoices.",
+                "每种币种单独设置套餐价格。默认币种与可用币种请在财务设置管理；不会自动换汇或改写历史账单。",
+                "Each currency requires independent plan prices. Manage available and default currencies in financial settings. There is no currency conversion or change to historical invoices.",
               )
             }}
           </p>

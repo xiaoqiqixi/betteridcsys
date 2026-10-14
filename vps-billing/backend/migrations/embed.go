@@ -19,3 +19,6 @@ var ExactCurrencyCodes string
 
 //go:embed 006_email_settings.sql
 var EmailSettings string
+
+//go:embed 007_currency_registry.sql
+var CurrencyRegistry string

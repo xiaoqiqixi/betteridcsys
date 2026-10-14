@@ -23,6 +23,7 @@ PARSER.add_argument('--admin-email', default=os.getenv('TEST_ADMIN_EMAIL', 'admi
 PARSER.add_argument('--admin-password', default=os.getenv('TEST_ADMIN_PASSWORD', ''))
 PARSER.add_argument('--second-email', default=os.getenv('TEST_SECOND_EMAIL', ''))
 PARSER.add_argument('--second-password', default=os.getenv('TEST_SECOND_PASSWORD', ''))
+PARSER.add_argument('--expect-fresh-cny', action='store_true')
 ARGS, REMAINING = PARSER.parse_known_args()
 if urllib.parse.urlparse(ARGS.base).hostname not in ('localhost', '127.0.0.1', '::1'):
     PARSER.error('Only explicit loopback/local servers are permitted')
@@ -67,7 +68,60 @@ class Client:
         self.session()
         return self
 
+FINANCIAL_FIELDS = ('code', 'name', 'prefix', 'suffix', 'decimal_places', 'enabled', 'sort_order')
+
+
+def currency_update(config, default=None):
+    return {'revision': config['revision'], 'default_currency': default or config['default_currency'],
+            'currencies': [{key: row[key] for key in FINANCIAL_FIELDS} for row in config['currencies']]}
+
+
+def prepare_financial_fixture(admin, expect_fresh=False):
+    """Approve synthetic currencies and independent prices through the real API."""
+    status, payload, _ = admin.request('/api/v1/admin/currencies')
+    assert status == 200, 'Financial fixture registry read failed'
+    config = payload['data']
+    assert config['default_currency'] == 'CNY', 'Fresh/restore fixture default changed'
+    if expect_fresh:
+        assert len(config['currencies']) == 1 and config['currencies'][0]['code'] == 'CNY', 'Fresh database is not CNY-only'
+        assert config['currencies'][0]['enabled'] and config['currencies'][0]['decimal_places'] == 2
+        assert admin.request('/api/v1/plans?currency=USD')[0] == 400, 'Fresh database exposes unapproved USD prices'
+    requested = (
+        {'code': 'USD', 'name': 'Synthetic USD', 'prefix': '$', 'suffix': '', 'decimal_places': 2, 'enabled': True, 'sort_order': 10},
+        {'code': 'JPY', 'name': 'Synthetic JPY', 'prefix': '¥', 'suffix': '', 'decimal_places': 0, 'enabled': True, 'sort_order': 20},
+        {'code': 'KWD', 'name': 'Synthetic KWD', 'prefix': '', 'suffix': ' KWD', 'decimal_places': 3, 'enabled': True, 'sort_order': 30},
+    )
+    body = currency_update(config)
+    existing = {row['code'] for row in body['currencies']}
+    additions = [row for row in requested if row['code'] not in existing]
+    if additions:
+        body['currencies'].extend(additions)
+        assert admin.request('/api/v1/admin/currencies', 'POST', body)[0] == 200, 'Explicit currency approval failed'
+    prices = {'USD': ('6.00', 600), 'JPY': ('1250', 1250), 'KWD': ('1.234', 1234)}
+    for code, (amount, minor) in prices.items():
+        status, payload, _ = admin.request('/api/v1/admin/plan-prices?currency=' + code)
+        assert status == 200, 'Independent price fixture read failed'
+        catalog = payload['data']
+        if expect_fresh:
+            assert all(row['amount'] == '' and not row['available'] for row in catalog['plans']), 'New currency was given implicit converted prices'
+        body = {'revision': catalog['revision'], 'currency': code, 'prices': [
+            {'plan_id': row['plan_id'], 'amount': amount, 'available': True, 'plan_available': True}
+            for row in catalog['plans']]}
+        assert body['prices'], 'Fixture contains no plans'
+        status, payload, _ = admin.request('/api/v1/admin/plan-prices', 'POST', body)
+        assert status == 200, 'Explicit independent price fixture write failed'
+        assert all(row['amount_minor'] == minor for row in payload['data']['plans']), 'Price fixture was rounded or converted'
+    return {'fresh_cny_only_verified': expect_fresh, 'registered': ['USD', 'JPY', 'KWD'],
+            'independent_minor_amounts': {code: values[1] for code, values in prices.items()}, 'automatic_fx': False}
+
+
 class SecuritySmoke(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.financial_fixture = None
+        if ARGS.admin_password:
+            cls.financial_fixture = prepare_financial_fixture(Client().login(ARGS.admin_email, ARGS.admin_password), ARGS.expect_fresh_cny)
+
     def setUp(self):
         self.client = Client()
 
@@ -79,7 +133,7 @@ class SecuritySmoke(unittest.TestCase):
     def test_unauthenticated_data_and_admin_denied(self):
         for path in ('overview', 'services', 'orders', 'invoices', 'audit', 'admin/overview',
                      'admin/customers', 'admin/orders', 'admin/invoices', 'admin/integrations', 'admin/site-settings',
-                     'admin/email-settings'):
+                     'admin/email-settings', 'admin/currencies', 'admin/plan-prices'):
             with self.subTest(path=path):
                 self.assertIn(self.client.request('/api/v1/' + path)[0], (401, 403))
 
@@ -93,7 +147,7 @@ class SecuritySmoke(unittest.TestCase):
 
     def test_customer_admin_boundary(self):
         client = self.customer()
-        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings', 'email-settings'):
+        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings', 'email-settings', 'currencies', 'plan-prices'):
             with self.subTest(path=path):
                 self.assertEqual(client.request('/api/v1/admin/' + path)[0], 403)
 
@@ -238,7 +292,7 @@ class SecuritySmoke(unittest.TestCase):
         for query in ('currency=EUR', 'currency=', 'currency=CNY&currency=USD'):
             status, payload, _ = self.client.request('/api/v1/plans?' + query)
             self.assertEqual(status, 400, payload)
-            self.assertEqual(payload['error']['code'], 'INVALID_CURRENCY')
+            self.assertIn(payload['error']['code'], ('INVALID_CURRENCY', 'UNSUPPORTED_CURRENCY'))
         for currency in ('CNY', 'USD'):
             status, payload, _ = self.client.request('/api/v1/plans?currency=' + currency,
                 headers={'Accept-Language': 'en'})
@@ -258,6 +312,8 @@ class SecuritySmoke(unittest.TestCase):
         status, payload, _ = admin.request('/api/v1/admin/site-settings')
         self.assertEqual(status, 200, payload)
         original = payload['data']
+        _, financial, _ = admin.request('/api/v1/admin/currencies')
+        original_default = financial['data']['default_currency']
         for update in ({'support_url': 'javascript:alert(1)'}, {'logo': 'https://example.invalid/logo.svg'},
                        {'theme': 'body{display:none}'}, {'default_currency': 'EUR'}, {'default_locale': 'fr'}):
             status, _, _ = admin.request('/api/v1/admin/site-settings', 'POST', dict(original, **update))
@@ -297,7 +353,10 @@ class SecuritySmoke(unittest.TestCase):
                 snapshots.append(invoice)
             _, current, _ = admin.request('/api/v1/admin/site-settings')
             self.assertEqual(admin.request('/api/v1/admin/site-settings', 'POST',
-                dict(current['data'], invoice_issuer='后来主体', default_currency='USD'))[0], 200)
+                dict(current['data'], invoice_issuer='后来主体'))[0], 200)
+            _, financial, _ = admin.request('/api/v1/admin/currencies')
+            self.assertEqual(admin.request('/api/v1/admin/currencies', 'POST',
+                currency_update(financial['data'], 'USD'))[0], 200)
             for expected in snapshots:
                 status, detail, _ = customer.request('/api/v1/invoices/' + expected['id'])
                 self.assertEqual(status, 200)
@@ -305,9 +364,44 @@ class SecuritySmoke(unittest.TestCase):
                 self.assertEqual(admin.request('/api/v1/admin/invoices/' + expected['id'])[0], 200)
                 self.assertEqual(admin.request('/api/v1/admin/invoices/' + expected['id'] + '/checkout', 'POST', {})[0], 405)
         finally:
+            _, financial, _ = admin.request('/api/v1/admin/currencies')
+            self.assertEqual(admin.request('/api/v1/admin/currencies', 'POST',
+                currency_update(financial['data'], original_default))[0], 200)
             _, current, _ = admin.request('/api/v1/admin/site-settings')
             restore = dict(original, revision=current['data']['revision'])
             self.assertEqual(admin.request('/api/v1/admin/site-settings', 'POST', restore)[0], 200)
+
+    def test_financial_registry_precision_no_fx_and_write_guards(self):
+        if not ARGS.admin_password:
+            self.skipTest('TEST_ADMIN_PASSWORD not supplied')
+        admin = Client().login(ARGS.admin_email, ARGS.admin_password)
+        customer = self.customer()
+        _, configured, _ = admin.request('/api/v1/admin/currencies')
+        body = currency_update(configured['data'])
+        self.assertEqual(admin.request('/api/v1/admin/currencies', 'POST', body, csrf=False)[0], 403)
+        self.assertEqual(customer.request('/api/v1/admin/currencies', 'POST', body)[0], 403)
+        changed = currency_update(configured['data'])
+        next(row for row in changed['currencies'] if row['code'] == 'USD')['decimal_places'] = 3
+        status, failure, _ = admin.request('/api/v1/admin/currencies', 'POST', changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(failure['error']['code'], 'CURRENCY_PRECISION_LOCKED')
+        for code, decimals, minor in (('JPY', 0, 1250), ('KWD', 3, 1234)):
+            _, catalog, _ = customer.request('/api/v1/plans?currency=' + code)
+            plan = next(row for row in catalog['data'] if row['available'])
+            self.assertEqual(plan['price_minor'], minor)
+            key = str(uuid.uuid4())
+            status, created, _ = customer.request('/api/v1/orders', 'POST', {
+                'plan_id': plan['id'], 'hostname': 'precision-' + key[:8], 'currency': code},
+                headers={'Idempotency-Key': key})
+            self.assertEqual(status, 201)
+            order = created['data']
+            self.assertEqual((order['currency'], order['total_minor'], order['currency_format']['decimal_places']),
+                             (code, minor, decimals))
+            _, invoices, _ = customer.request('/api/v1/invoices')
+            invoice = next(row for row in invoices['data'] if row['order_id'] == order['id'])
+            self.assertEqual((invoice['currency'], invoice['amount_minor'], invoice['currency_format']['decimal_places']),
+                             (code, minor, decimals))
+            self.assertNotEqual(invoice['status'], 'paid')
 
 if __name__ == '__main__':
     unittest.main(argv=['security_smoke.py'] + REMAINING, verbosity=2)

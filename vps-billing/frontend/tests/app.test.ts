@@ -5,6 +5,23 @@ import { createRouter, createMemoryHistory } from "vue-router";
 import { defaultSiteSettings } from "../src/lib/settings";
 import { restorePreferences, locale, currency } from "../src/lib/i18n";
 import App from "../src/App.vue";
+import { defaultCurrencyRegistry } from "../src/lib/currencies";
+const configuredCurrencies = () => ({
+  ...structuredClone(defaultCurrencyRegistry),
+  currencies: [
+    ...structuredClone(defaultCurrencyRegistry.currencies),
+    {
+      code: "USD",
+      name: "US Dollar",
+      prefix: "$",
+      suffix: "",
+      decimal_places: 2,
+      enabled: true,
+      sort_order: 1,
+      precision_locked: true,
+    },
+  ],
+});
 import * as fixtures from "../src/lib/preview";
 let checkoutResponse: unknown;
 let activeUser: null | typeof fixtures.previewUser = null;
@@ -46,7 +63,8 @@ beforeEach(() => {
         options,
       });
       let data: unknown;
-      if (endpoint === "/site-settings") data = defaultSiteSettings;
+      if (endpoint === "/currencies") data = configuredCurrencies();
+      else if (endpoint === "/site-settings") data = defaultSiteSettings;
       else if (endpoint === "/session")
         data = { user: activeUser, csrf_token: "csrf-test", demo_mode: true };
       else if (endpoint === "/auth/login") {
@@ -91,6 +109,209 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("billing workspace flows", () => {
+  it("initializes a new CNY-only installation before fetching prices and keeps old USD history literal", async () => {
+    activeUser = { ...fixtures.previewUser };
+    localStorage.setItem("aster.currency", "USD");
+    localStorage.setItem("aster.locale", "en");
+    restorePreferences();
+    const originalFetch = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) =>
+        path.endsWith("/currencies")
+          ? {
+              ok: true,
+              json: async () => ({
+                data: structuredClone(defaultCurrencyRegistry),
+              }),
+            }
+          : originalFetch(path, options),
+      ),
+    );
+    const { wrapper, router } = await mountApp();
+    expect(locale.value).toBe("en");
+    expect(currency.value).toBe("CNY");
+    expect(
+      wrapper.findAll('select[aria-label="Currency"] option'),
+    ).toHaveLength(1);
+    expect(
+      requests.some((request) => request.path.includes("currency=USD")),
+    ).toBe(false);
+    await router.push("/invoices");
+    await flushPromises();
+    expect(wrapper.find("table").text()).toContain("USD 24.00");
+    wrapper.unmount();
+  });
+  it("uses historical currency and plan snapshots even when the registry or live catalog differs", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const oldFormat = {
+      code: "KWD",
+      name: "Recorded dinar",
+      prefix: "old ",
+      suffix: "",
+      decimal_places: 3,
+    };
+    const originalFetch = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        let data: unknown;
+        if (path.endsWith("/currencies"))
+          data = {
+            ...configuredCurrencies(),
+            currencies: [
+              ...configuredCurrencies().currencies,
+              {
+                ...oldFormat,
+                prefix: "new ",
+                enabled: false,
+                precision_locked: true,
+                sort_order: 4,
+              },
+            ],
+          };
+        else if (path.endsWith("/invoices"))
+          data = [
+            {
+              ...fixtures.invoices[0],
+              currency: "KWD",
+              amount_minor: 1234,
+              currency_format: oldFormat,
+            },
+          ];
+        else if (path.endsWith("/orders"))
+          data = [
+            {
+              ...fixtures.orders[0],
+              plan_snapshot: {
+                plan_id: "p1",
+                name: "Recorded plan",
+                cpu: 7,
+                memory_gb: 9,
+                disk_gb: 111,
+                transfer_tb: 3,
+                region: "Recorded region",
+                billing_cycle: "monthly",
+              },
+            },
+            fixtures.orders[1],
+          ];
+        else return originalFetch(path, options);
+        return { ok: true, json: async () => ({ data }) };
+      }),
+    );
+    const { wrapper, router } = await mountApp();
+    await router.push("/invoices");
+    await flushPromises();
+    expect(wrapper.find("table").text()).toContain("KWD old 1.234");
+    expect(wrapper.find("table").text()).not.toContain("new ");
+    expect(
+      wrapper
+        .findAll('select[aria-label="币种"] option')
+        .map((item) => item.attributes("value")),
+    ).not.toContain("KWD");
+    await router.push("/orders");
+    await flushPromises();
+    expect(wrapper.find("table").text()).toContain("Recorded plan");
+    expect(wrapper.find("table").text()).toContain("7 vCPU");
+    expect(wrapper.find("table").text()).toContain("Recorded region");
+    expect(wrapper.find("table").text()).toContain("未保存成交规格");
+    wrapper.unmount();
+  });
+  it("reconciles a newly disabled purchase preference before requesting another catalog", async () => {
+    activeUser = { ...fixtures.previewUser };
+    let registry = configuredCurrencies();
+    const originalFetch = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) =>
+        path.endsWith("/currencies")
+          ? { ok: true, json: async () => ({ data: registry }) }
+          : originalFetch(path, options),
+      ),
+    );
+    const { wrapper, router } = await mountApp();
+    await router.push("/plans");
+    await wrapper.find('select[aria-label="币种"]').setValue("USD");
+    await flushPromises();
+    const oldRequestCount = requests.length;
+    registry = {
+      ...registry,
+      revision: 2,
+      currencies: registry.currencies.map((item) => ({
+        ...item,
+        enabled: item.code !== "USD",
+      })),
+    };
+    await wrapper.find('button[aria-label="刷新数据"]').trigger("click");
+    await flushPromises();
+    expect(currency.value).toBe("CNY");
+    expect(
+      requests
+        .slice(oldRequestCount)
+        .filter((request) => request.path.startsWith("/plans?")),
+    ).toHaveLength(1);
+    expect(
+      requests
+        .slice(oldRequestCount)
+        .filter((request) => request.path.startsWith("/plans?")),
+    ).toEqual([expect.objectContaining({ path: "/plans?currency=CNY" })]);
+    expect(wrapper.find(".purchase-total").text()).toContain("CNY");
+    wrapper.unmount();
+  });
+  it("lets administrators query disabled historical currencies without enabling them for purchases", async () => {
+    activeUser = { ...fixtures.previewUser, role: "admin" };
+    const originalFetch = fetch;
+    const reportQueries: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        let data: unknown;
+        if (path.endsWith("/currencies"))
+          data = {
+            ...configuredCurrencies(),
+            currencies: configuredCurrencies().currencies.map((item) => ({
+              ...item,
+              enabled: item.code !== "USD",
+            })),
+          };
+        else if (path.includes("/admin/overview?")) {
+          const code = new URL(path, "http://localhost").searchParams.get(
+            "currency",
+          )!;
+          reportQueries.push(code);
+          data = {
+            customers: 1,
+            total_services: 0,
+            unpaid_invoices: 0,
+            unpaid_total_minor: 0,
+            revenue_minor: code === "USD" ? 1201 : 0,
+            currency: code,
+            currency_format: {
+              code,
+              name: code,
+              prefix: "",
+              suffix: "",
+              decimal_places: 2,
+            },
+          };
+        } else if (path.includes("/admin/")) data = [];
+        else return originalFetch(path, options);
+        return { ok: true, json: async () => ({ data }) };
+      }),
+    );
+    const { wrapper } = await mountApp();
+    expect(
+      wrapper.find('select[aria-label="币种"] option[value="USD"]').text(),
+    ).toContain("仅历史");
+    await wrapper.find('select[aria-label="币种"]').setValue("USD");
+    await flushPromises();
+    expect(reportQueries.at(-1)).toBe("USD");
+    expect(wrapper.text()).toContain("USD 12.01");
+    expect(currency.value).toBe("CNY");
+    expect(requests.some((request) => request.method === "POST")).toBe(false);
+    wrapper.unmount();
+  });
   it("retains the selected region and plan through a delayed currency reload", async () => {
     activeUser = { ...fixtures.previewUser };
     const { wrapper, router } = await mountApp();
@@ -175,6 +396,13 @@ describe("billing workspace flows", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (path: string, options: RequestInit) => {
+        if (path.endsWith("/currencies"))
+          return {
+            ok: true,
+            json: async () => ({
+              data: { ...configuredCurrencies(), default_currency: "USD" },
+            }),
+          };
         if (path.endsWith("/site-settings"))
           return {
             ok: true,
@@ -251,28 +479,118 @@ describe("billing workspace flows", () => {
     );
     wrapper.unmount();
   });
-  it("retries the original payload and key after a timeout, 403 and currency change", async () => {
+  it.each([
+    "CSRF_FAILED",
+    "CURRENCY_DISABLED",
+    "UNSUPPORTED_CURRENCY",
+    "PRICE_CHANGED",
+  ])(
+    "retries the original payload and key after a timeout, %s and currency change",
+    async (rejection) => {
+      activeUser = { ...fixtures.previewUser };
+      const originalFetch = fetch;
+      const attempts: RequestInit[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) => {
+          if (path.endsWith("/orders") && options.method === "POST") {
+            attempts.push(options);
+            if (attempts.length === 1)
+              throw new TypeError("connection lost after commit");
+            if (attempts.length === 2)
+              return {
+                ok: false,
+                status: rejection === "CSRF_FAILED" ? 403 : 409,
+                json: async () => ({
+                  error: {
+                    code: rejection,
+                    message: "Session needs refresh",
+                  },
+                }),
+              };
+          }
+          return originalFetch(path, options);
+        }),
+      );
+      const { wrapper, router } = await mountApp();
+      await router.push("/plans");
+      await flushPromises();
+      await wrapper.find(".purchase-review").trigger("click");
+      await wrapper.find("#hostname").setValue("original-host");
+      await wrapper.find("input[type=checkbox]").setValue(true);
+      await wrapper.find("dialog form").trigger("submit");
+      await flushPromises();
+      expect(wrapper.find("#hostname").attributes("disabled")).toBeDefined();
+      expect(wrapper.text()).toContain("订单结果尚未确认");
+      await wrapper.find("dialog form").trigger("submit");
+      await flushPromises();
+      expect(wrapper.find("#hostname").attributes("disabled")).toBeDefined();
+      await wrapper
+        .find('dialog[aria-labelledby="order-title"] button[aria-label="关闭"]')
+        .trigger("click");
+      await wrapper.find('select[aria-label="币种"]').setValue("USD");
+      await flushPromises();
+      await wrapper.find(".purchase-review").trigger("click");
+      expect(wrapper.find("#hostname").element).toHaveProperty(
+        "value",
+        "original-host",
+      );
+      expect(wrapper.find(".order-plan").text()).toContain("CNY 39.00");
+      await wrapper.find("dialog form").trigger("submit");
+      await flushPromises();
+      expect(attempts).toHaveLength(3);
+      expect(
+        new Set(
+          attempts.map(
+            (r) => (r.headers as Record<string, string>)["Idempotency-Key"],
+          ),
+        ).size,
+      ).toBe(1);
+      expect(new Set(attempts.map((r) => r.body)).size).toBe(1);
+      expect(JSON.parse(attempts[0]!.body as string)).toEqual({
+        plan_id: "p1",
+        hostname: "original-host",
+        currency: "CNY",
+        quote: { price_minor: 3900, decimal_places: 2, price_revision: 1 },
+      });
+      expect(router.currentRoute.value.path).toBe("/orders");
+      wrapper.unmount();
+    },
+  );
+  it("requires a fresh confirmation and quote after a definitive server price change", async () => {
     activeUser = { ...fixtures.previewUser };
     const originalFetch = fetch;
     const attempts: RequestInit[] = [];
+    let changed = false;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (path: string, options: RequestInit) => {
+        if (path.endsWith("/plans?currency=CNY") && changed)
+          return {
+            ok: true,
+            json: async () => ({
+              data: fixtures.previewPlans("CNY").map((plan) => ({
+                ...plan,
+                price_minor: 9900,
+                price_revision: 2,
+              })),
+            }),
+          };
         if (path.endsWith("/orders") && options.method === "POST") {
           attempts.push(options);
-          if (attempts.length === 1)
-            throw new TypeError("connection lost after commit");
-          if (attempts.length === 2)
+          if (attempts.length === 1) {
+            changed = true;
             return {
               ok: false,
-              status: 403,
+              status: 409,
               json: async () => ({
                 error: {
-                  code: "CSRF_FAILED",
-                  message: "Session needs refresh",
+                  code: "PRICE_CHANGED",
+                  message: "Review the updated quote",
                 },
               }),
             };
+          }
         }
         return originalFetch(path, options);
       }),
@@ -281,43 +599,44 @@ describe("billing workspace flows", () => {
     await router.push("/plans");
     await flushPromises();
     await wrapper.find(".purchase-review").trigger("click");
-    await wrapper.find("#hostname").setValue("original-host");
+    await wrapper.find("#hostname").setValue("old-quote-host");
     await wrapper.find("input[type=checkbox]").setValue(true);
     await wrapper.find("dialog form").trigger("submit");
     await flushPromises();
-    expect(wrapper.find("#hostname").attributes("disabled")).toBeDefined();
-    expect(wrapper.text()).toContain("订单结果尚未确认");
-    await wrapper.find("dialog form").trigger("submit");
-    await flushPromises();
-    expect(wrapper.find("#hostname").attributes("disabled")).toBeDefined();
-    await wrapper
-      .find('dialog[aria-labelledby="order-title"] button[aria-label="关闭"]')
-      .trigger("click");
-    await wrapper.find('select[aria-label="币种"]').setValue("USD");
-    await flushPromises();
-    await wrapper.find(".purchase-review").trigger("click");
-    expect(wrapper.find("#hostname").element).toHaveProperty(
-      "value",
-      "original-host",
-    );
-    expect(wrapper.find(".order-plan").text()).toContain("CNY 39.00");
-    await wrapper.find("dialog form").trigger("submit");
-    await flushPromises();
-    expect(attempts).toHaveLength(3);
+    expect(attempts).toHaveLength(1);
     expect(
-      new Set(
-        attempts.map(
-          (r) => (r.headers as Record<string, string>)["Idempotency-Key"],
-        ),
-      ).size,
-    ).toBe(1);
-    expect(new Set(attempts.map((r) => r.body)).size).toBe(1);
-    expect(JSON.parse(attempts[0]!.body as string)).toEqual({
-      plan_id: "p1",
-      hostname: "original-host",
-      currency: "CNY",
+      wrapper.find('dialog[aria-labelledby="order-title"]').attributes("open"),
+    ).toBeUndefined();
+    expect(wrapper.text()).toContain("套餐、价格或币种已变化");
+    expect(wrapper.find(".purchase-total").text()).toContain("CNY 99.00");
+    await wrapper.find(".purchase-review").trigger("click");
+    expect(
+      (wrapper.find("input[type=checkbox]").element as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+    await wrapper.find("dialog form").trigger("submit");
+    await flushPromises();
+    expect(attempts).toHaveLength(1);
+    await wrapper.find("#hostname").setValue("new-quote-host");
+    await wrapper.find("input[type=checkbox]").setValue(true);
+    await wrapper.find("dialog form").trigger("submit");
+    await flushPromises();
+    expect(attempts).toHaveLength(2);
+    expect(JSON.parse(attempts[0]!.body as string).quote).toEqual({
+      price_minor: 3900,
+      decimal_places: 2,
+      price_revision: 1,
     });
-    expect(router.currentRoute.value.path).toBe("/orders");
+    expect(JSON.parse(attempts[1]!.body as string).quote).toEqual({
+      price_minor: 9900,
+      decimal_places: 2,
+      price_revision: 2,
+    });
+    expect(
+      (attempts[1]!.headers as Record<string, string>)["Idempotency-Key"],
+    ).not.toBe(
+      (attempts[0]!.headers as Record<string, string>)["Idempotency-Key"],
+    );
     wrapper.unmount();
   });
   it("blocks an unsubmitted confirmation while refreshed server prices are pending", async () => {
@@ -469,6 +788,65 @@ describe("billing workspace flows", () => {
     );
     wrapper.unmount();
   });
+  it.each(["CURRENCY_DISABLED", "UNSUPPORTED_CURRENCY"])(
+    "allows choosing a new currency and key after a definitive first %s rejection",
+    async (code) => {
+      activeUser = { ...fixtures.previewUser };
+      const originalFetch = fetch;
+      const attempts: RequestInit[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) => {
+          if (path.endsWith("/orders") && options.method === "POST") {
+            attempts.push(options);
+            if (attempts.length === 1)
+              return {
+                ok: false,
+                status: code === "CURRENCY_DISABLED" ? 409 : 400,
+                json: async () => ({
+                  error: { code, message: "Currency unavailable" },
+                }),
+              };
+          }
+          return originalFetch(path, options);
+        }),
+      );
+      const { wrapper, router } = await mountApp();
+      await router.push("/plans");
+      await flushPromises();
+      await wrapper.find(".purchase-review").trigger("click");
+      await wrapper.find("#hostname").setValue("first-host");
+      await wrapper.find("input[type=checkbox]").setValue(true);
+      await wrapper.find("dialog form").trigger("submit");
+      await flushPromises();
+      expect(wrapper.find("#hostname").attributes("disabled")).toBeUndefined();
+      expect(wrapper.text()).not.toContain("订单结果尚未确认");
+      await wrapper
+        .find('dialog[aria-labelledby="order-title"] button[aria-label="关闭"]')
+        .trigger("click");
+      await wrapper.find('select[aria-label="币种"]').setValue("USD");
+      await flushPromises();
+      await wrapper.find(".purchase-review").trigger("click");
+      await wrapper.find("#hostname").setValue("new-currency-host");
+      await wrapper.find("input[type=checkbox]").setValue(true);
+      await wrapper.find("dialog form").trigger("submit");
+      await flushPromises();
+      expect(attempts).toHaveLength(2);
+      expect(
+        (attempts[1]!.headers as Record<string, string>)["Idempotency-Key"],
+      ).not.toBe(
+        (attempts[0]!.headers as Record<string, string>)["Idempotency-Key"],
+      );
+      expect(JSON.parse(attempts[1]!.body as string)).toEqual({
+        plan_id: "p1",
+        hostname: "new-currency-host",
+        currency: "USD",
+        quote: { price_minor: 600, decimal_places: 2, price_revision: 1 },
+      });
+      expect(router.currentRoute.value.path).toBe("/orders");
+      wrapper.unmount();
+    },
+  );
   it("refreshes CSRF before an uncertain retry and never resends under a different account", async () => {
     activeUser = { ...fixtures.previewUser };
     const originalFetch = fetch;

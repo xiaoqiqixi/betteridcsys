@@ -53,7 +53,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	uid := uint32(os.Geteuid())
 	rules := trust{owner: uid, systemRoot: root.Uid, allowSameUID: true}
-	dir := filepath.Join(base, "plugins", "email.smtp", "1.0.0")
+	dir := filepath.Join(base, "plugins", "email.smtp", "1.1.0")
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -66,9 +66,9 @@ func newFixture(t *testing.T) *fixture {
 	if err = os.WriteFile(f.binary, binary, 0700); err != nil {
 		t.Fatal(err)
 	}
-	f.manifest = pluginapi.Manifest{Schema: 1, ID: "email.smtp", Version: "1.0.0", Protocol: pluginapi.SMTPProtocol, CoreMin: "0.4.0", CoreMaxExclusive: "0.5.0", Capabilities: []string{pluginapi.SMTPCapability}, Executable: "plugin", SHA256: digestBytes(binary)}
+	f.manifest = pluginapi.Manifest{Schema: 1, ID: "email.smtp", Version: "1.1.0", Protocol: pluginapi.SMTPProtocol, CoreMin: "0.4.0", CoreMaxExclusive: "0.6.0", Capabilities: []string{pluginapi.SMTPCapability}, Executable: "plugin", SHA256: digestBytes(binary)}
 	raw := writeJSON(t, f.manifestPath, f.manifest)
-	f.policy = pluginapi.Policy{Schema: 1, Revision: 1, SMTP: &pluginapi.Selection{Enabled: true, ID: "email.smtp", Version: "1.0.0", ManifestSHA256: digestBytes(raw), WorkerUID: uid, ClientUID: uid, Socket: filepath.Join(base, "rpc.sock"), AllowedTargets: []pluginapi.Target{{Host: "mail.example.test", Port: 465}}}}
+	f.policy = pluginapi.Policy{Schema: 1, Revision: 1, SMTP: &pluginapi.Selection{Enabled: true, ID: "email.smtp", Version: "1.1.0", ManifestSHA256: digestBytes(raw), WorkerUID: uid, ClientUID: uid, Socket: filepath.Join(base, "rpc.sock"), AllowedTargets: []pluginapi.Target{{Host: "mail.example.test", Port: 465}}}}
 	f.manager = &Manager{root: filepath.Join(base, "plugins"), policy: filepath.Join(base, "policy.json"), rules: rules}
 	writeJSON(t, f.manager.policy, f.policy)
 	return f
@@ -118,7 +118,7 @@ func (f *fixture) serve(t *testing.T, sender senderFunc) {
 func TestApprovalRejectsUnsafeFiles(t *testing.T) {
 	tests := map[string]func(*testing.T, *fixture){
 		"binary modification":   func(t *testing.T, f *fixture) { os.WriteFile(f.binary, []byte("unapproved"), 0700) },
-		"manifest modification": func(t *testing.T, f *fixture) { f.manifest.Version = "1.0.1"; writeJSON(t, f.manifestPath, f.manifest) },
+		"manifest modification": func(t *testing.T, f *fixture) { f.manifest.Version = "1.1.1"; writeJSON(t, f.manifestPath, f.manifest) },
 		"writable binary":       func(t *testing.T, f *fixture) { os.Chmod(f.binary, 0777) },
 		"writable parent":       func(t *testing.T, f *fixture) { os.Chmod(filepath.Dir(f.binary), 0777) },
 		"hard link": func(t *testing.T, f *fixture) {
@@ -144,7 +144,7 @@ func TestApprovalRejectsUnsafeFiles(t *testing.T) {
 		},
 		"noncanonical root": func(t *testing.T, f *fixture) { f.manager.root += "/../plugins" },
 		"incompatible": func(t *testing.T, f *fixture) {
-			f.manifest.CoreMin = "0.5.0"
+			f.manifest.CoreMin = "0.6.0"
 			raw := writeJSON(t, f.manifestPath, f.manifest)
 			f.policy.SMTP.ManifestSHA256 = digestBytes(raw)
 			writeJSON(t, f.manager.policy, f.policy)
@@ -163,6 +163,27 @@ func TestApprovalRejectsUnsafeFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestStateCompatibilityRequiresVerifiedApproval(t *testing.T) {
+	f := newFixture(t)
+	state := f.manager.State()
+	if state.SMTPProtocol != pluginapi.SMTPProtocol || state.SMTPCoreMin != "0.4.0" || state.SMTPCoreMaxExclusive != "0.6.0" {
+		t.Fatal("approved state omitted verified compatibility", state)
+	}
+	f.policy.SMTP.Enabled = false
+	writeJSON(t, f.manager.policy, f.policy)
+	os.Remove(f.binary)
+	state = f.manager.State()
+	if state.Status != "disabled" || state.Version != "1.1.0" || state.SMTPProtocol != "" || state.SMTPCoreMin != "" || state.SMTPCoreMaxExclusive != "" {
+		t.Fatal("disabled policy guessed compatibility or read missing binary", state)
+	}
+	f.policy.SMTP.Enabled = true
+	writeJSON(t, f.manager.policy, f.policy)
+	state = f.manager.State()
+	if state.Status != "unavailable" || state.SMTPProtocol != "" || state.SMTPCoreMin != "" || state.SMTPCoreMaxExclusive != "" {
+		t.Fatal("unavailable state claimed verified compatibility", state)
+	}
+}
 func TestDisabledAndPassiveDiscovery(t *testing.T) {
 	f := newFixture(t)
 	if got, err := f.manager.Discover(); err != nil || len(got) != 1 || got[0].Status != "discovered" {
@@ -173,7 +194,7 @@ func TestDisabledAndPassiveDiscovery(t *testing.T) {
 	f.policy.SMTP.Enabled = false
 	writeJSON(t, f.manager.policy, f.policy)
 	os.Remove(f.binary)
-	if state := f.manager.State(); state.Status != "disabled" || state.Version != "1.0.0" || state.ID != "email.smtp" || state.PolicyRevision != 1 {
+	if state := f.manager.State(); state.Status != "disabled" || state.Version != "1.1.0" || state.ID != "email.smtp" || state.PolicyRevision != 1 {
 		t.Fatal("disabled plugin not reported")
 	}
 	if _, err := f.manager.Check(context.Background()); !errors.Is(err, ErrDisabled) {
@@ -200,7 +221,7 @@ func TestRuntimeSendAndErrorRedaction(t *testing.T) {
 				return returned
 			})
 			id, err := f.manager.Check(context.Background())
-			if err != nil || id.Version != "1.0.0" {
+			if err != nil || id.Version != "1.1.0" {
 				t.Fatal(id, err)
 			}
 			if sends.Load() != 0 {
@@ -335,7 +356,7 @@ func TestServerRequiresSameConnectionAndOneSend(t *testing.T) {
 	var sends atomic.Int32
 	f.serve(t, func(context.Context, smtpv1.Config, smtpv1.Message) error { sends.Add(1); return nil })
 	nonce := strings.Repeat("a", 64)
-	request := pluginapi.SendRequest{Protocol: pluginapi.SMTPProtocol, Version: "1.0.0", RequestID: nonce, TimeoutMS: 1000, Config: config(), Message: message()}
+	request := pluginapi.SendRequest{Protocol: pluginapi.SMTPProtocol, Version: "1.1.0", RequestID: nonce, TimeoutMS: 1000, Config: config(), Message: message()}
 	unhandshaken := socketClient(f)
 	defer unhandshaken.CloseIdleConnections()
 	var out pluginapi.SendResponse

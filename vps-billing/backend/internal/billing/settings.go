@@ -120,7 +120,8 @@ func ValidateSettings(s SiteSettings) bool {
 	return validDisplayURL(s.SupportURL, false) && validDisplayURL(s.DisplayURL, true)
 }
 
-func SupportedCurrency(c string) bool { return c == "CNY" || c == "USD" }
+// SupportedCurrency validates syntax only; the store registry authorizes actual currencies.
+func SupportedCurrency(c string) bool { return validCurrencyCode(c) }
 
 func settingsAudit(actor User) Audit {
 	return Audit{ID: ID(), UserID: actor.ID, Action: "site.settings.updated", Target: "site", CreatedAt: time.Now().UTC(), ActorEmail: actor.Email, Detail: "站点设置已更新；历史账单身份和金额未改变"}

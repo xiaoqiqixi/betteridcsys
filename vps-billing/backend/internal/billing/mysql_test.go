@@ -47,7 +47,7 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = m.DB.ExecContext(ctx, "INSERT INTO plan_prices(plan_id,currency,amount_minor,available) VALUES(?,'USD',600,TRUE),(?,'CNY',3900,TRUE)", p.ID, p.ID)
+	_, e = m.DB.ExecContext(ctx, "INSERT INTO plan_prices(plan_id,currency,amount_minor,available) VALUES(?,'CNY',3900,TRUE)", p.ID)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -68,7 +68,7 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			o, _, e := m.CreateOrder(ctx, u, p.ID, "web-1", "same-key", "USD")
+			o, _, e := m.CreateOrder(ctx, u, p.ID, "web-1", "same-key", "CNY")
 			if e != nil {
 				t.Error(e)
 				return
@@ -102,10 +102,10 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	if e != nil || n != 1 {
 		t.Fatal(n, e)
 	}
-	if _, _, e = m.CreateOrder(ctx, u, p.ID, "web-2", "same-key", "USD"); e != ErrConflict {
+	if _, _, e = m.CreateOrder(ctx, u, p.ID, "web-2", "same-key", "CNY"); e != ErrConflict {
 		t.Fatal(e)
 	}
-	if _, _, e = m.CreateOrder(ctx, u, "missing-plan", "web-1", "unavailable-key", "USD"); e != ErrUnavailable {
+	if _, _, e = m.CreateOrder(ctx, u, "missing-plan", "web-1", "unavailable-key", "CNY"); e != ErrUnavailable {
 		t.Fatal(e)
 	}
 	e = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM order_requests WHERE user_id=? AND request_key='unavailable-key'", u.ID).Scan(&n)
@@ -113,13 +113,13 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 		t.Fatal("rolled back reservation", n, e)
 	}
 	is, e := m.Invoices(ctx, u.ID)
-	if e != nil || len(is) != 1 || is[0].AmountMinor != 600 {
+	if e != nil || len(is) != 1 || is[0].AmountMinor != 3900 {
 		t.Fatal(fmt.Sprint(is), e)
 	}
 	if _, e = m.Invoice(ctx, ID(), is[0].ID); e != ErrNotFound {
 		t.Fatal("owner filter", e)
 	}
-	summary, e := m.Summary(ctx, u.ID, "USD")
+	summary, e := m.Summary(ctx, u.ID, "CNY")
 	if e != nil || summary.PendingInvoices != 1 || summary.Revenue != 0 {
 		t.Fatal(summary, e)
 	}
@@ -152,7 +152,7 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	if _, e = m.UpdateSettings(ctx, admin, changed); e != ErrSettingsConflict {
 		t.Fatal("persisted revision conflict", e)
 	}
-	order, _, e := m.CreateOrder(ctx, u, p.ID, "issuer-test", "issuer-key", "USD")
+	order, _, e := m.CreateOrder(ctx, u, p.ID, "issuer-test", "issuer-key", "CNY")
 	if e != nil {
 		t.Fatal(e)
 	}

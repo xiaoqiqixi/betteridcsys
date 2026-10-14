@@ -18,6 +18,7 @@ func TestMySQLCurrencySnapshotsAndRollback(t *testing.T) {
 	if err := m.AddUser(ctx, admin); err != nil {
 		t.Fatal(err)
 	}
+	configureTestCurrency(t, m, admin, "USD", 2, "6.00")
 	migrationExec(t, ctx, m.DB, "UPDATE plans SET available=TRUE WHERE id='starter'")
 	migrationExec(t, ctx, m.DB, "UPDATE plan_prices SET available=TRUE WHERE plan_id='starter'")
 	first, _, err := m.CreateOrder(ctx, u, "starter", "cny-test", "default-order", "")
@@ -131,7 +132,7 @@ func TestMySQLCurrencySnapshotsAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"services", "invoices", "orders"} {
-		for _, currency := range []string{"EUR", "usd", "cny", "úsd", "cňy"} {
+		for _, currency := range []string{"usd", "cny", "úsd", "cňy"} {
 			if _, err = m.DB.ExecContext(ctx, "UPDATE "+table+" SET currency=? WHERE user_id=?", currency, u.ID); err == nil {
 				t.Fatal("unsupported persisted currency", table, currency)
 			}

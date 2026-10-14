@@ -1,4 +1,5 @@
-import { locale, tr, intlLocale, isCurrency } from "./i18n";
+import { locale, tr, intlLocale } from "./i18n";
+import { readCurrencyFormat, type CurrencyFormat } from "./currencies";
 export interface User {
   id: string;
   email: string;
@@ -20,8 +21,31 @@ export interface Plan {
   transfer_tb: number;
   region: string;
   price_minor: number;
+  price_revision: number;
   currency: string;
+  currency_format?: CurrencyFormat;
   available: boolean;
+}
+export interface OrderQuote {
+  price_minor: number;
+  decimal_places: number;
+  price_revision: number;
+}
+// This is a comparison precondition, never a client-authorized billing price.
+export function readOrderQuote(plan: Plan): OrderQuote {
+  const format = readCurrencyFormat(plan.currency_format, plan.currency);
+  if (
+    !Number.isSafeInteger(plan.price_minor) ||
+    plan.price_minor <= 0 ||
+    !Number.isSafeInteger(plan.price_revision) ||
+    plan.price_revision < 1
+  )
+    throw new Error("INVALID_ORDER_QUOTE");
+  return {
+    price_minor: plan.price_minor,
+    decimal_places: format.decimal_places,
+    price_revision: plan.price_revision,
+  };
 }
 export interface Service {
   id: string;
@@ -33,11 +57,23 @@ export interface Service {
   next_due_at: string;
   price_minor: number;
   currency: string;
+  currency_format?: CurrencyFormat;
   cpu: number;
   memory_gb: number;
   disk_gb: number;
 }
+export interface PlanSnapshot {
+  plan_id: string;
+  name: string;
+  cpu: number;
+  memory_gb: number;
+  disk_gb: number;
+  transfer_tb: number;
+  region: string;
+  billing_cycle: "monthly";
+}
 export interface Order {
+  plan_snapshot?: PlanSnapshot | null;
   issuer?: InvoiceIdentity;
   id: string;
   number: string;
@@ -45,6 +81,7 @@ export interface Order {
   status: string;
   total_minor: number;
   currency: string;
+  currency_format?: CurrencyFormat;
   created_at: string;
   service_id?: string;
 }
@@ -61,6 +98,7 @@ export interface Invoice {
   status: string;
   amount_minor: number;
   currency: string;
+  currency_format?: CurrencyFormat;
   issued_at: string;
   due_at: string;
   paid_at?: string;
@@ -84,6 +122,7 @@ export interface Overview {
   unpaid_total_minor: number;
   monthly_total_minor: number;
   currency: string;
+  currency_format?: CurrencyFormat;
   recent_orders: Order[];
 }
 export interface AdminOverview {
@@ -93,6 +132,7 @@ export interface AdminOverview {
   unpaid_total_minor: number;
   revenue_minor: number;
   currency: string;
+  currency_format?: CurrencyFormat;
 }
 let csrf = "";
 export function setCsrf(token: string) {
@@ -104,6 +144,7 @@ export class ApiError extends Error {
     message: string,
     public requestId?: string,
     public status?: number,
+    public details?: unknown,
   ) {
     super(message);
   }
@@ -129,7 +170,12 @@ export async function api<T>(
   });
   let result: {
     data?: T;
-    error?: { code: string; message: string; request_id?: string };
+    error?: {
+      code: string;
+      message: string;
+      request_id?: string;
+      details?: unknown;
+    };
   };
   try {
     result = await response.json();
@@ -161,6 +207,7 @@ export async function api<T>(
         ),
       result.error?.request_id,
       response.status,
+      result.error?.details,
     );
   if (!("data" in result)) {
     throw new ApiError(
@@ -174,24 +221,47 @@ export async function api<T>(
   return result.data as T;
 }
 // An amount is formatted only in its recorded currency; the preference never relabels it.
-export const money = (minor: number, recordedCurrency?: string) => {
-  if (!Number.isSafeInteger(minor) || !isCurrency(recordedCurrency)) return "—";
+export const money = (
+  minor: number,
+  recordedCurrency?: string,
+  snapshot?: CurrencyFormat,
+) => {
+  if (!Number.isSafeInteger(minor)) return "—";
+  let format: CurrencyFormat;
+  try {
+    if (snapshot !== undefined)
+      format = readCurrencyFormat(snapshot, recordedCurrency);
+    else {
+      // Compatibility only for pre-snapshot CNY/USD records. Never guess the
+      // precision of another code or consult today's editable currency registry.
+      if (recordedCurrency !== "CNY" && recordedCurrency !== "USD") return "—";
+      format = {
+        code: recordedCurrency,
+        name: recordedCurrency,
+        prefix: "",
+        suffix: "",
+        decimal_places: 2,
+      };
+    }
+  } catch {
+    return "—";
+  }
+  if (!recordedCurrency || format.code !== recordedCurrency) return "—";
   const amount = BigInt(minor);
   const magnitude = amount < 0n ? -amount : amount;
-  const whole = amount / 100n;
-  const fraction = String(magnitude % 100n).padStart(2, "0");
-  // Dividing a large Number by 100 can round away a valid cent. Format the
-  // integer part exactly and substitute the recorded two-digit minor units.
-  return new Intl.NumberFormat(intlLocale(), {
-    style: "currency",
-    currency: recordedCurrency,
-    currencyDisplay: "code",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+  const units = 10n ** BigInt(format.decimal_places);
+  const fraction = String(magnitude % units).padStart(
+    format.decimal_places,
+    "0",
+  );
+  const digits = new Intl.NumberFormat(intlLocale(), {
+    minimumFractionDigits: format.decimal_places,
+    maximumFractionDigits: format.decimal_places,
   })
-    .formatToParts(amount < 0n && whole === 0n ? -0 : whole)
+    .formatToParts(magnitude / units)
     .map((part) => (part.type === "fraction" ? fraction : part.value))
     .join("");
+  return `${amount < 0n ? "-" : ""}${format.code}\u00a0${format.prefix}${digits}${format.suffix}`;
 };
 export const date = (value: string) =>
   value && Number.isFinite(Date.parse(value))

@@ -1,8 +1,12 @@
 # 验证记录
 
-验证日期：2026-10-14 UTC。结果绑定实际执行时的提交与 GitHub run；后续源码或界面修改不沿用旧提交的通过结论。
+各项结果绑定实际执行时的提交、日期和 GitHub run；后续源码或界面修改不沿用旧提交的通过结论。
 
-## Core 0.4.0 / SMTP 1.0.0 正式交付
+## Core 0.5.0 / SMTP 1.1.0 的验证状态
+
+当前财务登记、迁移 007 / 14 表、报价确认与原始程序/资源拆分属于新的源码范围。该范围的完整 hosted CI、双构建和公开发行证据尚待对应提交的实际记录补入；下列 0.4.0 / 1.0.0 及 rc 结果均为历史，不证明新财务规则或新资产格式已经验收。新版本必须满足 [ACCEPTANCE.md](ACCEPTANCE.md) 与 [RELEASE.md](RELEASE.md) 的门禁，不用旧绿灯替代。
+
+## 历史 Core 0.4.0 / SMTP 1.0.0 正式交付
 
 交付源码：`b7699f98d926458f2b96c809c3be3ce66920f4be`。[完整 CI 38608932956](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38608932956)的[应用、真实数据库、原生与浏览器检查](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38608932956/job/116006961638)和[独立 Go 扫描](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38608932956/job/116006961025)均成功。以下数量属于该提交，历史 rc 结果不计入。
 

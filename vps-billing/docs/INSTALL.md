@@ -23,7 +23,7 @@ free -h
 df -h / /var
 sudo ss -ltnp
 sudo apt-get update
-sudo apt-get install --no-install-recommends nginx ca-certificates openssl python3
+sudo apt-get install --no-install-recommends nginx ca-certificates openssl python3 file
 ```
 
 Ubuntu 的 Nginx 软件包可能随安装启动默认站点；先保留管理入口、防火墙和已有站点，再配置本应用。站点管理方式参照 [Ubuntu Nginx 指引](https://ubuntu.com/server/docs/how-to/web-services/install-nginx/)。
@@ -43,15 +43,37 @@ APT 安装 MySQL 会初始化并启动其系统服务；这与 CI 仅提取官�
 
 ## 1. 核对来源与归档
 
-取得同一 Core Release 的 Linux 包、`BUILD.json`、`PROVENANCE.json` 和 `SHA256SUMS`，核对来源记录的 run、提交、版本及资产。新程序 Release 不手工附加源码包，源码从对应 Git 标签取得；SMTP 程序从另一个独立 Release 取得。校验和只证明与清单一致，下载渠道和提交来源仍须核实；当前不提供签名或供应链认证。
+Core 0.5.0 使用原始程序与资源分发。取得同一 Release 的全部六个资产：
+
+- `aster-api-0.5.0-linux-amd64`
+- `aster-plugin-host-0.5.0-linux-amd64`
+- `aster-core-0.5.0-linux-amd64-resources.tar.gz`
+- `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`
+
+核对来源记录的 run、提交、版本和全部资产摘要。源码从 Git 标签取得，SMTP 从其独立 Release 获取。当前没有独立发行签名；校验和只证明与清单一致，不能替代可信下载来源。旧 Core 0.4.0 一体归档按原版本流程处理，不把下面的新文件名套到旧资产。
 
 ```sh
 cd /path/to/downloads
 sha256sum -c SHA256SUMS
-tar -tzf aster-VERSION-linux-amd64.tar.gz
+file aster-api-0.5.0-linux-amd64 aster-plugin-host-0.5.0-linux-amd64
+tar -tzf aster-core-0.5.0-linux-amd64-resources.tar.gz
 ```
 
-阅读 `BUILD.json`：确认 `source_commit` 是已审查的提交、目标为 `linux/amd64`，工具链版本与验证记录相符，修订包的 `deployment_model` 明确为单服务器原生方案。归档根目录应只有 `aster-VERSION-linux-amd64/`，不可包含绝对路径或 `..`。先以普通用户解压到空目录，再检查内容。Core 包 `deploy/` 含 systemd/Nginx 样例、`scripts/backup-native.sh`、`scripts/plugin-manager.py` 和 `scripts/update-manager.py`；插件包不含 Core 或数据库。归档和来源文件必须与对应已审查提交一致。保留旧发布目录与校验清单，避免原地覆盖运行文件。
+确认 BUILD schema 3、分发类型 `raw-binaries-v1`、目标 `linux/amd64` 和已审查源码；两个程序是静态 amd64 ELF。资源包只有 `aster-core-0.5.0-linux-amd64-resources/` 一个根目录，无绝对路径、`..`、链接或额外 ELF。先以普通用户在空目录解压并组装，**不要运行尚未核验的程序**：
+
+```sh
+set -euo pipefail
+aster_version=0.5.0
+aster_stage=$(mktemp -d)
+tar -xzf "aster-core-$aster_version-linux-amd64-resources.tar.gz" \
+  --directory "$aster_stage" --no-same-owner --no-same-permissions
+aster_input="$aster_stage/aster-core-$aster_version-linux-amd64-resources"
+install -d -m 0755 "$aster_input/bin"
+install -m 0755 "aster-api-$aster_version-linux-amd64" "$aster_input/bin/aster-api"
+install -m 0755 "aster-plugin-host-$aster_version-linux-amd64" "$aster_input/bin/aster-plugin-host"
+```
+
+资源含编译网页、迁移 SQL、部署工具、文档和许可证。SQL 文件便于审核，正式迁移仍由所选二进制的 `-migrate` 执行，不能直接逐个手工导入。资源和两个程序必须同一 Release；后续使用实际 `aster_input` 路径，不能混用旧网页或插件宿主。
 
 ```text
 /opt/aster/releases/VERSION/
@@ -59,6 +81,7 @@ tar -tzf aster-VERSION-linux-amd64.tar.gz
   bin/aster-plugin-host
   web/
   docs/
+  migrations/
   deploy/
   manifests/BUILD.json
   manifests/go-dependencies.json
@@ -78,8 +101,8 @@ tar -tzf aster-VERSION-linux-amd64.tar.gz
 
 ```sh
 set -euo pipefail
-aster_version=VERSION
-aster_input=/path/to/unpacked/aster-VERSION-linux-amd64
+aster_version=0.5.0
+aster_input=/path/to/assembled/aster-core-0.5.0-linux-amd64-resources
 [[ $aster_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
 [[ -f $aster_input/bin/aster-api && -d $aster_input/web ]]
 if getent passwd aster >/dev/null || getent group aster >/dev/null || getent group aster-plugins >/dev/null; then
@@ -97,7 +120,8 @@ sudo chown -R root:root "/opt/aster/releases/$aster_version"
 sudo find "/opt/aster/releases/$aster_version" -type d -exec chmod 0755 '{}' +
 sudo find "/opt/aster/releases/$aster_version" -type f -exec chmod 0644 '{}' +
 sudo chmod 0755 "/opt/aster/releases/$aster_version/bin/aster-api" "/opt/aster/releases/$aster_version/bin/aster-plugin-host" "/opt/aster/releases/$aster_version/deploy/scripts/backup-native.sh"
-sudo chmod 0755 "/opt/aster/releases/$aster_version/deploy/scripts/plugin-manager.py"
+sudo chmod 0755 "/opt/aster/releases/$aster_version/deploy/scripts/plugin-manager.py" \
+  "/opt/aster/releases/$aster_version/deploy/scripts/update-manager.py"
 sudo ln -s "/opt/aster/releases/$aster_version" /opt/aster/current
 sudo install -d -o root -g root -m 0755 /etc/aster /opt/aster/plugins
 sudo install -d -o root -g aster -m 0750 /etc/aster/secrets
@@ -197,7 +221,7 @@ env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
   /opt/aster/releases/VERSION/bin/aster-api -migrate
 ```
 
-CLI 要求完整的生产模式配置，连接必须确实是本机 Unix socket。核对迁移版本和 checksum；当前应用包含迁移 1–6，迁移 006 新建 SMTP 配置表；以选定发布源码为准。迁移成功后，用运行身份 DSN 和独立初始化密码文件创建管理员；不要为引导账号而给运行身份 DDL 权限：
+CLI 要求完整的生产模式配置，连接必须确实是本机 Unix socket。核对迁移版本和 checksum；当前应用包含迁移 1–7，迁移 007 新增币种配置与历史快照，当前为 14 张基础表；以选定发布源码为准。迁移成功后，用运行身份 DSN 和独立初始化密码文件创建管理员；不要为引导账号而给运行身份 DDL 权限：
 
 ```sh
 env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
@@ -252,7 +276,7 @@ curl --fail --show-error https://billing.example.com/healthz
 curl --fail --show-error https://billing.example.com/readyz
 ```
 
-确认网页与 `/api/` 同源、Secure/HttpOnly/SameSite cookie 生效、API 不泄露 SQL/配置值。用管理员在“站点设置”中配置运营名称、支持方式、账单抬头、预设标志和主题；见 [站点与计价](SITE_SETTINGS.md)。初始默认是简体中文和 CNY，用户可分别切换语言和币种。空价格或未启用币种应显示不可购买，不得自动用另一币种价格替代。
+确认网页与 `/api/` 同源、Secure/HttpOnly/SameSite cookie 生效、API 不泄露 SQL/配置值。用管理员在“站点设置”中配置运营名称、支持方式、账单抬头、预设标志和主题；见 [站点与计价](SITE_SETTINGS.md)。全新安装仅启用 CNY，示例价格不可售。管理员须在“财务设置”审核币种与各币种独立价格，确认套餐/报价/币种三个开关后启售；客户只能选择已启用币种。升级保留旧 USD 报价和历史，不重置成新安装。缺价或停用应显示不可购买，不能用另一币种价格替代。完整规则见 [财务模型](FINANCIAL_MODEL.md)。
 
 至少用两个测试客户验证资源隔离、管理员专属入口、订单幂等、币种不匹配和支付失败关闭。新订单只生成待付款账单；没有任何真实扣款或 VPS 开通。完整验收见 [ACCEPTANCE.md](ACCEPTANCE.md)，实际运行证据见 [VALIDATION.md](VALIDATION.md)。
 

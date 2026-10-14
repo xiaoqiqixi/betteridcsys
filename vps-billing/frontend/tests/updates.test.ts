@@ -6,6 +6,7 @@ import UpdatesPage from "../src/components/UpdatesPage.vue";
 import App from "../src/App.vue";
 import { setCsrf } from "../src/lib/api";
 import { locale } from "../src/lib/i18n";
+import { defaultCurrencyRegistry } from "../src/lib/currencies";
 import { defaultSiteSettings } from "../src/lib/settings";
 import * as fixture from "../src/lib/preview";
 import {
@@ -20,6 +21,7 @@ const candidate = (
   overrides: Partial<UpdateCandidate> = {},
 ): UpdateCandidate => ({
   component: "core",
+  distribution_format: "archive-v1",
   tag: "v0.4.1",
   version: "0.4.1",
   release_url: "https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.4.1",
@@ -126,7 +128,127 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+it("accepts optional verified SMTP compatibility metadata without treating it as running status", () => {
+  const value = snapshot();
+  value.current = {
+    ...value.current,
+    smtp_status: "disabled",
+    smtp_protocol: "",
+    smtp_core_min: "",
+    smtp_core_max_exclusive: "",
+  };
+  expect(readUpdateStatus(value).current.smtp_status).toBe("disabled");
+  value.current = {
+    ...value.current,
+    smtp_status: "approved",
+    smtp_protocol: "aster-plugin-v1",
+    smtp_core_min: "0.4.0",
+    smtp_core_max_exclusive: "0.6.0",
+  };
+  expect(readUpdateStatus(value).current.smtp_core_min).toBe("0.4.0");
+  expect(() =>
+    readUpdateStatus({
+      ...value,
+      current: { ...value.current, smtp_core_min: "latest" },
+    }),
+  ).toThrow();
+});
+
 describe("bounded official update responses", () => {
+  it.each(["core", "smtp"] as const)(
+    "validates exact raw %s assets and binds schema-2 handoffs to the distribution format",
+    (component) => {
+      const version = component === "core" ? "0.5.0" : "1.1.0";
+      const tag = `${component === "core" ? "v" : "smtp-v"}${version}`;
+      const programs =
+        component === "core"
+          ? [
+              `aster-api-${version}-linux-amd64`,
+              `aster-plugin-host-${version}-linux-amd64`,
+              `aster-core-${version}-linux-amd64-resources.tar.gz`,
+            ]
+          : [
+              `aster-smtp-${version}-linux-amd64`,
+              `aster-smtp-${version}-linux-amd64-resources.tar.gz`,
+            ];
+      const raw = candidate({
+        component,
+        version,
+        tag,
+        distribution_format: "raw-binaries-v1",
+        release_url: `https://github.com/xiaoqiqixi/betteridcsys/releases/tag/${tag}`,
+        assets: [
+          ...programs,
+          "BUILD.json",
+          "PROVENANCE.json",
+          "SHA256SUMS",
+        ].map((name, index) => ({
+          name,
+          id: 900 + index,
+          size: 123,
+          sha256: "a".repeat(64),
+        })),
+      });
+      expect(readUpdateStatus(checked([raw])).items[0]).toEqual(raw);
+      const proposal = handoff(raw);
+      proposal.schema = proposal.intent.schema = 2;
+      proposal.intent.distribution_format = "raw-binaries-v1";
+      expect(readUpdateHandoff(proposal, raw, snapshot().current)).toEqual(
+        proposal,
+      );
+      expect(() =>
+        readUpdateHandoff(handoff(raw), raw, snapshot().current),
+      ).toThrow();
+      expect(() =>
+        readUpdateHandoff(
+          {
+            ...proposal,
+            intent: { ...proposal.intent, distribution_format: "archive-v1" },
+          },
+          raw,
+          snapshot().current,
+        ),
+      ).toThrow();
+      for (const assets of [
+        raw.assets.slice(1),
+        [...raw.assets, candidate().assets[0]!],
+        raw.assets.map((asset, index) =>
+          index === 0 ? { ...asset, name: "unexpected-program" } : asset,
+        ),
+      ])
+        expect(() => readUpdateStatus(checked([{ ...raw, assets }]))).toThrow();
+      expect(() =>
+        readUpdateStatus(
+          checked([{ ...raw, distribution_format: "archive-v1" }]),
+        ),
+      ).toThrow();
+      const omittedFormat = { ...raw } as Record<string, unknown>;
+      delete omittedFormat.distribution_format;
+      expect(() =>
+        readUpdateStatus({ ...checked(), items: [omittedFormat] }),
+      ).toThrow();
+    },
+  );
+  it("accepts only legacy four-asset records when an older server omits the distribution format", () => {
+    const legacy = { ...candidate() } as Record<string, unknown>;
+    delete legacy.distribution_format;
+    expect(
+      readUpdateStatus({ ...checked(), items: [legacy] }).items[0]!
+        .distribution_format,
+    ).toBe("archive-v1");
+    expect(
+      readUpdateHandoff(handoff(), candidate(), snapshot().current),
+    ).toEqual(handoff());
+    const schema2 = handoff();
+    schema2.schema = schema2.intent.schema = 2;
+    expect(() =>
+      readUpdateHandoff(schema2, candidate(), snapshot().current),
+    ).toThrow();
+    schema2.intent.distribution_format = "archive-v1";
+    expect(readUpdateHandoff(schema2, candidate(), snapshot().current)).toEqual(
+      schema2,
+    );
+  });
   it("retains only documented non-secret fields, with independent core and SMTP versions", () => {
     const value = {
       ...checked(),
@@ -456,6 +578,7 @@ describe("administrator update handoff", () => {
               csrf_token: "update-csrf",
               demo_mode: false,
             });
+          if (endpoint === "/currencies") return reply(defaultCurrencyRegistry);
           if (endpoint === "/site-settings") return reply(defaultSiteSettings);
           if (endpoint === "/admin/updates") return reply(snapshot());
           if (endpoint.startsWith("/admin/overview"))

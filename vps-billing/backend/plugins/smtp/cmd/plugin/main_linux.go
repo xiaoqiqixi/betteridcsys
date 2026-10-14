@@ -20,7 +20,7 @@ import (
 )
 
 // Set by the independent SMTP package build, never by a runtime request.
-var version = "1.0.0"
+var version = "1.1.0"
 
 func main() {
 	showVersion := flag.Bool("version", false, "Print SMTP plugin version")
@@ -59,7 +59,7 @@ func main() {
 	if err != nil || size < 64 || size > 64<<20 {
 		stop()
 	}
-	manifest := pluginapi.Manifest{Schema: 1, ID: "email.smtp", Version: version, Protocol: pluginapi.SMTPProtocol, CoreMin: "0.4.0", CoreMaxExclusive: "0.5.0", Capabilities: []string{pluginapi.SMTPCapability}, Executable: "plugin", SHA256: hex.EncodeToString(hash.Sum(nil))}
+	manifest := pluginapi.Manifest{Schema: 1, ID: "email.smtp", Version: version, Protocol: pluginapi.SMTPProtocol, CoreMin: "0.4.0", CoreMaxExclusive: "0.6.0", Capabilities: []string{pluginapi.SMTPCapability}, Executable: "plugin", SHA256: hex.EncodeToString(hash.Sum(nil))}
 	listener, err := listen(*socket)
 	if err != nil {
 		stop()

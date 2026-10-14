@@ -510,11 +510,33 @@ def release_kind(tag):
     return "smtp" if tag.startswith("smtp-v") else "core"
 
 
-def package_files(version, kind="core"):
+def distribution_format(version, kind):
+    if "-" in version:
+        return "archive-v1"
+    parts = tuple(map(int, version.split(".")))
+    return "raw-binaries-v1" if parts >= ((0, 5, 0) if kind == "core" else (1, 1, 0)) else "archive-v1"
+
+
+def binary_assets(version, kind):
+    if kind == "core":
+        return {"bin/aster-api": f"aster-api-{version}-linux-amd64", "bin/aster-plugin-host": f"aster-plugin-host-{version}-linux-amd64"}
+    require(kind == "smtp", "Unknown release component")
+    return {"plugin": f"aster-smtp-{version}-linux-amd64"}
+
+
+def resources_asset(version, kind):
+    return ("aster-core" if kind == "core" else "aster-smtp") + f"-{version}-linux-amd64-resources.tar.gz"
+
+
+def package_files(version, kind="core", format=None):
     require(kind in {"core", "smtp"}, "Unknown release component")
     if "-" in version:
         require(kind == "core", "Historical SMTP prereleases do not exist")
         return ("BUILD.json", f"aster-{version}-linux-amd64.tar.gz", f"aster-{version}-source.tar.gz", "SHA256SUMS")
+    format = distribution_format(version, kind) if format is None else format
+    if format == "raw-binaries-v1":
+        return ("BUILD.json", *binary_assets(version, kind).values(), resources_asset(version, kind), "SHA256SUMS")
+    require(format == "archive-v1", "Unknown distribution format")
     prefix = "aster-smtp" if kind == "smtp" else "aster"
     return ("BUILD.json", f"{prefix}-{version}-linux-amd64.tar.gz", "SHA256SUMS")
 
@@ -658,6 +680,18 @@ def archive_permissions(data, root, executables):
 
 
 def runtime_bundle(files, version, kind):
+    build = strict_json(files["BUILD.json"])
+    format = build.get("distribution_format", "archive-v1")
+    if format == "raw-binaries-v1":
+        name = resources_asset(version, kind)
+        root = name[:-7]
+        bundle = tar_files(files[name], root)
+        require(not any(data.startswith(b"\x7fELF") for data in bundle.values()), "Resource archives cannot contain ELF executables")
+        for logical, asset in binary_assets(version, kind).items():
+            require(logical not in bundle, "Resource/raw executable inventory collision")
+            bundle[logical] = files[asset]
+        return root, files[name], bundle
+    require(format == "archive-v1", "Unknown distribution format")
     root = ("aster-smtp" if kind == "smtp" else "aster") + "-" + version + "-linux-amd64"
     return root, files[root + ".tar.gz"], tar_files(files[root + ".tar.gz"], root)
 
@@ -666,7 +700,12 @@ def validate_runtime_package(files, source_sha, version, kind, provenance_data=N
     sha(source_sha)
     require(kind in {"core", "smtp"}, "Unknown release component")
     validate_tag(("smtp-v" if kind == "smtp" else "v") + version)
-    require(set(files) == set(package_files(version, kind)), "Runtime release must contain exactly three binary-only package files")
+    build = strict_json(files.get("BUILD.json", b""))
+    require(isinstance(build, dict), "Invalid BUILD metadata")
+    format = build.get("distribution_format", "archive-v1")
+    raw_distribution = format == "raw-binaries-v1"
+    require(isinstance(format, str) and format in {"archive-v1", "raw-binaries-v1"} and not (format == "archive-v1" and "distribution_format" in build), "Unknown/ambiguous distribution format")
+    require(set(files) == set(package_files(version, kind, format)), "Runtime release asset inventory mismatch")
     require(all(isinstance(value, bytes) and 0 < len(value) <= MAX_ZIP for value in files.values()), "Invalid package file size")
     checksum_data = dict(files)
     if provenance_data is not None:
@@ -675,7 +714,7 @@ def validate_runtime_package(files, source_sha, version, kind, provenance_data=N
     sums = checksum_inventory(files["SHA256SUMS"], set(checksum_data) - {"SHA256SUMS"})
     require(all(sha256(checksum_data[name]) == digest for name, digest in sums.items()), "Package checksum mismatch")
     build = strict_json(files["BUILD.json"])
-    require(isinstance(build, dict) and type(build.get("schema")) is int and build["schema"] == 2 and
+    require(isinstance(build, dict) and type(build.get("schema")) is int and build["schema"] == (3 if raw_distribution else 2) and
             build.get("release_kind") == kind and build.get("source_commit") == source_sha and
             build.get("release_label") == version and build.get("target") == "linux/amd64" and build.get("cgo_enabled") is False,
             "BUILD identity/target/component mismatch")
@@ -685,9 +724,13 @@ def validate_runtime_package(files, source_sha, version, kind, provenance_data=N
     for key, value in versions.items():
         validate_tag(("smtp-v" if key == "smtp" else "v") + value)
         require("-" not in value, "Component must use stable semantic version")
-    require(build.get("plugin_protocol") == "aster.smtp/1" and build.get("smtp_core_compatibility") == {"min": "0.4.0", "max_exclusive": "0.5.0"} and
-            tuple(int(x) for x in versions["core"].split(".")) >= (0, 4, 0) and tuple(int(x) for x in versions["core"].split(".")) < (0, 5, 0),
+    max_core = "0.6.0" if raw_distribution else "0.5.0"
+    require(build.get("plugin_protocol") == "aster.smtp/1" and build.get("smtp_core_compatibility") == {"min": "0.4.0", "max_exclusive": max_core} and
+            tuple(int(x) for x in versions["core"].split(".")) >= (0, 4, 0) and tuple(int(x) for x in versions["core"].split(".")) < tuple(map(int, max_core.split("."))),
             "Plugin protocol/core compatibility mismatch")
+    if raw_distribution:
+        require(build.get("binary_assets") == binary_assets(version, kind) and build.get("resources_asset") == resources_asset(version, kind), "Raw asset names or logical mapping mismatch")
+        require(not set(build).intersection({"resources_sha256", "resources_size", "resource_sha256", "resource_size"}), "Resource self-hash metadata is forbidden")
     root, raw, bundle = runtime_bundle(files, version, kind)
     require(sha256(bundle.get("LICENSE", b"")) == ROOT_LICENSE_HASH, "Root LICENSE must remain unchanged")
     inputs = build.get("input_sha256")
@@ -714,11 +757,14 @@ def validate_runtime_package(files, source_sha, version, kind, provenance_data=N
         for src in INPUT_PATHS:
             dest = "LICENSE" if src == "LICENSE" else "REPOSITORY-README.md" if src == "README.md" else "manifests/" + src.rsplit("/", 1)[1]
             require(sha256(bundle[dest]) == inputs[src], "Runtime input checksum mismatch")
-        archive_permissions(raw, root, required_binaries | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"})
+        if raw_distribution:
+            migrations = {path for path in bundle if path.startswith("migrations/")}
+            require(migrations and all(re.fullmatch(r"migrations/[0-9]{3}_[a-z0-9_]+\.sql", path) and copies.get(path) == "vps-billing/backend/" + path for path in migrations), "Core SQL migration resources missing/unbound")
+        archive_permissions(raw, root, (set() if raw_distribution else required_binaries) | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"})
     else:
         require(set(bundle) == SMTP_FILES and copies == {"LICENSE": "LICENSE", "README.md": "vps-billing/backend/plugins/smtp/README.md"}, "SMTP archive must contain exactly six fixed files")
         manifest = strict_json(bundle["manifest.json"], limit=8192)
-        expected = {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": binaries["plugin"]}
+        expected = {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": max_core, "capabilities": ["smtp.send"], "executable": "plugin", "sha256": binaries["plugin"]}
         require(manifest == expected and type(manifest.get("schema")) is int, "SMTP manifest identity/compatibility mismatch")
         inside = checksum_inventory(bundle["SHA256SUMS"], SMTP_FILES - {"SHA256SUMS"})
         require(all(sha256(bundle[name]) == digest for name, digest in inside.items()), "SMTP inner checksum mismatch")
@@ -727,7 +773,7 @@ def validate_runtime_package(files, source_sha, version, kind, provenance_data=N
         for item in notices["notices"]:
             require(isinstance(item, dict) and set(item) == {"path", "sha256", "text"} and isinstance(item["text"], str) and sha256(item["text"].encode()) == item["sha256"], "Original third-party notice checksum mismatch")
             safe_path(item["path"])
-        archive_permissions(raw, root, {"plugin"})
+        archive_permissions(raw, root, set() if raw_distribution else {"plugin"})
     for data in files.values():
         scan_obvious_secrets(data)
     return {name: {"sha256": sha256(data), "size": len(data)} for name, data in sorted(files.items())}
@@ -740,12 +786,23 @@ def verify_runtime_source(api, files, provenance):
     _, _, bundle = runtime_bundle(files, version, kind)
     tree = api.request("GET", api_path("/git/trees/" + sha(provenance["source_sha"]) + "?recursive=1"))
     require(tree.get("truncated") is False and isinstance(tree.get("tree"), list), "Incomplete source Git tree")
-    expected, sizes = {}, {}
+    expected, sizes, migrations = {}, {}, {}
+    raw_core = build.get("distribution_format") == "raw-binaries-v1" and kind == "core"
+    migration_prefix = "vps-billing/backend/migrations/"
     for entry in tree["tree"]:
+        require(isinstance(entry, dict), "Invalid source Git tree member")
         path = entry.get("path")
+        require(isinstance(path, str), "Invalid source Git tree path")
+        if raw_core and path.startswith(migration_prefix) and path.endswith(".sql") and "/" not in path[len(migration_prefix):]:
+            require(entry.get("type") == "blob" and entry.get("mode") in {"100644", "100755"} and path not in migrations, "Invalid tagged SQL migration inventory")
+            migrations[path] = sha(entry.get("sha"))
         if path in set(build["source_files"].values()) | set(CURRENT_INPUT_PATHS):
             require(entry.get("type") == "blob" and entry.get("mode") in {"100644", "100755"} and path not in expected, "Source contains links/submodules/duplicate Git paths")
             expected[path] = sha(entry.get("sha")); sizes[path] = entry.get("size")
+    if raw_core:
+        expected_migrations = {"migrations/" + path[len(migration_prefix):]: path for path in migrations}
+        copied_migrations = {path: source for path, source in build["source_files"].items() if path.startswith("migrations/")}
+        require(expected_migrations and copied_migrations == expected_migrations and {path for path in bundle if path.startswith("migrations/")} == set(expected_migrations), "Core SQL resources must contain the complete tagged migration inventory")
     require(set(expected) == set(build["source_files"].values()) | set(CURRENT_INPUT_PATHS), "Copied/source input missing from selected Git tree")
     for path, source in build["source_files"].items():
         require(git_blob_sha(bundle[path]) == expected[source], "Runtime text differs from tagged Git blob: " + source)
@@ -801,7 +858,7 @@ def read_artifact_zip(data):
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             members = archive.infolist()
-            require(len(members) in {4, 5}, "Artifact ZIP must contain exactly four runtime files or five legacy files")
+            require(len(members) in {4, 5, 6}, "Artifact ZIP must contain exactly four legacy, five SMTP raw or six Core raw files")
             require(not archive.comment and data[-22:-18] == b"PK\x05\x06" and
                     min(item.header_offset for item in members) == 0,
                     "ZIP comments/prefix/trailing payload are forbidden")
@@ -978,7 +1035,7 @@ def publish(api, policy, archive_bytes):
     if normal:
         component = "Aster Core" if kind == "core" else "Aster official SMTP plugin"
         fields["name"] = component + " " + provenance["version"]
-        fields["body"] = f"{component} {provenance['version']}，Linux amd64。源码提交：`{provenance['source_sha']}`。\n\n核心与官方 SMTP 独立分发，协议 `aster.smtp/1`，SMTP 支持 Core >=0.4.0,<0.5.0。插件需明确安装、固定哈希批准和单独的非特权进程；运行包不附手工源码归档。核心提供官方版本检查和审计交接，由主机管理员明确暂存与预检；网页不执行 root 替换、迁移或服务控制。付款、主控/被控与自动开通尚未实现；SMTP 只提供主动管理员测试，不代表业务通知或收件箱投递。\n\n本版本通过所链接构建的回归、原生 systemd/HTTPS/备份恢复、独立插件替换与崩溃隔离、浏览器和依赖扫描门槛；这些结果只覆盖合成回环测试，不构成生产就绪声明。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。附件包含独立安装包、SHA-256、BUILD 与 PROVENANCE；安装、升级与限制见核心文档。"
+        fields["body"] = f"{component} {provenance['version']}，Linux amd64。源码提交：`{provenance['source_sha']}`。\n\n核心与官方 SMTP 独立分发，协议 `aster.smtp/1`，SMTP 支持声明的 Core 兼容范围。插件需明确安装、固定哈希批准和单独的非特权进程；运行包不附手工源码归档。核心提供官方版本检查和审计交接，由主机管理员明确暂存与预检；网页不执行 root 替换、迁移或服务控制。付款、主控/被控与自动开通尚未实现；SMTP 只提供主动管理员测试，不代表业务通知或收件箱投递。\n\n本版本通过所链接构建的回归、原生 systemd/HTTPS/备份恢复、独立插件替换与崩溃隔离、浏览器和依赖扫描门槛；这些结果只覆盖合成回环测试，不构成生产就绪声明。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。附件包含原始 Linux amd64 程序及必须配套的资源包、SHA-256、BUILD 与 PROVENANCE；安装、升级与限制见核心文档。"
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)
