@@ -10,7 +10,7 @@ type SettlementExpectation struct {
 }
 
 func ValidateSettlement(v VerifiedPayment, want SettlementExpectation) error {
-	if want.ProviderID == "" || want.MerchantAccountID == "" || want.AccountID == "" || want.OrderID == "" || want.InvoiceID == "" || want.AmountMinor <= 0 || want.Currency == "" || v.ProviderID != want.ProviderID || v.MerchantAccountID != want.MerchantAccountID || v.AccountID != want.AccountID || v.OrderID != want.OrderID || v.InvoiceID != want.InvoiceID || v.AmountMinor != want.AmountMinor || v.Currency != want.Currency || v.EventID == "" || v.TransactionID == "" || v.Status != "settled" || v.SettledAt.IsZero() {
+	if want.ProviderID == "" || want.MerchantAccountID == "" || want.AccountID == "" || want.OrderID == "" || want.InvoiceID == "" || want.AmountMinor <= 0 || want.AmountMinor > maxMinor || !supportedCurrency(want.Currency) || v.ProviderID != want.ProviderID || v.MerchantAccountID != want.MerchantAccountID || v.AccountID != want.AccountID || v.OrderID != want.OrderID || v.InvoiceID != want.InvoiceID || v.AmountMinor != want.AmountMinor || v.Currency != want.Currency || v.EventID == "" || v.TransactionID == "" || v.Status != "settled" || v.SettledAt.IsZero() {
 		return ErrInvalidResult
 	}
 	return nil

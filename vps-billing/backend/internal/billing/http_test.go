@@ -79,7 +79,7 @@ func TestSecurityAndOrderLifecycle(t *testing.T) {
 		t.Fatalf("order %d %v", s, v)
 	}
 	id := v["data"].(map[string]any)["id"]
-	if v["data"].(map[string]any)["total_minor"] != float64(600) {
+	if v["data"].(map[string]any)["total_minor"] != float64(3900) {
 		t.Fatal(v)
 	}
 	s, v = c.request("POST", "/api/v1/orders", map[string]string{"plan_id": "starter", "hostname": "web-1"}, "first-key")
@@ -135,7 +135,7 @@ func TestConcurrentIdempotency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			o, _, e := m.CreateOrder(t.Context(), u, "starter", "concurrent", "same-key", "same-fingerprint")
+			o, _, e := m.CreateOrder(t.Context(), u, "starter", "concurrent", "same-key", "CNY")
 			if e != nil {
 				t.Error(e)
 			}

@@ -1,3 +1,4 @@
+import { tr, type Currency } from "./i18n";
 import type { Plan, Service, Order, Invoice, User, Audit } from "./api";
 export const previewUser: User = {
   id: "preview-customer",
@@ -9,7 +10,7 @@ export const plans: Plan[] = [
   {
     id: "p1",
     name: "Starter",
-    description: "轻量起步，让灵感即刻上线。",
+    description: "适合个人网站和测试环境。",
     cpu: 1,
     memory_gb: 2,
     disk_gb: 40,
@@ -22,7 +23,7 @@ export const plans: Plan[] = [
   {
     id: "p2",
     name: "Essential",
-    description: "从容应对日常业务与持续增长。",
+    description: "适合中小型网站和应用。",
     cpu: 2,
     memory_gb: 4,
     disk_gb: 80,
@@ -35,7 +36,7 @@ export const plans: Plan[] = [
   {
     id: "p3",
     name: "Performance",
-    description: "更多计算空间，为重要业务而生。",
+    description: "适合需要更多资源的应用。",
     cpu: 4,
     memory_gb: 8,
     disk_gb: 160,
@@ -151,3 +152,30 @@ export const audit: Audit[] = [
     detail: "登录成功。",
   },
 ];
+
+// Independent sample prices. No exchange-rate calculation; read-only preview data only.
+const cnySamplePrices: Record<string, number> = {
+  p1: 3900,
+  p2: 7900,
+  p3: 15900,
+};
+export function previewPlans(currency: Currency): Plan[] {
+  const descriptions = [
+    tr(
+      "适合个人网站和测试环境。",
+      "For personal websites and test environments.",
+    ),
+    tr("适合中小型网站和应用。", "For small websites and applications."),
+    tr(
+      "适合需要更多资源的应用。",
+      "For applications that need more resources.",
+    ),
+  ];
+  return plans.map((plan, index) => ({
+    ...plan,
+    description: descriptions[index]!,
+    currency,
+    price_minor:
+      currency === "CNY" ? cnySamplePrices[plan.id]! : plan.price_minor,
+  }));
+}

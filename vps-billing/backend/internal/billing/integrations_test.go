@@ -25,7 +25,7 @@ func (p *checkoutRecorder) VerifyCallback(context.Context, integrations.Callback
 }
 func TestInjectedCheckoutBoundary(t *testing.T) {
 	recorder := &checkoutRecorder{}
-	registry, e := integrations.New(context.Background(), []integrations.Definition{{Manifest: integrations.Manifest{ID: "payment.test", Kind: integrations.Payment, Name: "Test", Description: "Test only", Capabilities: []string{"checkout"}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, integrations.Config) (integrations.PaymentProvider, error) { return recorder, nil }}}, integrations.Options{PaymentID: "payment.test"})
+	registry, e := integrations.New(context.Background(), []integrations.Definition{{Manifest: integrations.Manifest{ID: "payment.test", Kind: integrations.Payment, Name: "Test", Description: "Test only", Capabilities: []string{"checkout"}, SupportedCurrencies: []string{"CNY", "USD"}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, integrations.Config) (integrations.PaymentProvider, error) { return recorder, nil }}}, integrations.Options{PaymentID: "payment.test"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -79,7 +79,7 @@ func TestInjectedCheckoutBoundary(t *testing.T) {
 	recorder.mu.Lock()
 	requests := append([]integrations.CheckoutRequest{}, recorder.requests...)
 	recorder.mu.Unlock()
-	if len(requests) != 2 || requests[0].AmountMinor != 600 || requests[0].Currency != "USD" || requests[0].InvoiceID != id || requests[0].OrderID != inv["order_id"] || requests[0].AccountID == "" || requests[0].IdempotencyKey != requests[1].IdempotencyKey {
+	if len(requests) != 2 || requests[0].AmountMinor != 3900 || requests[0].Currency != "CNY" || requests[0].InvoiceID != id || requests[0].OrderID != inv["order_id"] || requests[0].AccountID == "" || requests[0].IdempotencyKey != requests[1].IdempotencyKey {
 		t.Fatal(requests)
 	}
 	_, v = c.request("GET", "/api/v1/invoices/"+id, nil, "")

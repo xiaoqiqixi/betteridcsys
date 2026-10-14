@@ -2,8 +2,10 @@ package billing
 
 import (
 	"errors"
+	"net"
 	"net/mail"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -52,26 +54,42 @@ func validText(s string, max int, multiline bool) bool {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) && !(multiline && r == '\n') {
+		if r == '<' || r == '>' || unicode.Is(unicode.Cf, r) || (unicode.IsControl(r) && !(multiline && r == '\n')) {
 			return false
 		}
 	}
 	return true
 }
 
+var dnsLabel = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// These URLs are display links only. The server never resolves or fetches them.
+// Restrict them to HTTPS public-style DNS names, no embedded credentials or ports.
 func validDisplayURL(value string, originOnly bool) bool {
 	if value == "" {
 		return true
 	}
 	u, err := url.Parse(value)
-	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Fragment == "" && (!originOnly || (u.Path == "" && u.RawQuery == "" && !u.ForceQuery))
+	if err != nil || u.Scheme != "https" || u.Opaque != "" || u.Host == "" || u.User != nil || u.Fragment != "" || strings.Contains(u.Host, ":") || net.ParseIP(u.Hostname()) != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if len(host) > 253 || !strings.Contains(host, ".") || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !dnsLabel.MatchString(label) {
+			return false
+		}
+	}
+	return !originOnly || (u.Path == "" && u.RawQuery == "" && !u.ForceQuery)
 }
 
 func ValidateSettings(s SiteSettings) bool {
 	if (s.DefaultLocale != "zh-CN" && s.DefaultLocale != "en") || !SupportedCurrency(s.DefaultCurrency) {
 		return false
 	}
-	if s.Revision < 1 || strings.TrimSpace(s.SiteName) == "" || strings.TrimSpace(s.InvoiceIssuer) == "" {
+	if s.Revision < 1 || s.Revision > MaxMinor || strings.TrimSpace(s.SiteName) == "" || strings.TrimSpace(s.InvoiceIssuer) == "" {
 		return false
 	}
 	for _, v := range []struct {

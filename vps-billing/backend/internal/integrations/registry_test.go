@@ -12,16 +12,43 @@ import (
 type testPayment struct {
 	checkout Checkout
 	err      error
+	verified *VerifiedPayment
 }
 
 func (p testPayment) CreateCheckout(context.Context, CheckoutRequest) (Checkout, error) {
 	return p.checkout, p.err
 }
 func (p testPayment) VerifyCallback(context.Context, CallbackRequest) (VerifiedPayment, error) {
+	if p.verified != nil {
+		return *p.verified, p.err
+	}
 	return VerifiedPayment{}, ErrUnavailable
 }
+
+func TestCallbackNormalizedMoneyBounds(t *testing.T) {
+	valid := VerifiedPayment{ProviderID: "payment.test", EventID: "event", TransactionID: "transaction", MerchantAccountID: "merchant", AccountID: "a", OrderID: "o", InvoiceID: "i", AmountMinor: 100, Currency: "CNY", Status: "settled", SettledAt: time.Now()}
+	for _, tc := range []struct {
+		currency string
+		amount   int64
+		valid    bool
+	}{{"CNY", 100, true}, {"USD", 100, true}, {"EUR", 100, false}, {"cny", 100, false}, {"USD", maxMinor + 1, false}, {"USD", 0, false}} {
+		value := valid
+		value.Currency, value.AmountMinor = tc.currency, tc.amount
+		d := definition()
+		d.Manifest.ConfigurationFields = nil
+		d.PaymentFactory = func(context.Context, Config) (PaymentProvider, error) { return testPayment{verified: &value}, nil }
+		r, err := New(context.Background(), []Definition{d}, Options{PaymentID: d.Manifest.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = r.VerifyCallback(context.Background(), CallbackRequest{})
+		if tc.valid != (err == nil) {
+			t.Fatal(tc, err)
+		}
+	}
+}
 func definition() Definition {
-	return Definition{Manifest: Manifest{ID: "payment.test", Kind: Payment, Name: "Test only", Description: "Never registered by server", Capabilities: []string{"checkout"}, ConfigurationFields: []ConfigurationField{{Key: "api_key", Label: "API key reference", Type: "secret_ref", Required: true, Secret: true}}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, Config) (PaymentProvider, error) {
+	return Definition{Manifest: Manifest{ID: "payment.test", Kind: Payment, Name: "Test only", Description: "Never registered by server", Capabilities: []string{"checkout"}, SupportedCurrencies: []string{"CNY", "USD"}, ConfigurationFields: []ConfigurationField{{Key: "api_key", Label: "API key reference", Type: "secret_ref", Required: true, Secret: true}}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, Config) (PaymentProvider, error) {
 		return testPayment{checkout: Checkout{ProviderID: "payment.test", SessionID: "s1", URL: "https://checkout.example.com/session/1", ExpiresAt: time.Now().Add(time.Hour)}}, nil
 	}}
 }
@@ -84,6 +111,48 @@ func TestDisabledNeverSucceeds(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestCurrencyCapabilitiesAndSafeMoney(t *testing.T) {
+	d := definition()
+	d.Manifest.ConfigurationFields = nil
+	for _, currencies := range [][]string{nil, {"EUR"}, {"usd"}, {"USD", "USD"}} {
+		bad := d
+		bad.Manifest.SupportedCurrencies = currencies
+		if _, err := New(context.Background(), []Definition{bad}, Options{}); err == nil {
+			t.Fatal("invalid provider currencies", currencies)
+		}
+	}
+	d.Manifest.SupportedCurrencies = []string{"USD"}
+	r, err := New(context.Background(), []Definition{d}, Options{PaymentID: d.Manifest.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Manifest.SupportedCurrencies[0] = "CNY"
+	summaries := r.Summaries()
+	summaries[2].SupportedCurrencies[0] = "CNY"
+	request := CheckoutRequest{InvoiceID: "i", OrderID: "o", AccountID: "a", AmountMinor: 100, Currency: "USD", IdempotencyKey: "test-key"}
+	if _, err = r.CreateCheckout(context.Background(), request); err != nil {
+		t.Fatal("mutable capabilities", err)
+	}
+	request.Currency = "CNY"
+	if _, err = r.CreateCheckout(context.Background(), request); !errors.Is(err, ErrUnsupportedCurrency) {
+		t.Fatal(err)
+	}
+	request.Currency = "EUR"
+	if _, err = r.CreateCheckout(context.Background(), request); !errors.Is(err, ErrInvalidResult) {
+		t.Fatal(err)
+	}
+	request.Currency = "USD"
+	request.AmountMinor = maxMinor + 1
+	if _, err = r.CreateCheckout(context.Background(), request); !errors.Is(err, ErrInvalidResult) {
+		t.Fatal(err)
+	}
+	for _, summary := range Default().Summaries() {
+		if len(summary.SupportedCurrencies) != 0 {
+			t.Fatal("disabled capabilities", summary)
+		}
+	}
+}
 func TestCheckoutURLValidation(t *testing.T) {
 	for _, u := range []string{"http://checkout.example.com/s", "https://evil.example/s", "https://checkout.example.com.evil.example/s", "https://user:password@checkout.example.com/s", "https://checkout.example.com:8443/s", "javascript:alert(1)", "https://checkout.example.com/s#fragment"} {
 		t.Run(u, func(t *testing.T) {
@@ -120,6 +189,19 @@ func TestSettlementValidationDoesNotTrustClaims(t *testing.T) {
 	valid := VerifiedPayment{ProviderID: want.ProviderID, MerchantAccountID: want.MerchantAccountID, AccountID: want.AccountID, OrderID: want.OrderID, InvoiceID: want.InvoiceID, AmountMinor: want.AmountMinor, Currency: want.Currency, EventID: "event", TransactionID: "transaction", Status: "settled", SettledAt: time.Now()}
 	if e := ValidateSettlement(valid, want); e != nil {
 		t.Fatal(e)
+	}
+	for _, currency := range []string{"CNY", "USD", "EUR"} {
+		expected, actual := want, valid
+		expected.Currency, actual.Currency = currency, currency
+		err := ValidateSettlement(actual, expected)
+		if (currency == "EUR") != (err != nil) {
+			t.Fatal("settlement currency", currency, err)
+		}
+	}
+	unsafeExpected, unsafeActual := want, valid
+	unsafeExpected.AmountMinor, unsafeActual.AmountMinor = maxMinor+1, maxMinor+1
+	if ValidateSettlement(unsafeActual, unsafeExpected) == nil {
+		t.Fatal("unsafe settlement amount")
 	}
 	for _, change := range []func(*VerifiedPayment){func(v *VerifiedPayment) { v.AmountMinor = 1 }, func(v *VerifiedPayment) { v.Currency = "EUR" }, func(v *VerifiedPayment) { v.AccountID = "other" }, func(v *VerifiedPayment) { v.OrderID = "other" }, func(v *VerifiedPayment) { v.InvoiceID = "other" }, func(v *VerifiedPayment) { v.MerchantAccountID = "other" }, func(v *VerifiedPayment) { v.ProviderID = "other" }, func(v *VerifiedPayment) { v.EventID = "" }, func(v *VerifiedPayment) { v.TransactionID = "" }, func(v *VerifiedPayment) { v.Status = "pending" }} {
 		v := valid

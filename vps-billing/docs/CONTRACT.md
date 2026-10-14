@@ -1,32 +1,52 @@
-# Aster Cloud Billing v0.1 implementation contract
+# 当前 API 与业务约定
 
-Working product name: Aster Cloud (星屿云), placeholder and changeable. Chinese-first UI with Apple-inspired restraint, original branding. Scope: a custom production-oriented financial system with separate frontend/backend. VM controller implementation is outside this release. No live payments, external deployment, or real provisioning authorized/configured. Clearly mark demonstration data and simulated operations. Do not claim production certification.
+本文件对应可配置品牌、简体中文/English、CNY/USD 候选里程碑。默认站点名“星屿云”、语言 `zh-CN`、币种 `CNY`。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、邮件、真实 VPS 开通与完整财务账本均未实现。
 
-Architecture: Vue 3 + TypeScript + Vite frontend; Go HTTP API; MySQL InnoDB production store. Optional explicitly non-production in-memory store for local demo only. Session cookies HttpOnly, CSRF protection for browser mutations, RBAC/customer ownership, exact minor-unit monetary values, audit events, durable transactional outbox for future controller integration. Payment integration fail closed when no real provider is configured. Modular monolith. The durable outbox is present; its execution worker is not implemented in this release. USD as clearly provisional demo currency, monthly fixed-plan demos. No stored-card collection. No wallet funding feature.
+## 共通规则
 
-API prefix /api/v1. JSON responses {data: ...}; errors {error:{code:string,message:string,request_id?:string}}. Dates RFC3339 UTC. Money integer cents in amount_minor/price_minor, currency USD.
+- API 前缀 `/api/v1`；成功 `{data: ...}`，失败 `{error:{code,message,request_id?}}`。
+- 时间 RFC3339 UTC。`*_minor` 金额是 CNY 分或 USD 美分整数，不接受小数、其他币种或自动换汇。
+- 浏览器通过同源 HttpOnly cookie 鉴权，变更请求必须携带 `X-CSRF-Token`，校验来源和 Host。价格、角色、所有权及付款结果不信任浏览器。
+- 结构化错误 code 用于界面翻译；无法识别的新错误回退为安全通用文案，不向用户显示 SQL、密钥或服务商原始错误。
+- 当前列表上限 1,000；金额汇总使用 SQL 聚合而非列表求和，`unpaid_total_minor` 是所选币种全部待付金额。没有完整分页/导出协议。
 
-Endpoints for the first integrated UI:
-- GET /healthz and /readyz outside prefix.
-- GET /api/v1/session -> data {user: User|null,csrf_token:string,demo_mode:boolean}; same-origin cookie authentication. User {id,email,name,role:"customer"|"admin"}.
-- POST /api/v1/auth/login {email,password}, POST /auth/logout. CSRF header X-CSRF-Token from session response. POST /auth/register {email,password,name} if implemented, otherwise UI must not pretend functional.
-- GET /plans -> Plan[] {id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available:boolean}.
-- GET /overview -> {active_services:number,pending_invoices:number,monthly_total_minor:number,currency:string,recent_orders:Order[],usage?:...}.
-- GET /services -> Service[] {id,name,plan_name,region,ipv4,status,next_due_at,price_minor,currency,cpu,memory_gb,disk_gb}.
-- GET /orders -> Order[] {id,number,plan_name,status,total_minor,currency,created_at,service_id?:string}.
-- POST /orders {plan_id,hostname} with Idempotency-Key -> Order. Server sets price and owner. No real provisioning on creation.
-- GET /invoices -> Invoice[] {id,number,order_id,status,amount_minor,currency,issued_at,due_at,paid_at?:string}.
-- GET /invoices/{id} -> Invoice plus optional line_items.
-- POST /invoices/{id}/checkout -> when no provider configured, 503 PAYMENT_NOT_CONFIGURED. UI must say not connected, never imply paid.
-- GET /audit -> Audit[] {id,action,target,created_at,actor_email,detail}; customers limited to own safe events, admin can see administrative events.
-- GET /admin/overview -> {customers,total_services,unpaid_invoices,revenue_minor,currency}; admin only.
-- GET /admin/customers -> User[] admin only.
-- GET /admin/orders, GET /admin/invoices -> arrays admin only.
+## 主要接口
 
-Frontend should always consume HTTP API for actual mutations; graceful backend unavailable state, no silent fake success. A visible dedicated demo mode may use fixtures for read-only visual preview if API unavailable, but clearly label it, and do not treat it as production. Prefer runnable API demo integration over fixtures. Obtain credentials from backend README demo mode; never hard-code production credentials or secrets. Demo selection can be prominent login helper.
+| 方法与路径 | 权限 | 行为 |
+|---|---|---|
+| `GET /healthz`, `/readyz` | 公开 | 存活；数据库连接和迁移历史就绪 |
+| `GET /api/v1/session` | 公开 | `{user,csrf_token,demo_mode}`；user 只有公开身份字段 |
+| `POST /auth/login`, `/auth/logout` | 会话 + CSRF | 登录轮换 cookie/token；注销撤销原会话 |
+| `GET /site-settings` | 公开 | 公开站点展示字段与默认语言/币种 |
+| `GET /plans?currency=CNY` | 公开 | 该币种独立报价；缺失/禁用不可购买 |
+| `GET /overview?currency=CNY` | 客户 | 该币种金额/计数与带各自币种的最近订单 |
+| `GET /services`, `/orders`, `/invoices`, `/audit` | 客户 | 仅本人资源；历史各保留原币种 |
+| `POST /orders` | 客户 + CSRF | `{plan_id,hostname,currency}`，必须有 `Idempotency-Key` |
+| `GET /invoices/{id}` | 账单所有人 | 直接按账单 ID 和当前用户查找，不依赖列表上限 |
+| `POST /invoices/{id}/checkout` | 账单所有人 + CSRF | 未配置提供商返回 503 `PAYMENT_NOT_CONFIGURED`，不改变付款状态 |
+| `GET /admin/overview?currency=CNY` | 管理员 | 该币种金额/服务/账单数；客户数是全局 |
+| `GET /admin/customers`, `/admin/orders`, `/admin/invoices` | 管理员 | 全站只读列表 |
+| `GET /admin/invoices/{id}` | 管理员 | 直接读取任意账单；该路由无支付操作 |
+| `GET /admin/site-settings` | 管理员 | 完整站点设置及 revision |
+| `POST /admin/site-settings` | 管理员 + CSRF | 校验字段与 revision；同事务更新设置与审计，冲突拒绝 |
+| `GET /admin/integrations` | 管理员 | 只读适配器能力/配置字段说明，永不返回秘密值或引用 |
 
-Directory layout: backend/ contains API and database code; frontend/ contains the web interface; deploy/ contains deployment templates; docs/ contains specifications and release gates. See implementation and validation records for implemented features and limitations.
+上表除健康路径外均相对于 `/api/v1`。确切路由与响应结构以同提交 `backend/internal/billing/http.go`、`models.go` 和测试为准；实现新增字段应同步更新前后端类型。
 
-## Provider adapter extension (v0.2)
+## 金额、订单和身份
 
-GET /api/v1/admin/integrations is admin-only and returns data {items:[{id,kind,name,description,enabled,configured,status,capabilities,configuration_fields,configuration_mode,limitations}]}. This is a read-only manifest/configuration-status endpoint, not an upload or secret-management API. Payment and email are typed, statically registered adapters. Additional code adapters require rebuild/redeploy. Registry entries do not imply a live provider is connected. Core retains invoice ownership, amount/currency and state control. Secret values and secret references must never be returned.
+`plan_prices(plan_id,currency,amount_minor,available)` 是独立报价来源。下单事务锁定套餐/对应报价，验证两个可售标志；未知 JSON 字段直接拒绝。订单、账单、幂等记录、审计与 outbox 原子提交；订单与账单保存金额、币种及运营身份快照。
+
+相同用户、相同幂等键、相同请求返回原订单；改变币种/套餐/主机名会冲突。数据库死锁/锁超时有限次重试；客户端面对不确定提交结果应重用原键与原请求，而不是生成新键。创建订单不创建 VPS、不记录假付款、不消费 outbox。
+
+修改价格、运营公司或账单抬头只影响之后创建的记录。旧记录无 issuer 快照时维持缺失，不能以当前设置补写假历史。没有退款、续费、钱包、余额换汇、税务发票或账务分录系统。
+
+## 设置与偏好
+
+支持站点/公司名称、预设标志/主题、支持邮箱/HTTPS 链接、展示 HTTPS 来源、纯文本邮件署名、账单抬头/地址与默认语言/币种。公开读接口省略私有运营字段。没有任意 HTML/CSS/脚本、远程资源抓取、图片上传或 DNS/TLS 配置。详细限制见 [SITE_SETTINGS.md](SITE_SETTINGS.md)。
+
+语言和币种是独立浏览偏好，支持值只有 `zh-CN`/`en` 和 `CNY`/`USD`，缺省回退到站点设置。用户输入数据不自动翻译；选择新币种不改变已开具记录。服务商密钥不通过站点设置保存。
+
+## 适配器
+
+支付和邮件是可信的编译期类型化适配器，当前只注册禁用实现。新增适配器需要代码审查、重建及独立验收；它们不是运行时上传插件或第三方代码沙箱。提供商仅接收核心授予的不可变业务数据，不获得数据库/Store；金融状态仍由核心控制。见 [PLUGINS.md](PLUGINS.md)。

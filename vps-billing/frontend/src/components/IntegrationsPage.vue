@@ -14,10 +14,11 @@ import {
   Server,
   AlertCircle,
 } from "@lucide/vue";
+import { locale, tr } from "../lib/i18n";
 import { api } from "../lib/api";
 import {
   readIntegrationManifest,
-  previewIntegrations,
+  localizedPreviewIntegrations,
   type IntegrationSummary,
 } from "../lib/integrations";
 const props = defineProps<{ preview: boolean; refreshToken: number }>();
@@ -26,25 +27,31 @@ const items = ref<IntegrationSummary[]>([]),
   error = ref("");
 const selected = ref<IntegrationSummary>(),
   drawer = ref<HTMLDialogElement>();
-const groups = [
+const groups = computed(() => [
   {
     kind: "payment",
-    title: "支付服务",
-    caption: "独立收款适配器，让账务与渠道解耦。",
+    title: tr("支付服务", "Payment services"),
+    caption: tr(
+      "通过独立适配器连接支付服务。",
+      "Payment providers connect through separate adapters.",
+    ),
     icon: CreditCard,
   },
   {
     kind: "email",
-    title: "邮件服务",
-    caption: "统一发送接口，让投递渠道自由替换。",
+    title: tr("邮件服务", "Email services"),
+    caption: tr(
+      "邮件服务使用统一的发送接口。",
+      "Email providers share a typed delivery interface.",
+    ),
     icon: Mail,
   },
-];
-const planned = [
-  { name: "短信通知", icon: MessageSquare },
-  { name: "对象存储", icon: HardDrive },
-  { name: "节点控制器", icon: Server },
-];
+]);
+const planned = computed(() => [
+  { name: tr("短信通知", "SMS notifications"), icon: MessageSquare },
+  { name: tr("对象存储", "Object storage"), icon: HardDrive },
+  { name: tr("节点控制器", "Server controllers"), icon: Server },
+]);
 const enabledCount = computed(
   () => items.value.filter((i) => i.enabled).length,
 );
@@ -58,13 +65,16 @@ async function load() {
   loading.value = true;
   try {
     const result = props.preview
-      ? previewIntegrations
+      ? localizedPreviewIntegrations()
       : readIntegrationManifest(await api<unknown>("/admin/integrations"));
     if (current === generation) items.value = result;
   } catch {
     // Do not echo backend diagnostics: configuration errors may contain secrets.
     if (current === generation)
-      error.value = "无法读取扩展清单。请确认管理员会话与服务端状态后重试。";
+      error.value = tr(
+        "无法读取扩展清单。请确认管理员会话与服务端状态后重试。",
+        "Cannot load integrations. Check your administrator session and server status, then retry.",
+      );
   } finally {
     if (current === generation) loading.value = false;
   }
@@ -76,17 +86,19 @@ async function open(item: IntegrationSummary) {
 }
 const label = (item: IntegrationSummary) =>
   !item.enabled || item.status === "disabled"
-    ? "未启用"
+    ? tr("未启用", "Disabled")
     : item.status === "ready" && item.configured
-      ? "配置就绪"
-      : "不可用";
+      ? tr("配置就绪", "Configured")
+      : tr("不可用", "Unavailable");
 const tone = (item: IntegrationSummary) =>
-  label(item) === "配置就绪"
+  label(item) === tr("配置就绪", "Configured")
     ? "green"
-    : label(item) === "未启用"
+    : label(item) === tr("未启用", "Disabled")
       ? "gray"
       : "amber";
-watch(() => [props.preview, props.refreshToken], load, { immediate: true });
+watch(() => [props.preview, props.refreshToken, locale.value], load, {
+  immediate: true,
+});
 onBeforeUnmount(() => {
   generation++;
   drawer.value?.close();
@@ -100,17 +112,26 @@ onBeforeUnmount(() => {
         <Puzzle :size="27" :stroke-width="1.5" />
       </div>
       <div class="integration-intro-copy">
-        <p class="eyebrow">BUILT TO ADAPT</p>
-        <h2>能力可扩展，核心保持简单。</h2>
+        <p class="eyebrow">{{ tr("扩展清单", "INTEGRATIONS") }}</p>
+        <h2>
+          {{ tr("已注册扩展", "Registered integrations") }}
+        </h2>
         <p>
-          在同一处查看支付与邮件适配器。渠道实现独立于业务，配置由服务端安全管理。
+          {{
+            tr(
+              "在同一处查看支付与邮件适配器。渠道实现独立于业务，配置由服务端安全管理。",
+              "View payment and email adapters here. Provider implementations and configuration are managed on the server.",
+            )
+          }}
         </p>
       </div>
       <div class="integration-totals">
         <strong>{{ loading || error ? "—" : items.length }}</strong
-        ><span>已注册适配器</span
+        ><span> {{ tr("已注册适配器", "Registered adapters") }} </span
         ><small>{{
-          loading || error ? "等待读取" : `${enabledCount} 个已启用`
+          loading || error
+            ? tr("等待读取", "Waiting for data")
+            : tr(`${enabledCount} 个已启用`, `${enabledCount} enabled`)
         }}</small>
       </div>
     </section>
@@ -119,19 +140,37 @@ onBeforeUnmount(() => {
       <p>
         {{
           preview
-            ? "样例清单 · 未连接任何外部服务。"
-            : "以下状态来自服务端注册表，不代表外部服务连通性验证。"
+            ? tr(
+                "样例清单 · 未连接任何外部服务。",
+                "Sample manifest · No external services connected.",
+              )
+            : tr(
+                "以下状态来自服务端注册表，不代表外部服务连通性验证。",
+                "Status comes from the server registry and does not prove connectivity to an external service.",
+              )
         }}
-        首版通过环境变量与密钥管理配置，本页仅供查看。
+        {{
+          tr(
+            "首版通过环境变量与密钥管理配置，本页仅供查看。",
+            "This page is read only. Configuration uses server environment variables and secret management.",
+          )
+        }}
       </p>
     </div>
     <div v-if="error" class="alert error" role="alert">
       <AlertCircle :size="18" /><span>{{ error }}</span
-      ><button @click="load">重试</button>
+      ><button @click="load">{{ tr("重试", "Retry") }}</button>
     </div>
     <div v-else-if="loading" class="panel integration-empty" role="status">
       <RefreshCw :size="20" class="spin" />
-      <p>正在读取服务端扩展清单…</p>
+      <p>
+        {{
+          tr(
+            "正在读取服务端扩展清单…",
+            "Loading the server integration manifest…",
+          )
+        }}
+      </p>
     </div>
     <template v-else>
       <section
@@ -146,11 +185,9 @@ onBeforeUnmount(() => {
             <p>{{ group.caption }}</p>
           </div>
           <span class="tiny-tag"
-            >{{
-              items.filter((i) => i.kind === group.kind).length
-            }}
-            个适配器</span
-          >
+            >{{ items.filter((i) => i.kind === group.kind).length }}
+            {{ tr("个适配器", " adapters") }}
+          </span>
         </div>
         <div class="integration-grid">
           <article
@@ -172,16 +209,26 @@ onBeforeUnmount(() => {
               <span v-for="capability in item.capabilities" :key="capability">{{
                 capability
               }}</span
-              ><span v-if="!item.capabilities.length">暂无可用能力</span>
+              ><span v-if="!item.capabilities.length">
+                {{ tr("暂无可用能力", "No available capabilities") }}
+              </span>
             </div>
             <div class="integration-card-footer">
-              <span><LockKeyhole :size="13" />服务端配置</span
+              <span
+                ><LockKeyhole :size="13" />
+                {{ tr("服务端配置", "Server configuration") }} </span
               ><button
                 class="text-button"
-                :aria-label="`查看 ${item.name} 配置说明`"
+                :aria-label="
+                  tr(
+                    `查看 ${item.name} 配置说明`,
+                    `Configuration guide for ${item.name}`,
+                  )
+                "
                 @click="open(item)"
               >
-                配置说明<ArrowUpRight :size="15" />
+                {{ tr("配置说明", "Configuration guide") }}
+                <ArrowUpRight :size="15" />
               </button>
             </div>
           </article>
@@ -190,21 +237,35 @@ onBeforeUnmount(() => {
             class="panel integration-empty"
           >
             <component :is="group.icon" :size="23" />
-            <p>服务端尚未注册此类适配器。</p>
+            <p>
+              {{
+                tr(
+                  "服务端尚未注册此类适配器。",
+                  "No adapters of this kind are registered.",
+                )
+              }}
+            </p>
           </div>
         </div>
       </section>
     </template>
     <section class="integration-roadmap">
       <div>
-        <p class="eyebrow">ROOM TO GROW</p>
-        <h2>为未来，留好位置。</h2>
-        <p>以下方向仍在规划中，尚未提供可用接口或插件。</p>
+        <p class="eyebrow">{{ tr("后续扩展", "PLANNED EXTENSIONS") }}</p>
+        <h2>{{ tr("计划中的扩展", "Planned integrations") }}</h2>
+        <p>
+          {{
+            tr(
+              "以下方向仍在规划中，尚未提供可用接口或插件。",
+              "These extensions are planned. No working interfaces or plugins are available yet.",
+            )
+          }}
+        </p>
       </div>
       <div class="integration-planned">
         <div v-for="item in planned" :key="item.name">
           <component :is="item.icon" :size="18" /><span>{{ item.name }}</span
-          ><small>规划中</small>
+          ><small> {{ tr("规划中", "Planned") }} </small>
         </div>
       </div>
     </section>
@@ -217,12 +278,12 @@ onBeforeUnmount(() => {
       <template v-if="selected"
         ><div class="modal-heading">
           <div>
-            <p class="eyebrow">INTEGRATION DETAILS</p>
+            <p class="eyebrow">{{ tr("扩展详情", "INTEGRATION DETAILS") }}</p>
             <h2 id="integration-title">{{ selected.name }}</h2>
           </div>
           <button
             class="icon-button"
-            aria-label="关闭扩展详情"
+            :aria-label="tr('关闭扩展详情', 'Close integration details')"
             @click="drawer?.close()"
           >
             <X :size="21" />
@@ -237,31 +298,65 @@ onBeforeUnmount(() => {
         <p class="integration-detail-description">{{ selected.description }}</p>
         <dl class="account-details">
           <div>
-            <dt>当前选择</dt>
-            <dd>{{ selected.enabled ? "已启用" : "未启用" }}</dd>
+            <dt>{{ tr("当前选择", "Selection") }}</dt>
+            <dd>
+              {{
+                selected.enabled
+                  ? tr("已启用", "Enabled")
+                  : tr("未启用", "Disabled")
+              }}
+            </dd>
           </div>
           <div>
-            <dt>配置状态</dt>
-            <dd>{{ selected.configured ? "已配置" : "未配置" }}</dd>
+            <dt>{{ tr("配置状态", "Configuration status") }}</dt>
+            <dd>
+              {{
+                selected.configured
+                  ? tr("已配置", "Configured")
+                  : tr("未配置", "Not configured")
+              }}
+            </dd>
           </div>
           <div>
-            <dt>配置方式</dt>
-            <dd>服务端环境变量</dd>
+            <dt>{{ tr("配置方式", "Configuration method") }}</dt>
+            <dd>{{ tr("服务端环境变量", "Server environment variables") }}</dd>
           </div>
         </dl>
+        <section
+          v-if="selected.kind === 'payment'"
+          class="integration-detail-section"
+        >
+          <h3>{{ tr("支持币种", "Supported currencies") }}</h3>
+          <p>
+            {{
+              selected.supported_currencies.length
+                ? selected.supported_currencies.join(" / ")
+                : tr("无可用支付币种", "No payment currencies available")
+            }}
+          </p>
+        </section>
         <section class="integration-detail-section">
-          <h3>接口能力</h3>
+          <h3>{{ tr("接口能力", "Capabilities") }}</h3>
           <div class="integration-capabilities">
             <span
               v-for="capability in selected.capabilities"
               :key="capability"
               >{{ capability }}</span
-            ><span v-if="!selected.capabilities.length">暂无可用能力</span>
+            ><span v-if="!selected.capabilities.length">
+              {{ tr("暂无可用能力", "No available capabilities") }}
+            </span>
           </div>
         </section>
         <section class="integration-detail-section">
-          <h3>配置项清单</h3>
-          <p>这里只显示字段说明，不读取或展示已保存的配置值。</p>
+          <h3>{{ tr("配置项清单", "Configuration fields") }}</h3>
+          <p>
+            {{
+              tr(
+                "这里只显示字段说明，不读取或展示已保存的配置值。",
+                "Only field descriptions are shown. Saved values are never read or displayed here.",
+              )
+            }}
+          </p>
           <div
             v-for="field in selected.configuration_fields"
             :key="field.key"
@@ -270,46 +365,75 @@ onBeforeUnmount(() => {
             <div>
               <b>{{ field.label }}</b
               ><span
-                >{{ field.required ? "必填" : "可选" }} ·
+                >{{
+                  field.required
+                    ? tr("必填", "Required")
+                    : tr("可选", "Optional")
+                }}
+                ·
                 {{
                   field.secret || field.type === "secret_ref"
-                    ? "密钥引用"
+                    ? tr("密钥引用", "Secret reference")
                     : field.type === "url"
-                      ? "服务地址"
-                      : "文本"
+                      ? tr("服务地址", "Service URL")
+                      : tr("文本", "Text")
                 }}</span
               >
             </div>
             <code>{{ field.key }}</code
             ><small v-if="field.secret || field.type === 'secret_ref'"
-              ><LockKeyhole
-                :size="12"
-              />通过服务端密钥管理注入，不在浏览器输入</small
-            >
+              ><LockKeyhole :size="12" />
+              {{
+                tr(
+                  "通过服务端密钥管理注入，不在浏览器输入",
+                  "Injected through server secret management, never entered in the browser",
+                )
+              }}
+            </small>
           </div>
           <p
             v-if="!selected.configuration_fields.length"
             class="integration-field-empty"
           >
-            此适配器未声明配置项。
+            {{
+              tr(
+                "此适配器未声明配置项。",
+                "This adapter has no configuration fields.",
+              )
+            }}
           </p>
         </section>
         <section class="integration-detail-section">
-          <h3>如何接入</h3>
+          <h3>{{ tr("如何接入", "How to connect") }}</h3>
           <ol class="integration-steps">
             <li>
-              在服务端配置已注册的适配器与所需环境变量，密钥通过部署平台安全注入。
+              {{
+                tr(
+                  "在服务端配置已注册的适配器与所需环境变量，密钥通过部署平台安全注入。",
+                  "Configure a registered adapter and its environment variables on the server. Inject secrets securely through the deployment platform.",
+                )
+              }}
             </li>
             <li>
-              重启服务使配置生效，返回此页刷新清单，并另行验证外部服务连通性。
+              {{
+                tr(
+                  "重启服务使配置生效，返回此页刷新清单，并另行验证外部服务连通性。",
+                  "Restart the service, refresh this page, and separately verify connectivity to the external provider.",
+                )
+              }}
             </li>
             <li>
-              新供应商需实现类型化接口、注册并重新构建。暂不支持在线安装、上传脚本或在此切换。
+              {{
+                tr(
+                  "新供应商需实现类型化接口、注册并重新构建。暂不支持在线安装、上传脚本或在此切换。",
+                  "New providers require a typed implementation, registration and rebuild. Online installation, script upload and switching here are not supported.",
+                )
+              }}
             </li>
           </ol>
         </section>
         <div v-if="selected.limitations.length" class="integration-limitations">
-          <b>当前限制</b>
+          <b> {{ tr("当前限制", "Current limitations") }} </b>
           <ul>
             <li v-for="limitation in selected.limitations" :key="limitation">
               {{ limitation }}
@@ -317,7 +441,7 @@ onBeforeUnmount(() => {
           </ul>
         </div>
         <button class="button secondary full" @click="drawer?.close()">
-          关闭说明
+          {{ tr("关闭说明", "Close guide") }}
         </button>
       </template>
     </dialog>
