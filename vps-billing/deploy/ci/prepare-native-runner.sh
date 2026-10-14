@@ -18,6 +18,13 @@ for command in sudo apt-get dpkg-deb sha256sum; do
   command -v "$command" >/dev/null || fail "Missing $command."
 done
 
+# The hosted image may make its installed Chrome tree shared-writable. Verify
+# protected dpkg records and remove only those write bits before any browser use.
+# This does not install Chrome, restore set-ID bits, or change sandbox policy.
+controller_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+  /usr/bin/python3 -I "$controller_dir/prepare-browser.py"
+
 # /run is visible to the hardened API; PrivateTmp and ProtectHome intentionally
 # hide ordinary temporary/home directories. Never reuse an existing path.
 fixture_root=$(sudo mktemp -d /run/aster-native.XXXXXXXX)

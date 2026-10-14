@@ -59,7 +59,11 @@ Go 漏洞扫描独立于数据库 job，数据库准备失败不会使它被前�
 
 ## 隔离浏览器检查
 
-常规 CI 与候选构建使用 `browser-demo.py` 启动本次源码的回环内存 API 和已构建前端，再执行源码中的浏览器回归。使用标准 Ubuntu runner 预装的 Google Chrome 实际二进制 `/opt/google/chrome/chrome`，独立校验可执行权限、所有者及不可共享写入；不调用 runner 中可能全局可写的启动包装脚本。保持 Chromium 沙箱开启；沙箱或浏览器不可用即失败，不修改主机安全设置。运行日志记录实际 Chrome 版本，临时 runner 从 Ubuntu 已验证的软件源安装 CJK 字体，支持中文截图。预装软件以 [GitHub runner 镜像清单](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) 和实际运行版本为准。
+常规 CI 与候选构建使用 `browser-demo.py` 启动本次源码的回环内存 API 和已构建前端，再执行源码中的浏览器回归。使用标准 Ubuntu runner 预装的 Google Chrome 实际二进制 `/opt/google/chrome/chrome`，独立校验可执行权限、所有者及不可共享写入，再读取版本并运行浏览器。
+
+部分 runner 镜像中的预装 Chrome 带有过宽写权限。仅在明确的一次性 Ubuntu runner 中，准备脚本检查已安装软件包、受保护的 dpkg 校验清单及完整 Chrome 文件树，移除指定 root 所有路径的组/其他用户写权限，并核验文件内容；不增加权限、不替换二进制。异常内容、未登记文件、危险链接或不可信安装记录均使准备失败。此步骤在项目及依赖代码执行前完成；收紧权限不能撤销已有写入句柄，不适用于修复已被不可信进程使用的共享主机。安装清单校验用于同一受信镜像内的完整性比对，不等于独立签名或外部来源认证。
+
+Chromium 沙箱保持开启；沙箱或浏览器不可用即失败，不修改 AppArmor、内核安全设置，也不添加绕过沙箱的启动参数。运行摘要记录实际 Chrome 版本。临时 runner 从 Ubuntu 已验证的软件源安装 CJK 字体，支持中文截图。预装软件以 [GitHub runner 镜像清单](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) 和实际运行版本为准。
 
 检查仅使用公开演示账号和合成订单，不加载生产配置、SMTP 密钥或数据库 DSN。独立临时端口、启动就绪和自有进程检查限制测试目标；退出时清理本次进程与私有临时目录。上传内容仅含结果摘要和合成数据截图，保留 7 天，不上传 API/Vite 日志。截图不进入源码或运行安装包。该检查覆盖指定桌面/手机视口及自动化断言，不代表所有设备、完整无障碍或真实业务环境的视觉验收；实际通过结果按提交记录。
 

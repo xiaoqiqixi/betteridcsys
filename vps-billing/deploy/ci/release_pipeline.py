@@ -32,6 +32,7 @@ TRUSTED_PATHS = (
     "vps-billing/deploy/ci/historical-artifacts.json",
     "vps-billing/deploy/ci/check.sh",
     "vps-billing/deploy/ci/prepare-native-runner.sh",
+    "vps-billing/deploy/ci/prepare-browser.py",
     "vps-billing/deploy/ci/accept-native.sh",
     "vps-billing/deploy/ci/accept-native-http.py",
     "vps-billing/deploy/ci/browser-demo.py",
