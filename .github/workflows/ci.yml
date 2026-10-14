@@ -2,8 +2,7 @@ name: Read-only CI
 
 on:
   push:
-    branches-ignore: ['artifacts/**']
-  pull_request:
+    branches: ['main']
   workflow_dispatch:
 
 permissions:

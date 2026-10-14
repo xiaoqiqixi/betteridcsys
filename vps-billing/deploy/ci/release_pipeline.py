@@ -5,6 +5,8 @@ The publishing workflow must run this file from the trusted default-branch commi
 Build code and dependencies run in a separate job with read-only credentials.
 """
 import argparse
+import base64
+import binascii
 import gzip
 import hashlib
 import io
@@ -27,6 +29,7 @@ PUBLISH_WORKFLOW = ".github/workflows/release-publish.yml"
 TRUSTED_PATHS = (
     BUILD_WORKFLOW,
     "vps-billing/deploy/ci/release_pipeline.py",
+    "vps-billing/deploy/ci/historical-artifacts.json",
     "vps-billing/deploy/ci/check.sh",
     "vps-billing/deploy/ci/prepare-native-runner.sh",
     "vps-billing/deploy/ci/accept-native.sh",
@@ -41,6 +44,9 @@ MAX_TAR = 256 * 1024 * 1024
 MAX_FILE = 64 * 1024 * 1024
 MAX_JSON = 2 * 1024 * 1024
 MAX_MEMBERS = 20000
+MAX_HISTORICAL_FILE = 8 * 1024 * 1024
+MAX_HISTORICAL_ZIP = 16 * 1024 * 1024
+HISTORICAL_MANIFEST = Path(__file__).with_name("historical-artifacts.json")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 HASH = re.compile(r"^[0-9a-f]{64}$")
 NUMBER = r"(?:0|[1-9][0-9]*)"
@@ -87,8 +93,8 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def strict_json(data):
-    require(isinstance(data, bytes) and len(data) <= MAX_JSON, "JSON exceeds limit")
+def strict_json(data, limit=MAX_JSON):
+    require(isinstance(data, bytes) and len(data) <= limit, "JSON exceeds limit")
     def pairs(items):
         result = {}
         for key, value in items:
@@ -168,6 +174,27 @@ class GitHub:
         require(status == 201, "Unexpected asset upload response")
         return strict_json(raw)
 
+    def historical_blob(self, blob_sha, expected_size):
+        """Bounded read of one fixed archival blob; never execute its contents."""
+        sha(blob_sha)
+        require(type(expected_size) is int and 0 < expected_size <= MAX_HISTORICAL_FILE,
+                "Invalid historical blob size")
+        limit = expected_size * 2 + 8192  # Base64, line wrapping and fixed metadata.
+        status, _, raw = self._open("GET", "https://api.github.com" + api_path("/git/blobs/" + blob_sha), limit=limit)
+        require(status == 200, "Historical blob download failed")
+        value = strict_json(raw, limit=limit)
+        require(isinstance(value, dict) and value.get("sha") == blob_sha and
+                type(value.get("size")) is int and value["size"] == expected_size and
+                value.get("encoding") == "base64" and isinstance(value.get("content"), str),
+                "Historical blob identity/encoding mismatch")
+        try:
+            data = base64.b64decode(value["content"].replace("\n", "").replace("\r", ""), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise GuardError("Invalid historical blob encoding") from exc
+        require(len(data) == expected_size and git_blob_sha(data) == blob_sha,
+                "Historical blob size/hash mismatch")
+        return data
+
     def download_artifact(self, artifact):
         artifact_id = integer(artifact["id"], "artifact ID")
         url = f"https://api.github.com/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip"
@@ -188,6 +215,118 @@ class GitHub:
 
 def api_path(suffix=""):
     return "/repos/" + REPOSITORY + suffix
+
+
+def git_blob_sha(data):
+    return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+
+
+def historical_manifest():
+    value = strict_json(HISTORICAL_MANIFEST.read_bytes())
+    require(isinstance(value, dict) and set(value) == {"schema", "repository", "repository_id", "release_tag", "archives"} and
+            type(value["schema"]) is int and value["schema"] == 1 and
+            value["repository"] == REPOSITORY and type(value["repository_id"]) is int and
+            value["repository_id"] == REPOSITORY_ID and value["release_tag"] == "v0.3.0-rc.3",
+            "Invalid historical archive policy")
+    require(isinstance(value["archives"], list) and len(value["archives"]) == 2,
+            "Historical policy must preserve both candidates")
+    versions = set()
+    for entry in value["archives"]:
+        require(isinstance(entry, dict) and set(entry) == {"version", "original_source_commit", "artifact_commit", "files", "attachment"},
+                "Invalid historical archive entry")
+        version = entry["version"]
+        require(version in {"0.3.0-rc.1", "0.3.0-rc.2"} and version not in versions,
+                "Unexpected/duplicate historical version")
+        versions.add(version)
+        sha(entry["original_source_commit"])
+        sha(entry["artifact_commit"])
+        expected = set(package_files(version)) | {"README.md"}
+        require(isinstance(entry["files"], dict) and set(entry["files"]) == expected,
+                "Historical file inventory mismatch")
+        for meta in entry["files"].values():
+            require(isinstance(meta, dict) and set(meta) == {"git_blob", "sha256", "size"},
+                    "Invalid historical file metadata")
+            sha(meta["git_blob"])
+            require(isinstance(meta["sha256"], str) and HASH.fullmatch(meta["sha256"]) and
+                    type(meta["size"]) is int and 0 < meta["size"] <= MAX_HISTORICAL_FILE,
+                    "Invalid historical file hash/size")
+        attachment = entry["attachment"]
+        require(isinstance(attachment, dict) and set(attachment) == {"name", "sha256", "size"} and
+                attachment["name"] == f"historical-v{version}.zip" and
+                isinstance(attachment["sha256"], str) and HASH.fullmatch(attachment["sha256"]) and
+                type(attachment["size"]) is int and 0 < attachment["size"] <= MAX_HISTORICAL_ZIP,
+                "Invalid historical attachment metadata")
+    return value
+
+
+def historical_zip(entry, files):
+    """Original five files stay byte-exact; metadata labels the wrapper as archival."""
+    require(set(files) == set(entry["files"]), "Historical ZIP file set mismatch")
+    metadata = {
+        "schema": 1, "kind": "historical-unmodified-candidate",
+        "version": entry["version"], "original_source_commit": entry["original_source_commit"],
+        "original_artifact_commit": entry["artifact_commit"], "files": entry["files"],
+        "notice": "Historical preservation only; not rebuilt, not the current release source, and not recommended for installation. Original README and BUILD statements describe their historical snapshot and may be superseded. This archive has no current-build provenance claim.",
+    }
+    members = {f"v{entry['version']}/" + name: data for name, data in files.items()}
+    members["ARCHIVE.json"] = json_bytes(metadata)
+    result = io.BytesIO()
+    with zipfile.ZipFile(result, "w", compression=zipfile.ZIP_STORED, allowZip64=False) as archive:
+        for name, data in sorted(members.items()):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(info, data, compress_type=zipfile.ZIP_STORED)
+    data = result.getvalue()
+    require(len(data) <= MAX_HISTORICAL_ZIP, "Historical ZIP exceeds limit")
+    return data
+
+
+def historical_attachments(api, tag):
+    """All network/data validation completes before release creation; no old code runs."""
+    manifest = historical_manifest()
+    if tag != manifest["release_tag"]:
+        return {}, ""
+    result, descriptions = {}, []
+    for entry in manifest["archives"]:
+        tree = api.request("GET", api_path("/git/trees/" + entry["artifact_commit"] + "?recursive=1"))
+        require(isinstance(tree, dict) and tree.get("truncated") is False and isinstance(tree.get("tree"), list),
+                "Incomplete historical artifact tree")
+        actual = {}
+        for item in tree["tree"]:
+            require(isinstance(item, dict) and item.get("type") == "blob" and item.get("mode") == "100644" and
+                    item.get("path") in entry["files"] and item["path"] not in actual,
+                    "Historical artifact tree has unexpected files/types")
+            actual[item["path"]] = item.get("sha")
+        require(actual == {name: meta["git_blob"] for name, meta in entry["files"].items()},
+                "Historical artifact tree differs from pinned inventory")
+        files = {}
+        for name, meta in sorted(entry["files"].items()):
+            data = api.historical_blob(meta["git_blob"], meta["size"])
+            require(isinstance(data, bytes) and len(data) == meta["size"] and
+                    sha256(data) == meta["sha256"] and git_blob_sha(data) == meta["git_blob"],
+                    "Historical asset differs from pinned bytes")
+            scan_obvious_secrets(data)
+            files[name] = data
+        build = strict_json(files["BUILD.json"])
+        require(isinstance(build, dict) and build.get("source_commit") == entry["original_source_commit"] and
+                build.get("release_label") == entry["version"], "Historical BUILD identity mismatch")
+        checksums = {}
+        for line in files["SHA256SUMS"].decode("ascii").splitlines():
+            match = re.fullmatch(r"([0-9a-f]{64})  (?:\./)?([A-Za-z0-9._-]+)", line)
+            require(match is not None and match[2] not in checksums, "Invalid historical checksums")
+            checksums[match[2]] = match[1]
+        require(set(checksums) == set(package_files(entry["version"])) - {"SHA256SUMS"} and
+                all(sha256(files[name]) == value for name, value in checksums.items()),
+                "Historical checksum inventory/content mismatch")
+        data = historical_zip(entry, files)
+        meta = entry["attachment"]
+        require(len(data) == meta["size"] and sha256(data) == meta["sha256"],
+                "Historical ZIP differs from pinned output")
+        result[meta["name"]] = data
+        descriptions.append(f"- `{meta['name']}`：原始源码 `{entry['original_source_commit']}`；SHA-256 `{meta['sha256']}`。")
+    body = "\n\n历史保留附件（不建议安装）：以下 ZIP 原样保留旧候选的五个文件，包括原始 README、BUILD 和校验和；没有重新构建或改写旧 SHA，与当前标签的源码/构建来源记录不同。ZIP 内 ARCHIVE.json 列出每个原文件的哈希、大小和原始 Git blob。\n" + "\n".join(descriptions)
+    return result, body
 
 
 def repository(api):
@@ -608,6 +747,9 @@ def publish(api, policy, archive_bytes):
     current_artifact = artifact_for_run(api, policy["run_id"], policy["run_attempt"])
     require(all(current_artifact[key] == policy["artifact"][key] for key in ("id", "name", "size_in_bytes", "digest")),
             "Artifact identity changed after download")
+    historical, historical_body = historical_attachments(api, provenance["tag"])
+    require(not set(files).intersection(historical), "Historical/current asset name collision")
+    files = dict(files, **historical)
     assert_no_release(api, provenance["tag"])
     recheck(api, policy, provenance)
     # No code from the artifact is extracted, imported, sourced or executed.
@@ -616,7 +758,7 @@ def publish(api, policy, archive_bytes):
     # this external TOCTOU window. Concurrent movers must be prohibited by policy.
     fields = {"tag_name": provenance["tag"], "target_commitish": provenance["source_sha"],
               "name": "星屿云 " + provenance["version"],
-              "body": f"自动生成的审阅草稿。源码提交：`{provenance['source_sha']}`。\n\nLinux amd64；支付和邮件适配器保持禁用。发布前请完成安装、升级、备份恢复及安全门禁审阅。\n\n构建运行：{policy['run_id']}，尝试：{policy['run_attempt']}。附件包含校验和及构建来源记录。",
+              "body": f"Linux amd64 预发布。源码提交：`{provenance['source_sha']}`。\n\n支付和邮件适配器保持禁用。该版本已通过流水线中的原生安装、业务、备份恢复和同 schema 版本回退检查。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试：{policy['run_attempt']}。附件包含安装包、源码、校验和及构建来源记录；环境与功能限制见包内文档。" + historical_body,
               "draft": True, "prerelease": True, "make_latest": "false", "generate_release_notes": False}
     release_id = None
     try:

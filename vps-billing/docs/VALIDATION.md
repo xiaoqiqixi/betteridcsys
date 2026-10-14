@@ -1,100 +1,46 @@
 # 验证记录
 
-本文件区分“实现了配置”和“实际跑通”。编写日期：2026-10-14 UTC。
+验证日期：2026-10-14 UTC。以下结果绑定实际执行时的提交与 GitHub run，不将历史测试转记为其他提交的通过结果。
 
-## 当前原生修订的证据边界
+## 应用与原生验收基线
 
-本轮实现、已跑测试与具体停止点见 [原生检查点](NATIVE_CHECKPOINT.md)，以其结果区分当前验证和下面的历史事实。
+已验证源码：`00654f431b070c44b8442fff71a18cdd65b29999`。
 
-最新要求是只保留单服务器原生 Linux 方案：当前部署脚本、配置、文档和 CI 不再提供 Docker 路径。原生 MySQL 8.4 一次性进程夹具正在替换旧 CI 服务依赖；最终结果必须绑定修订提交和实际日志，不能沿用旧夹具的通过状态。工作流代码尚未安装到默认分支或触发；目标系统、systemd 开机、真实 TLS、升级及原生恢复的验收仍需单独完成。
+- [Push run 38557196471](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38557196471)：应用检查与独立 Go 漏洞扫描均成功。
+- [PR run 38557186363](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38557186363)：应用检查与独立 Go 漏洞扫描均成功。
+原生验收摘要及脱敏 JSON 见 [push checks job 115829150826](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38557196471/job/115829150826)。PR 运行使用 GitHub 的合并测试引用，不能与分支提交混为同一个 checkout。
 
-**下方全部为旧候选或更早交付的历史记录。** 其中 Docker/Compose、镜像、旧备份脚本、当时工具可用性和当时进程状态只说明原测试发生过什么；相关实现已从当前源码路径移除，不是当前操作指引、依赖或待恢复的支持方案。历史提交和 `0.3.0-rc.1` 产物保持原样，不改写测试事实，也不把旧证据转换成原生验收。
+| 验证项 | 实际结果 |
+|---|---|
+| 环境与数据库来源 | Ubuntu 24.04 / amd64；四个官方 MySQL 8.4.11 DEB 按固定大小、SHA-256 校验后提取，真实数据库初始化、socket 就绪与回归通过 |
+| Go | Go 1.27.2；race 38 个顶层 + 50 个子测试，0 失败、0 跳过；vet 与 Linux amd64 编译通过 |
+| 前端 | Node.js 24.19.0；62 项测试、类型检查、格式检查和生产构建通过 |
+| 独立回归 | Python CI 93 项（发布守卫 59、数据库夹具 22、检查编排 4、验收守卫 8）；许可证清单 4、配置 8、演示 HTTP 13 项通过 |
+| 原生服务 | 加固 systemd API、Nginx HTTPS、只读版本目录及私有测试 CA 的完整证书校验通过 |
+| 业务与代理 | 20 项 HTTPS 测试通过，包含生产 Cookie、CSRF、客户隔离、Host/来源、HTTP 跳转、伪造代理头与两个来源的限速隔离 |
+| 数据库与文件权限 | API 仅本库 DML；迁移使用 SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER/INDEX/REFERENCES；运行身份 DDL、授权、跨库访问及修改版本/秘密的负向测试通过 |
+| 重启与切换 | API 重启、同二进制/schema 的 A→B→A 发布目录切换通过，4 个既有订单保留 |
+| 原生备份与恢复 | 实际备份、checksum/gzip 校验、同一 MySQL 实例中新空库恢复成功；12 张表的完整数据哈希一致 |
+| 恢复后业务 | API 切换至恢复库，另外 20 项 HTTPS 测试通过 |
+| 清理 | 清理退出码 0，自有测试服务、账号、数据库和路径均已移除 |
+| 审计与工作流 | npm 审计 0 项已知漏洞；actionlint 1.7.7 通过；独立 Go 扫描成功，范围如下 |
 
-本次修订的原生安装与放行条件见 [INSTALL.md](INSTALL.md)、[ACCEPTANCE.md](ACCEPTANCE.md) 和 [CI_RELEASE_AUTOMATION.md](CI_RELEASE_AUTOMATION.md)。根 LICENSE/README 保留原文；项目 `vps-billing/README.md` 已获准更新为原生路径。当前云端 Go 漏洞数据库访问仍返回 Forbidden，未完成扫描。
+Go 扫描使用 `govulncheck v1.9.0`；报告 **0 项可达函数、0 项导入包、19 项模块级告警**。余下告警来自当前应用未导入的 `x/crypto` SSH/OpenPGP 包，不能概括为“依赖无已知漏洞”。最近核对的漏洞库更新时间为 2026-10-08 22:31:09 UTC；结果仅覆盖对应源码、构建配置和数据库快照。
 
-## 历史：0.3.0-rc.1 维护里程碑
+## 验证范围
 
-本节记录旧候选相对更早快照的“USD-only / MySQL 从未运行 / 仅迁移 1”等状态变化；历史记录保留原测试范围和时间，不向过去补写今天的结果。当前功能约定见 [CONTRACT.md](CONTRACT.md)，完整发布条件见 [RELEASE.md](RELEASE.md)。
+本次使用一次性 GitHub-hosted runner 和合成数据，没有连接外部业务服务器或调用真实支付、邮件、VPS 服务。HTTPS 使用 localhost 与临时私有 CA，没有测试真实域名、公共 CA 签发或续期。A→B→A 使用相同二进制和 schema，不证明不同应用版本间的迁移回滚。
 
-该历史候选源码完成了以下云端验收；保留当时明确未完成的发布条件，不据此声称生产就绪。证据目录：`/workspace/aster-validation-20261014/`。实际工具链为 Go 1.27.2、Node 24.19.0、MySQL 8.4.11。
+备份恢复目标是同一实例的另一新空库；没有重启 MySQL 进程或整机，也没有验证独立实例、异地加密副本、断电恢复、PITR、容量或生产 RPO/RTO。浏览器视觉验收见下节历史范围，不混计到上述原生 HTTP 测试。宝塔适配操作见 [BAOTA.md](BAOTA.md)，尚无实际面板运行结论。
 
-- Go：全量 `go test -race -count=1 -v ./...` 38 个顶层测试、50 个子测试通过，0 失败、0 跳过；真实 MySQL 覆盖 35 个独立迁移场景，以及双币种、快照、并发幂等、金额边界和事务故障回滚。`go vet` 通过。证据 `backend-race-mysql.log`、`backend-vet.log`。
-- 前端：62 项单元/组件测试、typecheck、Vite 生产构建和格式检查通过。浏览器截图复核后把窄屏三列统计改为单列，重新构建和浏览器验收通过；这次纯 CSS 调整不改变业务逻辑。证据 `frontend-final.log`、`frontend-mobile-build.log`、`frontend-format-final.log`。
-- HTTP 安全冒烟 13/13、启动配置 8/8，均针对最新静态编译二进制；合成账号测试没有跳过。证据 `http-final.log`、`config-final.log`。
-- 浏览器：通过已获准的云端命令执行正常启动安装的 Chromium，保持沙箱开启。访问本机回环 demo，经真实 API 完成双语/币种独立偏好、CNY 下单、切换币种后历史不变、支付禁用、弹窗/搜索、手机导航、管理员设置预览和保存、新访客默认值、历史开具方快照及设置恢复。1440×1100 与 390×844 截图已检查，手机页面无横向溢出、侧栏完全关闭，流程无 pageerror。证据 `browser-final.log` 与 `browser/`。这不是完整无障碍、所有设备或生产 CSP 认证。
-- Docker：MySQL 自定义镜像构建通过，发现并修复初始化脚本宿主机权限造成 runtime 用户缺失的问题。原 API/web 多阶段构建因 Docker 构建网络 DNS 无法解析 proxy.golang.org/APK 镜像源失败；普通 host 构建网络仍失败，未绕过网络策略。证据 `compose-final-build.log` 与后续构建日志。
-- 容器运行替代验证：仅在一次性测试目录使用现有基础镜像和本轮本地编译产物组装运行镜像，不把它写成原多阶段 Dockerfile 构建通过。Compose 生产模式的 nginx→API health/ready、迁移 1–5、CLI 引导合成账号、Secure/HttpOnly/SameSite Cookie、权限/CSRF、设置持久化、CNY/USD 下单/幂等/快照/独立汇总、禁用 checkout 均通过。runtime 账号 CREATE/ALTER/DROP/GRANT 均被拒绝；非 root、只读、cap_drop、no-new-privileges 和端口边界已检查。请求在回环 HTTP 上模拟外层 HTTPS Host/Origin，不证明真实 TLS。证据 `compose-http-production.log`、`compose-runtime-privileges.log`、`compose-runtime-hardening.log`。
-- 真实备份恢复：执行 backup.sh，复制后校验 SHA-256/gzip，在独立临时 MySQL 项目恢复。12 张表及行数一致，迁移 checksum、设置、价格、订单/账单金额币种身份、幂等记录和分币种总额一致，孤立/不匹配记录 0，重复迁移退出 0。合成小库导入加比较约 7.3 秒，不作生产 RTO/RPO 承诺。证据 `compose-backup-restore.log`。没有验证备份加密、异地主机或生产规模恢复。
-- 打包/备份脚本：bash 语法、Python 编译、源文件排除规则、参数拒绝、文档相对链接、git diff --check 通过；mock Docker 测试包含 8 个同秒并发备份、搬移校验和、gzip、失败清理与 0700/0600 权限。
-- npm：Vitest 升级到 5.0.4 后完整 npm audit 已知漏洞 0（含开发依赖）。不覆盖 Go、镜像或业务逻辑。
-- Go 漏洞扫描：官方数据库请求返回 Forbidden，govulncheck 未完成，不能认定 Go 无漏洞。镜像安全扫描也未完成。
+具体发布与双构建结果以对应 Release 中的 `PROVENANCE.json` 和构建运行链接为准；只读 CI 不创建 Release，也不部署主机。新源码按 [发布要求](RELEASE.md) 重新生成并核对归档，历史候选的原文件和哈希保持不变。
 
-发布脚本仅构建准确 Git 提交；两次构建比对及实际 SHA-256 由提交后的发布目录 `BUILD.json`、`SHA256SUMS` 和最终维护报告记录，源码文档不自证自己尚未生成的归档。发布包不自动包含测试日志。根 LICENSE/README 和原项目 README 保留原文。
+## 历史归档回归
 
-原生 systemd/nginx 样例未在目标主机安装，真实域名/TLS、容量、监控告警、异地灾备尚待验证；没有真实支付/邮件/控制器、外部生产部署、生产客户数据或生产认证。GitHub Release 创建/上传工具未暴露，gh 身份无效；本地候选归档不能称为 GitHub 已发布。开发分支和草稿 PR 保持可审查，不合并。
+历史候选归档处理新增 19 项离线回归，与原发布守卫 59 项一同通过。该本地验证不计入 `00654f4` 的 93 项 CI，也不替代新源码的完整 CI 或实际 Release 上传结果。
 
-## 以下为原始交付的历史验证
+## 浏览器与历史候选
 
-## 部署部分
+历史候选 `0.3.0-rc.1` 的云端 Chromium E2E 通过，浏览器沙箱保持开启。测试经回环 demo API 覆盖中文/English、CNY/USD 独立偏好、下单及历史快照、禁用支付、手机导航与管理员设置保存；检查了 1440×1100 和 390×844 截图，未出现页面错误或手机横向溢出。这不代表所有设备、完整无障碍、当前宝塔环境或真实业务主机已验收。证据为 `/workspace/aster-validation-20261014/browser-final.log` 与同目录 `browser/`。
 
-已准备：多阶段 Dockerfile、非 root API/nginx、同源反向代理、安全头、独立 MySQL 网络与持久卷、健康检查、迁移先行、随机秘密初始化脚本、备份模板与隔离恢复说明。
-
-已验证：2026-10-14，`bash -n deploy/scripts/backup.sh`、`sh -n deploy/scripts/init-secrets.sh` 均通过；两个 Compose 文件经 PyYAML 解析成功；静态断言确认 API/数据库未发布端口，data 网络 internal，API/web 只读根文件系统且 tmpfs 挂载格式正确。已人工对照后端 `cmd/server/main.go` 验证环境变量、`-migrate` 与 `-create-user` 标志一致；对照前端构建脚本确认产物为 `dist`。追加静态检查：迁移 DSN 与 runtime DSN 分离，API 无迁移秘密，web 不加入 data 网络，nginx 固定 /32 地址与 TRUSTED_PROXY_CIDRS 一致；MySQL runtime 初始化脚本 bash 语法通过。随机秘密初始化脚本在一次性临时目录实际运行，确认 7 个文件、0700/0444 权限、独立 DSN 身份和拒绝覆盖行为；临时秘密未输出，测试后目录已清理。上述均未运行真实数据库验证。
-
-这些是静态检查，不替代 Docker Compose 自身校验或运行验证。
-
-尚未验证：当前工作环境没有 Docker CLI/daemon，未构建容器镜像、未运行 docker compose、未验证容器启动/网络/权限/健康检查、未做真实 MySQL 数据恢复演练。需要在用户授权的测试机或具备 Docker 的隔离 CI 环境完成。
-
-本交付没有连接外部测试服务器，没有真实收款、真实开通、真实客户数据或第三方安全认证。项目的 production 模式是运行时约束，不是验证结论。
-
-## 应用测试
-
-以下结果来自本机演示 API / 启动参数测试，**不使用真实 MySQL**：
-
-- `tests/http-smoke-results.txt`：10/10 通过，包含未登录隔离、客户/管理权限、会话轮换、注销、CSRF/Origin、Host 校验、订单幂等/并发及支付未配置失败关闭。
-- `tests/config-smoke-results.txt`：5/5 通过，包含默认非 demo、缺少数据库配置、非 HTTPS 来源、示例秘密与未知模式拒绝。
-- Go 1.24.9：2026-10-14 03:34 UTC 再运行 `go test -buildvcs=false -v ./...`，5 个内存/HTTP 单元测试通过。`TestMySQLTransactionalOrders` 明确 SKIP：未设置 `ASTER_MYSQL_TEST_DSN`，**真实 MySQL 集成未运行**。
-- 集成阶段 03:33 UTC 的 `go vet -buildvcs=false ./...` 返回 0；后端最终补充 `go test -race` 六项通过、vet/build 通过。MySQL 测试仍因无服务器跳过。
-- 前端 `npm run build`（含类型检查）及 8 项单元/组件测试通过。`npm audit --omit=dev` 报告生产依赖已知漏洞 0；这不是无漏洞证明，也未覆盖完整开发依赖/镜像/业务逻辑。
-- 通过 Vite 同源代理请求真实演示 API `/api/v1/session` 的冒烟测试通过。
-- 初次运行时完整浏览器 E2E 与视觉验收受阻：命令执行环境中的 Playwright Chromium 因沙箱 socket 限制无法启动，替代启动器因只读挂载失败；当时独立云浏览器无法访问命令执行环境的回环地址。04:49 UTC 起使用正常云端桌面终端启动同一演示应用后，云端浏览器手动测试已可进行，具体范围见下方增补。自动化 E2E 仍未运行。
-- 仍需在授权测试环境补充精确手机视口、键盘/焦点完整覆盖、实际 CSP 和自动化 E2E。用户已明确选择云端，本轮没有连接或使用用户 Mac。
-
-安全审查详见 [tests/SECURITY_REVIEW.md](../tests/SECURITY_REVIEW.md)。
-
-Go 模块声明 1.24.0，Docker builder 使用兼容的 Go 1.26 系列。实际测试使用的工具链与镜像构建是不同验证，未声称 Docker builder 已运行。
-
-最终复核：03:36 UTC 独立重跑前端 build 与全部 8 项测试通过；后端最终新增弱密钥拒绝用例后共 6 项 Go 测试（race）通过。浏览器测试脚本保留正常 Chromium 沙箱并使用可移植浏览器路径，仍未执行。
-
-03:38 UTC 最终源码复核：Go race/vet/build 通过；重新构建后二次运行 HTTP 10/10 通过；配置回归因新增弱密钥拒绝规则更新了测试随机密钥夹具，再运行 5/5 通过。真实 MySQL 与浏览器验收仍未运行。
-
-## 可插拔适配器增补复核（03:51 UTC）
-
-- 新增支付/邮件类型化接口、注册表、配置文件校验、脱敏管理员清单和扩展中心。没有真实服务商、支付回调落账或发信。
-- 对更新后源码独立运行 Go race 测试、vet 和 build 均通过；注册表测试包括配置/重复 ID/超时/回调金额与身份匹配/结账 HTTPS 白名单等。
-- HTTP 安全回归扩大为 11/11，通过；增加管理员清单只读、客户权限和配置值不回显检查。生产启动配置回归仍 5/5 通过。
-- 前端生产构建通过，21 项单元/组件测试通过，包含扩展中心错误恢复与支付会话安全链接校验。
-- 所有这些测试不替代浏览器、真实 MySQL 或真实支付渠道验收；原有未验证项目仍然未验证。
-
-
-## 云端桌面手动浏览器验收（04:49–04:52 UTC）
-
-运行环境：通过受支持的云端 Linux 桌面终端启动演示 API 与 Vite，再用同一云端电脑的 Chromium 浏览器访问。未使用用户电脑，未使用公网发布或外部隧道，未改变浏览器/系统安全设置。API 明确使用 APP_MODE=demo，数据仅在内存中。
-
-- 前端：`http://localhost:5173`，仅本机访问；后端：`127.0.0.1:18080`。8080 已被云端既有服务占用，保留原服务并改用演示进程自己的回环端口。Vite `/api` 代理通过 `API_PROXY_TARGET` 指向 18080。
-- 通过真实在线演示按钮登录客户工作台，空服务/空订单状态正确；不是只读离线视觉预览。
-- 打开轻量云订单弹窗，用 Escape 关闭后重新打开；创建 `cloud-qa-demo` 测试待付订单成功（ORD-2f4e353be5d9，USD 6.00），显示未付款、未开通真实服务器。
-- 账单列表和详情显示对应待付账单 INV-2f4e353be5d9；点击支付可用性检查，页面明确显示“支付通道尚未接入。未发生扣款，账单仍为待付款。”没有外部支付动作。
-- 退出后返回登录页；管理演示登录成功。运营总览、客户管理、全部订单和审计日志页面可见，审计记录包含本次 `order.created`。
-- 扩展中心读取服务端注册表，显示 2 个注册适配器、0 个启用；支付和邮件均为安全禁用状态。配置说明弹窗正确显示未配置、暂无能力，不回显秘密配置值，关闭正常。
-- 已实际检查登录页、客户工作台、账单弹窗、扩展中心的浏览器截图：桌面布局可读，导航/主要操作未出现横向溢出。观测的浏览器视口为 1188 × 761 CSS px，扩展中心文档 scrollWidth 为 1173。
-- 精确手机视口未验证。浏览器明确提示组织禁止 DevTools，已停止该路径；普通窗口调整未改变观测视口，不能以此声称手机布局通过。没有绕过 DevTools 限制。
-- 浏览器日志存在云端扩展自身的 metadata 发送错误（chrome-extension 来源）；不把它判为应用错误，也不声称已经全面排除应用运行时错误。
-
-这次是有界手动浏览器冒烟和桌面截图检查，不是完整自动化 E2E、完整无障碍/视觉验收或生产验证。`frontend/tests/e2e.mjs` 未执行；真实 MySQL、Docker 运行、负载测试、真实支付/邮件、灾备恢复仍未验证。演示进程留在云端终端运行；停止/重启会丢失测试数据。此回环地址不应当作用户电脑可打开的公网链接。
-
-### 云端预览回归修复（04:55 UTC）
-
-- Vite 开发配置中的 `/api`、`/healthz`、`/readyz` 现在共用 `API_PROXY_TARGET`，避免健康路由仍指向默认 8080；生产 Nginx 配置未修改。云端浏览器访问 `/healthz` 被浏览器客户端以 `net::ERR_BLOCKED_BY_CLIENT` 拒绝，未绕过限制；不声称健康/就绪路由已在浏览器实测通过。
-- 修复直接加载管理端路径时，恢复会话后页面内容正确但浏览器标题仍显示“页面未找到”的问题：标题订阅派生 `pageTitle`（包含角色变化），路由变化仍单独清空搜索。扩展中心直接刷新后的标题已在真实云端浏览器确认是“扩展中心 · 星屿云”。为已有管理路由测试增加管理员直达、导航切换与客户未授权路径标题断言。
-- 最终源码再次执行 `npm run build`（含类型检查）、`npm test`（21/21）、`npm run format:check`，全部返回 0。该结果不扩大前述浏览器、数据库和部署验收范围。
+旧版本的构建、失败排查和阶段交付详情保存在 Git 历史与对应 Actions 记录中，不作为当前安装步骤。历史候选不覆盖、不改名；新源码重新构建并记录来源及哈希。

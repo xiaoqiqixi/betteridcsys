@@ -1,10 +1,12 @@
 # Ubuntu 24.04 原生单机安装
 
-本手册说明在一台 Ubuntu 24.04 / amd64 服务器上安装 Nginx、systemd API 与 MySQL 8.4。核心原生服务、HTTPS、权限、API 重启、同 schema 版本切换和备份恢复已在一次性 Ubuntu runner 实测通过，准确提交与范围见 [原生验证记录](NATIVE_CHECKPOINT.md)。支付、邮件、退款、VPS 开通均未接入；`production` 表示持久化及严格配置检查，不代表生产认证。新候选须满足 [发布门禁](RELEASE.md)，历史 `0.3.0-rc.1` 保持原样。
+本手册说明在一台 Ubuntu 24.04 / amd64 服务器上安装 Nginx、systemd API 与 MySQL 8.4。核心原生服务、HTTPS、权限、API 重启、同 schema 版本切换和备份恢复已在一次性 Ubuntu runner 实测通过，准确提交与范围见 [原生验证记录](VALIDATION.md)。支付、邮件、退款、VPS 开通均未接入；`production` 表示持久化及严格配置检查，不代表生产认证。新候选须满足 [发布门禁](RELEASE.md)，历史 `0.3.0-rc.1` 保持原样。
+
+已使用宝塔管理 Nginx/MySQL 的服务器请使用 [宝塔部署与更新指南](BAOTA.md)，避免重复安装系统服务。
 
 ## 前置确认
 
-本手册目标为 **Ubuntu Server 24.04 LTS / amd64**，使用 systemd、Nginx 和 MySQL 8.4 LTS；原生自动化也以该发行版为测试环境，实际结果见 [原生验证记录](NATIVE_CHECKPOINT.md)。开始前确认 CPU、内存/磁盘容量和已有服务；其他发行版或 arm64 不能直接套用。本项目未完成容量基准测试，不据示例配置承诺并发量。
+本手册目标为 **Ubuntu Server 24.04 LTS / amd64**，使用 systemd、Nginx 和 MySQL 8.4 LTS；原生自动化也以该发行版为测试环境，实际结果见 [原生验证记录](VALIDATION.md)。开始前确认 CPU、内存/磁盘容量和已有服务；其他发行版或 arm64 不能直接套用。本项目未完成容量基准测试，不据示例配置承诺并发量。
 
 原生包提供静态 Go API、编译网页、文档和配置样例，运行 API 不需要 Go 或 Node.js 工具链。单机路径为：浏览器 HTTPS → Nginx → `127.0.0.1:18080` API → 本机 MySQL Unix socket。只有经批准的 HTTPS 和管理入口对外开放；API 和数据库均不公开监听。当前源码与 CI 只提供原生运行路径；测试用临时数据库不代表目标服务器已完成安装。
 
@@ -26,7 +28,7 @@ sudo apt-get install --no-install-recommends nginx ca-certificates openssl pytho
 
 Ubuntu 的 Nginx 软件包可能随安装启动默认站点；先保留管理入口、防火墙和已有站点，再配置本应用。站点管理方式参照 [Ubuntu Nginx 指引](https://ubuntu.com/server/docs/how-to/web-services/install-nginx/)。
 
-MySQL 必须明确选择 **8.4 LTS**，本轮原生夹具固定 `8.4.11`。按 [Oracle 官方 APT 指引](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/) 获取并验证对应仓库配置包，在配置菜单选择 8.4 LTS；已有 MySQL/MariaDB/Percona 主机须先做独立迁移计划，不执行全新安装流程。不要关闭 APT 签名校验或把其他数据库系列当作等价替代。仓库配置完成后：
+MySQL 必须明确选择 **8.4 LTS**，原生验证夹具固定 `8.4.11`。按 [Oracle 官方 APT 指引](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/) 获取并验证对应仓库配置包，在配置菜单选择 8.4 LTS；已有 MySQL/MariaDB/Percona 主机须先做独立迁移计划，不执行全新安装流程。不要关闭 APT 签名校验或把其他数据库系列当作等价替代。仓库配置完成后：
 
 ```sh
 sudo apt-get update
@@ -118,7 +120,7 @@ GRANT SHOW_ROUTINE ON *.* TO 'aster_backup'@'localhost';
 
 **当前后端即使使用 Unix socket 也会检查 MySQL TLS 配置，因此本机 socket 必须显式设置 `MYSQL_ALLOW_INSECURE=true`。** 这是在已审查本机 socket/文件权限下的窄范围例外，不能作为 TCP 明文连接的通用开关；所有迁移、引导与 API 运行命令均需一致。不能仅填写 `tls=true` 来假装 socket 已做 TLS 验证。
 
-若之后改成 TCP/跨主机数据库，应单独审查拓扑，将 `MYSQL_ALLOW_INSECURE=false`，使用 `tls=true`、证书匹配主机名和可信 CA，禁止 `skip-verify`、`preferred`、`allowFallbackToPlaintext=true`。本轮不实施远程数据库方案；也不通过关闭 SELinux/AppArmor 或放宽到任意来源来解决权限错误。
+若之后改成 TCP/跨主机数据库，应单独审查拓扑，将 `MYSQL_ALLOW_INSECURE=false`，使用 `tls=true`、证书匹配主机名和可信 CA，禁止 `skip-verify`、`preferred`、`allowFallbackToPlaintext=true`。远程数据库方案需单独验证；也不通过关闭 SELinux/AppArmor 或放宽到任意来源来解决权限错误。
 
 使用上一步建立的无登录权限 `aster` 系统身份。应用目录由管理员所有，运行身份只有读取和执行权限。由批准的秘密管理工具提供：
 
@@ -177,7 +179,7 @@ sudo systemctl start aster-api
 sudo systemctl status aster-api --no-pager
 ```
 
-先完成应用就绪和业务测试，再单独启用已审查的开机启动配置，并安排授权重启验收。静态 `systemd-analyze verify` 或一次 `start` 成功，都不能证明整机重启后会恢复服务；本轮尚未进行目标主机开机测试。
+先完成应用就绪和业务测试，再单独启用已审查的开机启动配置，并安排授权重启验收。静态 `systemd-analyze verify` 或一次 `start` 成功，都不能证明整机重启后会恢复服务；目标主机开机恢复不在上述 CI 验证范围内。
 
 在 Nginx `http {}` 中引入经过修改的 `deploy/nginx.native.conf`。替换域名、证书路径，检查 Nginx 版本支持模板指令，并审查与已有默认站点/监听端口的冲突；不要覆盖同机其他业务。执行 `nginx -t` 后才 reload。模板由 Nginx 直接终止 TLS，用实际 socket 对端的 `$remote_addr` 覆盖客户端 IP 头；若已有全局 real_ip 配置，先审查其是否会改写此值。API 只信任 Nginx 的精确回环来源。增加 CDN/前置代理时必须重新审查完整信任链，不能直接信任浏览器的转发头。
 

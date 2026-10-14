@@ -1,8 +1,8 @@
 # 单服务器原生 Linux 运维手册
 
-部署基线为 Ubuntu 24.04 / amd64，同一台服务器运行 Nginx、systemd API 和 MySQL 8.4 LTS。高可用暂缓。原生自动化的实际结果见 [原生验证记录](NATIVE_CHECKPOINT.md)；外部主机的资源、已有服务、真实域名、公共 CA 证书、开机恢复及运维计划需与该环境匹配。历史 `0.3.0-rc.1` 产物保持原提交和哈希。
+部署基线为 Ubuntu 24.04 / amd64，同一台服务器运行 Nginx、systemd API 和 MySQL 8.4 LTS。高可用暂缓。原生自动化的实际结果见 [原生验证记录](VALIDATION.md)；外部主机的资源、已有服务、真实域名、公共 CA 证书、开机恢复及运维计划需与该环境匹配。历史 `0.3.0-rc.1` 产物保持原提交和哈希。
 
-初次安装见 [INSTALL.md](INSTALL.md)，升级回滚见 [UPGRADE.md](UPGRADE.md)，备份恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)，站点与计价见 [SITE_SETTINGS.md](SITE_SETTINGS.md)。本轮实际证据见 [VALIDATION.md](VALIDATION.md)，最终放行见 [RELEASE.md](RELEASE.md)。以下步骤供管理已安装的原生实例使用，不会由应用或 CI 自动在外部服务器执行。
+初次安装见 [INSTALL.md](INSTALL.md)，宝塔环境见 [BAOTA.md](BAOTA.md)，升级回滚见 [UPGRADE.md](UPGRADE.md)，备份恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)，站点与计价见 [SITE_SETTINGS.md](SITE_SETTINGS.md)。实际证据见 [VALIDATION.md](VALIDATION.md)，最终放行见 [RELEASE.md](RELEASE.md)。以下步骤供管理已安装的原生实例使用，不会由应用或 CI 自动在外部服务器执行。
 
 ## 1. 组件与边界
 
@@ -70,7 +70,7 @@ curl --fail --show-error https://billing.example.com/readyz
 | 502/连接超时 | systemd 状态、回环监听、代理目的地址及数据库延迟 | 把 API 暴露到公网进行长期绕行 |
 | 磁盘空间不足 | 数据库/journal/备份占用和保留政策 | 随意删除 MySQL 文件、唯一备份或迁移记录 |
 
-应用、Nginx 和数据库日志可能包含客户/订单标识。限制读取与保留，分享前脱敏；不收集完整环境变量、秘密文件或 DSN 到工单。journal 保留和磁盘限制应结合目标主机政策制定，本轮没有修改主机日志配置。
+应用、Nginx 和数据库日志可能包含客户/订单标识。限制读取与保留，分享前脱敏；不收集完整环境变量、秘密文件或 DSN 到工单。journal 保留和磁盘限制应结合目标主机政策制定，应用不会修改主机日志配置。
 
 ## 5. 备份、恢复和秘密轮换
 

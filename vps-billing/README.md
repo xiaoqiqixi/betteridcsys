@@ -2,13 +2,13 @@
 
 Vue 3 / TypeScript / Vite 控制台、Go API 与 MySQL InnoDB 持久化。支持可配置站点品牌、简体中文/English，以及分别定价的 CNY/USD；默认中文与 CNY，不提供自动汇率换算。
 
-**这是持续开发和验收中的工程基础，不是经过生产认证的财务系统。** 支付和邮件适配器保持禁用，尚无真实收款、VPS 控制器、邮件验证、密码找回或 MFA。创建订单生成待付款账单，不创建虚拟机；未配置支付时明确失败，不标记已支付。没有完整财务账本、税务或结算能力。
+支付和邮件适配器保持禁用，尚未接入真实收款、VPS 控制器、邮件验证、密码找回或 MFA。创建订单生成待付款账单，不创建虚拟机；未配置支付时明确失败，不标记已支付。完整财务账本、税务和结算能力仍待实现。
 
 ## 当前交付状态
 
 部署基线是 Ubuntu 24.04 / amd64 单服务器：Nginx 提供 HTTPS 和静态页面，systemd 管理 API，本机 MySQL 8.4 LTS 通过 Unix socket 保存数据。高可用暂缓。原生 CI 使用一次性云端 runner；没有连接或部署用户服务器，真实域名、公共 CA 证书、开机恢复、容量与异地灾备不在测试环境结论内。
 
-应用维护 PR #1 已合并到 `main`（`95ca53ed2cf280ea49b5e1f2c7bb6e342c9d3512`）；原生安装与自动化 PR #2 仍在验收。`9ed815c` 已通过真实 MySQL、systemd/Nginx HTTPS、API 重启、同 schema 版本切换及备份恢复验收；该次整体 CI 在随后 actionlint 失败，修复后的完整重跑正在准备。候选构建至草稿 Release 上传的端到端流程尚未完成。已有候选保留原提交和哈希；新的发布必须对应新的已审查源码和实际验证记录。见 [发布说明](docs/RELEASE.md)、[原生验证记录](docs/NATIVE_CHECKPOINT.md) 和 [CI 与草稿 Release](docs/CI_RELEASE_AUTOMATION.md)。
+原生验收已覆盖真实 MySQL、systemd/Nginx HTTPS、API 重启、同 schema 版本切换和备份恢复；检查结果与源码提交绑定，见 [验证记录](docs/VALIDATION.md)。源码在 `main` 维护，Linux amd64 安装包、源码包及校验信息通过 GitHub Releases 交付。见 [发布说明](docs/RELEASE.md) 和 [发布流水线](docs/CI_RELEASE_AUTOMATION.md)。
 
 ## 云端 Linux 开发演示
 
@@ -42,6 +42,8 @@ API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5
 
 [安装手册](docs/INSTALL.md) 提供 Ubuntu 24.04 / amd64 的软件安装、数据库账号、秘密文件、迁移、systemd 和 HTTPS 步骤。执行前核实资源、已有服务和维护窗口。应用归档无需在运行服务器安装 Go/Node.js；MySQL、Nginx、systemd、证书和主机维护仍须独立审查。
 
+已有宝塔面板的服务器使用 [宝塔部署与更新](docs/BAOTA.md)，复用现有 Nginx/MySQL，包含前端构建、上传、HTTPS、API 代理及前后端同步回退。
+
 运行身份仅获得本库 DML 权限，迁移身份单独保管；秘密放在受限文件中，不提交到 Git、不写入命令行或日志。本机 Unix socket 当前需要显式的 `MYSQL_ALLOW_INSECURE=true` 例外，必须先核对真实 DSN 和 socket 权限，不能扩展成远程 TCP 明文配置。数据库迁移和管理员创建是明确的独立操作，不随 API 开机启动自动执行。
 
 初始套餐及币种价格须经逐项审核后启用；CNY/USD 独立设置金额，没有价格时不可售。站点设置只能修改展示和账单身份，不控制 DNS、TLS、登录来源或服务商秘密。见 [站点与计价](docs/SITE_SETTINGS.md)。
@@ -63,4 +65,4 @@ API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5
 
 真实支付及回调落账、退款/争议/对账、自动续费、税务、汇率、邮件验证/找回、MFA、完整账号生命周期、控制器消费、监控告警和异地灾备仍需单独完成。持久化 outbox 只记录事件，不代表已有 worker 或真实开通。列表尚有 1,000 条上限，不能当完整导出使用。
 
-测试结论须绑定提交和运行环境，见 [验证记录](docs/VALIDATION.md) 与 [原生验证记录](docs/NATIVE_CHECKPOINT.md)。`cf971f1` 的 GitHub Go 扫描报告 0 项可达函数、0 项导入包、19 项模块级告警；后者属于当前应用未导入的 SSH/OpenPGP 包，不能写成“Go 无已知漏洞”。旧候选的应用测试、浏览器及数据库证据不能替代本次修订原生部署的实际验收。未接真实支付、邮件或生产客户数据，也未进行生产部署。
+Go 扫描报告 0 项可达函数、0 项导入包、19 项模块级告警；模块级告警属于当前应用未导入的 SSH/OpenPGP 包，详细版本和运行记录见 [验证记录](docs/VALIDATION.md)。验收使用隔离测试数据，未连接真实支付、邮件或生产客户数据。

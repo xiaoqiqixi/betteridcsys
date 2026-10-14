@@ -1,10 +1,10 @@
 # 候选发布、复现与放行条件
 
-本里程碑包含可配置站点品牌、简体中文/English、独立 CNY/USD 定价，以及安全和正确性修复。源码、文档、构建包和校验和交付到公开仓库 `xiaoqiqixi/betteridcsys`；秘密、实际服务器配置、客户数据和敏感日志必须排除。应用维护 PR #1 已合并到 `main`（`95ca53ed2cf280ea49b5e1f2c7bb6e342c9d3512`），原生安装与发布自动化 PR #2 仍在验收；未部署外部主机或接通真实付款/邮件。功能与验证状态以 [VALIDATION.md](VALIDATION.md) 及 [原生验证记录](NATIVE_CHECKPOINT.md) 的提交与实际记录为准。
+本里程碑包含可配置站点品牌、简体中文/English、独立 CNY/USD 定价，以及安全和正确性修复。源码、文档、构建包和校验和交付到公开仓库 `xiaoqiqixi/betteridcsys`；秘密、实际服务器配置、客户数据和敏感日志必须排除。未部署外部主机或接通真实付款/邮件。功能与验证状态以 [验证记录](VALIDATION.md) 的提交与实际记录为准。
 
 后续部署目标已调整为 **单服务器原生 Linux**，当前源码、部署工具和 CI 都只保留原生路径，高可用暂缓。现有 `0.3.0-rc.1` 保留为历史候选，不覆盖或重新命名；新候选须通过 Ubuntu 24.04 原生服务、权限、HTTPS、升级切换与备份恢复等工程验证；外部主机的开机恢复、真实域名和公共 CA 证书另行记录，不宣称已部署。
 
-根 LICENSE、README 保留原文；项目 `vps-billing/README.md` 已更新为当前原生路径。**当前接口与能力以 [CONTRACT.md](CONTRACT.md)、[SITE_SETTINGS.md](SITE_SETTINGS.md) 和本轮验证记录为准。** 旧提交中的 USD-only、迁移/数据库未验证等文字属于早期快照，不作为当前能力证明。
+根 LICENSE、README 保留原文；项目 `vps-billing/README.md` 已更新为当前原生路径。**当前接口与能力以 [CONTRACT.md](CONTRACT.md)、[SITE_SETTINGS.md](SITE_SETTINGS.md) 和对应验证记录为准。** 旧提交中的 USD-only、迁移/数据库未验证等文字属于早期快照，不作为当前能力证明。
 
 ## 可审查的交付物
 
@@ -12,7 +12,11 @@
 - `aster-VERSION-linux-amd64.tar.gz`：静态 API、编译网页、文档、依赖清单和许可证材料；修订后的运行包只带原生 systemd/Nginx 样例及 `backup-native.sh`。
 - `aster-VERSION-source.tar.gz`：同一修订提交中的根 LICENSE/README 和项目源码，排除本地秘密、依赖目录、构建输出与旧测试日志；不重新加入已从当前源码删除的旧部署实现。
 - `BUILD.json`：准确 Git 提交、提交时间作为 SOURCE_DATE_EPOCH、目标架构、构建参数、工具链及关键输入 SHA-256；修订包新增 `deployment_model`，明确单服务器原生模型和目标主机验证状态。
-- `SHA256SUMS`：验证两个归档和 BUILD.json。尚无签名、来源证明或完整 SPDX/CycloneDX SBOM；依赖清单及收集的 license/notice 文件不等于法律合规结论。
+- `SHA256SUMS`：验证两个归档和 BUILD.json。
+- 自动化额外生成 `PROVENANCE.json`，记录精确 run、提交和文件哈希；它不是签名证明。
+- 仅 `v0.3.0-rc.3` 额外附带 `historical-v0.3.0-rc.1.zip` 与 `historical-v0.3.0-rc.2.zip`；保留旧候选原五文件及 `ARCHIVE.json`，不重建、不改原哈希，不作为当前安装包。
+
+归档尚无签名或完整 SPDX/CycloneDX SBOM；依赖清单及收集的 license/notice 文件不等于法律合规结论。
 
 归档不带部署秘密、真实数据、数据库备份或本机缓存。测试日志留在受限证据目录，不自动塞入发布包，避免暴露运行路径、账号与 DSN。
 
@@ -49,14 +53,12 @@ diff -u /workspace/release-a/SHA256SUMS /workspace/release-b/SHA256SUMS
 
 ## 发布与安装
 
-只读 CI、标签候选构建与默认分支受信草稿发布流程，见 [CI 与草稿 Release 自动化](CI_RELEASE_AUTOMATION.md)。`9ed815c` 已通过真实原生数据库回归、systemd/HTTPS、API 重启、同 schema 切换及备份恢复；完整 CI 在后续 actionlint 失败，修复后的最终重跑和候选构建至草稿上传仍待完成，见 [原生验证记录](NATIVE_CHECKPOINT.md)。应用合并、自动化合并、CI 成功和 Release 创建分别记录，不互相替代。
+只读 CI、标签候选构建与默认分支受信草稿发布流程，见 [CI 与草稿 Release 自动化](CI_RELEASE_AUTOMATION.md)。`00654f4` 的完整 CI 已通过，包括真实原生数据库、systemd/HTTPS、权限、API 重启、同 schema 切换及备份恢复；具体结果见 [原生验证记录](VALIDATION.md)。源码集成、候选构建和 Release 创建分别记录，不互相替代。
 
-`cf971f1` 的 Go 扫描成功，报告 0 项可达函数、0 项导入包、19 项模块级告警；后者涉及当前应用未导入的 `x/crypto` SSH/OpenPGP 包，不能表述为“零已知漏洞”。扫描使用 Go `1.27.2`、`govulncheck v1.9.0` 与 2026-10-08 的漏洞库快照；每次候选按该次真实输出重新记录。
+先将 `main` 上的源码提交、生成的包和证据相互对应，再上传到明确标记的草稿 Release。没有可用 Release API 或授权凭据时，保留本地完整发布目录并报告出版阻塞；不要把上传失败说成发布成功，也不要为此创建长期凭据。
 
-先将源码提交/草稿 PR、生成的包和证据相互对应，再上传到明确标记的草稿 Release。没有可用 Release API 或授权凭据时，保留本地完整发布目录并报告出版阻塞；不要把上传失败说成发布成功，也不要为此创建长期凭据。
-
-本地文件齐全、草稿 Release 创建和实际部署是三个独立动作。安装见 [INSTALL.md](INSTALL.md)，升级/回滚见 [UPGRADE.md](UPGRADE.md)，恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)。不把草稿提交自动打为正式生产版本。
+本地文件齐全、草稿 Release 创建和实际部署是三个独立动作。普通原生安装见 [INSTALL.md](INSTALL.md)，宝塔部署见 [BAOTA.md](BAOTA.md)，升级/回滚见 [UPGRADE.md](UPGRADE.md)，恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)。不把草稿提交自动打为正式生产版本。
 
 ## 商业运营仍需单独补齐
 
-真实支付/签名回调/持久化结算去重/账务分录/退款对账、控制器消费者、邮件验证与找回、MFA/完整账号生命周期、分页导出、税务政策、异地加密备份/PITR、容量和滥用防护、监控告警、部署 TLS/秘密轮换和事件响应均不因本轮里程碑而自动完成。运营负责人需按实际业务放行；不能宣称安全认证、支付合规或 SLA。
+真实支付/签名回调/持久化结算去重/账务分录/退款对账、控制器消费者、邮件验证与找回、MFA/完整账号生命周期、分页导出、税务政策、异地加密备份/PITR、容量和滥用防护、监控告警、部署 TLS/秘密轮换和事件响应均不因本里程碑而自动完成。运营负责人需按实际业务放行；不能宣称安全认证、支付合规或 SLA。

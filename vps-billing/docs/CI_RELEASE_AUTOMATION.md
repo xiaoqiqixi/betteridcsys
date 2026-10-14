@@ -2,7 +2,7 @@
 
 本方案固定用于公开仓库 `xiaoqiqixi/betteridcsys`（仓库 ID `1418618420`）的代码验证与候选归档，默认生成 **Draft + Pre-release**。公开内容限于源码、文档、构建包与校验和；秘密、实际服务器配置、客户数据和敏感日志排除。工作流不合并 PR、不部署服务器、不接通支付/邮件，也不把候选版本标记为正式可运营版本。
 
-应用 PR #1 已合并，提交 `95ca53ed2cf280ea49b5e1f2c7bb6e342c9d3512`；原生与自动化 PR #2 尚在验收。真实只读 Actions 已运行，`9ed815c` 的真实 MySQL 回归、systemd/HTTPS、API 重启、同 schema 目录切换及备份恢复已通过；该次整体 CI 仅在后续 actionlint 步骤失败，修复后的完整重跑仍待完成。候选构建至草稿发布尚未完成端到端验收。最新状态和完整 run 链接见 [原生验证记录](NATIVE_CHECKPOINT.md)。
+应用与原生验收基线 `00654f4` 的真实只读 CI 已完整通过：原生 MySQL、systemd/Nginx HTTPS、权限、API 重启、同 schema 切换、备份恢复与清理均有运行证据。验收范围见 [验证记录](VALIDATION.md)；具体发布、双构建和上传结果以对应 Release 的 `PROVENANCE.json` 及构建运行链接为准。
 
 部署基线为 **Ubuntu 24.04 / amd64 单服务器原生安装**，当前源码、部署工具和 CI 只提供原生路径。CI 使用一次性原生 MySQL 8.4 进程及隔离数据目录，原生验收另外启动临时 systemd API/Nginx 与私有测试 CA。所有系统操作限定于一次性 GitHub-hosted runner，不连接用户服务器。整机重启、数据库进程重启、真实域名和公共 CA 证书不在当前自动化范围内。
 
@@ -10,7 +10,7 @@
 
 | 流程 | 入口 | 权限与产出 |
 |---|---|---|
-| `ci.yml` / `Read-only CI` | 分支 push / PR / 手动；push 排除 `artifacts/**` | 只读源码，验证 Go、MySQL、前端及接口；不创建 Release |
+| `ci.yml` / `Read-only CI` | `main` push / 手动 | 只读源码，验证 Go、MySQL、前端及接口；不创建 Release |
 | `release-build.yml` / `Release candidate build` | 预发布标签 push；或默认分支上的手动入口指定已有标签 | `contents: read`；验证精确源码，构建候选文件并上传该次 run 的 Actions artifact |
 | `release-publish.yml` | 指定构建流程的 `workflow_run: completed` | 仅发布 job 声明 `contents: write`、`actions: read`；检查成功 run 与产物后创建新草稿 Release |
 
@@ -26,7 +26,7 @@ GitHub 的 `workflow_run` 发布流程来自默认分支，并可获得前序只
 
 本流程不提供创建、移动或删除标签操作，也不覆盖已有草稿或正式 Release。发现标签缺失/已移动、来源不一致或同名 Release 已存在时停止，不用 `target_commitish` 把它自动补成新标签。[GitHub：创建 Release 参数](https://docs.github.com/en/rest/releases/releases#create-a-release)
 
-这些校验不是跨 API 的原子锁。其他有权限的人仍可能在检查后移动标签、删除标签或发布草稿；发布前后复查和工作流并发限制不能提供密码学不可变性。需要服务器端标签/分支规则才能进一步限制外部写入，本轮不更改仓库规则或权限。具有仓库写权限的人也可能修改其他工作流申请权限，这套实现不是针对恶意仓库写入者的全仓库安全沙箱。
+这些校验不是跨 API 的原子锁。其他有权限的人仍可能在检查后移动标签、删除标签或发布草稿；发布前后复查和工作流并发限制不能提供密码学不可变性。需要服务器端标签/分支规则才能进一步限制外部写入，本流程不更改仓库规则或权限。具有仓库写权限的人也可能修改其他工作流申请权限，这套实现不是针对恶意仓库写入者的全仓库安全沙箱。
 
 ## 构建与上传前核验
 
@@ -41,19 +41,21 @@ GitHub 的 `workflow_run` 发布流程来自默认分支，并可获得前序只
 
 `mysql-distribution.json` 为 schema 2、状态 `pinned_official_metadata`，固定 Ubuntu 24.04 amd64 的 MySQL `8.4.11-1ubuntu24.04`。`server-core`、`client-core`、`client-plugins`、`client` 四个官方包的大小和 SHA-256 来自 [Oracle Packages 元数据](https://repo.mysql.com/apt/ubuntu/dists/noble/mysql-8.4-lts/binary-amd64/Packages)。夹具先验证全部包，再检查包名/版本/架构并提取数据；不安装数据库服务，不运行包维护脚本，也不接受临时传入的哈希或已解压二进制目录。测试运行库由 Ubuntu 签名 APT 源提供。
 
-这是官方 HTTPS 元数据固定，不是本地 InRelease 签名核验。旧清单为空哈希时的两次失败、本地下载 HTTP 403、修订后的真实包获取/初始化和数据库回归分别记录在 [原生验证记录](NATIVE_CHECKPOINT.md)。本地替身测试不能替代真实 MySQL、systemd 或 TLS 结果；每项成功结论须绑定实际提交和 run。
+这是官方 HTTPS 元数据固定，不是本地 InRelease 签名核验。官方包获取、真实初始化和数据库回归的通过范围见 [验证记录](VALIDATION.md)。本地替身测试不能替代真实 MySQL、systemd 或 TLS 结果；每项成功结论须绑定实际提交和 run。
 
 发布器只读取指定上游 run 的指定 artifact，通过有上限的 ZIP 下载/解析校验文件名、大小、路径和内容。拒绝目录穿越、重复/多余文件、链接、超限压缩内容、来源不匹配或校验和错误。归档数据不能覆盖受信脚本目录；不会从下载包中导入 Python 模块、执行 shell 或运行二进制。
 
 保留在源码归档中的文件集合及每个文件的 Git blob 哈希还须匹配候选 commit，不能只相信归档自报的清单。修订后的运行包只携带原生 systemd、Nginx 配置和 `backup-native.sh`；源码归档跟随修订后的提交，不重新加入已删除的旧部署实现。历史文件仅存在于不可改写的旧提交/旧候选中。`BUILD.json` 新增 `deployment_model`，明确原生单服务器模型及目标主机验证待完成。
 
-打包输出严格为同一候选版本的源码包、Linux amd64 包、`BUILD.json` 和 `SHA256SUMS` 四个文件。构建验证后额外生成 `PROVENANCE.json`，记录仓库、tag/source commit、run ID/attempt、受信控制文件 blob ID 和四个文件的哈希/大小。因此中间 artifact `candidate-RUN_ID-ATTEMPT` 与最终草稿 Release 各含五个文件；发布说明写入 Release 正文，不增加说明附件。`SHA256SUMS` 覆盖两个归档与 BUILD，`PROVENANCE.json` 的传输完整性由 GitHub artifact 的整体 digest 校验。来源记录没有签名，也不是 SLSA 认证或完整供应链证明。
+打包输出严格为同一候选版本的源码包、Linux amd64 包、`BUILD.json` 和 `SHA256SUMS` 四个文件。构建验证后额外生成 `PROVENANCE.json`，记录仓库、tag/source commit、run ID/attempt、受信控制文件 blob ID 和四个文件的哈希/大小。因此中间 artifact `candidate-RUN_ID-ATTEMPT` 含五个文件，普通候选 Release 同样包含这五项；发布说明写入 Release 正文。`SHA256SUMS` 覆盖两个归档与 BUILD，`PROVENANCE.json` 的传输完整性由 GitHub artifact 的整体 digest 校验。来源记录没有签名，也不是 SLSA 认证或完整供应链证明。
+
+`v0.3.0-rc.3` 另外附加 `historical-v0.3.0-rc.1.zip` 和 `historical-v0.3.0-rc.2.zip`，共七项 Release 资产。每份 ZIP 保存该历史候选的原五个文件与 `ARCHIVE.json`，原始字节、源码提交及哈希不变；这是历史归档，不是当前安装包或新构建。附加文件在发布前按固定大小/哈希及内部文件清单验证，仍使用同一发布 job，不增加权限、标签或分支。实际上传状态以 Release 记录为准。
 
 Actions artifact 是中间交付，不等于 Release 已创建；草稿 Release 也不等于部署成功。完整人工放行条件见 [RELEASE.md](RELEASE.md)。
 
 常规 CI 与候选构建另行执行 `npm audit --audit-level=high` 和固定版本 `govulncheck`；命令返回非零（包括扫描网络失败）会使该 job 失败，不跳过门禁。npm 低于 high 的审计发现不一定使该命令失败，因此必须结合输出报告范围，不能把绿灯解释为“零漏洞”。目标主机系统软件审查、浏览器视觉验收、公共 CA/真实 DNS/证书续期、整机重启、独立实例或异地恢复、真实支付/邮件和负载验收不在当前自动化范围内；商业运营所需项按 RELEASE.md 单独评估。扫描源不可访问时记录失败/未完成与原因。
 
-Go 漏洞扫描已独立于数据库 job，数据库准备失败不会使它被前序步骤跳过。最近 `cf971f1` 的 [push](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38555568661/job/115823726899) 与 [PR](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38555576197/job/115823748608) 扫描均成功：Go `1.27.2`、`govulncheck v1.9.0`，漏洞库更新时间 2026-10-08 22:31:09 UTC；报告 0 项可达函数、0 项导入包、19 项模块级告警。余下是当前应用未导入的 `x/crypto` SSH/OpenPGP 包告警，不等于依赖无已知漏洞。实际 checkout 提交与详细范围见原生验证记录。
+Go 漏洞扫描独立于数据库 job，数据库准备失败不会使它被前序步骤跳过。结果须同时记录可达函数、导入包及模块告警范围；未调用相关函数不等于依赖无已知漏洞。已执行扫描见 [验证记录](VALIDATION.md)。
 
 ## 权限与依赖
 
@@ -72,11 +74,11 @@ Go 漏洞扫描已独立于数据库 job，数据库准备失败不会使它被�
 
 ## 首次安装与现有 rc.1
 
-现有候选 `0.3.0-rc.1` 来自 `0c849bc6739d8e8319ae4162c65a90d9883da27b`，其已核验产物作为历史候选保留在独立的 `artifacts/v0.3.0-rc.1` 分支。它不是修订后的单服务器原生安装版本。自动化变更不修改这些文件、既有源码提交或已有候选哈希。
+现有候选 `0.3.0-rc.1` 来自 `0c849bc6739d8e8319ae4162c65a90d9883da27b`，其文件及校验和作为历史候选保留，不能用于冒充新源码的构建结果。它不是修订后的单服务器原生安装版本。自动化变更不修改这些文件、既有源码提交或已有候选哈希。
 
-该旧提交没有本轮新增的受信工作流，不能靠现在安装流程就“追溯触发”旧提交的 tag-push 构建。应用与自动化经过审查、正常合并后，未来标签须指向包含已安装流程和应用代码的受审查提交，并使用未占用的候选号。已经生成的候选仍按其原提交和哈希保留；新源码必须重新构建，不能通过改名或覆盖旧文件制造新版本。
+该旧提交没有受信发布工作流，不能靠现在安装流程就“追溯触发”旧提交的 tag-push 构建。应用与自动化经过审查、正常合并后，未来标签须指向包含已安装流程和应用代码的受审查提交，并使用未占用的候选号。已经生成的候选仍按其原提交和哈希保留；新源码必须重新构建，不能通过改名或覆盖旧文件制造新版本。
 
-候选构建首次运行前，由维护方核对原生安装包与操作文档、安装提交、严格标签映射、默认分支祖先关系、测试结果、权限与费用状态，并按已获授权推进验收。候选工程验收与目标主机开机、公共 CA 和灾备验证分别记录，不用前者宣称后者已经完成。创建标签、触发候选及草稿上传各自需要实际结果记录；本文件不提前宣称这些动作已完成。
+候选构建首次运行前，由维护方核对原生安装包与操作文档、安装提交、严格标签映射、默认分支祖先关系、测试结果、权限与费用状态，并记录验收结果。候选工程验收与目标主机开机、公共 CA 和灾备验证分别记录，不用前者宣称后者已经完成。创建标签、触发候选及草稿上传各自需要实际结果记录；本文件不提前宣称这些动作已完成。
 
 ## 草稿创建失败后的处理
 
@@ -86,6 +88,6 @@ Go 漏洞扫描已独立于数据库 job，数据库准备失败不会使它被�
 
 ## 运行资源与费用边界
 
-只使用标准 GitHub-hosted `ubuntu-24.04`；不使用 larger runner、自托管机器或用户 Mac，不启用付费计划，不设置预算，不修改账户或仓库级权限。常规应用检查、独立 Go 扫描、候选构建、草稿发布的 job 超时分别为 35、15、45、10 分钟，中间 artifact 保留 7 天；配置并发限制以减少失控运行和无意覆盖。过期中间产物不触发自动重建/补传。
+只使用标准 GitHub-hosted `ubuntu-24.04`；不使用 larger runner 或自托管机器，不启用付费计划，不设置预算，不修改账户或仓库级权限。常规应用检查、独立 Go 扫描、候选构建、草稿发布的 job 超时分别为 35、15、45、10 分钟，中间 artifact 保留 7 天；配置并发限制以减少失控运行和无意覆盖。过期中间产物不触发自动重建/补传。
 
-公开仓库授权不代表已经核验本账户的 runner 资格、存储使用、费用策略或工作流运行权限；本轮未检查账户额度，也不承诺所有相关资源免费。若账户策略、额度或组织权限阻止执行，应报告限制，不自动开通付费能力或扩大权限。[GitHub：Actions 计费与用量](https://docs.github.com/en/actions/concepts/billing-and-usage)
+公开仓库授权不代表已经核验本账户的 runner 资格、存储使用、费用策略或工作流运行权限；账户额度未在此验证，也不承诺所有相关资源免费。若账户策略、额度或组织权限阻止执行，应报告限制，不自动开通付费能力或扩大权限。[GitHub：Actions 计费与用量](https://docs.github.com/en/actions/concepts/billing-and-usage)
