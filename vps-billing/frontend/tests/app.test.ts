@@ -91,6 +91,53 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("billing workspace flows", () => {
+  it("retains the selected region and plan through a delayed currency reload", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const { wrapper, router } = await mountApp();
+    await router.push("/plans");
+    await flushPromises();
+    const plan = fixtures.previewPlans("CNY")[2]!;
+    await wrapper.findAll(".region-options button")[2]!.trigger("click");
+    expect(wrapper.find(".purchase-summary").text()).toContain(plan.name);
+    const originalFetch = fetch;
+    let resolvePlans!: (value: unknown) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        if (path.endsWith("/plans?currency=USD"))
+          return new Promise((resolve) => {
+            resolvePlans = resolve;
+          });
+        return originalFetch(path, options);
+      }),
+    );
+    await wrapper.find('select[aria-label="币种"]').setValue("USD");
+    await flushPromises();
+    expect(wrapper.find(".purchase-page").exists()).toBe(true);
+    expect(wrapper.find(".purchase-total").exists()).toBe(false);
+    expect(
+      wrapper.find(".purchase-review").attributes("disabled"),
+    ).toBeDefined();
+    resolvePlans({
+      ok: true,
+      json: async () => ({ data: fixtures.previewPlans("USD") }),
+    });
+    await flushPromises();
+    expect(wrapper.findAll(".catalog-plan")).toHaveLength(1);
+    expect(wrapper.find('.region-options [aria-pressed="true"]').text()).toBe(
+      plan.region,
+    );
+    expect(wrapper.find(".purchase-summary").text()).toContain(plan.name);
+    expect(wrapper.find(".purchase-total").text()).toContain("USD 24.00");
+    await wrapper.find('select[aria-label="币种"]').setValue("CNY");
+    await flushPromises();
+    expect(wrapper.findAll(".catalog-plan")).toHaveLength(1);
+    expect(wrapper.find(".purchase-total").text()).toContain("CNY 159.00");
+    expect(
+      requests.filter((request) => request.method === "POST"),
+    ).toHaveLength(0);
+    wrapper.unmount();
+  });
   it("keeps locale and currency independent and historical invoices in their recorded currency", async () => {
     activeUser = { ...fixtures.previewUser };
     const { wrapper, router } = await mountApp();

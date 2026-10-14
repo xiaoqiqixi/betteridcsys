@@ -2,6 +2,9 @@
 # Fake mysqldump only. Exercises filesystem/pipe failure behavior, never a DB.
 set -euo pipefail
 umask 077
+fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+# A missing scanner must stop the suite, never mean "no secret matched".
+command -v grep >/dev/null 2>&1 || fail 'required leakage scanner grep is unavailable'
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/aster-native-backup-test.XXXXXXXX")
 trap 'rm -rf -- "$test_dir"' EXIT
@@ -98,13 +101,23 @@ chmod 755 "$test_dir/bin/"*
 export PATH="$test_dir/bin:$PATH"
 script="$script_dir/backup-native.sh"
 base_args=(--client-config "$test_dir/private/client.cnf" --socket "$test_dir/fake-mysql.sock" --database aster_fixture --output-dir "$test_dir/backups")
-fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+assert_no_private_markers() {
+  local status=0
+  # Do not use -q: GNU grep may return success after a match despite a later
+  # read error. Suppress the actual matching text so fixtures stay private.
+  grep -a -E -r -- 'fixture-not-a-real-secret|fixture-private-diagnostic-do-not-log' "$@" >/dev/null 2>&1 || status=$?
+  case "$status" in
+    0) fail 'private diagnostic or credential leaked' ;;
+    1) return 0 ;;
+    *) fail "leakage scanner failed (exit $status); result is not a clean scan" ;;
+  esac
+}
 assert_clean() {
   [[ -z $(find "$test_dir/backups" -name '*.partial' -print -quit) ]] || fail 'staging data survived a handled failure'
 }
 expect_failure() {
   if "$@" > "$test_dir/result.log" 2>&1; then fail 'operation unexpectedly succeeded'; fi
-  if rg -q 'fixture-not-a-real-secret|fixture-private-diagnostic-do-not-log' "$test_dir/result.log"; then fail 'private diagnostic or credential leaked'; fi
+  assert_no_private_markers "$test_dir/result.log"
   assert_clean
 }
 # Predictable timestamp ensures that concurrency depends on random identity,
@@ -126,7 +139,7 @@ for directory in "$test_dir/copied backups/"*; do
 done
 [[ -z $(find "$test_dir/backups" -type d ! -perm 700 -print -quit) ]] || fail 'non-private output directory'
 [[ -z $(find "$test_dir/backups" -type f ! -perm 600 -print -quit) ]] || fail 'non-private output file'
-if rg -q -r '' 'fixture-not-a-real-secret' "$test_dir/backups" "$test_dir/calls"; then fail 'credential copied into output or command arguments'; fi
+assert_no_private_markers "$test_dir/backups" "$test_dir/calls"
 printf '%s\n' 'PASS: 8 concurrent same-second backups, private permissions, fixed socket/options, environment isolation, portable checksums (fake mysqldump)'
 
 expect_failure env ASTER_TEST_DUMP_FAIL=1 bash "$script" "${base_args[@]}"

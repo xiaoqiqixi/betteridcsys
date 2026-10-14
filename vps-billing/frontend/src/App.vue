@@ -1218,7 +1218,7 @@ onMounted(init);
           </button>
         </div>
         <div
-          v-if="loading && !overview && !adminOverview"
+          v-if="loading && !overview && !adminOverview && page !== 'plans'"
           class="skeleton-grid"
           :aria-label="tr('正在载入数据', 'Loading data')"
           role="status"

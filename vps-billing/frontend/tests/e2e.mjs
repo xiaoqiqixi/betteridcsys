@@ -142,6 +142,10 @@ try {
     amount(alternatePlan),
   );
   await page.getByLabel("币种", { exact: true }).selectOption("USD");
+  await expect(summary).toContainText(alternatePlan.name);
+  await expect(page.locator(".catalog-plan")).toHaveCount(
+    catalogUSD.filter((plan) => plan.region === alternatePlan.region).length,
+  );
   await expect(summary.locator(".purchase-total")).toContainText(
     amount(catalogUSD.find((plan) => plan.id === alternatePlan.id)),
   );
