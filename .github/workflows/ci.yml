@@ -1,0 +1,42 @@
+name: Read-only CI
+
+on:
+  push:
+    branches-ignore: ['artifacts/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Required regressions with native MySQL
+        run: bash vps-billing/deploy/ci/mysql-native.sh -- bash vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE"
+      - name: npm vulnerability gate
+        working-directory: vps-billing/frontend
+        run: npm audit --audit-level=high
+      - name: Workflow syntax and expression checks
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/release-build.yml .github/workflows/release-publish.yml
+      - name: Go vulnerability gate (network failures fail the check)
+        working-directory: vps-billing/backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

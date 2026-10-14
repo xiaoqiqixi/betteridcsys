@@ -30,11 +30,11 @@ demo 无初始服务或假已付账单；创建订单只生成待付款记录，
 | 环境变量 | 作用 |
 |---|---|
 | APP_MODE | production（默认）或显式 demo |
-| LISTEN_ADDR | 默认 127.0.0.1:8080；容器内部 0.0.0.0:8080 |
+| LISTEN_ADDR | 默认 127.0.0.1:8080；原生 systemd 模板使用 127.0.0.1:18080 |
 | APP_ORIGIN | 精确 HTTPS 来源，无路径/尾斜杠，如 https://billing.example.com |
 | SESSION_SECRET / SESSION_SECRET_FILE | 独立随机秘密，至少 32 字节；优先受限文件 |
 | MYSQL_DSN / MYSQL_DSN_FILE | Go MySQL DSN；生产优先验证证书的 tls=true |
-| MYSQL_ALLOW_INSECURE | 默认 false；true 仅用于已审查的隔离同机测试网络 |
+| MYSQL_ALLOW_INSECURE | 默认 false；原生同机 Unix socket 须显式 true，并核验 socket 权限、账号与目标；不得据此启用明文 TCP |
 | TRUSTED_PROXY_CIDRS | 直接可信代理精确 CIDR；空值不信任转发地址 |
 | BOOTSTRAP_EMAIL / NAME / ROLE | CLI 创建用户；role 默认 customer，管理员需显式 admin |
 | BOOTSTRAP_PASSWORD / BOOTSTRAP_PASSWORD_FILE | 唯一 16–72 字节强口令，不用 demo/示例值 |

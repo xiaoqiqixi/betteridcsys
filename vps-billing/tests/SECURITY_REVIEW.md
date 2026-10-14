@@ -1,5 +1,7 @@
 # Security and production-readiness review
 
+> Historical application review through `0.3.0-rc.1`. The deployment implementation described below has since been replaced by the native Linux-only path. These findings remain historical evidence, not current installation instructions or native host acceptance. See [current validation status](../docs/VALIDATION.md).
+
 ## 维护轮次补充审查（2026-10-14 UTC）
 
 本节记录本轮独立源码审查及已核对的测试日志。下方保留此前的历史记录；其中“MySQL 尚未运行”、旧测试数量及“审计仅覆盖订单”的表述不再代表当前状态。后续浏览器、Compose、恢复与发布包验证结果以 [验证记录](../docs/VALIDATION.md) 为准。本记录不是渗透测试认证、生产上线许可或真实收款验收。
