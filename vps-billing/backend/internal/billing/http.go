@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -106,7 +107,8 @@ func errorKind(e error) string {
 	return "storage_error"
 }
 func body(w http.ResponseWriter, r *http.Request, v any) bool {
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
 		fail(w, r, 415, "JSON_REQUIRED", "请使用 JSON 请求")
 		return false
 	}
@@ -233,6 +235,15 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if p == "/site-settings" && r.Method == "GET" {
+		settings, err := a.Store.Settings(r.Context())
+		if err != nil {
+			a.internal(w, r, err)
+			return
+		}
+		jsonOut(w, 200, settings.Public())
+		return
+	}
 	u, e := a.current(r)
 	if errors.Is(e, ErrNotFound) {
 		fail(w, r, 401, "AUTH_REQUIRED", "请先登录")
@@ -255,17 +266,43 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.createOrder(w, r, u)
 		return
 	}
-	if strings.HasPrefix(p, "/invoices/") {
-		id := strings.TrimPrefix(p, "/invoices/")
+	if p == "/admin/site-settings" {
+		if r.Method == "GET" {
+			settings, err := a.Store.Settings(r.Context())
+			a.result(w, r, settings, err)
+			return
+		}
+		var settings SiteSettings
+		if !body(w, r, &settings) {
+			return
+		}
+		if !ValidateSettings(settings) {
+			fail(w, r, 400, "INVALID_SETTINGS", "请检查必填项、语言、币种、联系方式和 HTTPS 地址")
+			return
+		}
+		updated, err := a.Store.UpdateSettings(r.Context(), u, settings)
+		if errors.Is(err, ErrSettingsConflict) {
+			fail(w, r, 409, "SETTINGS_CONFLICT", "设置已被其他管理员修改，请重新读取后再编辑")
+			return
+		}
+		a.result(w, r, updated, err)
+		return
+	}
+	if strings.HasPrefix(p, "/invoices/") || strings.HasPrefix(p, "/admin/invoices/") {
+		invoicePath := "/invoices/"
+		if admin {
+			invoicePath = "/admin/invoices/"
+		}
+		id := strings.TrimPrefix(p, invoicePath)
 		checkout := strings.HasSuffix(id, "/checkout")
 		if checkout {
 			id = strings.TrimSuffix(id, "/checkout")
 		}
-		if (checkout && r.Method != "POST") || (!checkout && r.Method != "GET") {
+		if (checkout && (admin || r.Method != "POST")) || (!checkout && r.Method != "GET") {
 			fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
 			return
 		}
-		invoice, e := a.Store.Invoice(r.Context(), u.ID, id)
+		invoice, e := a.Store.Invoice(r.Context(), uid, id)
 		if errors.Is(e, ErrNotFound) {
 			fail(w, r, 404, "NOT_FOUND", "未找到此账单")
 			return
@@ -362,7 +399,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		if e == nil && network.Contains(net.ParseIP(ip)) {
 			forwarded := strings.TrimSpace(r.Header.Get("X-Real-IP"))
 			if net.ParseIP(forwarded) != nil {
-				ip = forwarded
+				ip = net.ParseIP(forwarded).String()
 			}
 			break
 		}

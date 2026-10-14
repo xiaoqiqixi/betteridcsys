@@ -82,6 +82,37 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("billing workspace flows", () => {
+  it("ignores invoice details that finish after the dialog was closed", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const { wrapper, router } = await mountApp();
+    await router.push("/invoices");
+    await flushPromises();
+    let resolveDetail!: (value: unknown) => void;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDetail = resolve as typeof resolveDetail;
+        }),
+    );
+    await wrapper.findAll(".table-action")[0]!.trigger("click");
+    await flushPromises();
+    await wrapper
+      .find('.invoice-modal button[aria-label="关闭"]')
+      .trigger("click");
+    await wrapper.findAll(".table-action")[1]!.trigger("click");
+    await flushPromises();
+    resolveDetail({
+      ok: true,
+      json: async () => ({
+        data: { ...fixtures.invoices[0], number: "STALE-INVOICE" },
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find(".invoice-modal").text()).not.toContain(
+      "STALE-INVOICE",
+    );
+    wrapper.unmount();
+  });
   it.each([
     ["https://checkout.example.com/session/test", true],
     ["javascript:alert(1)", false],

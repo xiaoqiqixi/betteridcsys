@@ -45,16 +45,17 @@ type Order struct {
 	Hostname   string    `json:"hostname"`
 }
 type Invoice struct {
-	ID          string     `json:"id"`
-	Number      string     `json:"number"`
-	UserID      string     `json:"-"`
-	OrderID     string     `json:"order_id"`
-	Status      string     `json:"status"`
-	AmountMinor int64      `json:"amount_minor"`
-	Currency    string     `json:"currency"`
-	IssuedAt    time.Time  `json:"issued_at"`
-	DueAt       time.Time  `json:"due_at"`
-	PaidAt      *time.Time `json:"paid_at,omitempty"`
+	Issuer      *InvoiceIdentity `json:"issuer,omitempty"`
+	ID          string           `json:"id"`
+	Number      string           `json:"number"`
+	UserID      string           `json:"-"`
+	OrderID     string           `json:"order_id"`
+	Status      string           `json:"status"`
+	AmountMinor int64            `json:"amount_minor"`
+	Currency    string           `json:"currency"`
+	IssuedAt    time.Time        `json:"issued_at"`
+	DueAt       time.Time        `json:"due_at"`
+	PaidAt      *time.Time       `json:"paid_at,omitempty"`
 }
 type Service struct {
 	ID         string    `json:"id"`
@@ -94,6 +95,8 @@ type Summary struct {
 	Customers       int
 }
 type Store interface {
+	Settings(context.Context) (SiteSettings, error)
+	UpdateSettings(context.Context, User, SiteSettings) (SiteSettings, error)
 	Summary(context.Context, string) (Summary, error)
 	Invoice(context.Context, string, string) (Invoice, error)
 	Ping(context.Context) error

@@ -19,7 +19,7 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	if e != nil {
 		return nil, errors.New("invalid MySQL configuration")
 	}
-	if !allowInsecure && cfg.TLSConfig != "true" {
+	if !allowInsecure && (cfg.TLSConfig != "true" || cfg.AllowFallbackToPlaintext) {
 		return nil, errors.New("MySQL TLS is required; use tls=true or explicitly allow an isolated private database")
 	}
 	cfg.ParseTime = true
@@ -41,57 +41,146 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	}
 	return &MySQL{db}, nil
 }
+
+var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies}
+
 func (m *MySQL) Ping(ctx context.Context) error {
-	var checksum string
-	e := m.DB.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE version=1").Scan(&checksum)
-	if e != nil {
-		return e
+	rows, err := m.DB.QueryContext(ctx, "SELECT version,checksum FROM schema_migrations ORDER BY version")
+	if err != nil {
+		return err
 	}
-	if checksum != digest(migrations.Initial) {
-		return errors.New("schema version mismatch")
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var version int
+		var checksum string
+		if err = rows.Scan(&version, &checksum); err != nil {
+			return err
+		}
+		if version != n+1 || n >= len(schemaVersions) || checksum != digest(schemaVersions[n]) {
+			return errors.New("schema version mismatch")
+		}
+		n++
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if n != len(schemaVersions) {
+		return errors.New("schema upgrade required")
 	}
 	return nil
 }
+
 func (m *MySQL) Migrate(ctx context.Context) error {
-	conn, e := m.DB.Conn(ctx)
-	if e != nil {
-		return e
+	conn, err := m.DB.Conn(ctx)
+	if err != nil {
+		return err
 	}
 	defer conn.Close()
 	var locked int
-	if e = conn.QueryRowContext(ctx, "SELECT GET_LOCK('aster_schema_migration',30)").Scan(&locked); e != nil || locked != 1 {
+	if err = conn.QueryRowContext(ctx, "SELECT GET_LOCK('aster_schema_migration',30)").Scan(&locked); err != nil || locked != 1 {
 		return errors.New("could not obtain migration lock")
 	}
 	defer conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK('aster_schema_migration')")
-	if _, e = conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations(version INT PRIMARY KEY, checksum CHAR(64) NOT NULL, applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)) ENGINE=InnoDB"); e != nil {
-		return e
+	if _, err = conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations(version INT PRIMARY KEY, checksum CHAR(64) NOT NULL, applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)) ENGINE=InnoDB"); err != nil {
+		return err
 	}
-	var checksum string
-	e = conn.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE version=1").Scan(&checksum)
-	if e == nil {
-		if checksum != digest(migrations.Initial) {
-			return errors.New("migration checksum mismatch; never edit applied migrations")
+	var future int
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version> ?", len(schemaVersions)).Scan(&future); err != nil {
+		return err
+	}
+	if future != 0 {
+		return errors.New("database schema is newer than this binary")
+	}
+	for index, source := range schemaVersions {
+		version := index + 1
+		var checksum string
+		err = conn.QueryRowContext(ctx, "SELECT checksum FROM schema_migrations WHERE version=?", version).Scan(&checksum)
+		if err == nil {
+			if checksum != digest(source) {
+				return errors.New("migration checksum mismatch; never edit applied migrations")
+			}
+			continue
 		}
-		return nil
-	}
-	if !errors.Is(e, sql.ErrNoRows) {
-		return e
-	}
-	for _, q := range strings.Split(migrations.Initial, ";") {
-		if strings.TrimSpace(q) != "" {
-			if _, e = conn.ExecContext(ctx, q); e != nil {
-				return fmt.Errorf("migration failed: %w", e)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if version == 3 {
+			// MySQL generated names depend on the original schema. Identify only legacy USD checks.
+			rows, e := conn.QueryContext(ctx, "SELECT tc.TABLE_NAME,tc.CONSTRAINT_NAME,cc.CHECK_CLAUSE FROM information_schema.TABLE_CONSTRAINTS tc JOIN information_schema.CHECK_CONSTRAINTS cc ON tc.CONSTRAINT_SCHEMA=cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME=cc.CONSTRAINT_NAME WHERE tc.CONSTRAINT_SCHEMA=DATABASE() AND tc.TABLE_NAME IN ('orders','invoices') AND tc.CONSTRAINT_TYPE='CHECK'")
+			if e != nil {
+				return e
+			}
+			var drop []string
+			for rows.Next() {
+				var table, name, clause string
+				if e = rows.Scan(&table, &name, &clause); e != nil {
+					rows.Close()
+					return e
+				}
+				if strings.Contains(clause, "currency") && !strings.Contains(clause, "CNY") {
+					drop = append(drop, "ALTER TABLE `"+table+"` DROP CHECK `"+strings.ReplaceAll(name, "`", "``")+"`")
+				}
+			}
+			e = rows.Err()
+			rows.Close()
+			if e != nil {
+				return e
+			}
+			for _, q := range drop {
+				if _, e = conn.ExecContext(ctx, q); e != nil {
+					return e
+				}
 			}
 		}
-	}
-	for _, p := range Catalog() {
-		_, e = conn.ExecContext(ctx, "INSERT IGNORE INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available) VALUES(?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, p.PriceMinor, p.Currency, false)
-		if e != nil {
-			return e
+		for _, q := range strings.Split(source, ";") {
+			q = strings.TrimSpace(q)
+			if q == "" {
+				continue
+			}
+			if strings.HasPrefix(q, "ALTER TABLE invoices ADD COLUMN issuer_snapshot") {
+				var n int
+				if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='invoices' AND COLUMN_NAME='issuer_snapshot'").Scan(&n); err != nil {
+					return err
+				}
+				if n != 0 {
+					continue
+				}
+			}
+			if strings.Contains(q, "ADD CONSTRAINT") {
+				fields := strings.Fields(q)
+				name := fields[5]
+				var n int
+				if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_NAME=?", fields[2], name).Scan(&n); err != nil {
+					return err
+				}
+				if n != 0 {
+					continue
+				}
+			}
+			if _, err = conn.ExecContext(ctx, q); err != nil {
+				return fmt.Errorf("migration %d failed: %w", version, err)
+			}
+		}
+		if version == 1 {
+			for _, p := range Catalog() {
+				_, err = conn.ExecContext(ctx, "INSERT IGNORE INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available) VALUES(?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, p.PriceMinor, p.Currency, false)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		if version == 2 {
+			raw, _ := json.Marshal(DefaultSettings())
+			if _, err = conn.ExecContext(ctx, "INSERT IGNORE INTO site_settings(id,document) VALUES(1,?)", raw); err != nil {
+				return err
+			}
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO schema_migrations(version,checksum) VALUES(?,?)", version, digest(source)); err != nil {
+			return err
 		}
 	}
-	_, e = conn.ExecContext(ctx, "INSERT INTO schema_migrations(version,checksum) VALUES(1,?)", digest(migrations.Initial))
-	return e
+	return nil
 }
 func scanUser(s interface{ Scan(...any) error }) (User, error) {
 	var u User
@@ -200,7 +289,7 @@ func (m *MySQL) Orders(c context.Context, uid string) ([]Order, error) {
 }
 func (m *MySQL) Invoices(c context.Context, uid string) ([]Invoice, error) {
 	w, a := filter(uid)
-	r, e := m.DB.QueryContext(c, "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at FROM invoices"+w+" ORDER BY issued_at DESC LIMIT 1000", a...)
+	r, e := m.DB.QueryContext(c, "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at,issuer_snapshot FROM invoices"+w+" ORDER BY issued_at DESC LIMIT 1000", a...)
 	if e != nil {
 		return nil, e
 	}
@@ -208,9 +297,15 @@ func (m *MySQL) Invoices(c context.Context, uid string) ([]Invoice, error) {
 	out := []Invoice{}
 	for r.Next() {
 		var i Invoice
-		e = r.Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt)
+		var issuerRaw []byte
+		e = r.Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt, &issuerRaw)
 		if e != nil {
 			return nil, e
+		}
+		if len(issuerRaw) > 0 {
+			if e = json.Unmarshal(issuerRaw, &i.Issuer); e != nil {
+				return nil, e
+			}
 		}
 		out = append(out, i)
 	}
@@ -286,12 +381,22 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, fp st
 	if e != nil {
 		return Order{}, false, e
 	}
+	var settingsRaw []byte
+	if e = tx.QueryRowContext(c, "SELECT document FROM site_settings WHERE id=1 FOR SHARE").Scan(&settingsRaw); e != nil {
+		return Order{}, false, e
+	}
+	var settings SiteSettings
+	if e = json.Unmarshal(settingsRaw, &settings); e != nil {
+		return Order{}, false, e
+	}
 	o, i, a := newRecords(u, p, host)
+	i.Issuer = settings.Identity()
+	issuerRaw, _ := json.Marshal(i.Issuer)
 	_, e = tx.ExecContext(c, "INSERT INTO orders(id,number,user_id,plan_id,plan_name,hostname,status,total_minor,currency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", o.ID, o.Number, u.ID, pid, p.Name, host, o.Status, o.TotalMinor, o.Currency, o.CreatedAt)
 	if e != nil {
 		return Order{}, false, e
 	}
-	_, e = tx.ExecContext(c, "INSERT INTO invoices(id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at) VALUES(?,?,?,?,?,?,?,?,?)", i.ID, i.Number, u.ID, o.ID, i.Status, i.AmountMinor, i.Currency, i.IssuedAt, i.DueAt)
+	_, e = tx.ExecContext(c, "INSERT INTO invoices(id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,issuer_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?)", i.ID, i.Number, u.ID, o.ID, i.Status, i.AmountMinor, i.Currency, i.IssuedAt, i.DueAt, issuerRaw)
 	if e != nil {
 		return Order{}, false, e
 	}
@@ -314,7 +419,17 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, fp st
 
 func (m *MySQL) Invoice(c context.Context, uid, id string) (Invoice, error) {
 	var i Invoice
-	e := m.DB.QueryRowContext(c, "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at FROM invoices WHERE id=? AND user_id=?", id, uid).Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt)
+	var issuerRaw []byte
+	query := "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at,issuer_snapshot FROM invoices WHERE id=?"
+	args := []any{id}
+	if uid != "" {
+		query += " AND user_id=?"
+		args = append(args, uid)
+	}
+	e := m.DB.QueryRowContext(c, query, args...).Scan(&i.ID, &i.Number, &i.UserID, &i.OrderID, &i.Status, &i.AmountMinor, &i.Currency, &i.IssuedAt, &i.DueAt, &i.PaidAt, &issuerRaw)
+	if e == nil && len(issuerRaw) > 0 {
+		e = json.Unmarshal(issuerRaw, &i.Issuer)
+	}
 	if errors.Is(e, sql.ErrNoRows) {
 		e = ErrNotFound
 	}
@@ -360,4 +475,47 @@ func (m *MySQL) CreateOrder(c context.Context, u User, pid, host, key, fp string
 		}
 	}
 	return Order{}, false, errors.New("transaction retry exhausted")
+}
+
+func (m *MySQL) Settings(ctx context.Context) (SiteSettings, error) {
+	var raw []byte
+	var s SiteSettings
+	if err := m.DB.QueryRowContext(ctx, "SELECT document FROM site_settings WHERE id=1").Scan(&raw); err != nil {
+		return s, err
+	}
+	err := json.Unmarshal(raw, &s)
+	return s, err
+}
+
+func (m *MySQL) UpdateSettings(ctx context.Context, actor User, settings SiteSettings) (SiteSettings, error) {
+	if actor.Role != "admin" || !ValidateSettings(settings) {
+		return SiteSettings{}, errors.New("invalid settings update")
+	}
+	tx, err := m.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return SiteSettings{}, err
+	}
+	defer tx.Rollback()
+	var raw []byte
+	var old SiteSettings
+	if err = tx.QueryRowContext(ctx, "SELECT document FROM site_settings WHERE id=1 FOR UPDATE").Scan(&raw); err != nil {
+		return SiteSettings{}, err
+	}
+	if err = json.Unmarshal(raw, &old); err != nil {
+		return SiteSettings{}, err
+	}
+	if settings.Revision != old.Revision {
+		return SiteSettings{}, ErrSettingsConflict
+	}
+	settings.Revision++
+	raw, _ = json.Marshal(settings)
+	if _, err = tx.ExecContext(ctx, "UPDATE site_settings SET document=? WHERE id=1", raw); err != nil {
+		return SiteSettings{}, err
+	}
+	a := settingsAudit(actor)
+	if _, err = tx.ExecContext(ctx, "INSERT INTO audit_events(id,user_id,action,target,created_at,actor_email,detail) VALUES(?,?,?,?,?,?,?)", a.ID, a.UserID, a.Action, a.Target, a.CreatedAt, a.ActorEmail, a.Detail); err != nil {
+		return SiteSettings{}, err
+	}
+	err = tx.Commit()
+	return settings, err
 }
