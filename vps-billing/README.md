@@ -6,9 +6,9 @@ Vue 3 / TypeScript / Vite 控制台、Go API 与 MySQL InnoDB 持久化。支持
 
 ## 当前交付状态
 
-部署目标是单服务器原生 Linux amd64：Nginx 提供 HTTPS 和静态页面，systemd 管理 API，本机 MySQL Unix socket 保存数据。高可用暂缓。目标发行版/版本、架构、内存和服务器是否已有服务仍需确认；尚未连接或部署到用户服务器，原生启动、重启、TLS、升级及恢复须单独验收。
+部署基线是 Ubuntu 24.04 / amd64 单服务器：Nginx 提供 HTTPS 和静态页面，systemd 管理 API，本机 MySQL 8.4 LTS 通过 Unix socket 保存数据。高可用暂缓。原生 CI 使用一次性云端 runner；没有连接或部署用户服务器，真实域名、公共 CA 证书、开机恢复、容量与异地灾备不在测试环境结论内。
 
-原生安装与发布自动化正在开发分支集成，合并到 `main` 尚待完成。真实 GitHub CI 已运行：独立 Go 漏洞扫描成功，但数据库来源门禁仍失败，整体 CI 尚未通过。候选构建至草稿 Release 上传的端到端流程尚未验收。已有候选保留原提交和哈希；新的发布必须对应新的已审查源码和实际验证记录。见 [发布说明](docs/RELEASE.md)、[原生检查点](docs/NATIVE_CHECKPOINT.md) 和 [CI 与草稿 Release](docs/CI_RELEASE_AUTOMATION.md)。
+应用维护 PR #1 已合并到 `main`（`95ca53ed2cf280ea49b5e1f2c7bb6e342c9d3512`）；原生安装与自动化 PR #2 仍在验收。`9ed815c` 已通过真实 MySQL、systemd/Nginx HTTPS、API 重启、同 schema 版本切换及备份恢复验收；该次整体 CI 在随后 actionlint 失败，修复后的完整重跑正在准备。候选构建至草稿 Release 上传的端到端流程尚未完成。已有候选保留原提交和哈希；新的发布必须对应新的已审查源码和实际验证记录。见 [发布说明](docs/RELEASE.md)、[原生验证记录](docs/NATIVE_CHECKPOINT.md) 和 [CI 与草稿 Release](docs/CI_RELEASE_AUTOMATION.md)。
 
 ## 云端 Linux 开发演示
 
@@ -40,13 +40,13 @@ API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5
 
 ## 原生持久化安装
 
-先阅读 [安装手册](docs/INSTALL.md)，确认目标系统后再制定发行版对应步骤。应用归档无需在运行服务器安装 Go/Node.js；MySQL、Nginx、systemd、证书和主机维护仍须独立审查。
+[安装手册](docs/INSTALL.md) 提供 Ubuntu 24.04 / amd64 的软件安装、数据库账号、秘密文件、迁移、systemd 和 HTTPS 步骤。执行前核实资源、已有服务和维护窗口。应用归档无需在运行服务器安装 Go/Node.js；MySQL、Nginx、systemd、证书和主机维护仍须独立审查。
 
 运行身份仅获得本库 DML 权限，迁移身份单独保管；秘密放在受限文件中，不提交到 Git、不写入命令行或日志。本机 Unix socket 当前需要显式的 `MYSQL_ALLOW_INSECURE=true` 例外，必须先核对真实 DSN 和 socket 权限，不能扩展成远程 TCP 明文配置。数据库迁移和管理员创建是明确的独立操作，不随 API 开机启动自动执行。
 
 初始套餐及币种价格须经逐项审核后启用；CNY/USD 独立设置金额，没有价格时不可售。站点设置只能修改展示和账单身份，不控制 DNS、TLS、登录来源或服务商秘密。见 [站点与计价](docs/SITE_SETTINGS.md)。
 
-日常操作参照 [运维](docs/OPERATIONS.md)、[升级与回滚](docs/UPGRADE.md)、[备份恢复](docs/BACKUP_RECOVERY.md) 和 [验收清单](docs/ACCEPTANCE.md)。这些文档是待目标环境验证的操作方案，不是已完成安装的证明。
+日常操作参照 [运维](docs/OPERATIONS.md)、[升级与回滚](docs/UPGRADE.md)、[备份恢复](docs/BACKUP_RECOVERY.md) 和 [验收清单](docs/ACCEPTANCE.md)。工程验收由维护方运行并记录；部署环境的具体配置与恢复能力应与实际主机对应。
 
 ## 工程目录
 
@@ -63,4 +63,4 @@ API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5
 
 真实支付及回调落账、退款/争议/对账、自动续费、税务、汇率、邮件验证/找回、MFA、完整账号生命周期、控制器消费、监控告警和异地灾备仍需单独完成。持久化 outbox 只记录事件，不代表已有 worker 或真实开通。列表尚有 1,000 条上限，不能当完整导出使用。
 
-测试结论须绑定提交和运行环境，见 [验证记录](docs/VALIDATION.md) 与 [原生检查点](docs/NATIVE_CHECKPOINT.md)。最新 GitHub Go 扫描未报告可达函数层面的漏洞，但仍报告导入包及依赖模块告警，不能写成“Go 无已知漏洞”。旧候选的应用测试、浏览器及数据库证据不能替代本次修订原生部署的实际验收。未接真实支付、邮件或生产客户数据，也未进行生产部署。
+测试结论须绑定提交和运行环境，见 [验证记录](docs/VALIDATION.md) 与 [原生验证记录](docs/NATIVE_CHECKPOINT.md)。`cf971f1` 的 GitHub Go 扫描报告 0 项可达函数、0 项导入包、19 项模块级告警；后者属于当前应用未导入的 SSH/OpenPGP 包，不能写成“Go 无已知漏洞”。旧候选的应用测试、浏览器及数据库证据不能替代本次修订原生部署的实际验收。未接真实支付、邮件或生产客户数据，也未进行生产部署。
