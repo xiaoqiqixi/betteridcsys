@@ -200,7 +200,7 @@ async function logout() {
     if (!preview.value) await api("/auth/logout", "POST", {});
     loadGeneration++;
     orderDialog.value?.close();
-    invoiceDialog.value?.close();
+    closeInvoice();
     helpDialog.value?.close();
     selectedInvoice.value = undefined;
     checkoutSession.value = undefined;
@@ -338,6 +338,7 @@ async function createOrder() {
   }
 }
 async function openInvoice(invoice: Invoice) {
+  const generation = ++invoiceGeneration;
   checkoutSession.value = undefined;
   selectedInvoice.value = invoice;
   modalError.value = "";
@@ -345,11 +346,13 @@ async function openInvoice(invoice: Invoice) {
   invoiceDialog.value?.showModal();
   if (!preview.value) {
     try {
-      selectedInvoice.value = await api<Invoice>(
-        "/invoices/" + encodeURIComponent(invoice.id),
+      const detail = await api<Invoice>(
+        (isAdmin.value ? "/admin/invoices/" : "/invoices/") +
+          encodeURIComponent(invoice.id),
       );
+      if (generation === invoiceGeneration) selectedInvoice.value = detail;
     } catch (e) {
-      modalError.value = explain(e);
+      if (generation === invoiceGeneration) modalError.value = explain(e);
     }
   }
 }
@@ -360,6 +363,7 @@ async function checkout() {
   modalError.value = "";
   checkoutSession.value = undefined;
   const invoiceId = selectedInvoice.value.id;
+  const generation = invoiceGeneration;
   try {
     const result = await api<unknown>(
       "/invoices/" + encodeURIComponent(invoiceId) + "/checkout",
@@ -367,9 +371,13 @@ async function checkout() {
       {},
     );
     const verified = readCheckoutSession(result);
-    if (selectedInvoice.value?.id === invoiceId)
+    if (
+      generation === invoiceGeneration &&
+      selectedInvoice.value?.id === invoiceId
+    )
       checkoutSession.value = verified;
   } catch (e) {
+    if (generation !== invoiceGeneration) return;
     modalError.value =
       e instanceof ApiError && e.code === "PAYMENT_NOT_CONFIGURED"
         ? "支付通道尚未接入。未发生扣款，账单仍为待付款。"
@@ -377,6 +385,14 @@ async function checkout() {
   } finally {
     saving.value = false;
   }
+}
+let invoiceGeneration = 0;
+function closeInvoice() {
+  invoiceGeneration++;
+  invoiceDialog.value?.close();
+  selectedInvoice.value = undefined;
+  checkoutSession.value = undefined;
+  modalError.value = "";
 }
 function followCheckout(event: MouseEvent) {
   try {
@@ -1589,6 +1605,7 @@ onMounted(init);
     ref="invoiceDialog"
     class="modal invoice-modal"
     aria-labelledby="invoice-title"
+    @cancel="closeInvoice()"
   >
     <div class="modal-heading">
       <div>
@@ -1599,7 +1616,7 @@ onMounted(init);
         class="icon-button"
         aria-label="关闭"
         :disabled="saving"
-        @click="invoiceDialog?.close()"
+        @click="closeInvoice()"
       >
         <X :size="21" />
       </button>

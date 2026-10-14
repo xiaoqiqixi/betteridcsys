@@ -95,6 +95,15 @@ func TestSecurityAndOrderLifecycle(t *testing.T) {
 		t.Fatal(v)
 	}
 	iid := invoices[0].(map[string]any)["id"].(string)
+	if status, _ := admin.request("GET", "/api/v1/admin/invoices/"+iid, nil, ""); status != 200 {
+		t.Fatal("admin invoice detail", status)
+	}
+	if status, _ := c.request("GET", "/api/v1/admin/invoices/"+iid, nil, ""); status != 403 {
+		t.Fatal("customer admin detail", status)
+	}
+	if status, _ := admin.request("POST", "/api/v1/admin/invoices/"+iid+"/checkout", nil, ""); status != 405 {
+		t.Fatal("admin checkout must remain unsupported", status)
+	}
 	for _, path := range []string{"/api/v1/invoices/" + iid, "/api/v1/invoices/" + iid + "/checkout"} {
 		method := "GET"
 		if path[len(path)-8:] == "checkout" {

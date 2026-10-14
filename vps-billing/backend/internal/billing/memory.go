@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"golang.org/x/crypto/bcrypt"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ type memoRequest struct {
 	Order       Order
 }
 type Memory struct {
+	settings SiteSettings
 	mu       sync.Mutex
 	users    map[string]User
 	sessions map[string]Session
@@ -25,6 +27,7 @@ type Memory struct {
 
 func NewMemory() *Memory {
 	m := &Memory{users: map[string]User{}, sessions: map[string]Session{}, plans: Catalog(), orders: []Order{}, invoices: []Invoice{}, services: []Service{}, audits: []Audit{}, requests: map[string]memoRequest{}}
+	m.settings = DefaultSettings()
 	for _, v := range []struct{ email, name, role, password string }{{"demo@aster.local", "林先生", "customer", "DemoCustomer!2026"}, {"admin@aster.local", "演示管理员", "admin", "DemoAdmin!2026"}, {"other@aster.local", "另一位客户", "customer", "DemoOther!2026"}} {
 		h, _ := bcrypt.GenerateFromPassword([]byte(v.password), bcrypt.DefaultCost)
 		u := User{ID: ID(), Email: v.email, Name: v.name, Role: v.role, PasswordHash: string(h)}
@@ -170,6 +173,7 @@ func (m *Memory) CreateOrder(_ context.Context, u User, pid, host, key, fp strin
 		return Order{}, false, ErrUnavailable
 	}
 	o, i, a := newRecords(u, p, host)
+	i.Issuer = m.settings.Identity()
 	m.orders = append(m.orders, o)
 	m.invoices = append(m.invoices, i)
 	m.audits = append(m.audits, a)
@@ -220,4 +224,25 @@ func (m *Memory) Summary(_ context.Context, uid string) (Summary, error) {
 		}
 	}
 	return out, nil
+}
+
+func (m *Memory) Settings(context.Context) (SiteSettings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.settings, nil
+}
+
+func (m *Memory) UpdateSettings(_ context.Context, actor User, settings SiteSettings) (SiteSettings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if actor.Role != "admin" || !ValidateSettings(settings) {
+		return SiteSettings{}, errors.New("invalid settings update")
+	}
+	if settings.Revision != m.settings.Revision {
+		return SiteSettings{}, ErrSettingsConflict
+	}
+	settings.Revision++
+	m.settings = settings
+	m.audits = append(m.audits, settingsAudit(actor))
+	return settings, nil
 }

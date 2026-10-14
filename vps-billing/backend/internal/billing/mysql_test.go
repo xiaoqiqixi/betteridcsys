@@ -118,4 +118,60 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	if e != nil || summary.PendingInvoices != 1 || summary.Revenue != 0 {
 		t.Fatal(summary, e)
 	}
+	admin := User{ID: ID(), Email: ID() + "@integration.invalid", Name: "Settings admin", Role: "admin", PasswordHash: "unused"}
+	if e = m.AddUser(ctx, admin); e != nil {
+		t.Fatal(e)
+	}
+	original, e := m.Settings(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() {
+		current, e := m.Settings(ctx)
+		if e == nil {
+			original.Revision = current.Revision
+			_, e = m.UpdateSettings(ctx, admin, original)
+		}
+		if e != nil {
+			t.Error("settings restore", e)
+		}
+		_, _ = m.DB.ExecContext(ctx, "DELETE FROM audit_events WHERE user_id=?", admin.ID)
+		_, _ = m.DB.ExecContext(ctx, "DELETE FROM users WHERE id=?", admin.ID)
+	}()
+	changed := original
+	changed.InvoiceIssuer = "测试开票公司"
+	updated, e := m.UpdateSettings(ctx, admin, changed)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = m.UpdateSettings(ctx, admin, changed); e != ErrSettingsConflict {
+		t.Fatal("persisted revision conflict", e)
+	}
+	order, _, e := m.CreateOrder(ctx, u, p.ID, "issuer-test", "issuer-key", "issuer-fp")
+	if e != nil {
+		t.Fatal(e)
+	}
+	updated.InvoiceIssuer = "后来公司"
+	if _, e = m.UpdateSettings(ctx, admin, updated); e != nil {
+		t.Fatal(e)
+	}
+	invoices, e := m.Invoices(ctx, u.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	found := false
+	for _, invoice := range invoices {
+		if invoice.OrderID == order.ID {
+			found = true
+			if invoice.Issuer == nil || invoice.Issuer.Name != "测试开票公司" {
+				t.Fatal("mutable SQL invoice identity", invoice)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing snapshot invoice")
+	}
+	if invoice, e := m.Invoice(ctx, "", is[0].ID); e != nil || invoice.ID != is[0].ID {
+		t.Fatal("admin direct detail", invoice, e)
+	}
 }
