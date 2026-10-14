@@ -77,6 +77,91 @@ class SafeDiagnosticTests(unittest.TestCase):
                          "expected_status": 200, "actual_status": 503})
 
 
+class IsolatedCanaryBootstrapTests(unittest.TestCase):
+    def test_no_identity_cleanup_stops_the_real_owned_child(self):
+        process = NATIVE.start_canary_process(["/usr/bin/python3", "-I", "-c", "import time;time.sleep(30)"])
+        NATIVE.stop_canary_process(process, None)
+        self.assertIsNotNone(process.poll())
+        self.assertNotEqual(process.returncode, 0)
+
+    def test_diagnostic_pipe_read_does_not_wait_for_a_live_writer(self):
+        reader, writer = os.pipe()
+        with os.fdopen(reader, "rb") as stream:
+            try:
+                self.assertEqual(NATIVE.bounded_pipe_diagnostic(stream), b"")
+                os.write(writer, b"CANARY_BOOTSTRAP_ERROR=PermissionError\n")
+                self.assertEqual(NATIVE.bounded_pipe_diagnostic(stream), b"CANARY_BOOTSTRAP_ERROR=PermissionError\n")
+            finally:
+                os.close(writer)
+
+    def test_peer_probe_accepts_real_connection_closure_and_rejects_any_response(self):
+        import socket
+        import threading
+        for payload in (b"", b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"):
+            with self.subTest(payload=bool(payload)), tempfile.TemporaryDirectory(prefix="aster-peer-probe-") as directory:
+                endpoint = str(Path(directory) / "probe.sock")
+                with socket.socket(socket.AF_UNIX) as listener:
+                    listener.bind(endpoint)
+                    listener.listen(1)
+                    listener.settimeout(3)
+
+                    def reject():
+                        connection, _ = listener.accept()
+                        with connection:
+                            if payload:
+                                connection.sendall(payload)
+                            else:
+                                connection.shutdown(socket.SHUT_RDWR)
+
+                    thread = threading.Thread(target=reject)
+                    thread.start()
+                    result = subprocess.run(["/usr/bin/python3", "-I", "-c", NATIVE.WRONG_UID_PROBE, endpoint],
+                                            cwd="/", capture_output=True, timeout=5)
+                    thread.join(3)
+                    self.assertFalse(thread.is_alive())
+                    self.assertEqual(result.returncode, 3 if payload else 0, result.stderr.decode())
+
+    def test_real_nonroot_isolated_exec_preserves_canary_descriptor_before_host_cleanup(self):
+        import json
+        self.assertNotEqual(os.geteuid(), 0, "This regression must run as an ordinary account")
+        with tempfile.TemporaryDirectory(prefix="aster-canary-bootstrap-") as directory:
+            root = Path(directory)
+            canary = root / "nonsecret-canary"
+            canary.write_text("synthetic-descriptor-canary")
+            target = root / "inspector"
+            target.write_text("#!/usr/bin/python3\nimport json,os\n"
+                "values=[]\nfor name in os.listdir('/proc/self/fd'):\n"
+                " try:\n  fd=int(name)\n  if fd>2 and os.readlink('/proc/self/fd/'+name)=="
+                + repr(str(canary)) + ": values.append([fd,os.get_inheritable(fd),os.read(fd,64).decode()])\n"
+                " except FileNotFoundError: pass\n"
+                "print(json.dumps({'cwd':os.getcwd(),'uid':os.geteuid(),'descriptors':values}))\n")
+            target.chmod(0o755)
+            process = NATIVE.start_canary_process(["/usr/bin/python3", "-I", "-c", NATIVE.CANARY_WRAPPER,
+                str(target), str(root), str(root / "policy"), str(canary)])
+            output, errors = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, errors.decode())
+            identity, raw = output.splitlines()
+            values = identity.split()
+            self.assertEqual(len(values), 2)
+            self.assertTrue(all(value.isdigit() for value in values))
+            result = json.loads(raw)
+            self.assertEqual(result["cwd"], "/")
+            self.assertEqual(result["uid"], os.geteuid())
+            self.assertEqual(result["descriptors"], [[int(values[1]), True, "synthetic-descriptor-canary"]])
+
+    def test_preidentity_open_failure_exposes_only_fixed_class_and_numeric_exit(self):
+        with tempfile.TemporaryDirectory(prefix="aster-canary-missing-") as directory:
+            missing = str(Path(directory) / "synthetic-sensitive-path")
+            process = NATIVE.start_canary_process(["/usr/bin/python3", "-I", "-c", NATIVE.CANARY_WRAPPER,
+                "/nonexistent", directory, directory, missing])
+            output, errors = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 70)
+            self.assertEqual(output, b"")
+            self.assertEqual(errors, b"CANARY_BOOTSTRAP_ERROR=FileNotFoundError\n")
+            self.assertNotIn(missing.encode(), errors)
+            self.assertEqual(NATIVE.canary_failure_class(errors), "FileNotFoundError")
+
+
 class PluginNativeGuardTests(unittest.TestCase):
     def guard(self, settings, arguments=None):
         with tempfile.TemporaryDirectory(prefix="aster-plugin-guard-") as directory:

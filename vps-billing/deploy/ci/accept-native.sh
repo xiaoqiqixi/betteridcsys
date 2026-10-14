@@ -138,6 +138,13 @@ done
 sudo -n groupadd --system "$socket_group"
 created_groups+=("$socket_group")
 sudo -n usermod -a -G "$socket_group" "$api_user"
+# Match the worker's systemd Group for the direct descriptor canary. sudo -g
+# must name a group the target account may use; do not relax sudoers policy.
+sudo -n usermod -a -G "$socket_group" "$smtp_user"
+# This disposable negative-probe identity deliberately has socket DAC access,
+# so the later rejection proves peer-UID authorization, rather than a missing
+# directory permission. It never joins the API's private secret group.
+sudo -n usermod -a -G "$socket_group" "$web_user"
 for path in "$opt" "$config" "$logs" "$run"; do
   sudo -n mkdir -- "$path"; created_paths+=("$path")
   sudo -n chmod 755 "$path"

@@ -63,6 +63,75 @@ class SafeDiagnostics:
 DIAGNOSTICS = SafeDiagnostics()
 
 
+CANARY_WRAPPER = """import os,sys
+try:
+ fd=os.open(sys.argv[4],os.O_RDONLY);os.set_inheritable(fd,True)
+ print(str(os.getpid())+' '+str(fd),flush=True)
+ os.execv(sys.argv[1],[sys.argv[1],'--root',sys.argv[2],'--policy',sys.argv[3]])
+except OSError as error:
+ print('CANARY_BOOTSTRAP_ERROR='+type(error).__name__,file=sys.stderr,flush=True)
+ raise SystemExit(70)
+"""
+
+
+def start_canary_process(arguments):
+    # A different UID must never depend on access to the runner's private cwd
+    # or stdin. Python -I is supplied by the caller before the fixed wrapper.
+    return subprocess.Popen(arguments, cwd="/", stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def canary_failure_class(stderr):
+    for name in ("PermissionError", "FileNotFoundError", "OSError", "IsADirectoryError"):
+        if ("CANARY_BOOTSTRAP_ERROR=" + name).encode() in stderr:
+            return name
+    if b"not allowed to execute" in stderr or b"not in the sudoers" in stderr:
+        return "SudoAuthorizationRejected"
+    if b"a password is required" in stderr:
+        return "SudoAuthenticationRequired"
+    if b"error evaluating path" in stderr:
+        return "PythonStartupPathError"
+    return "UnclassifiedBootstrapFailure"
+
+
+def bounded_pipe_diagnostic(stream):
+    ready, _, _ = select.select([stream], [], [], 0)
+    return os.read(stream.fileno(), 4096) if ready else b""
+
+
+def stop_canary_process(process, pid):
+    if pid is not None and process.poll() is None:
+        subprocess.run(["sudo", "-n", "kill", "-TERM", str(pid)], cwd="/", capture_output=True, timeout=5)
+    elif process.poll() is None:
+        try:
+            process.terminate()
+        except PermissionError:
+            subprocess.run(["sudo", "-n", "kill", "-TERM", str(process.pid)], cwd="/", capture_output=True, timeout=5)
+    try:
+        process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        if pid is not None:
+            subprocess.run(["sudo", "-n", "kill", "-KILL", str(pid)], cwd="/", capture_output=True, timeout=5)
+        if process.poll() is None:
+            try:
+                process.kill()
+            except PermissionError:
+                subprocess.run(["sudo", "-n", "kill", "-KILL", str(process.pid)], cwd="/", capture_output=True, timeout=5)
+        process.communicate(timeout=5)
+
+
+WRONG_UID_PROBE = """import socket,sys
+s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect(sys.argv[1])
+try:
+ try:
+  s.sendall(b'POST /handshake HTTP/1.1\\r\\nHost: plugin.local\\r\\nContent-Type: application/json\\r\\nContent-Length: 0\\r\\n\\r\\n')
+  data=s.recv(512)
+ except (ConnectionResetError,BrokenPipeError): data=b''
+ if data: raise SystemExit(3)
+finally:s.close()
+"""
+
+
 def command_name(arguments):
     """Do not return env values, script source, targets or arbitrary arguments."""
     items = list(map(str, arguments))
@@ -113,7 +182,7 @@ def command(arguments, *, expected=0, cwd=None, timeout=30):
 
 
 def privileged(*arguments, expected=0, timeout=30):
-    return command(["sudo", "-n", *map(str, arguments)], expected=expected, timeout=timeout)
+    return command(["sudo", "-n", *map(str, arguments)], expected=expected, timeout=timeout, cwd="/")
 
 
 def fixture_package(source, scratch, version):
@@ -392,17 +461,8 @@ class NativePluginAcceptance:
                 "Plugin socket ownership/permissions differ")
         # This caller has actual filesystem access through the socket group,
         # but a different peer UID. Failure therefore exercises SO_PEERCRED.
-        probe = """import socket,sys
-s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect(sys.argv[1])
-try:
- s.sendall(b'POST /handshake HTTP/1.1\\r\\nHost: plugin.local\\r\\nContent-Type: application/json\\r\\nContent-Length: 0\\r\\n\\r\\n')
- try: data=s.recv(512)
- except (ConnectionResetError,BrokenPipeError): data=b''
- if data: raise SystemExit(3)
-finally:s.close()
-"""
         privileged("-u", self.web_user, "-g", self.group, "env", "-i", "PATH=/usr/bin:/bin",
-                   "python3", "-c", probe, self.socket)
+                   "python3", "-I", "-c", WRONG_UID_PROBE, self.socket)
         self.checks.append("different_uid_systemd_verified_fd_exec_scrubbed_environment_peer_uid_and_secret_denial")
 
     def unknown_discovery(self):
@@ -436,21 +496,25 @@ finally:s.close()
         local = self.scratch / "descriptor-canary"
         local.write_text("nonsecret inherited descriptor must disappear\n")
         privileged("install", "-m", "644", local, canary)
-        wrapper = """import os,sys
-fd=os.open(sys.argv[4],os.O_RDONLY);os.set_inheritable(fd,True)
-print(str(os.getpid())+' '+str(fd),flush=True)
-os.execv(sys.argv[1],[sys.argv[1],'--root',sys.argv[2],'--policy',sys.argv[3]])
-"""
-        process = subprocess.Popen(["sudo", "-n", "-u", self.worker_user, "-g", self.group,
-            "env", "-i", "PATH=/usr/bin:/bin", "python3", "-c", wrapper, str(self.host),
-            str(self.root), str(self.policy), str(canary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = start_canary_process(["sudo", "-n", "-u", self.worker_user, "-g", self.group,
+            "env", "-i", "PATH=/usr/bin:/bin", "python3", "-I", "-c", CANARY_WRAPPER, str(self.host),
+            str(self.root), str(self.policy), str(canary)])
         pid = None
         try:
             ready, _, _ = select.select([process.stdout], [], [], 3)
             require(bool(ready), "Inherited descriptor canary did not launch")
             values = process.stdout.readline(128).split()
-            require(len(values) == 2 and all(value.isdigit() for value in values),
-                    "Inherited descriptor canary identity differs")
+            if len(values) != 2 or not all(value.isdigit() for value in values):
+                try:
+                    returncode = process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    returncode = None
+                failure_class = canary_failure_class(bounded_pipe_diagnostic(process.stderr)) if returncode is not None else "BootstrapStillRunning"
+                DIAGNOSTICS.last_command = {"command": "python3 isolated-canary", "expected_exit_code": 0,
+                    "actual_exit_code": returncode, "bootstrap_failure_class": failure_class,
+                    "identity_field_count": len(values)}
+                raise AcceptanceFailure("Inherited descriptor canary identity differs; process exit "
+                                        + str(returncode) + "; bootstrap class " + failure_class)
             pid, descriptor = map(int, values)
             require(descriptor > 2, "Inherited descriptor canary was not an extra descriptor")
             deadline = time.monotonic() + 5
@@ -472,14 +536,7 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
             self.checks.append("native_verified_fd_exec_closes_inherited_non_cloexec_canary")
             self.unchanged_core("inherited_descriptor_canary_rejected")
         finally:
-            if pid is not None:
-                subprocess.run(["sudo", "-n", "kill", "-TERM", str(pid)], capture_output=True, timeout=5)
-            try:
-                process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                if pid is not None:
-                    subprocess.run(["sudo", "-n", "kill", "-KILL", str(pid)], capture_output=True, timeout=5)
-                process.communicate(timeout=5)
+            stop_canary_process(process, pid)
 
     def restore_settings(self):
         if self.api and self.initial_settings:
