@@ -75,7 +75,9 @@ def validate_inputs(repo, chromium, output):
     mode = chromium.stat()
     if (not stat.S_ISREG(mode.st_mode) or not os.access(chromium, os.X_OK)
             or mode.st_uid not in (0, os.geteuid()) or mode.st_mode & 0o022):
-        raise Failure("Chrome must be an existing trusted executable without shared write access")
+        raise Failure("Chrome must be an existing trusted executable without shared write access "
+                      f"(uid={mode.st_uid}, expected=0/{os.geteuid()}, "
+                      f"mode={stat.S_IMODE(mode.st_mode):04o}, executable={os.access(chromium, os.X_OK)})")
     if output.exists() or output.is_symlink():
         raise Failure("Evidence output must be a new directory")
     parent = output.parent.resolve(strict=True)
