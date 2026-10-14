@@ -5,7 +5,7 @@ import path from "node:path";
 const base = process.env.TEST_BASE_URL || "http://localhost:5173";
 if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname))
   throw new Error("Browser acceptance must target a disposable loopback demo");
-const output = process.env.E2E_OUTPUT_DIR || "qa";
+const output = process.env.E2E_OUTPUT_DIR || "test-results/browser";
 const browser = await chromium.launch({
   ...(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH }
@@ -16,7 +16,29 @@ const browser = await chromium.launch({
 const context = await browser.newContext({
   viewport: { width: 1440, height: 1100 },
   deviceScaleFactor: 1,
+  serviceWorkers: "block",
 });
+const blockedRequests = [];
+async function allowLoopbackOnly(browserContext) {
+  await browserContext.route("**/*", async (route) => {
+    if (new URL(route.request().url()).origin !== new URL(base).origin) {
+      blockedRequests.push("cross-origin request blocked");
+      await route.abort("blockedbyclient");
+      return;
+    }
+    const requestURL = new URL(route.request().url());
+    if (
+      requestURL.pathname.startsWith("/api/v1/admin/email-settings") &&
+      route.request().method() !== "GET"
+    ) {
+      blockedRequests.push("SMTP mutation blocked");
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.continue();
+  });
+}
+await allowLoopbackOnly(context);
 const page = await context.newPage();
 page.setDefaultTimeout(15000);
 const errors = [];
@@ -88,19 +110,75 @@ try {
   await expect(page.locator("h1")).toContainText("你好");
   await shot("dashboard-desktop");
   await page.getByRole("link", { name: "选购服务", exact: true }).click();
+  const catalogCNY = await json("/plans?currency=CNY");
+  const catalogUSD = await json("/plans?currency=USD");
+  const firstPlan = catalogCNY[0];
+  const alternatePlan = catalogCNY.find(
+    (plan) => plan.region !== firstPlan.region && plan.available,
+  );
+  expect(alternatePlan).toBeTruthy();
+  const summary = page.getByRole("complementary", { name: "订单摘要" });
+  const amount = (plan) =>
+    new Intl.NumberFormat("zh-CN", {
+      style: "currency",
+      currency: plan.currency,
+      currencyDisplay: "code",
+    }).format(plan.price_minor / 100);
   await page
-    .getByRole("button", { name: "选择此方案", exact: true })
-    .first()
+    .getByRole("button", { name: alternatePlan.region, exact: true })
     .click();
+  await expect(page.locator(".catalog-plan")).toHaveCount(
+    catalogCNY.filter((plan) => plan.region === alternatePlan.region).length,
+  );
+  await page
+    .getByRole("button", {
+      name: `选择套餐 ${alternatePlan.name}`,
+      exact: true,
+    })
+    .click();
+  await expect(summary).toContainText(alternatePlan.name);
+  await expect(summary).toContainText(alternatePlan.region);
+  await expect(summary.locator(".purchase-total")).toContainText(
+    amount(alternatePlan),
+  );
+  await page.getByLabel("币种", { exact: true }).selectOption("USD");
+  await expect(summary.locator(".purchase-total")).toContainText(
+    amount(catalogUSD.find((plan) => plan.id === alternatePlan.id)),
+  );
+  await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
+  await page.getByLabel("币种", { exact: true }).selectOption("CNY");
+  await expect(summary.locator(".purchase-total")).toContainText(
+    amount(alternatePlan),
+  );
+  await page.getByRole("button", { name: "全部区域", exact: true }).click();
+  await page
+    .getByRole("button", { name: `选择套餐 ${firstPlan.name}`, exact: true })
+    .click();
+  await expect(summary.locator(".purchase-total")).toContainText(
+    amount(firstPlan),
+  );
+  const desktopCatalog = await page.locator(".purchase-catalog").boundingBox();
+  const desktopSummary = await summary.boundingBox();
+  expect(desktopCatalog).toBeTruthy();
+  expect(desktopSummary).toBeTruthy();
+  expect(desktopSummary.x).toBeGreaterThanOrEqual(
+    desktopCatalog.x + desktopCatalog.width,
+  );
+  expect(desktopSummary.x + desktopSummary.width).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect(desktopSummary.y).toBeGreaterThanOrEqual(0);
+  expect(desktopSummary.y + desktopSummary.height).toBeLessThanOrEqual(
+    page.viewportSize().height,
+  );
+  await shot("plans-desktop");
+  await page.getByRole("button", { name: "确认配置", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "确认你的云服务器" }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator("dialog[open]")).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "选择此方案", exact: true })
-    .first()
-    .click();
+  await page.getByRole("button", { name: "确认配置", exact: true }).click();
   await page.getByLabel("服务器名称", { exact: true }).fill("qa-browser-cny");
   await page.getByRole("checkbox").check();
   const orderResult = page.waitForResponse(
@@ -114,8 +192,14 @@ try {
   const orderResponse = await orderResult;
   expect(orderResponse.status()).toBe(201);
   const order = (await orderResponse.json()).data;
+  expect(orderResponse.request().postDataJSON()).toEqual({
+    plan_id: firstPlan.id,
+    hostname: "qa-browser-cny",
+    currency: "CNY",
+  });
   expect(order.currency).toBe("CNY");
-  expect(order.total_minor).toBe(3900);
+  expect(order.plan_name).toBe(firstPlan.name);
+  expect(order.total_minor).toBe(firstPlan.price_minor);
   await page.waitForURL("**/orders");
   await page.getByLabel("币种", { exact: true }).selectOption("USD");
   await expect(
@@ -157,6 +241,43 @@ try {
   await shot("dashboard-mobile");
   await page.getByRole("button", { name: "打开导航", exact: true }).click();
   await page.getByRole("link", { name: "选购服务", exact: true }).click();
+  await page
+    .getByRole("button", { name: alternatePlan.region, exact: true })
+    .click();
+  await expect(page.locator(".catalog-plan")).toHaveCount(
+    catalogUSD.filter((plan) => plan.region === alternatePlan.region).length,
+  );
+  await page
+    .getByRole("button", {
+      name: `选择套餐 ${alternatePlan.name}`,
+      exact: true,
+    })
+    .click();
+  await expect(summary).toContainText(alternatePlan.name);
+  await expect(summary.locator(".purchase-total")).toContainText(
+    amount(catalogUSD.find((plan) => plan.id === alternatePlan.id)),
+  );
+  await page.getByLabel("币种", { exact: true }).selectOption("CNY");
+  await expect(summary.locator(".purchase-total")).toContainText(
+    amount(alternatePlan),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    )
+    .toBe(true);
+  await summary.scrollIntoViewIfNeeded();
+  await expect(summary).toBeVisible();
+  await expect(summary.locator(".purchase-review")).toBeInViewport();
+  const mobileCatalog = await page.locator(".purchase-catalog").boundingBox();
+  const mobileSummary = await summary.boundingBox();
+  expect(mobileSummary.y).toBeGreaterThanOrEqual(
+    mobileCatalog.y + mobileCatalog.height,
+  );
+  expect(mobileSummary.x).toBeGreaterThanOrEqual(0);
+  expect(mobileSummary.x + mobileSummary.width).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
   await shot("plans-mobile");
   await page.getByRole("button", { name: "打开导航", exact: true }).click();
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
@@ -167,6 +288,28 @@ try {
   await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("运营概况");
   await shot("admin-desktop");
+  await page.getByRole("link", { name: "扩展中心", exact: true }).click();
+  const smtp = page.locator(".smtp-settings");
+  await expect(smtp.getByText("已保存：禁用", { exact: true })).toBeVisible();
+  await expect(
+    smtp.getByText(
+      "服务器尚未配置凭据加密密钥。可以保存不含凭据的禁用草稿；启用和测试发送暂不可用。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(smtp.locator('input[name="enabled"]')).not.toBeChecked();
+  await expect(smtp.locator('input[name="enabled"]')).toBeDisabled();
+  await expect(smtp.locator("#smtp-username")).toBeEmpty();
+  await expect(smtp.locator("#smtp-password")).toBeEmpty();
+  await expect(smtp.locator("#smtp-username")).toBeDisabled();
+  await expect(smtp.locator("#smtp-password")).toBeDisabled();
+  await expect(
+    smtp.locator('[data-testid="smtp-form"] button[type="submit"]'),
+  ).toBeDisabled();
+  await expect(
+    smtp.locator('[data-testid="smtp-test-form"] button[type="submit"]'),
+  ).toBeDisabled();
+  await shot("smtp-disabled-desktop");
   originalSettings = await json("/admin/site-settings");
   await page.getByRole("link", { name: "站点设置", exact: true }).click();
   await page.locator('input[name="site_name"]').fill("验收测试云");
@@ -186,7 +329,8 @@ try {
   ).toBeVisible();
   await expect(page.locator(".sidebar .brand strong")).toHaveText("验收测试云");
   await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
-  const fresh = await browser.newContext();
+  const fresh = await browser.newContext({ serviceWorkers: "block" });
+  await allowLoopbackOnly(fresh);
   try {
     const visitor = await fresh.newPage();
     await visitor.goto(base);
@@ -218,8 +362,9 @@ try {
   await shot("settings-mobile");
   await restoreSettings();
   expect(errors).toEqual([]);
+  expect(blockedRequests).toEqual([]);
   console.log(
-    "PASS: real demo API, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, mobile navigation/overflow, admin settings save/preview, new-visitor defaults, immutable invoice issuer, settings restored; no browser runtime errors.",
+    "PASS: real demo API, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, admin settings save/preview, new-visitor defaults, immutable invoice issuer, settings restored; no browser runtime errors.",
   );
 } finally {
   try {

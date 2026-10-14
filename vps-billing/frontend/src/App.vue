@@ -24,10 +24,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock3,
-  Globe2,
-  Cpu,
-  HardDrive,
-  MemoryStick,
   LockKeyhole,
   Download,
   Menu,
@@ -62,6 +58,7 @@ import type {
   CheckoutSession,
 } from "./lib/api";
 import SettingsPage from "./components/SettingsPage.vue";
+import PlansPage from "./components/PlansPage.vue";
 import {
   defaultSiteSettings,
   readPublicSiteSettings,
@@ -127,6 +124,7 @@ const selectedPlan = ref<Plan>(),
   hostname = ref(""),
   agreed = ref(false),
   orderKey = ref("");
+const orderCatalogChanged = ref(false);
 const checkoutSession = ref<CheckoutSession>();
 const checkoutHost = computed(() =>
   checkoutSession.value
@@ -441,7 +439,8 @@ async function openOrder(plan: Plan) {
     return;
   }
   if (!plan.available || plan.currency !== currency.value) return;
-  selectedPlan.value = plan;
+  selectedPlan.value = { ...plan };
+  orderCatalogChanged.value = false;
   hostname.value = "";
   agreed.value = false;
   modalError.value = "";
@@ -449,9 +448,45 @@ async function openOrder(plan: Plan) {
   await nextTick();
   orderDialog.value?.showModal();
 }
+function invalidateChangedOrder() {
+  const draft = selectedPlan.value;
+  if (!draft || pendingOrder.value) return false;
+  const current = plans.value.find((plan) => plan.id === draft.id);
+  const fields: (keyof Plan)[] = [
+    "name",
+    "description",
+    "region",
+    "cpu",
+    "memory_gb",
+    "disk_gb",
+    "transfer_tb",
+    "price_minor",
+    "currency",
+  ];
+  if (
+    current?.available &&
+    current.currency === currency.value &&
+    fields.every((field) => current[field] === draft[field])
+  )
+    return false;
+  orderDialog.value?.close();
+  selectedPlan.value = undefined;
+  hostname.value = "";
+  agreed.value = false;
+  orderKey.value = "";
+  orderCatalogChanged.value = true;
+  return true;
+}
 async function createOrder() {
-  if (preview.value || !selectedPlan.value || !agreed.value || saving.value)
+  if (
+    preview.value ||
+    !selectedPlan.value ||
+    !agreed.value ||
+    saving.value ||
+    (loading.value && !pendingOrder.value)
+  )
     return;
+  if (invalidateChangedOrder()) return;
   if (!pendingOrder.value)
     pendingOrder.value = {
       key: orderKey.value,
@@ -672,6 +707,13 @@ watch(currency, () => {
   adminOverview.value = undefined;
   if (!booting.value && session.value.user) void load();
 });
+watch(
+  [plans, currency],
+  () => {
+    if (orderDialog.value?.open && !saving.value) invalidateChangedOrder();
+  },
+  { flush: "sync" },
+);
 watch(locale, () => {
   if (!booting.value && session.value.user) void load();
 });
@@ -1046,6 +1088,20 @@ onMounted(init);
         </button>
       </div>
       <main id="main" tabindex="-1">
+        <div v-if="orderCatalogChanged" class="alert info" role="status">
+          <AlertCircle :size="18" /><span>{{
+            tr(
+              "套餐、价格或币种已变化，请重新核对配置后再下单。",
+              "The plan, price or currency changed. Review the configuration again before ordering.",
+            )
+          }}</span>
+          <button
+            :aria-label="tr('关闭提示', 'Dismiss notice')"
+            @click="orderCatalogChanged = false"
+          >
+            <X :size="16" />
+          </button>
+        </div>
         <div v-if="error" class="alert error" role="alert">
           <AlertCircle :size="18" /><span>{{ error }}</span
           ><button @click="load">{{ tr("重试", "Retry") }}</button>
@@ -1603,120 +1659,17 @@ onMounted(init);
             </div>
           </section>
         </template>
-        <template v-else-if="page === 'plans'"
-          ><div class="plans-intro">
-            <span
-              ><Globe2 :size="17" />
-              {{ tr("独立云服务器", "Cloud servers") }} </span
-            ><span>
-              {{ tr("按月计费", "Monthly billing") }} <i>·</i> {{ currency }}
-              {{
-                session.demo_mode
-                  ? tr("演示定价", "demo prices")
-                  : tr("计价", "prices")
-              }}</span
-            >
-          </div>
-          <div class="plans-grid">
-            <article
-              v-for="(plan, index) in plans"
-              :key="plan.id"
-              class="plan-card"
-              :class="{ featured: index === 1 }"
-            >
-              <div class="plan-top">
-                <div class="plan-symbol">
-                  <Layers :size="24" :stroke-width="1.4" />
-                </div>
-                <span v-if="index === 1" class="recommended">
-                  {{ tr("均衡之选", "Balanced plan") }}
-                </span>
-              </div>
-              <h2>{{ plan.name }}</h2>
-              <p>{{ plan.description }}</p>
-              <div class="plan-price">
-                {{
-                  plan.available
-                    ? money(plan.price_minor, plan.currency)
-                    : tr("暂不可售", "Unavailable")
-                }}<span> {{ tr("/ 月", "/ month") }} </span>
-              </div>
-              <button
-                class="button"
-                :class="index === 1 ? 'primary' : 'secondary'"
-                :disabled="
-                  !plan.available || loading || plan.currency !== currency
-                "
-                @click="openOrder(plan)"
-              >
-                {{
-                  plan.available
-                    ? tr("选择此方案", "Choose this plan")
-                    : tr("暂不可用", "Unavailable")
-                }}<ArrowRight :size="16" />
-              </button>
-              <div class="plan-spec">
-                <div>
-                  <Cpu :size="17" /><span>
-                    {{ tr("计算核心", "CPU cores") }} </span
-                  ><b>{{ plan.cpu }} vCPU</b>
-                </div>
-                <div>
-                  <MemoryStick :size="17" /><span>
-                    {{ tr("内存", "Memory") }} </span
-                  ><b>{{ plan.memory_gb }} GB</b>
-                </div>
-                <div>
-                  <HardDrive :size="17" /><span>
-                    {{ tr("SSD 存储", "SSD storage") }} </span
-                  ><b>{{ plan.disk_gb }} GB</b>
-                </div>
-                <div>
-                  <Activity :size="17" /><span>
-                    {{ tr("月流量", "Monthly transfer") }} </span
-                  ><b>{{ plan.transfer_tb }} TB</b>
-                </div>
-                <div>
-                  <Globe2 :size="17" /><span> {{ tr("区域", "Region") }} </span
-                  ><b>{{ plan.region }}</b>
-                </div>
-              </div>
-            </article>
-          </div>
-          <div v-if="!plans.length" class="panel empty-state">
-            <Layers :size="30" />
-            <h3>{{ tr("暂无可用方案", "No plans available") }}</h3>
-            <p>
-              {{
-                tr(
-                  "服务提供方还未发布套餐。",
-                  "Your provider has not published plans for this currency.",
-                )
-              }}
-            </p>
-          </div>
-          <div class="quiet-note">
-            <ShieldCheck :size="18" />
-            <div>
-              <b>
-                {{
-                  tr(
-                    "下单前请核对方案与金额。",
-                    "Review your order before confirming.",
-                  )
-                }}
-              </b>
-              <p>
-                {{
-                  tr(
-                    "下单只创建待付款订单。支付通道及自动开通尚未接入，不会扣款，也不会创建真实服务器。",
-                    "Creating an order only creates an unpaid record. Payments and provisioning are not connected; no charge or real server will be created.",
-                  )
-                }}
-              </p>
-            </div>
-          </div></template
-        >
+        <PlansPage
+          v-else-if="page === 'plans'"
+          :plans="plans"
+          :currency="currency"
+          :loading="loading"
+          :saving="saving"
+          :preview="preview"
+          :demo="session.demo_mode"
+          :pending-plan="pendingOrder?.plan"
+          @review="openOrder"
+        />
         <template v-else-if="page === 'services'"
           ><div class="list-toolbar">
             <span
@@ -2273,7 +2226,7 @@ onMounted(init);
           <b>{{ selectedPlan.name }}</b>
           <p>
             {{ selectedPlan.cpu }} vCPU · {{ selectedPlan.memory_gb }} GB ·
-            {{ selectedPlan.disk_gb }} GB SSD
+            {{ selectedPlan.disk_gb }} GB
           </p>
         </div>
         <strong
@@ -2349,7 +2302,7 @@ onMounted(init);
       </div>
       <button
         class="button primary full"
-        :disabled="preview || saving || !agreed"
+        :disabled="preview || saving || !agreed || (loading && !pendingOrder)"
       >
         <LoaderCircle v-if="saving" :size="17" class="spin" />{{
           saving

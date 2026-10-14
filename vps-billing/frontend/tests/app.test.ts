@@ -233,7 +233,7 @@ describe("billing workspace flows", () => {
     const { wrapper, router } = await mountApp();
     await router.push("/plans");
     await flushPromises();
-    await wrapper.find(".plan-card button").trigger("click");
+    await wrapper.find(".purchase-review").trigger("click");
     await wrapper.find("#hostname").setValue("original-host");
     await wrapper.find("input[type=checkbox]").setValue(true);
     await wrapper.find("dialog form").trigger("submit");
@@ -248,7 +248,7 @@ describe("billing workspace flows", () => {
       .trigger("click");
     await wrapper.find('select[aria-label="币种"]').setValue("USD");
     await flushPromises();
-    await wrapper.find(".plan-card button").trigger("click");
+    await wrapper.find(".purchase-review").trigger("click");
     expect(wrapper.find("#hostname").element).toHaveProperty(
       "value",
       "original-host",
@@ -273,6 +273,108 @@ describe("billing workspace flows", () => {
     expect(router.currentRoute.value.path).toBe("/orders");
     wrapper.unmount();
   });
+  it("blocks an unsubmitted confirmation while refreshed server prices are pending", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const { wrapper, router } = await mountApp();
+    await router.push("/plans");
+    await flushPromises();
+    await wrapper.find(".purchase-review").trigger("click");
+    await wrapper.find("#hostname").setValue("wait-for-price");
+    await wrapper.find("input[type=checkbox]").setValue(true);
+    const originalFetch = fetch;
+    let resolvePlans!: (value: unknown) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        if (path.includes("/plans?"))
+          return new Promise((resolve) => {
+            resolvePlans = resolve;
+          });
+        return originalFetch(path, options);
+      }),
+    );
+    await wrapper.find('button[aria-label="刷新数据"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper
+        .find('dialog[aria-labelledby="order-title"] .button.primary')
+        .attributes("disabled"),
+    ).toBeDefined();
+    await wrapper.find("dialog form").trigger("submit");
+    expect(
+      requests.filter(
+        (request) => request.path === "/orders" && request.method === "POST",
+      ),
+    ).toHaveLength(0);
+    const plans = fixtures.previewPlans("CNY");
+    plans[0]!.price_minor += 100;
+    resolvePlans({ ok: true, json: async () => ({ data: plans }) });
+    await flushPromises();
+    expect(
+      wrapper.find('dialog[aria-labelledby="order-title"]').attributes("open"),
+    ).toBeUndefined();
+    expect(wrapper.text()).toContain("套餐、价格或币种已变化");
+    wrapper.unmount();
+  });
+  it.each(["price", "availability", "removed", "currency"])(
+    "requires renewed confirmation when an unsubmitted order changes: %s",
+    async (change) => {
+      activeUser = { ...fixtures.previewUser };
+      const { wrapper, router } = await mountApp();
+      await router.push("/plans");
+      await flushPromises();
+      await wrapper.find(".purchase-review").trigger("click");
+      await wrapper.find("#hostname").setValue("review-again");
+      await wrapper.find("input[type=checkbox]").setValue(true);
+      if (change === "currency") {
+        await wrapper.find('select[aria-label="币种"]').setValue("USD");
+      } else {
+        const originalFetch = fetch;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (path: string, options: RequestInit) => {
+            if (path.includes("/plans?")) {
+              const plans = fixtures.previewPlans("CNY");
+              if (change === "price") plans[0]!.price_minor += 100;
+              if (change === "availability") plans[0]!.available = false;
+              return {
+                ok: true,
+                json: async () => ({
+                  data: change === "removed" ? plans.slice(1) : plans,
+                }),
+              };
+            }
+            return originalFetch(path, options);
+          }),
+        );
+        await wrapper.find('button[aria-label="刷新数据"]').trigger("click");
+      }
+      await flushPromises();
+      expect(
+        wrapper
+          .find('dialog[aria-labelledby="order-title"]')
+          .attributes("open"),
+      ).toBeUndefined();
+      expect(wrapper.text()).toContain("套餐、价格或币种已变化");
+      await wrapper.find("dialog form").trigger("submit");
+      expect(
+        requests.filter(
+          (request) => request.path === "/orders" && request.method === "POST",
+        ),
+      ).toHaveLength(0);
+      await wrapper.find(".purchase-review").trigger("click");
+      expect(
+        wrapper
+          .find('dialog[aria-labelledby="order-title"]')
+          .attributes("open"),
+      ).toBeDefined();
+      expect(wrapper.find("input[type=checkbox]").element).toHaveProperty(
+        "checked",
+        false,
+      );
+      wrapper.unmount();
+    },
+  );
   it("allows correcting a definitively rejected first order with a new key", async () => {
     activeUser = { ...fixtures.previewUser };
     const originalFetch = fetch;
@@ -300,7 +402,7 @@ describe("billing workspace flows", () => {
     const { wrapper, router } = await mountApp();
     await router.push("/plans");
     await flushPromises();
-    await wrapper.find(".plan-card button").trigger("click");
+    await wrapper.find(".purchase-review").trigger("click");
     await wrapper.find("#hostname").setValue("bad-host-");
     await wrapper.find("input[type=checkbox]").setValue(true);
     await wrapper.find("dialog form").trigger("submit");
@@ -337,7 +439,7 @@ describe("billing workspace flows", () => {
     const { wrapper, router } = await mountApp();
     await router.push("/plans");
     await flushPromises();
-    await wrapper.find(".plan-card button").trigger("click");
+    await wrapper.find(".purchase-review").trigger("click");
     await wrapper.find("#hostname").setValue("original-account-host");
     await wrapper.find("input[type=checkbox]").setValue(true);
     await wrapper.find("dialog form").trigger("submit");
@@ -388,7 +490,7 @@ describe("billing workspace flows", () => {
     expect(wrapper.find(".plan-price").text()).toContain("暂不可售");
     expect(wrapper.find(".plan-price").text()).not.toContain("0.00");
     expect(
-      wrapper.find(".plan-card button").attributes("disabled"),
+      wrapper.find(".catalog-plan button").attributes("disabled"),
     ).toBeDefined();
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
     wrapper.unmount();
@@ -480,10 +582,7 @@ describe("billing workspace flows", () => {
     expect(wrapper.text()).toContain("只读设计预览 · 以下均为样例数据");
     await router.push("/plans");
     await flushPromises();
-    await wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("选择此方案"))!
-      .trigger("click");
+    await wrapper.find(".purchase-review").trigger("click");
     await flushPromises();
     const action = wrapper
       .findAll("button")
@@ -502,10 +601,7 @@ describe("billing workspace flows", () => {
     expect(wrapper.text()).toContain("你好，Alex");
     await router.push("/plans");
     await flushPromises();
-    await wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("选择此方案"))!
-      .trigger("click");
+    await wrapper.find(".purchase-review").trigger("click");
     await flushPromises();
     await wrapper.find("#hostname").setValue("production-api");
     await wrapper.find("input[type=checkbox]").setValue(true);

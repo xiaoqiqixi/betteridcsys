@@ -1,0 +1,165 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it } from "vitest";
+import { mount } from "@vue/test-utils";
+import PlansPage from "../src/components/PlansPage.vue";
+import { previewPlans } from "../src/lib/preview";
+import { restorePreferences, setLocale } from "../src/lib/i18n";
+
+function setup(overrides = {}) {
+  return mount(PlansPage, {
+    props: {
+      plans: previewPlans("CNY"),
+      currency: "CNY",
+      loading: false,
+      saving: false,
+      preview: false,
+      demo: false,
+      ...overrides,
+    },
+  });
+}
+beforeEach(() => {
+  localStorage.clear();
+  restorePreferences();
+});
+
+describe("plan selection and order summary", () => {
+  it("filters real regions, updates the summary and only reviews on explicit confirmation", async () => {
+    const wrapper = setup();
+    const plans = previewPlans("CNY");
+    expect(wrapper.findAll(".region-options button")).toHaveLength(3);
+    expect(wrapper.findAll(".catalog-plan")).toHaveLength(3);
+    await wrapper.findAll(".plan-select")[1]!.trigger("click");
+    expect(wrapper.find(".purchase-summary").text()).toContain(plans[1]!.name);
+    expect(wrapper.find(".purchase-total").text()).toContain("CNY 79.00");
+    expect(wrapper.emitted("review")).toBeUndefined();
+    await wrapper.findAll(".region-options button")[2]!.trigger("click");
+    expect(wrapper.findAll(".catalog-plan")).toHaveLength(1);
+    expect(wrapper.find(".purchase-summary").text()).toContain(
+      plans[2]!.region,
+    );
+    expect(wrapper.find(".purchase-summary").text()).toContain("4 vCPU");
+    await wrapper.find(".purchase-review").trigger("click");
+    expect(wrapper.emitted("review")).toEqual([[plans[2]]]);
+    wrapper.unmount();
+  });
+
+  it("preserves the selected plan across currency reloads and hides stale money while loading", async () => {
+    const wrapper = setup();
+    await wrapper.findAll(".plan-select")[1]!.trigger("click");
+    await wrapper.setProps({ currency: "USD", plans: [], loading: true });
+    expect(wrapper.find(".purchase-total").exists()).toBe(false);
+    expect(
+      wrapper.find(".purchase-review").attributes("disabled"),
+    ).toBeDefined();
+    await wrapper.setProps({ plans: previewPlans("USD"), loading: false });
+    expect(wrapper.find(".purchase-total").text()).toContain("USD 12.00");
+    expect(wrapper.findAll(".plan-select")[1]!.attributes("aria-pressed")).toBe(
+      "true",
+    );
+    await wrapper.find(".purchase-review").trigger("click");
+    expect(wrapper.emitted("review")![0]![0]).toMatchObject({
+      id: "p2",
+      currency: "USD",
+      price_minor: 1200,
+    });
+    wrapper.unmount();
+  });
+
+  it("keeps missing prices and wrong-currency plans unavailable without presenting them as free", async () => {
+    const plans = previewPlans("CNY");
+    const wrapper = setup({
+      plans: [
+        { ...plans[0], available: false, price_minor: 0 },
+        { ...plans[1], currency: "USD" },
+      ],
+    });
+    expect(
+      wrapper
+        .findAll(".plan-select")
+        .every((button) => button.attributes("disabled") !== undefined),
+    ).toBe(true);
+    expect(
+      wrapper.find(".purchase-review").attributes("disabled"),
+    ).toBeDefined();
+    expect(wrapper.find(".purchase-total").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("0.00");
+    expect(wrapper.text()).not.toContain("USD");
+    wrapper.unmount();
+  });
+
+  it("preserves the original uncertain order even when the catalog currency or availability changes", async () => {
+    const original = previewPlans("CNY")[0]!;
+    const wrapper = setup({
+      plans: previewPlans("USD"),
+      currency: "USD",
+      pendingPlan: original,
+    });
+    expect(wrapper.find(".purchase-total").text()).toContain("CNY 39.00");
+    expect(wrapper.find(".purchase-pending").text()).toContain(
+      "保留原配置与币种",
+    );
+    expect(
+      wrapper
+        .findAll(".plan-select")
+        .every((button) => button.attributes("disabled") !== undefined),
+    ).toBe(true);
+    await wrapper.setProps({ plans: [] });
+    await wrapper.find(".purchase-review").trigger("click");
+    expect(wrapper.emitted("review")).toEqual([[original]]);
+    wrapper.unmount();
+  });
+
+  it("reconciles removed regions or unavailable selections against refreshed API data", async () => {
+    const plans = previewPlans("CNY");
+    const wrapper = setup();
+    await wrapper.findAll(".region-options button")[2]!.trigger("click");
+    await wrapper.setProps({
+      plans: [{ ...plans[0]!, available: false }, plans[1]!],
+    });
+    expect(
+      wrapper.find(".region-options button").attributes("aria-pressed"),
+    ).toBe("true");
+    expect(wrapper.find(".purchase-summary").text()).toContain(plans[1]!.name);
+    await wrapper.setProps({ plans: [] });
+    expect(wrapper.find(".purchase-total").exists()).toBe(false);
+    expect(
+      wrapper.find(".purchase-review").attributes("disabled"),
+    ).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("translates controls while keeping operator content literal and escaped", async () => {
+    const wrapper = setup({
+      plans: [
+        {
+          ...previewPlans("CNY")[0],
+          name: "<b>Operator</b>",
+          description: "原始产品说明",
+          region: "Private region",
+        },
+      ],
+    });
+    setLocale("en");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("Choose a region");
+    expect(wrapper.text()).toContain("Order summary");
+    expect(wrapper.text()).toContain("<b>Operator</b>");
+    expect(wrapper.text()).toContain("原始产品说明");
+    expect(wrapper.find(".catalog-plan h3 b").exists()).toBe(false);
+    expect(wrapper.find(".purchase-total").text()).toContain("CNY 39.00");
+    wrapper.unmount();
+  });
+
+  it("allows read-only preview details and blocks review while saving", async () => {
+    const wrapper = setup({ preview: true, demo: true });
+    expect(wrapper.find(".purchase-review").text()).toBe("预览订单配置");
+    expect(wrapper.find(".purchase-boundary").text()).toContain("不能创建订单");
+    await wrapper.find(".purchase-review").trigger("click");
+    expect(wrapper.emitted("review")).toHaveLength(1);
+    await wrapper.setProps({ saving: true });
+    await wrapper.find(".purchase-review").trigger("click");
+    expect(wrapper.emitted("review")).toHaveLength(1);
+    wrapper.unmount();
+  });
+});

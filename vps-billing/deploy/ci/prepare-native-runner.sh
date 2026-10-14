@@ -29,11 +29,11 @@ mkdir "$fixture_root/packages" "$fixture_root/nginx"
 apt_security=(-o Acquire::Retries=0 -o APT::Get::AllowUnauthenticated=false
   -o Acquire::AllowInsecureRepositories=false -o Acquire::AllowDowngradeToInsecureRepositories=false)
 sudo apt-get "${apt_security[@]}" update
-# These are runtime libraries/tools only. Do not install or upgrade MySQL or
+# These are runtime libraries/tools and browser-test fonts only. Do not install or upgrade MySQL or
 # Nginx services, change repositories, disable signature checks or run a daemon.
 sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_security[@]}" install --yes --no-install-recommends \
   libaio1t64 libmecab2 libnuma1 libssl3t64 libtirpc3t64 libtinfo6 \
-  libgssapi-krb5-2 libkrb5-3 libsasl2-2 libudev1 libpcre2-8-0 openssl
+  libgssapi-krb5-2 libkrb5-3 libsasl2-2 libudev1 libpcre2-8-0 openssl fonts-noto-cjk
 (
   cd "$fixture_root/packages"
   apt-get "${apt_security[@]}" download nginx
