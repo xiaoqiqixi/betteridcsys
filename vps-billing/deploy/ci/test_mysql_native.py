@@ -7,7 +7,6 @@ from pathlib import Path
 import signal
 import shutil
 import subprocess
-import tarfile
 import tempfile
 import textwrap
 import time
@@ -44,6 +43,17 @@ class NativeMySQLFixtureTest(unittest.TestCase):
         ''')
         self.real_timeout = shutil.which("timeout")
         self.assertIsNotNone(self.real_timeout)
+        self.real_dpkg = shutil.which("dpkg-deb")
+        self.assertIsNotNone(self.real_dpkg)
+        executable(self.fake_bin / "dpkg-deb", '''\
+            #!/usr/bin/env python3
+            import os
+            from pathlib import Path
+            import sys
+            with open(os.environ['CI_FIXTURE_DPKG_EVENTS'], 'a') as output:
+                output.write(sys.argv[1] + '\\n')
+            os.execv(os.environ['CI_FIXTURE_REAL_DPKG'], ['dpkg-deb'] + sys.argv[1:])
+        ''')
         executable(self.fake_bin / "timeout", '''\
             #!/usr/bin/env python3
             import os
@@ -55,9 +65,34 @@ class NativeMySQLFixtureTest(unittest.TestCase):
                 args[2] = '0.2s'
             os.execv(os.environ['CI_FIXTURE_REAL_TIMEOUT'], ['timeout'] + args)
         ''')
-        distribution = self.root / "fake-mysql"
-        (distribution / "bin").mkdir(parents=True)
-        executable(distribution / "bin/mysqld", '''\
+        self.manifest = json.loads(MANIFEST.read_text())
+        self.manifest["verification_note"] = "TEST FIXTURE ONLY: fake executables, not Oracle packages"
+        self.package_dir = self.root / "offline packages"
+        self.package_dir.mkdir()
+        self.package_sources = {}
+        for package in self.manifest["packages"]:
+            source = self.root / package["name"]
+            (source / "DEBIAN").mkdir(parents=True)
+            (source / "DEBIAN").chmod(0o755)
+            (source / "DEBIAN/control").write_text(
+                f"Package: {package['name']}\nVersion: {self.manifest['package_version']}\n"
+                "Architecture: amd64\nMaintainer: Test <fixture@example.invalid>\nDescription: Offline fake CI fixture\n"
+            )
+            # A maintainer script must never execute during plain data extraction.
+            executable(source / "DEBIAN/postinst", "#!/bin/sh\nexit 99\n")
+            (source / "DEBIAN/postinst").chmod(0o755)
+            self.package_sources[package["name"]] = source
+        server = self.package_sources["mysql-community-server-core"] / "usr"
+        (server / "sbin").mkdir(parents=True)
+        (server / "share/mysql-8.4/english").mkdir(parents=True)
+        (server / "share/mysql-8.4/english/errmsg.sys").write_text("fake message fixture")
+        client = self.package_sources["mysql-community-client-core"] / "usr"
+        (client / "bin").mkdir(parents=True)
+        (self.package_sources["mysql-community-client-plugins"] / "usr/lib/mysql/plugin").mkdir(parents=True)
+        dump = self.package_sources["mysql-community-client"] / "usr/bin/mysqldump"
+        dump.parent.mkdir(parents=True)
+        executable(dump, "#!/bin/sh\nexit 0\n")
+        executable(server / "sbin/mysqld", '''\
             #!/usr/bin/env python3
             import os
             from pathlib import Path
@@ -77,6 +112,8 @@ class NativeMySQLFixtureTest(unittest.TestCase):
                 if os.environ.get('CI_FIXTURE_INIT_HANG'):
                     Path(os.environ['CI_FIXTURE_INIT_PID']).write_text(str(os.getpid()))
                     time.sleep(30)
+                if os.environ.get('CI_FIXTURE_INIT_FAIL'):
+                    print('[ERROR] [MY-999999] fixture-private-text=inherited-must-not-escape')
                 raise SystemExit(2 if os.environ.get('CI_FIXTURE_INIT_FAIL') else 0)
             assert '--bind-address=127.0.0.1' in sys.argv
             assert '--mysqlx=0' in sys.argv
@@ -93,7 +130,7 @@ class NativeMySQLFixtureTest(unittest.TestCase):
             while True:
                 time.sleep(0.05)
         ''')
-        executable(distribution / "bin/mysql", '''\
+        executable(client / "bin/mysql", '''\
             #!/usr/bin/env python3
             import os
             from pathlib import Path
@@ -112,12 +149,8 @@ class NativeMySQLFixtureTest(unittest.TestCase):
                     time.sleep(30)
             print(os.environ.get('CI_FIXTURE_SERVER_VERSION', '8.4.11'))
         ''')
-        self.archive = self.root / "offline archive.tar.xz"
-        with tarfile.open(self.archive, "w:xz") as archive:
-            archive.add(distribution, arcname="mysql-fixture")
-        self.manifest = json.loads(MANIFEST.read_text())
-        self.manifest.update(status="verified", sha256=hashlib.sha256(self.archive.read_bytes()).hexdigest(),
-                             verification_note="TEST FIXTURE ONLY: fake executables, not an Oracle archive")
+        for package in self.manifest["packages"]:
+            self.build_package(package["name"])
         self.write_manifest()
         self.child = self.root / "child.py"
         executable(self.child, '''\
@@ -131,6 +164,16 @@ class NativeMySQLFixtureTest(unittest.TestCase):
             assert re.fullmatch(r'aster_ci:AsterCiFixtureOnly2026@tcp\\(127\\.0\\.0\\.1:[0-9]+\\)/aster_ci_test\\?parseTime=true', os.environ['ASTER_MYSQL_TEST_DSN'])
             assert 'MYSQL_PWD' not in os.environ
             assert 'MYSQL_TEST_LOGIN_FILE' not in os.environ
+            fixture = Path(os.environ['ASTER_NATIVE_MYSQL_FIXTURE_ROOT'])
+            verified = Path(os.environ['ASTER_NATIVE_MYSQL_ROOT'])
+            assert verified == fixture / 'distribution/usr'
+            assert (verified / 'bin/mysql').is_file() and (verified / 'bin/mysqldump').is_file()
+            assert (verified / 'sbin/mysqld').is_file()
+            config = Path(os.environ['ASTER_NATIVE_MYSQL_ADMIN_CNF'])
+            assert config.parent == fixture and config.stat().st_mode & 0o777 == 0o600
+            assert config.read_text() == '[client]\\nuser=aster_ci\\npassword=AsterCiFixtureOnly2026\\n'
+            assert Path(os.environ['ASTER_NATIVE_MYSQL_SOCKET']).parent == fixture
+            assert os.environ['ASTER_NATIVE_MYSQL_PORT'].isdigit()
             Path(os.environ['CI_FIXTURE_CHILD_PID']).write_text(str(os.getpid()))
             if os.environ.get('CI_FIXTURE_BACKGROUND'):
                 source = 'import time; time.sleep(30)'
@@ -155,18 +198,29 @@ class NativeMySQLFixtureTest(unittest.TestCase):
             "CI_FIXTURE_INIT_PID": str(self.root / "initialize.pid"),
             "CI_FIXTURE_QUERY_PID": str(self.root / "query.pid"),
             "CI_FIXTURE_REAL_TIMEOUT": self.real_timeout,
+            "CI_FIXTURE_REAL_DPKG": self.real_dpkg,
+            "CI_FIXTURE_DPKG_EVENTS": str(self.root / "dpkg-events"),
             "MYSQL_PWD": "inherited-must-not-escape",
             "MYSQL_TEST_LOGIN_FILE": "inherited-must-not-escape",
             "ASTER_MYSQL_TEST_DSN": "inherited-must-not-escape",
+            "ASTER_NATIVE_COMMAND_STOP_SECONDS": "1",
         })
 
     def write_manifest(self):
         (self.controller / MANIFEST.name).write_text(json.dumps(self.manifest), encoding="utf-8")
 
+    def build_package(self, name):
+        package = next(item for item in self.manifest["packages"] if item["name"] == name)
+        path = self.package_dir / f"{name}_{self.manifest['package_version']}_amd64.deb"
+        result = subprocess.run([self.real_dpkg, "--build", "--root-owner-group", str(self.package_sources[name]), str(path)],
+                                text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        package.update(sha256=hashlib.sha256(path.read_bytes()).hexdigest(), size=path.stat().st_size)
+
     def command(self, script=None, offline=True):
         command = ["bash", str(script or self.script)]
         if offline:
-            command += ["--archive", str(self.archive)]
+            command += ["--packages", str(self.package_dir)]
         return command + ["--", str(self.child)]
 
     def run_fixture(self, script=None, offline=True, **overrides):
@@ -190,15 +244,16 @@ class NativeMySQLFixtureTest(unittest.TestCase):
                     continue
                 self.assertEqual(state, "Z", f"owned {name} still running")
 
-    def test_repository_manifest_blocks_before_download_or_execution(self):
-        result = self.run_fixture(script=SCRIPT, offline=False)
+    def test_repository_pins_reject_fake_packages_before_extraction(self):
+        result = self.run_fixture(script=SCRIPT)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("awaiting verified provenance and SHA-256", result.stderr)
+        self.assertIn("SHA-256 mismatch", result.stderr)
         self.assertFalse((self.root / "download").exists())
         self.assertFalse((self.root / "events").exists())
+        self.assertFalse((self.root / "dpkg-events").exists())
 
     def test_verified_status_without_checksum_still_blocks(self):
-        self.manifest["sha256"] = None
+        self.manifest["packages"][0]["sha256"] = None
         self.write_manifest()
         result = self.run_fixture(offline=False)
         self.assertEqual(result.returncode, 1)
@@ -212,12 +267,84 @@ class NativeMySQLFixtureTest(unittest.TestCase):
         self.assertFalse((self.root / "events").exists())
 
     def test_checksum_mismatch_stops_before_execution(self):
-        self.manifest["sha256"] = "a" * 64
+        # Even the last package must be verified before extracting the first.
+        self.manifest["packages"][-1]["sha256"] = "a" * 64
         self.write_manifest()
         result = self.run_fixture()
         self.assertEqual(result.returncode, 1)
         self.assertIn("SHA-256 mismatch", result.stderr)
         self.assertFalse((self.root / "events").exists())
+        self.assertFalse((self.root / "dpkg-events").exists())
+
+    def test_wrong_package_architecture_stops_before_extraction(self):
+        name = self.manifest["packages"][0]["name"]
+        control = self.package_sources[name] / "DEBIAN/control"
+        control.write_text(control.read_text().replace("Architecture: amd64", "Architecture: arm64"))
+        self.build_package(name)
+        self.write_manifest()
+        result = self.run_fixture()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("identity/version/architecture", result.stderr)
+        self.assertFalse((self.root / "events").exists())
+        self.assertNotIn("--fsys-tarfile", (self.root / "dpkg-events").read_text())
+
+    def test_wrong_package_version_stops_before_extraction(self):
+        name = self.manifest["packages"][0]["name"]
+        control = self.package_sources[name] / "DEBIAN/control"
+        control.write_text(control.read_text().replace(self.manifest["package_version"], "8.0.44-1ubuntu24.04"))
+        self.build_package(name)
+        self.write_manifest()
+        result = self.run_fixture()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("identity/version/architecture", result.stderr)
+        self.assertFalse((self.root / "events").exists())
+
+    def test_escaping_package_symlink_is_rejected(self):
+        name = self.manifest["packages"][0]["name"]
+        outside = self.root / "must-not-be-written"
+        (self.package_sources[name] / "usr/share/escaping-link").symlink_to(outside)
+        self.build_package(name)
+        self.write_manifest()
+        result = self.run_fixture()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("AbsoluteLinkError", result.stderr)
+        self.assertFalse(outside.exists())
+        self.assertFalse((self.root / "events").exists())
+
+    def test_wrong_package_size_stops_before_extraction(self):
+        self.manifest["packages"][-1]["size"] += 1
+        self.write_manifest()
+        result = self.run_fixture()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("package size", result.stderr)
+        self.assertFalse((self.root / "dpkg-events").exists())
+
+    def test_duplicate_package_manifest_is_rejected_before_download(self):
+        self.manifest["packages"][-1] = self.manifest["packages"][0]
+        self.write_manifest()
+        result = self.run_fixture(offline=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nonduplicated", result.stderr)
+        self.assertFalse((self.root / "download").exists())
+
+    def test_invalid_cleanup_grace_is_rejected_before_download(self):
+        for value in ("0", "91", "-1", "1;true", "1.5"):
+            with self.subTest(value=value):
+                result = self.run_fixture(offline=False, ASTER_NATIVE_COMMAND_STOP_SECONDS=value)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("integer from 1 through 90", result.stderr)
+                self.assertFalse((self.root / "download").exists())
+
+    def test_offline_fifo_package_is_rejected_without_blocking(self):
+        name = self.manifest["packages"][0]["name"]
+        path = self.package_dir / f"{name}_{self.manifest['package_version']}_amd64.deb"
+        path.unlink()
+        os.mkfifo(path)
+        result = self.run_fixture()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("readable regular file", result.stderr)
+        self.assertFalse((self.root / "events").exists())
+        self.assertFalse((self.root / "dpkg-events").exists())
 
     def test_wrong_binary_version_stops_before_initialization(self):
         result = self.run_fixture(CI_FIXTURE_BINARY_VERSION="8.0.44")
@@ -229,6 +356,8 @@ class NativeMySQLFixtureTest(unittest.TestCase):
         result = self.run_fixture(CI_FIXTURE_INIT_FAIL="1")
         self.assertEqual(result.returncode, 1)
         self.assertIn("initialization failed", result.stderr)
+        self.assertIn("exit 2", result.stderr)
+        self.assertIn("MySQL diagnostic codes: MY-999999", result.stderr)
         self.assertFalse((self.root / "mysql.pid").exists())
         self.assertFalse((self.root / "child.pid").exists())
 

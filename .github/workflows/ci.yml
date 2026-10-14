@@ -17,7 +17,7 @@ jobs:
   checks:
     if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,13 +30,43 @@ jobs:
         with:
           node-version: '24.19.0'
           package-manager-cache: false
+      - name: Prepare disposable native runner
+        run: bash vps-billing/deploy/ci/prepare-native-runner.sh
       - name: Required regressions with native MySQL
-        run: bash vps-billing/deploy/ci/mysql-native.sh -- bash vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE"
+        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash vps-billing/deploy/ci/mysql-native.sh -- bash vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE"
+      - name: Native systemd, TLS, business, backup and rollback acceptance
+        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash vps-billing/deploy/ci/mysql-native.sh -- bash vps-billing/deploy/ci/accept-native.sh --allow-isolated-runner "$GITHUB_WORKSPACE" "$RUNNER_TEMP/native-acceptance-evidence"
       - name: npm vulnerability gate
         working-directory: vps-billing/frontend
         run: npm audit --audit-level=high
       - name: Workflow syntax and expression checks
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/release-build.yml .github/workflows/release-publish.yml
+      - name: Retain nonsecret native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/native-acceptance-evidence/native-acceptance.json
+            ${{ runner.temp }}/native-acceptance-evidence/cleanup.json
+            ${{ runner.temp }}/native-acceptance-evidence/https-tests.json
+            ${{ runner.temp }}/native-acceptance-evidence/restored-https-tests.json
+            ${{ runner.temp }}/native-acceptance-evidence/api-properties.txt
+            ${{ runner.temp }}/native-acceptance-evidence/systemd-verify.log
+            ${{ runner.temp }}/native-acceptance-evidence/nginx-config.log
+            ${{ runner.temp }}/native-acceptance-evidence/failure-unit-status.txt
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: false
+      - name: Remove owned native runner scratch
+        if: always()
+        run: |
+          if [[ -n ${ASTER_NATIVE_FIXTURE_ROOT:-} ]]; then
+            [[ $ASTER_NATIVE_FIXTURE_ROOT =~ ^/run/aster-native\.[A-Za-z0-9]{8}$ ]]
+            [[ -d $ASTER_NATIVE_FIXTURE_ROOT && ! -L $ASTER_NATIVE_FIXTURE_ROOT ]]
+            [[ $(stat -c %u "$ASTER_NATIVE_FIXTURE_ROOT") == "$(id -u)" ]]
+            sudo rm -rf --one-file-system -- "$ASTER_NATIVE_FIXTURE_ROOT"
+          fi
   go-vulnerability:
     # Keep this scan independent of database provisioning so network failures
     # and vulnerability findings remain visible even when another gate fails.
@@ -53,4 +83,4 @@ jobs:
           cache: false
       - name: Go vulnerability gate (network failures fail the check)
         working-directory: vps-billing/backend
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format=text -show=version ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format=text -show=version,verbose ./...
