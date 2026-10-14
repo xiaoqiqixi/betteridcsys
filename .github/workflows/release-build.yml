@@ -1,0 +1,86 @@
+name: Release candidate build
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*-rc.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*-beta.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*-alpha.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing reviewed prerelease tag, e.g. v0.3.0-rc.2; dispatch from the default branch'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-build-${{ github.ref }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Read-only workflow controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Validate existing tag, public repository and trusted source
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py prepare-build --policy "$RUNNER_TEMP/build-policy.json"
+      - name: Exact validated source checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.policy.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Required regressions with native MySQL
+        run: bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE/source"
+      - name: npm vulnerability gate
+        working-directory: source/vps-billing/frontend
+        run: npm audit --audit-level=high
+      - name: Workflow syntax and expression checks
+        working-directory: source
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/release-build.yml .github/workflows/release-publish.yml
+      - name: Go vulnerability gate (no bypass on scan failure)
+        working-directory: source/vps-billing/backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Reproducible Linux amd64 packages from the validated commit
+        env:
+          SOURCE_SHA: ${{ steps.policy.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.policy.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/candidate"
+          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/rebuild"
+          diff -r "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/rebuild"
+      - name: Validate packages and bind provenance to this exact run
+        run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py seal-build --policy "$RUNNER_TEMP/build-policy.json" --directory "$RUNNER_TEMP/candidate"
+      - name: Retain immutable candidate data for the separate publisher
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.policy.outputs.artifact_name }}
+          path: ${{ runner.temp }}/candidate/*
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+          compression-level: 0
+          retention-days: 7
+          archive: true

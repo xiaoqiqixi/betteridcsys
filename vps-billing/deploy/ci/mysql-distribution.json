@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "status": "awaiting_verification",
+  "version": "8.4.11",
+  "archive": "mysql-8.4.11-linux-glibc2.28-x86_64-minimal.tar.xz",
+  "download_url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-linux-glibc2.28-x86_64-minimal.tar.xz",
+  "sha256": null,
+  "verification_note": "UNVERIFIED candidate URL. Official archive access returned HTTP 403 on 2026-10-14; no archive or checksum was obtained. Before enabling CI, verify the official distribution provenance/signature, record its SHA-256, test native startup on Ubuntu 24.04, and review the manifest change. Do not substitute an unverified directory, mirror, or different database version."
+}
