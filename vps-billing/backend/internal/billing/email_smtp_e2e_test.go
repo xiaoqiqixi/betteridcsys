@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"aster/billing/plugins/smtp"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -79,6 +80,7 @@ func TestAdminSMTPActualTLSDelivery(t *testing.T) {
 	}
 	store := NewMemory()
 	app := NewApp(store, Config{Demo: true, Origin: "http://localhost", Secret: ID() + ID(), SMTPKey: cipher})
+	app.SMTP.sender = smtp.NewClient() // Explicit transport fixture; production has no compiled fallback.
 	api := httptest.NewServer(app.Handler())
 	defer api.Close()
 	admin := client(t, api.URL, "admin@aster.local", "DemoAdmin!2026")

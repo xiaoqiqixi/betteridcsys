@@ -34,25 +34,25 @@ fixture_root=$ASTER_NATIVE_MYSQL_FIXTURE_ROOT
 [[ -S $mysql_socket && -f $admin_cnf && ! -L $admin_cnf ]] || fail 'MySQL fixture socket/private client file unavailable.'
 [[ $(realpath -e "$mysql_socket") == "$fixture_root/"* ]] || fail 'Socket does not belong to the declared disposable fixture.'
 [[ $(stat -c %a "$admin_cnf") == 600 && $(stat -c %u "$admin_cnf") == "$EUID" ]] || fail 'Fixture client file must be private and runner-owned.'
-for tool in go npm python3 openssl curl sudo systemctl systemd-analyze install useradd userdel groupdel getent gzip sha256sum timeout; do
+for tool in go npm python3 openssl curl sudo systemctl systemd-analyze install useradd usermod userdel groupadd groupdel getent gzip sha256sum timeout; do
   command -v "$tool" >/dev/null || fail "Required native tool unavailable: $tool"
 done
 sudo -n true || fail 'Passwordless sudo is required on this disposable runner.'
 mysql_cmd=("$mysql_root/bin/mysql" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --batch --skip-column-names)
 server_data=$("${mysql_cmd[@]}" --execute='SELECT @@datadir' 2>/dev/null) || fail 'Could not verify owned native MySQL identity.'
 [[ $(realpath -e "$server_data") == "$fixture_root/data" ]] || fail 'Refusing any database outside the owned fixture data directory.'
-for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@}; do unset "$variable"; done
+for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!PLUGIN_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@}; do unset "$variable"; done
 export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 PYTHONDONTWRITEBYTECODE=1
 mkdir -m 700 -- "$evidence"
 scratch=$(mktemp -d "${RUNNER_TEMP:?}/aster-native-accept.XXXXXXXX")
 identity="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$$"
-api_user="astapi$$"; web_user="astweb$$"
+api_user="astapi$$"; web_user="astweb$$"; smtp_user="astsmtp$$"; socket_group="astsock$$"
 opt="/opt/aster-ci-$identity"; config="/etc/aster-ci-$identity"
 logs="/var/log/aster-ci-$identity"; run="/run/aster-ci-$identity"
-api_unit="aster-ci-api-$identity.service"; web_unit="aster-ci-web-$identity.service"
+api_unit="aster-ci-api-$identity.service"; web_unit="aster-ci-web-$identity.service"; smtp_unit="aster-ci-smtp-$identity.service"
 db="aster_native_test_${GITHUB_RUN_ID}_$$"; restored="aster_restore_test_${GITHUB_RUN_ID}_$$"
 [[ ${#db} -le 64 && ${#restored} -le 64 ]] || fail 'Run identity exceeds safe database name length.'
-created_paths=(); created_units=(); created_users=(); db_created=false
+created_paths=(); created_units=(); created_users=(); created_groups=(); db_created=false
 cleanup() {
   test_result=$?
   trap - EXIT INT TERM
@@ -94,6 +94,7 @@ cleanup() {
       sudo -n userdel "$user" >/dev/null 2>&1 || cleanup_failed=true
       if getent group "$user" >/dev/null; then sudo -n groupdel "$user" >/dev/null 2>&1 || cleanup_failed=true; fi
     done
+    for group in "${created_groups[@]}"; do sudo -n groupdel "$group" >/dev/null 2>&1 || cleanup_failed=true; done
     if [[ $db_created == true && -f $scratch/cleanup.sql ]]; then
       timeout --signal=TERM --kill-after=1s 5s "${mysql_cmd[@]}" < "$scratch/cleanup.sql" >/dev/null 2>&1 || cleanup_failed=true
     fi
@@ -105,6 +106,7 @@ cleanup() {
   for user in "${created_users[@]}"; do
     if getent passwd "$user" >/dev/null || getent group "$user" >/dev/null; then cleanup_failed=true; fi
   done
+  for group in "${created_groups[@]}"; do if getent group "$group" >/dev/null; then cleanup_failed=true; fi; done
   for path in "${created_paths[@]}"; do [[ ! -e $path ]] || cleanup_failed=true; done
   rm -rf -- "$scratch" || cleanup_failed=true
   result=$test_result
@@ -120,18 +122,22 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-for user in "$api_user" "$web_user"; do
+for user in "$api_user" "$web_user" "$smtp_user" "$socket_group"; do
   if getent passwd "$user" >/dev/null || getent group "$user" >/dev/null; then fail 'Refusing to reuse an existing OS identity/group.'; fi
 done
-for path in "$opt" "$config" "$logs" "$run" "/etc/systemd/system/$api_unit" "/etc/systemd/system/$web_unit"; do [[ ! -e $path && ! -L $path ]] || fail 'Refusing to reuse an existing privileged path.'; done
+for path in "$opt" "$config" "$logs" "$run" "/etc/systemd/system/$api_unit" "/etc/systemd/system/$web_unit" "/etc/systemd/system/$smtp_unit"; do [[ ! -e $path && ! -L $path ]] || fail 'Refusing to reuse an existing privileged path.'; done
 
 step 'Build versioned source into two same-schema release directories'
 (cd "$project/backend" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$scratch/aster-api" ./cmd/server)
+(cd "$project/backend" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$scratch/aster-plugin-host" ./cmd/plugin-host)
 (cd "$project/frontend" && npm ci --include=dev --no-audit --no-fund && npm run build)
-for user in "$api_user" "$web_user"; do
+for user in "$api_user" "$web_user" "$smtp_user"; do
   sudo -n useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$user"
   created_users+=("$user")
 done
+sudo -n groupadd --system "$socket_group"
+created_groups+=("$socket_group")
+sudo -n usermod -a -G "$socket_group" "$api_user"
 for path in "$opt" "$config" "$logs" "$run"; do
   sudo -n mkdir -- "$path"; created_paths+=("$path")
   sudo -n chmod 755 "$path"
@@ -139,6 +145,7 @@ done
 sudo -n install -d -m 755 "$opt/releases/a/bin" "$opt/releases/a/web" "$opt/releases/b/bin" "$opt/releases/b/web" "$opt/tools"
 for version in a b; do
   sudo -n install -m 755 "$scratch/aster-api" "$opt/releases/$version/bin/aster-api"
+  sudo -n install -m 755 "$scratch/aster-plugin-host" "$opt/releases/$version/bin/aster-plugin-host"
   sudo -n cp -R "$project/frontend/dist/." "$opt/releases/$version/web/"
   sudo -n find "$opt/releases/$version/web" -type d -exec chmod 755 '{}' +
   sudo -n find "$opt/releases/$version/web" -type f -exec chmod 644 '{}' +
@@ -148,6 +155,8 @@ done
 sudo -n install -m 755 "$ASTER_ACCEPT_NGINX_BIN" "$opt/tools/nginx"
 sudo -n ln -s "$opt/releases/a" "$opt/current"
 sudo -n install -d -o root -g "$api_user" -m 750 "$config/secrets"
+sudo -n install -d -o root -g root -m 755 "$opt/plugins"
+sudo -n install -d -o "$smtp_user" -g "$socket_group" -m 750 "$run/smtp"
 
 step 'Create isolated roles, private fixture credentials and synthetic TLS trust'
 python3 - "$scratch" "$db" "$restored" "$mysql_socket" "$run" <<'PY'
@@ -225,18 +234,20 @@ done
 "${mysql_cmd[@]}" "$restored" --execute='DROP TABLE permission_canary' >/dev/null
 
 step 'Render and start the hardened API and dedicated nginx units'
-python3 - "$project" "$scratch" "$opt" "$config" "$logs" "$run" "$api_user" "$web_user" "$api_port" "$http_port" "$tls_port" "$mysql_socket" <<'PY'
+python3 - "$project" "$scratch" "$opt" "$config" "$logs" "$run" "$api_user" "$web_user" "$api_port" "$http_port" "$tls_port" "$mysql_socket" "$socket_group" <<'PY'
 from pathlib import Path
 import sys
-project,scratch,opt,config,logs,run,api_user,web_user,api_port,http_port,tls_port,mysql_socket=sys.argv[1:]
+project,scratch,opt,config,logs,run,api_user,web_user,api_port,http_port,tls_port,mysql_socket,socket_group=sys.argv[1:]
 p=Path(scratch)
 unit=Path(project+'/deploy/systemd/aster-api.service').read_text()
 unit=unit.replace('/opt/aster',opt).replace('/etc/aster',config).replace('User=aster','User='+api_user).replace('Group=aster','Group='+api_user)
+unit='\n'.join(line for line in unit.splitlines() if not line.startswith('SupplementaryGroups='))+'\n'
+unit=unit.replace('[Service]', '[Service]\nSupplementaryGroups='+socket_group)
 unit=unit.replace('After=network-online.target mysql.service','After=network-online.target').replace('SyslogIdentifier=aster-api','SyslogIdentifier='+api_user)
 unit=unit.replace('[Install]',f'BindReadOnlyPaths={mysql_socket}:{run}/mysql.sock\n\n[Install]')
 (p/'api.service').write_text(unit)
 env=Path(project+'/deploy/systemd/api.env.example').read_text().replace('https://billing.example.com','https://localhost:'+tls_port).replace('127.0.0.1:18080','127.0.0.1:'+api_port).replace('/etc/aster',config).replace('session_secret','session').replace('mysql_runtime_dsn','runtime.service.dsn').replace('MYSQL_ALLOW_INSECURE=false','MYSQL_ALLOW_INSECURE=true')
-env='\n'.join(line for line in env.splitlines() if not line.startswith('SMTP_ENCRYPTION_KEY_FILE='))+'\nSMTP_ENCRYPTION_KEY_FILE='+config+'/secrets/smtp-key\n'
+env='\n'.join(line for line in env.splitlines() if not line.startswith(('SMTP_ENCRYPTION_KEY_FILE=','PLUGIN_DIRECTORY=','PLUGIN_POLICY_FILE=')))+'\nSMTP_ENCRYPTION_KEY_FILE='+config+'/secrets/smtp-key\nPLUGIN_DIRECTORY='+opt+'/plugins\nPLUGIN_POLICY_FILE='+config+'/plugin-policy.json\n'
 (p/'api.env').write_text(env)
 web=Path(project+'/deploy/nginx.native.conf').read_text().replace('/opt/aster',opt).replace('billing.example.com','localhost')
 web=web.replace('/etc/letsencrypt/live/localhost/fullchain.pem',config+'/server.pem').replace('/etc/letsencrypt/live/localhost/privkey.pem',config+'/server.key')
@@ -308,6 +319,16 @@ actual_pid=$(sudo -n systemctl show "$api_unit" -p MainPID --value)
 [[ $(ps -o user= -p "$actual_pid" | xargs) == "$api_user" ]] || fail 'API did not run as its dedicated non-root account.'
 python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --report "$evidence/https-tests.json"
 
+step 'Independent plugin installation, live-core upgrade/rollback and isolated crash recovery'
+# Register the owned unit before the helper writes it, so partial failures are
+# cleaned by this outer trap. No existing user service is reused or altered.
+created_units+=("$smtp_unit")
+ASTER_PLUGIN_OPT="$opt" ASTER_PLUGIN_CONFIG="$config" ASTER_PLUGIN_RUN="$run" \
+ASTER_PLUGIN_SCRATCH="$scratch" ASTER_PLUGIN_API_UNIT="$api_unit" ASTER_PLUGIN_WORKER_UNIT="$smtp_unit" \
+ASTER_PLUGIN_API_USER="$api_user" ASTER_PLUGIN_WORKER_USER="$smtp_user" ASTER_PLUGIN_WEB_USER="$web_user" \
+ASTER_PLUGIN_SOCKET_GROUP="$socket_group" ASTER_PLUGIN_HTTPS_PORT="$tls_port" \
+bash "$project/deploy/ci/plugin-native.sh" --allow-isolated-runner "$source_root" "$evidence/plugin-native"
+
 step 'API restart and same-schema versioned symlink upgrade/rollback'
 count_before=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM orders')
 [[ $count_before =~ ^[0-9]+$ && $count_before -gt 0 ]] || fail 'Business suite did not persist orders.'
@@ -359,7 +380,9 @@ summary = {
     'environment': 'isolated Ubuntu 24.04 GitHub-hosted runner',
     'systemd_hardened_api': True, 'nginx_verified_tls': True,
     'runtime_dml_migrator_separation': True, 'native_backup_restore_equal_data': True,
-    'smtp_encrypted_settings_restored': True, 'smtp_disabled_fixture_no_mail_sent': True,
+    'smtp_encrypted_settings_restored': True, 'smtp_disabled_restore_check_no_send': True,
+    'runtime_plugins_native_evidence': 'plugin-native/plugin-native.json',
+    'smtp_synthetic_loopback_only_no_external_delivery': True,
     'same_schema_release_a_b_a': True, 'persisted_orders_before_restart': int(count),
     'source_table_count': int(source_tables), 'restored_table_count': int(restored_tables),
     'backup_elapsed_seconds': round((int(backup_finished) - int(backup_started)) / 1e9, 3),

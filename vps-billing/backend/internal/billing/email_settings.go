@@ -2,7 +2,8 @@ package billing
 
 import (
 	"aster/billing/internal/integrations"
-	"aster/billing/plugins/smtp"
+	"aster/billing/internal/runtimeplugins"
+	smtp "aster/billing/pkg/pluginapi/smtpv1"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -37,6 +38,10 @@ type EmailSettingsRecord struct {
 }
 
 type EmailSettingsView struct {
+	PluginAvailable    bool      `json:"plugin_available"`
+	PluginStatus       string    `json:"plugin_status"`
+	PluginVersion      string    `json:"plugin_version"`
+	DestinationAllowed bool      `json:"destination_allowed"`
 	Revision           int64     `json:"revision"`
 	Enabled            bool      `json:"enabled"`
 	Host               string    `json:"host"`
@@ -129,6 +134,7 @@ type emailTestContextKey struct{}
 // SMTPService owns authorization, persistence and audit. The official transport
 // receives only the validated configuration/message and never receives a Store.
 type SMTPService struct {
+	runtime  *runtimeplugins.Manager
 	store    Store
 	cipher   *SMTPCipher
 	sender   smtpSender
@@ -138,7 +144,7 @@ type SMTPService struct {
 }
 
 func newSMTPService(store Store, cipher *SMTPCipher) *SMTPService {
-	return &SMTPService{store: store, cipher: cipher, sender: smtp.NewClient()}
+	return &SMTPService{store: store, cipher: cipher, sender: unavailableSMTPSender{}}
 }
 
 func (s *SMTPService) credentials(record EmailSettingsRecord) (emailCredentials, error) {
@@ -153,8 +159,9 @@ func (s *SMTPService) credentials(record EmailSettingsRecord) (emailCredentials,
 
 func (s *SMTPService) view(record EmailSettingsRecord) EmailSettingsView {
 	c, err := s.credentials(record)
+	plugin := s.runtime.State()
 	// Flags describe presence without disclosing credential lengths or values.
-	return EmailSettingsView{Revision: record.Revision, Enabled: record.Enabled, Host: record.Host, Port: record.Port, TLSMode: record.TLSMode, FromAddress: record.FromAddress, FromName: record.FromName, UpdatedAt: record.UpdatedAt, UsernameConfigured: record.CredentialsCiphertext != "" && (err != nil || c.Username != ""), PasswordConfigured: record.CredentialsCiphertext != "" && (err != nil || c.Password != ""), KeyConfigured: s.cipher != nil}
+	return EmailSettingsView{PluginAvailable: plugin.Status == "approved", PluginStatus: plugin.Status, PluginVersion: plugin.Version, DestinationAllowed: s.runtime.Allows(record.config(c)), Revision: record.Revision, Enabled: record.Enabled, Host: record.Host, Port: record.Port, TLSMode: record.TLSMode, FromAddress: record.FromAddress, FromName: record.FromName, UpdatedAt: record.UpdatedAt, UsernameConfigured: record.CredentialsCiphertext != "" && (err != nil || c.Username != ""), PasswordConfigured: record.CredentialsCiphertext != "" && (err != nil || c.Password != ""), KeyConfigured: s.cipher != nil}
 }
 
 func (s *SMTPService) Settings(ctx context.Context) (EmailSettingsView, error) {
@@ -254,14 +261,15 @@ func (s *SMTPService) Summary(ctx context.Context) (integrations.Summary, error)
 	}
 	c, e := s.credentials(r)
 	configured := s.cipher != nil && e == nil && smtp.ValidateConfig(r.config(c)) == nil
+	pluginReady := s.runtime.State().Status == "approved" && s.runtime.Allows(r.config(c))
 	status := "disabled"
 	if r.Enabled {
 		status = "unavailable"
-		if configured {
+		if configured && pluginReady {
 			status = "ready"
 		}
 	}
-	return integrations.Summary{Manifest: integrations.Manifest{ID: "email.smtp", Kind: integrations.Email, Name: "官方 SMTP 邮件", Description: "使用已保存的 TLS SMTP 配置发送管理员测试邮件", Capabilities: []string{"admin_test_email"}, ConfigurationFields: []integrations.ConfigurationField{}, SupportedCurrencies: []string{}, Limitations: []string{"仅提供管理员测试发送；未接入通知、邮箱验证或密码找回", "接受表示 SMTP 服务器接受，不保证收件箱投递"}}, ConfigurationMode: "admin_api", Enabled: r.Enabled && configured, Configured: configured, Status: status}, nil
+	return integrations.Summary{Manifest: integrations.Manifest{ID: "email.smtp", Kind: integrations.Email, Name: "SMTP 邮件插件", Description: "通过独立运行时插件发送管理员测试邮件", Capabilities: []string{"admin_test_email"}, ConfigurationFields: []integrations.ConfigurationField{}, SupportedCurrencies: []string{}, Limitations: []string{"需要单独安装、批准并运行兼容插件；配置保存不会执行未知文件", "仅提供管理员测试发送；未接入通知、邮箱验证或密码找回", "接受表示 SMTP 服务器接受，不保证收件箱投递"}}, ConfigurationMode: "admin_api", Enabled: r.Enabled && configured && pluginReady, Configured: configured, Status: status}, nil
 }
 
 func (s *SMTPService) Test(ctx context.Context, registry *integrations.Registry, actor User, revision int64, to string) error {
@@ -330,4 +338,11 @@ func (s *SMTPService) Send(ctx context.Context, message integrations.EmailMessag
 		return integrations.EmailReceipt{}, result
 	}
 	return integrations.EmailReceipt{ProviderMessageID: "smtp-accepted-" + strconv.FormatInt(r.Revision, 10) + "-" + message.IdempotencyKey}, nil
+}
+
+// No built-in SMTP fallback: an absent runtime plugin stays unavailable.
+type unavailableSMTPSender struct{}
+
+func (unavailableSMTPSender) Send(context.Context, smtp.Config, smtp.Message) error {
+	return &smtp.Error{Code: smtp.CodeConnection}
 }

@@ -1,22 +1,40 @@
 # 星屿云 Aster Cloud · VPS 计费平台
 
-Vue 3 / TypeScript / Vite 控制台、Go API 与 MySQL InnoDB 持久化。支持可配置站点品牌、简体中文/English，以及分别定价的 CNY/USD；默认中文与 CNY，不提供自动汇率换算。
+Vue 3 / TypeScript / Vite 控制台、Go API 与 MySQL InnoDB 持久化。支持站点品牌设置、中文/English，以及分别定价的 CNY/USD；默认中文/CNY，不自动换汇。选购页按套餐实际地区筛选，展示规格、可售状态与订单摘要，创建待付款订单和账单。
 
-选购页按实际套餐地区筛选，展示规格、可售状态与实时订单摘要；桌面和手机均可核对所选币种报价，再确认创建待付款订单。
+**尚未接入真实支付、主控/被控或 VPS 自动开通。** 没有完整财务账本、退款对账、税务发票、邮件通知/验证/找回、MFA 或完整账号生命周期。outbox 只记录事件，没有消费者；不会因创建订单生成虚拟机或伪造已付状态。
 
-支付适配器保持禁用；官方 SMTP 插件默认关闭，支持管理员配置和发送测试邮件，凭据加密保存。尚未接入真实收款、VPS 控制器、业务邮件通知、邮件验证、密码找回或 MFA。创建订单生成待付款账单，不创建虚拟机；未配置支付时明确失败，不标记已支付。完整财务账本、税务和结算能力仍待实现。
+## 程序与独立插件
 
-## 当前交付状态
+Core `0.4.0` 与官方 SMTP `1.0.0` 分开构建、安装和正常发布。SMTP 插件实现 `aster.smtp/1`，兼容 Core `>=0.4.0,<0.5.0`，只支持管理员固定测试邮件，默认关闭。Core 没有内置 SMTP 传输；安装独立包并经 root 明确批准后，独立 systemd 身份通过 Unix socket 提供能力。
 
-部署基线是 Ubuntu 24.04 / amd64 单服务器：Nginx 提供 HTTPS 和静态页面，systemd 管理 API，本机 MySQL 8.4 LTS 通过 Unix socket 保存数据。高可用暂缓。原生 CI 使用一次性云端 runner；没有连接或部署用户服务器，真实域名、公共 CA 证书、开机恢复、容量与异地灾备不在测试环境结论内。
+Core 被动读取 manifest，不执行未知文件、启动服务或自动下载。安装/启停/版本切换见 [插件指南](docs/PLUGINS.md)，协议、身份与秘密边界见 [PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md)。插件替换无需重编 Core；实际不变哈希/PID 与故障恢复结果必须查对应 [验证记录](docs/VALIDATION.md)，不能从文档推导已验证。
 
-原生验收已覆盖真实 MySQL、systemd/Nginx HTTPS、API 重启、同 schema 版本切换和备份恢复；检查结果与源码提交绑定，见 [验证记录](docs/VALIDATION.md)。源码在 `main` 维护，Linux amd64 安装包、源码包及校验信息通过 GitHub Releases 交付。见 [发布说明](docs/RELEASE.md) 和 [发布流水线](docs/CI_RELEASE_AUTOMATION.md)。
+## 原生 Linux 安装
 
-## 云端 Linux 开发演示
+部署基线为 Ubuntu 24.04 / amd64：Nginx 提供 HTTPS 和静态页面，systemd 管理 API/可选 SMTP，本机 MySQL 8.4 LTS 通过 Unix socket 持久化。运行包已有 API、插件宿主、网页、文档和配置工具，服务器无需 Go/Node.js；应用归档不安装系统服务、数据库或公共证书。
 
-本轮构建使用 Go `1.27.2`、Node.js `24.19.0`；开发依赖由 `go.sum` 和 `package-lock.json` 锁定。以下命令从仓库根目录分别在两个终端执行，只启动回环地址的内存演示，不是持久化部署。
+- [原生安装](docs/INSTALL.md)：来源、目录、独立数据库身份、秘密、迁移和 HTTPS。
+- [宝塔部署与更新](docs/BAOTA.md)：复用面板 Nginx/MySQL，系统 API 与独立 SMTP，前后端同步切换。
+- [升级与回退](docs/UPGRADE.md)、[备份恢复](docs/BACKUP_RECOVERY.md)、[运维](docs/OPERATIONS.md)。
+- [接口契约](docs/CONTRACT.md)、[站点与计价](docs/SITE_SETTINGS.md)、[安全边界](docs/SECURITY.md)。
 
-终端一：
+```text
+/opt/aster/releases/<core-version>/  bin/、web/、docs/、deploy/、licenses/
+/opt/aster/current                  当前 Core 版本链接
+/opt/aster/plugins/<id>/<version>/  独立、不可覆盖的插件版本
+/etc/aster/api.env                  文件引用和非秘密配置
+/etc/aster/plugins.json             root 审批与精确 SMTP 目的地
+/etc/aster/secrets/                 Core 可读、插件不可读的秘密
+```
+
+运行数据库身份仅本库 DML，迁移身份独立，迁移/管理员引导不随服务开机自动执行。本机 Unix socket 目前仍需显式 `MYSQL_ALLOW_INSECURE=true`，只有核实真实 DSN/socket 权限后才能采用，禁止沿用到远程 TCP。秘密和备份不得写进 Git、Release、网页或日志。
+
+初始产品与 CNY/USD 价格逐项审核后启用，无价格时不可售；品牌设置不能改变 DNS/TLS/登录来源。SMTP 凭据由 Core 用独立密钥加密保存，插件仅接收本次调用，不取得密钥、数据库 DSN 或会话秘密。审批不是恶意代码沙箱，SMTP 仍需来源审查和主机出口控制。
+
+## 云端开发演示
+
+当前工具链基线 Go `1.27.2`、Node.js `24.19.0`；依赖由锁文件固定。以下分别在两个终端运行，仅启动回环内存演示，重启数据丢失：
 
 ```sh
 cd vps-billing/backend
@@ -24,48 +42,27 @@ APP_MODE=demo APP_ORIGIN=http://127.0.0.1:5173 LISTEN_ADDR=127.0.0.1:18080 \
   go run ./cmd/server
 ```
 
-终端二：
-
 ```sh
 cd vps-billing/frontend
 npm ci
 API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-在同一云端环境访问 `http://127.0.0.1:5173`。端口被占用时先检查现有进程，保留无关服务；若调整地址，需同步修改 API Origin 和前端代理。API 与 Vite 均不得公开到公网。
+同环境访问 `http://127.0.0.1:5173`。客户 `demo@aster.local / DemoCustomer!2026`，管理员 `admin@aster.local / DemoAdmin!2026`；仅用于显式 demo，不能公开部署。结束后停止自己启动的进程，不清理无关服务。离线预览不写后端，不能验收持久化或发信。
 
-- 客户账号：`demo@aster.local` / `DemoCustomer!2026`。
-- 管理账号：`admin@aster.local` / `DemoAdmin!2026`。
-- 这些是公开演示账号，仅适用于 `APP_MODE=demo`；重启 API 后内存数据丢失。
-- 结束体验后在两个终端分别按 Ctrl-C，确认自己启动的进程已退出。
-- 离线视觉预览不写入后端，不能用于验收真实业务或数据库持久化。
+## 工程目录与交付
 
-## 原生持久化安装
+| 目录 | 职责 |
+|---|---|
+| `frontend/` | 客户/管理控制台，偏好、配置与组件测试 |
+| `backend/internal/billing/` | 认证、权限、订单/账单、设置、审计、MySQL/内存存储 |
+| `backend/pkg/pluginapi/` | 纯协议与 SMTP 类型，不含具体网络传输 |
+| `backend/internal/runtimeplugins/` | 被动发现、受保护文件与审批、Unix RPC 客户端 |
+| `backend/cmd/plugin-host/` | 独立身份验证并执行批准的程序 inode |
+| `backend/plugins/smtp/` | 独立 SMTP 程序、TLS 传输与测试 |
+| `deploy/systemd/`、`deploy/scripts/` | 原生服务样例、备份、插件管理与精确提交打包 |
+| `deploy/ci/` | 只读检查、临时原生服务验收和受信发布程序 |
 
-[安装手册](docs/INSTALL.md) 提供 Ubuntu 24.04 / amd64 的软件安装、数据库账号、秘密文件、迁移、systemd 和 HTTPS 步骤。执行前核实资源、已有服务和维护窗口。应用归档无需在运行服务器安装 Go/Node.js；MySQL、Nginx、systemd、证书和主机维护仍须独立审查。
+在 `main` 维护，同提交源码、包、来源与检查记录对应。Core/SMTP 每个正常 Release 只上传对应程序包和 BUILD/PROVENANCE/校验和，不手动上传源码包，历史资产保留。见 [构建发布](docs/RELEASE.md) 与 [CI 流程](docs/CI_RELEASE_AUTOMATION.md)。
 
-已有宝塔面板的服务器使用 [宝塔部署与更新](docs/BAOTA.md)，复用现有 Nginx/MySQL，包含前端构建、上传、HTTPS、API 代理及前后端同步回退。
-
-运行身份仅获得本库 DML 权限，迁移身份单独保管；秘密放在受限文件中，不提交到 Git、不写入命令行或日志。本机 Unix socket 当前需要显式的 `MYSQL_ALLOW_INSECURE=true` 例外，必须先核对真实 DSN 和 socket 权限，不能扩展成远程 TCP 明文配置。数据库迁移和管理员创建是明确的独立操作，不随 API 开机启动自动执行。
-
-初始套餐及币种价格须经逐项审核后启用；CNY/USD 独立设置金额，没有价格时不可售。站点设置只能修改展示和账单身份，不控制 DNS、TLS、登录来源或服务商秘密。见 [站点与计价](docs/SITE_SETTINGS.md)。
-
-日常操作参照 [运维](docs/OPERATIONS.md)、[升级与回滚](docs/UPGRADE.md)、[备份恢复](docs/BACKUP_RECOVERY.md) 和 [验收清单](docs/ACCEPTANCE.md)。工程验收由维护方运行并记录；部署环境的具体配置与恢复能力应与实际主机对应。
-
-## 工程目录
-
-- `frontend/`：用户和管理控制台、两语言/两币种显示与组件测试。
-- `backend/`：认证、权限、订单/账单、站点设置、审计、MySQL 与演示存储。
-- `backend/plugins/`：随源码审查和编译的官方插件，当前包含 SMTP TLS 传输。
-- `deploy/systemd/`、`deploy/nginx.native.conf`：原生服务与 HTTPS 配置样例。
-- `deploy/scripts/`：提交快照打包、依赖清单和原生备份脚本。
-- `deploy/ci/`：应用检查、原生临时数据库验证与受信发布控制程序。
-- [接口契约](docs/CONTRACT.md)、[安全边界](docs/SECURITY.md)、[实际验证记录](docs/VALIDATION.md)。
-
-## 服务商扩展与剩余边界
-
-支付和邮件使用类型化适配器接口及注册表，管理员扩展中心显示清单、能力和配置要求。官方 SMTP 插件支持严格校验证书的 STARTTLS/隐式 TLS，以及后台配置、启停和单收件人测试；数据库只保存加密凭据，密钥由主机受限文件提供。保存 SMTP 设置后即时生效；更换密钥文件需重启 API。不会自动下载或安装服务商代码，新增插件需要代码审查、重建和专项验收。见 [插件约定](docs/PLUGINS.md)。
-
-真实支付及回调落账、退款/争议/对账、自动续费、税务、汇率、邮件验证/找回、MFA、完整账号生命周期、控制器消费、监控告警和异地灾备仍需单独完成。持久化 outbox 只记录事件，不代表已有 worker 或真实开通。列表尚有 1,000 条上限，不能当完整导出使用。
-
-Go 扫描报告 0 项可达函数、0 项导入包、19 项模块级告警；模块级告警属于当前应用未导入的 SSH/OpenPGP 包，详细版本和运行记录见 [验证记录](docs/VALIDATION.md)。验收使用隔离测试数据，未连接真实支付、邮件或生产客户数据。
+原生/浏览器/插件检查使用一次性云端环境和合成数据，没有用户服务器、Mac、外部真实邮件或付款。宝塔组合、公共 CA 续期、容量、整机恢复、异地灾备及所有未实现业务必须分别验收；正式版本和 `APP_MODE=production` 均不是运营认证。具体测试数量、扫描范围与剩余告警只认 [VALIDATION.md](docs/VALIDATION.md) 的对应提交和 run。

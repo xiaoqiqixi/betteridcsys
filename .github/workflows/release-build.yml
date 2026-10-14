@@ -1,15 +1,15 @@
-name: Release candidate build
+name: Runtime release build
 
 on:
   push:
     tags:
-      - 'v[0-9]*.[0-9]*.[0-9]*-rc.[0-9]*'
-      - 'v[0-9]*.[0-9]*.[0-9]*-beta.[0-9]*'
-      - 'v[0-9]*.[0-9]*.[0-9]*-alpha.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - 'smtp-v[0-9]*.[0-9]*.[0-9]*'
+      - '!v*-*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing reviewed prerelease tag, e.g. v0.3.0-rc.2; dispatch from the default branch'
+        description: 'Existing reviewed normal runtime tag: v0.4.0 or smtp-v1.0.0; dispatch from main'
         required: true
         type: string
 
@@ -17,14 +17,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: candidate-build-${{ github.ref }}-${{ inputs.tag || github.ref_name }}
+  group: runtime-build-${{ github.ref }}-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   build:
     if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - name: Read-only workflow controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,13 +76,18 @@ jobs:
         env:
           SOURCE_SHA: ${{ steps.policy.outputs.source_sha }}
           RELEASE_VERSION: ${{ steps.policy.outputs.version }}
+          RELEASE_KIND: ${{ steps.policy.outputs.kind }}
         run: |
           set -euo pipefail
-          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/candidate"
-          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/rebuild"
+          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --kind "$RELEASE_KIND" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/candidate"
+          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --kind "$RELEASE_KIND" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/rebuild"
           diff -r "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/rebuild"
       - name: Validate packages and bind provenance to this exact run
-        run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py seal-build --policy "$RUNNER_TEMP/build-policy.json" --directory "$RUNNER_TEMP/candidate"
+        run: |
+          set -euo pipefail
+          python3 -I controller/vps-billing/deploy/ci/release_pipeline.py seal-build --policy "$RUNNER_TEMP/build-policy.json" --directory "$RUNNER_TEMP/candidate"
+          python3 -I controller/vps-billing/deploy/ci/release_pipeline.py seal-build --policy "$RUNNER_TEMP/build-policy.json" --directory "$RUNNER_TEMP/rebuild"
+          diff -r "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/rebuild"
       - name: Retain immutable candidate data for the separate publisher
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -101,6 +106,7 @@ jobs:
           name: native-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/native-acceptance-evidence/native-acceptance.json
+            ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json
             ${{ runner.temp }}/native-acceptance-evidence/cleanup.json
             ${{ runner.temp }}/native-acceptance-evidence/https-tests.json
             ${{ runner.temp }}/native-acceptance-evidence/restored-https-tests.json

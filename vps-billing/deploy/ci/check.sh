@@ -28,13 +28,13 @@ else
 fi
 source_root=$(cd -- "$source_path" && pwd -P)
 project_root="$source_root/vps-billing"
-for required in backend/go.mod frontend/package-lock.json tests/config_smoke.py tests/security_smoke.py deploy/scripts/test-release-manifest.py deploy/scripts/test-backup-native.sh deploy/ci/test_release_pipeline.py; do
+for required in backend/go.mod frontend/package-lock.json tests/config_smoke.py tests/security_smoke.py deploy/scripts/test-release-manifest.py deploy/scripts/test-plugin-manager.py deploy/scripts/test-backup-native.sh deploy/ci/test_release_pipeline.py; do
   [[ -f "$project_root/$required" ]] || fail "Source checkout is missing $required"
 done
 
 # Ignore any inherited production, bootstrap, provider or smoke-test settings.
 # Preserve the explicit disposable test DSN only until the Go test suite finishes.
-for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@} ${!TEST_@}; do
+for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!PLUGIN_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@} ${!TEST_@}; do
   unset "$variable"
 done
 export NO_PROXY=127.0.0.1,localhost,::1
@@ -88,6 +88,17 @@ step 'Go vet and static Linux amd64 build'
 (
   cd -- "$project_root/backend"
   go vet ./...
+  go list -deps ./cmd/server > "$check_tmp/core-dependencies.txt"
+  python3 - "$check_tmp/core-dependencies.txt" <<'PYDEPS'
+from pathlib import Path
+import sys
+deps = set(Path(sys.argv[1]).read_text().splitlines())
+if not deps or "aster/billing/cmd/server" not in deps:
+    raise SystemExit("FAIL: core dependency inventory is incomplete")
+if deps.intersection({"aster/billing/plugins/smtp", "net/smtp", "os/exec"}):
+    raise SystemExit("FAIL: core imported SMTP transport or process execution")
+print("PASS: core excludes SMTP transport and process execution")
+PYDEPS
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$check_tmp/aster-api" ./cmd/server
 )
 
@@ -106,6 +117,7 @@ step 'Release pipeline and dependency notice generator tests'
   cd -- "$project_root"
   python3 -m unittest discover -s deploy/ci -p 'test_*.py' -v
   python3 deploy/scripts/test-release-manifest.py -v
+  python3 deploy/scripts/test-plugin-manager.py -v
 )
 
 step 'Shell/Python syntax and mock backup regression'

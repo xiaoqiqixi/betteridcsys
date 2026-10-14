@@ -3,9 +3,12 @@ package main
 import (
 	"aster/billing/internal/billing"
 	"aster/billing/internal/integrations"
+	"aster/billing/internal/runtimeplugins"
+	"aster/billing/pkg/pluginapi"
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"golang.org/x/crypto/bcrypt"
 	"log/slog"
 	"net"
@@ -50,9 +53,14 @@ func validSessionSecret(key string) bool {
 	return len(seen) >= 8
 }
 func main() {
+	version := flag.Bool("version", false, "Print core version")
 	migrate := flag.Bool("migrate", false, "Apply embedded MySQL schema; seeds unavailable plans only")
 	create := flag.Bool("create-user", false, "Create user from BOOTSTRAP_* environment")
 	flag.Parse()
+	if *version {
+		fmt.Println("Aster Core " + pluginapi.CoreVersion)
+		return
+	}
 	mode := os.Getenv("APP_MODE")
 	demo := mode == "demo"
 	if mode != "" && mode != "production" && !demo {
@@ -144,7 +152,8 @@ func main() {
 			fatal("TRUSTED_PROXY_CIDRS must contain valid comma-separated CIDRs")
 		}
 	}
-	// Installed adapters are compiled into this list. No dynamic code loading.
+	// Legacy built-ins remain disabled. SMTP transport is an approved runtime
+	// process accessed through a typed Unix-socket protocol, not linked here.
 	integrationConfigs, configErr := integrations.LoadConfigFile(os.Getenv("INTEGRATIONS_CONFIG_FILE"))
 	if configErr != nil {
 		fatal("invalid integration configuration file; use a bounded JSON object of provider settings and secret references")
@@ -159,7 +168,8 @@ func main() {
 	if smtpKeyErr != nil {
 		fatal("invalid SMTP encryption key file; require a readable private regular 32-byte file and safe parent directories")
 	}
-	app := billing.NewAppWithIntegrations(store, billing.Config{SMTPKey: smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: proxyCIDRs}, registry)
+	plugins := runtimeplugins.New(os.Getenv("PLUGIN_DIRECTORY"), os.Getenv("PLUGIN_POLICY_FILE"))
+	app := billing.NewAppWithIntegrations(store, billing.Config{Plugins: plugins, SMTPKey: smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: proxyCIDRs}, registry)
 	server := &http.Server{Addr: listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)

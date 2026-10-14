@@ -233,12 +233,12 @@ def flow_fixture():
 
 class TagValidationTest(unittest.TestCase):
     def test_only_exact_release_and_rc_tags(self):
-        for tag in ("v0.0.0-alpha.0", "v1.2.3-beta.2", "v1.2.3-rc.1", "v12.34.56-rc.123"):
+        for tag in ("v0.0.0-alpha.0", "v1.2.3-beta.2", "v1.2.3-rc.1", "v12.34.56-rc.123", "v0.4.0", "smtp-v1.0.0"):
             with self.subTest(tag=tag):
-                self.assertEqual(pipeline.validate_tag(tag), tag[1:])
+                self.assertEqual(pipeline.validate_tag(tag), tag[6:] if tag.startswith("smtp-v") else tag[1:])
 
     def test_ref_traversal_shell_and_nonrelease_inputs_rejected(self):
-        for tag in ("", "1.2.3", "main", "refs/tags/" + TAG, "v1.2", "v1.2.3.4", "v1.2.3",
+        for tag in ("", "1.2.3", "main", "refs/tags/" + TAG, "v1.2", "v1.2.3.4",
                     "v1.2.3-dev.1", "v1.2.3+build", "v1.2.3-rc.-1", "v1.2.3-rc.x",
                     "v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-rc.01",
                     "v1.2.3/../../main", "v1.2.3\n", " v1.2.3", "v1.2.3;echo bad",

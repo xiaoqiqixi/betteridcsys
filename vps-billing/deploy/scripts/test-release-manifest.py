@@ -49,5 +49,45 @@ class GoDependencyNoticesTest(unittest.TestCase):
             self.assertNotIn(str(source), str(item))
 
 
+class SourceVersionTest(unittest.TestCase):
+    def fixture(self, core="0.4.0", smtp="1.0.0"):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        protocol = root / "vps-billing/backend/pkg/pluginapi/protocol.go"
+        protocol.parent.mkdir(parents=True)
+        protocol.write_text('package pluginapi\nconst CoreVersion = "' + core + '"\n')
+        version = root / "vps-billing/backend/plugins/smtp/VERSION"
+        version.parent.mkdir(parents=True)
+        version.write_text(smtp + "\n")
+        return root
+
+    def test_exact_independent_source_versions_allowed(self):
+        root = self.fixture()
+        self.assertEqual(manifest.selected_versions(root), {"core": "0.4.0", "smtp": "1.0.0"})
+        manifest.verify_version(root, "core", "0.4.0")
+        manifest.verify_version(root, "smtp", "1.0.0")
+
+    def test_tag_cannot_relabel_other_source_or_component(self):
+        root = self.fixture()
+        for kind, version in (("core", "1.0.0"), ("smtp", "0.4.0"), ("smtp", "1.0.1"), ("other", "0.4.0")):
+            with self.subTest(kind=kind, version=version), self.assertRaises(SystemExit):
+                manifest.verify_version(root, kind, version)
+
+    def test_invalid_or_missing_source_version_fails_closed(self):
+        for version in ("01.0.0", "1.0", "1.0.0-rc.1", "1.0.0\nextra"):
+            with self.subTest(version=version), self.assertRaises(SystemExit):
+                manifest.selected_versions(self.fixture(smtp=version))
+
+    def test_embedded_original_license_text_has_exact_checksum(self):
+        root = self.fixture()
+        path = root / "licenses/go-runtime/LICENSE"
+        path.parent.mkdir(parents=True)
+        original = "原始许可证文字\n"
+        path.write_text(original)
+        items = manifest.embedded_notices(root)
+        self.assertEqual(items, [{"path": "go-runtime/LICENSE", "sha256": manifest.hashlib.sha256(original.encode()).hexdigest(), "text": original}])
+
+
 if __name__ == "__main__":
     unittest.main()

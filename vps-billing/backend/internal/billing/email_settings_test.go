@@ -349,7 +349,8 @@ func TestSMTPAdminHTTPGuardsAndRedaction(t *testing.T) {
 	for _, item := range data["data"].(map[string]any)["items"].([]any) {
 		v := item.(map[string]any)
 		if v["id"] == "email.smtp" {
-			found = v["enabled"] == true && v["configuration_mode"] == "admin_api"
+			// Injected test transport is not evidence of an installed runtime plugin.
+			found = v["enabled"] == false && v["configured"] == true && v["status"] == "unavailable" && v["configuration_mode"] == "admin_api"
 		}
 	}
 	if !found {

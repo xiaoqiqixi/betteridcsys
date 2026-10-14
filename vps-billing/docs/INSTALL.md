@@ -1,6 +1,6 @@
 # Ubuntu 24.04 原生单机安装
 
-本手册说明在一台 Ubuntu 24.04 / amd64 服务器上安装 Nginx、systemd API 与 MySQL 8.4。核心原生服务、HTTPS、权限、API 重启、同 schema 版本切换和备份恢复已在一次性 Ubuntu runner 实测通过，准确提交与范围见 [原生验证记录](VALIDATION.md)。支付、退款、VPS 开通均未接入；官方 SMTP 默认关闭，仅支持管理员配置和主动测试邮件；`production` 表示持久化及严格配置检查，不代表生产认证。新候选须满足 [发布门禁](RELEASE.md)，历史 `0.3.0-rc.1` 保持原样。
+本手册说明在一台 Ubuntu 24.04 / amd64 服务器上安装 Nginx、systemd API 与 MySQL 8.4。核心原生服务、HTTPS、权限、API 重启、同 schema 版本切换和备份恢复已在一次性 Ubuntu runner 实测通过，准确提交与范围见 [原生验证记录](VALIDATION.md)。支付、退款、VPS 开通均未接入；官方 SMTP 独立安装、默认关闭，仅支持管理员配置和主动测试邮件；`production` 表示持久化及严格配置检查，不代表生产认证。Core 与 SMTP 分别发布正常程序版本，须满足 [发布门禁](RELEASE.md)，历史候选保持原样。
 
 已使用宝塔管理 Nginx/MySQL 的服务器请使用 [宝塔部署与更新指南](BAOTA.md)，避免重复安装系统服务。
 
@@ -8,7 +8,7 @@
 
 本手册目标为 **Ubuntu Server 24.04 LTS / amd64**，使用 systemd、Nginx 和 MySQL 8.4 LTS；原生自动化也以该发行版为测试环境，实际结果见 [原生验证记录](VALIDATION.md)。开始前确认 CPU、内存/磁盘容量和已有服务；其他发行版或 arm64 不能直接套用。本项目未完成容量基准测试，不据示例配置承诺并发量。
 
-原生包提供静态 Go API、编译网页、文档和配置样例，运行 API 不需要 Go 或 Node.js 工具链。单机路径为：浏览器 HTTPS → Nginx → `127.0.0.1:18080` API → 本机 MySQL Unix socket。只有经批准的 HTTPS 和管理入口对外开放；API 和数据库均不公开监听。当前源码与 CI 只提供原生运行路径；测试用临时数据库不代表目标服务器已完成安装。
+Core 包提供静态 Go API、插件宿主、编译网页、文档和配置工具，运行 API 不需要 Go 或 Node.js 工具链。单机路径为：浏览器 HTTPS → Nginx → `127.0.0.1:18080` API → 本机 MySQL Unix socket。只有经批准的 HTTPS 和管理入口对外开放；API 和数据库均不公开监听。当前源码与 CI 只提供原生运行路径；测试用临时数据库不代表目标服务器已完成安装。
 
 以下 Bash 命令供管理员在确认目标后执行；先替换域名、路径、数据库名和账号。自动化验证没有连接外部服务器，也不设置其 DNS、公共证书、防火墙或开机启动。保留服务器已有服务与数据，不把非空服务器当作全新安装处理。
 
@@ -43,7 +43,7 @@ APT 安装 MySQL 会初始化并启动其系统服务；这与 CI 仅提取官�
 
 ## 1. 核对来源与归档
 
-取得同一发布目录中的 Linux 包、源码包、`BUILD.json` 和 `SHA256SUMS`。若未来经自动化生成，还应核对 `PROVENANCE.json` 的 run 与提交信息。校验和只证明与清单一致，下载渠道和提交来源仍须核实；当前不提供签名或供应链认证。
+取得同一 Core Release 的 Linux 包、`BUILD.json`、`PROVENANCE.json` 和 `SHA256SUMS`，核对来源记录的 run、提交、版本及资产。新程序 Release 不手工附加源码包，源码从对应 Git 标签取得；SMTP 程序从另一个独立 Release 取得。校验和只证明与清单一致，下载渠道和提交来源仍须核实；当前不提供签名或供应链认证。
 
 ```sh
 cd /path/to/downloads
@@ -51,11 +51,12 @@ sha256sum -c SHA256SUMS
 tar -tzf aster-VERSION-linux-amd64.tar.gz
 ```
 
-阅读 `BUILD.json`：确认 `source_commit` 是已审查的提交、目标为 `linux/amd64`，工具链版本与验证记录相符，修订包的 `deployment_model` 明确为单服务器原生方案。归档根目录应只有 `aster-VERSION-linux-amd64/`，不可包含绝对路径或 `..`。先以普通用户解压到空目录，再检查内容。运行包 `deploy/` 只含 systemd/Nginx 样例及 `scripts/backup-native.sh`；源码包与修订后的已审查提交一致，不重新加入已删除的旧部署实现。保留旧发布目录与校验清单，避免原地覆盖运行文件。
+阅读 `BUILD.json`：确认 `source_commit` 是已审查的提交、目标为 `linux/amd64`，工具链版本与验证记录相符，修订包的 `deployment_model` 明确为单服务器原生方案。归档根目录应只有 `aster-VERSION-linux-amd64/`，不可包含绝对路径或 `..`。先以普通用户解压到空目录，再检查内容。Core 包 `deploy/` 含 systemd/Nginx 样例、`scripts/backup-native.sh` 和 `scripts/plugin-manager.py`；插件包不含 Core 或数据库。归档和来源文件必须与对应已审查提交一致。保留旧发布目录与校验清单，避免原地覆盖运行文件。
 
 ```text
 /opt/aster/releases/VERSION/
   bin/aster-api
+  bin/aster-plugin-host
   web/
   docs/
   deploy/
@@ -65,7 +66,9 @@ tar -tzf aster-VERSION-linux-amd64.tar.gz
   licenses/
   LICENSE
 /opt/aster/current -> /opt/aster/releases/VERSION
+/opt/aster/plugins/<id>/<plugin-version>/
 /etc/aster/api.env
+/etc/aster/plugins.json             # 非秘密审批，仅 root 可修改
 /etc/aster/secrets/                # 不在发布目录或网页根目录内
 ```
 
@@ -79,22 +82,25 @@ aster_version=VERSION
 aster_input=/path/to/unpacked/aster-VERSION-linux-amd64
 [[ $aster_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
 [[ -f $aster_input/bin/aster-api && -d $aster_input/web ]]
-if getent passwd aster >/dev/null || getent group aster >/dev/null; then
+if getent passwd aster >/dev/null || getent group aster >/dev/null || getent group aster-plugins >/dev/null; then
   echo 'aster identity already exists; inspect the installation before continuing.' >&2
   exit 1
 fi
 [[ ! -e /opt/aster/current && ! -L /opt/aster/current ]]
 [[ ! -e /opt/aster/releases/$aster_version ]]
-sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin aster
+sudo groupadd --system aster-plugins
+sudo useradd --system --user-group --groups aster-plugins --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin aster
 sudo install -d -o root -g root -m 0755 /opt/aster/releases
 sudo install -d -o root -g root -m 0755 "/opt/aster/releases/$aster_version"
 sudo cp -R "$aster_input/." "/opt/aster/releases/$aster_version/"
 sudo chown -R root:root "/opt/aster/releases/$aster_version"
 sudo find "/opt/aster/releases/$aster_version" -type d -exec chmod 0755 '{}' +
 sudo find "/opt/aster/releases/$aster_version" -type f -exec chmod 0644 '{}' +
-sudo chmod 0755 "/opt/aster/releases/$aster_version/bin/aster-api" "/opt/aster/releases/$aster_version/deploy/scripts/backup-native.sh"
+sudo chmod 0755 "/opt/aster/releases/$aster_version/bin/aster-api" "/opt/aster/releases/$aster_version/bin/aster-plugin-host" "/opt/aster/releases/$aster_version/deploy/scripts/backup-native.sh"
+sudo chmod 0755 "/opt/aster/releases/$aster_version/deploy/scripts/plugin-manager.py"
 sudo ln -s "/opt/aster/releases/$aster_version" /opt/aster/current
-sudo install -d -o root -g aster -m 0750 /etc/aster /etc/aster/secrets
+sudo install -d -o root -g root -m 0755 /etc/aster /opt/aster/plugins
+sudo install -d -o root -g aster -m 0750 /etc/aster/secrets
 ```
 
 ## 2. 数据库与秘密
@@ -129,7 +135,7 @@ GRANT SHOW_ROUTINE ON *.* TO 'aster_backup'@'localhost';
 - 迁移 DSN：放入仅迁移操作身份可读的位置；**不要**放在运行账号可读的秘密目录。
 - 初始化管理员密码：独立的 16–72 字节强口令，保存在临时受限文件；不放进命令行、聊天或源码。
 
-`/etc/aster/secrets` 使用 `root:aster`、0750，会话秘密与运行 DSN 使用 `root:aster`、0640；用 `sudo -u aster test -r 文件路径` 验证可读，且确认 `aster` 无权修改文件。迁移/备份秘密由对应操作身份保管，运行账号不得读取。秘密的备份、轮换和销毁独立于版本归档管理。
+`/etc/aster` 使用 `root:root`、0755，使独立插件可读非秘密审批；`api.env` 仍为 `root:aster`、0640。`/etc/aster/secrets` 使用 `root:aster`、0750，会话秘密与运行 DSN 使用 `root:aster`、0640；用 `sudo -u aster test -r 文件路径` 验证可读，且确认 `aster` 无权修改文件。迁移/备份秘密由对应操作身份保管，运行账号不得读取。秘密的备份、轮换和销毁独立于版本归档管理。
 
 审查并复制 `deploy/systemd/api.env.example` 到 `/etc/aster/api.env`，所有者 `root:aster`、权限 0640。配置精确 HTTPS `APP_ORIGIN`、回环监听地址、可信代理和文件引用，不放秘密值。Origin 使用规范小写 ASCII 主机名，无路径、尾斜杠、查询或片段，默认 443 端口省略；必须与浏览器实际来源一致。后台“展示地址”不会修改 `APP_ORIGIN`、DNS、TLS、监听地址或可信代理范围。不要把 systemd 环境文件作为 shell 脚本 `source` 执行。
 
@@ -168,7 +174,15 @@ sudo -u aster test -r /etc/aster/secrets/smtp_encryption_key
 
 生成失败时先检查私密文件状态，不盲目覆盖。将 `SMTP_ENCRYPTION_KEY_FILE=/etc/aster/secrets/smtp_encryption_key` 加入 `/etc/aster/api.env`。已有服务需重启；首次安装完成下文迁移后再按第 4 节启动并检查就绪。无效文件会阻止启动，未设置变量则保持发信不可用。不要把内容复制到环境变量、浏览器、日志、Git 或 Release。密钥加载一次，后续文件变化需重启。
 
-完成迁移后按 [官方 SMTP 配置](PLUGINS.md#官方-smtp-配置与测试)保存服务器、TLS 与凭据，再向获准地址主动发送测试邮件。普通配置保存不会发信，测试也不启用通知或找回密码。启用前完成 [独立密钥备份与恢复准备](BACKUP_RECOVERY.md#smtp-密钥备份恢复与轮换)；只备份数据库不能恢复 SMTP 凭据。
+完成迁移及 [独立插件安装/审批](PLUGINS.md)后，按 [官方 SMTP 配置](PLUGINS.md#官方-smtp-配置与测试)保存服务器、TLS 与凭据，再向获准地址主动发送测试邮件。普通配置保存不会发信，测试也不启用通知或找回密码。启用前完成 [独立密钥备份与恢复准备](BACKUP_RECOVERY.md#smtp-密钥备份恢复与轮换)；只备份数据库不能恢复 SMTP 凭据。
+
+### 可选：独立 SMTP 程序
+
+Core 不内置 SMTP 传输。按 [插件安装与启停](PLUGINS.md)取得 SMTP 独立 Release，校验安装到 `/opt/aster/plugins/email.smtp/<version>`，准备 `aster-smtp` 无登录账号及 `/etc/aster/plugins.json`。策略默认关闭，需要明确选择、批准目的地主机/端口并启用；插件管理工具不执行程序或管理 systemd。
+
+首次接入需更新 API 的 `PLUGIN_DIRECTORY` / `PLUGIN_POLICY_FILE` 和共享 socket 组并重启 API；后续插件版本替换只更新策略并重启 `aster-smtp`，不重编/重启 API。Core 和插件分别检查兼容区间、SHA、Unix 对端身份及同连接握手。缺少插件或审批时账号/订单/账单继续服务，SMTP 不可用。
+
+`/etc/aster` 必须 root:root 0755，策略 root 管理且非秘密；API 环境、DSN/会话秘密和 SMTP 加密密钥保留各自受限权限，插件不得读这些文件。Linux amd64 宿主要求 Linux >=5.11；Ubuntu 24.04 基线满足，其他内核不得通过降低隔离绕过。
 
 ## 3. 迁移与管理员
 

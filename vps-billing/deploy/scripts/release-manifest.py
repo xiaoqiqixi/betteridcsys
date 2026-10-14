@@ -60,10 +60,55 @@ def go_dependency_metadata(entry, linked_modules):
     return {key: entry[key] for key in keys if key in entry}
 
 
-def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
+def selected_versions(source):
+    protocol = (source / "vps-billing/backend/pkg/pluginapi/protocol.go").read_text()
+    match = re.search(r'CoreVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', protocol)
+    if not match:
+        raise SystemExit("Core version missing from selected source")
+    smtp = (source / "vps-billing/backend/plugins/smtp/VERSION").read_text().strip()
+    if not re.fullmatch(r"(?:0|[1-9][0-9]{0,5})(?:\.(?:0|[1-9][0-9]{0,5})){2}", smtp):
+        raise SystemExit("Invalid SMTP source version")
+    return {"core": match[1], "smtp": smtp}
+
+
+def verify_version(source, kind, version):
+    if kind not in {"core", "smtp"} or selected_versions(source)[kind] != version:
+        raise SystemExit("Release version differs from selected source")
+
+
+def source_copies(source, bundle, kind):
+    copies = {"LICENSE": "LICENSE"}
+    if kind == "core":
+        copies.update({"REPOSITORY-README.md": "README.md", "PROJECT-README.md": "vps-billing/README.md"})
+        for prefix in ("docs", "deploy/systemd"):
+            for path in sorted((source / "vps-billing" / prefix).rglob("*")):
+                if path.is_file():
+                    copies[str(path.relative_to(source / "vps-billing"))] = str(path.relative_to(source))
+        for path in ("deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py"):
+            copies[path] = "vps-billing/" + path
+        for path in ("backend/go.mod", "backend/go.sum", "frontend/package.json", "frontend/package-lock.json"):
+            copies["manifests/" + Path(path).name] = "vps-billing/" + path
+    else:
+        copies["README.md"] = "vps-billing/backend/plugins/smtp/README.md"
+    return copies
+
+
+def embedded_notices(bundle):
+    # Preserve original top-level third-party texts, not just SPDX labels.
+    texts = []
+    for path in sorted((bundle / "licenses").rglob("*")):
+        if path.is_file():
+            texts.append({"path": str(path.relative_to(bundle / "licenses")), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "text": path.read_text(encoding="utf-8", errors="strict")})
+    return texts
+
+
+def manifest(source, bundle, modules_path, build_path, commit, version, epoch, kind="core", output=None):
+    verify_version(source, kind, version)
     project = source / "vps-billing"
     build_lines = build_path.read_text().splitlines()
-    linked_modules = {fields[1] for line in build_lines if len(fields := line.split()) >= 2 and fields[0] == "dep"}
+    host_path = build_path.with_name("go-host-build.txt")
+    host_lines = host_path.read_text().splitlines() if kind == "core" else []
+    linked_modules = {fields[1] for line in build_lines + host_lines if len(fields := line.split()) >= 2 and fields[0] == "dep"}
     modules = []
     decoder = json.JSONDecoder()
     raw = modules_path.read_text()
@@ -78,51 +123,65 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
             item.update(go_dependency_notices(entry, dest, linked_modules))
         modules.append(item)
     npm = []
-    for path in sorted((project / "frontend/node_modules").rglob("package.json")):
-        # Only actual package roots, excluding test fixture/package-example JSON.
-        if path.parent.parent.name != "node_modules" and not (path.parent.parent.name.startswith("@") and path.parent.parent.parent.name == "node_modules"):
-            continue
-        value = json.loads(path.read_text())
-        if not value.get("name") or not value.get("version"):
-            continue
-        item = {key: value[key] for key in ("name", "version", "license", "licenses") if key in value}
-        package_id = re.sub(r"[^a-zA-Z0-9@._-]", "_", value["name"] + "@" + value["version"])
-        item["notice_files"] = notices(path.parent, bundle / "licenses/npm" / package_id)
-        npm.append(item)
-    goroot = Path(tool("go", "env", "GOROOT"))
-    notices(goroot, bundle / "licenses/go-runtime")
-    write_json(bundle / "manifests/go-dependencies.json", sorted(modules, key=lambda v: v["Path"]))
-    write_json(bundle / "manifests/npm-installed-dependencies.json", sorted(npm, key=lambda v: (v["name"], v["version"])))
-    # First line from `go version -m` contains a random staging path. Remove it.
-    (bundle / "manifests/go-build.txt").write_text("aster-api: " + build_lines[0].split(":", 1)[-1].strip() + "\n" + "\n".join(build_lines[1:]) + "\n")
+    if kind == "core":
+        for path in sorted((project / "frontend/node_modules").rglob("package.json")):
+            if path.parent.parent.name != "node_modules" and not (path.parent.parent.name.startswith("@") and path.parent.parent.parent.name == "node_modules"):
+                continue
+            value = json.loads(path.read_text())
+            if not value.get("name") or not value.get("version"):
+                continue
+            item = {key: value[key] for key in ("name", "version", "license", "licenses") if key in value}
+            package_id = re.sub(r"[^a-zA-Z0-9@._-]", "_", value["name"] + "@" + value["version"])
+            item["notice_files"] = notices(path.parent, bundle / "licenses/npm" / package_id)
+            npm.append(item)
+    notices(Path(tool("go", "env", "GOROOT")), bundle / "licenses/go-runtime")
     inputs = {}
-    for relative in ("LICENSE", "README.md", "vps-billing/backend/go.mod", "vps-billing/backend/go.sum", "vps-billing/frontend/package.json", "vps-billing/frontend/package-lock.json"):
+    for relative in ("LICENSE", "README.md", "vps-billing/backend/go.mod", "vps-billing/backend/go.sum", "vps-billing/frontend/package.json", "vps-billing/frontend/package-lock.json", "vps-billing/backend/pkg/pluginapi/protocol.go", "vps-billing/backend/plugins/smtp/VERSION"):
         inputs[relative] = hashlib.sha256((source / relative).read_bytes()).hexdigest()
+    binaries = ("bin/aster-api", "bin/aster-plugin-host") if kind == "core" else ("plugin",)
+    build_info = {"aster-api" if kind == "core" else "plugin": "\n".join([("aster-api" if kind == "core" else "plugin") + ": " + build_lines[0].split(":", 1)[-1].strip(), *build_lines[1:]]) + "\n"}
+    if kind == "core":
+        build_info["aster-plugin-host"] = "\n".join(["aster-plugin-host: " + host_lines[0].split(":", 1)[-1].strip(), *host_lines[1:]]) + "\n"
     info = {
-        "release_label": version, "source_commit": commit, "source_date_epoch": int(epoch),
+        "schema": 2, "release_kind": kind, "release_label": version, "source_commit": commit, "source_date_epoch": int(epoch),
+        "component_versions": selected_versions(source), "plugin_protocol": "aster.smtp/1", "smtp_core_compatibility": {"min": "0.4.0", "max_exclusive": "0.5.0"},
         "target": "linux/amd64", "cgo_enabled": False,
-        "deployment_model": "single-server native Linux: systemd, Nginx and local MySQL; target-host validation pending",
-        "tools": {"go": tool("go", "version"), "node": tool("node", "--version"), "npm": tool("npm", "--version"), "tar": tool("tar", "--version").splitlines()[0], "gzip": tool("gzip", "--version").splitlines()[0], "python": tool("python3", "--version")},
-        "go_build_flags": ["-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w"],
-        "frontend_build": ["npm ci --no-audit --no-fund", "npm run build"],
-        "input_sha256": inputs,
-        "source_archive": "Git commit paths LICENSE, README.md, vps-billing; local secrets, build/dependency directories and recorded test outputs excluded",
-        "dependency_inventory": "Go module graph (unlinked nodes explicitly marked) and npm installed package metadata plus original lockfiles; not a complete SPDX/CycloneDX SBOM or license compliance certification",
-        "release_status": "review candidate; payments disabled; official SMTP opt-in and disabled by default; no production deployment",
+        "deployment_model": "single-server native Linux; independently managed nonprivileged Unix-RPC SMTP worker; external target-host validation pending",
+        "tools": {"go": tool("go", "version"), "tar": tool("tar", "--version").splitlines()[0], "gzip": tool("gzip", "--version").splitlines()[0], "python": tool("python3", "--version")},
+        "go_build_flags": ["-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w"] + (["-X main.version=" + version] if kind == "smtp" else []),
+        "frontend_build": ["npm ci --no-audit --no-fund", "npm run build"] if kind == "core" else [],
+        "input_sha256": inputs, "source_files": source_copies(source, bundle, kind),
+        "binary_sha256": {path: hashlib.sha256((bundle / path).read_bytes()).hexdigest() for path in binaries},
+        "go_build_info": build_info,
+        "source_delivery": "No manually uploaded project source archive; source remains in Git and GitHub automatic source downloads",
+        "dependency_inventory": "Go module graph, linked module and runtime original notice texts; core also includes npm installed metadata/lockfiles; not a full SPDX/CycloneDX SBOM or legal certification",
+        "release_status": "Normal versioned runtime distribution; payment and provisioning unavailable; SMTP requires explicit installation and approval; no production deployment claim",
     }
-    write_json(bundle / "manifests/BUILD.json", info)
-    (bundle / "licenses/README.txt").write_text(
-        "Dependency notices copied from top-level LICENSE/COPYING/NOTICE/COPYRIGHT files of linked Go modules, Go runtime and installed npm packages.\n"
-        "Unlinked Go graph entries are marked module_graph_only with path/version only and no copied notices, independently of cache contents; linked dependencies must have source available.\n"
-        "Original package license metadata and lockfiles are in manifests/. Build-only npm packages may be included.\n"
-        "Nested, generated, nonstandard or missing license notices require manual review. This inventory is not a complete SBOM or a legal determination.\n"
-        "The repository LICENSE is preserved unchanged at the archive root.\n"
-    )
+    if kind == "core":
+        info["tools"].update(node=tool("node", "--version"), npm=tool("npm", "--version"))
+        write_json(bundle / "manifests/go-dependencies.json", sorted(modules, key=lambda v: v["Path"]))
+        write_json(bundle / "manifests/npm-installed-dependencies.json", sorted(npm, key=lambda v: (v["name"], v["version"])))
+        for name, content in build_info.items():
+            (bundle / "manifests" / (name + "-build.txt")).write_text(content)
+        (bundle / "licenses/README.txt").write_text("Original top-level notices for linked Go modules, Go runtime and installed npm packages. Unlinked graph entries contain path/version metadata only. Nested or missing notices require separate review. This inventory is not a complete SBOM or legal determination. Repository LICENSE is unchanged.\n")
+        write_json(bundle / "manifests/BUILD.json", info)
+    else:
+        write_json(bundle / "THIRD_PARTY_NOTICES.json", {"schema": 1, "go_modules": sorted(modules, key=lambda v: v["Path"]), "go_runtime": tool("go", "version"), "notices": embedded_notices(bundle), "scope": "Original top-level linked-module and Go runtime license/notice texts; not a complete SPDX/CycloneDX SBOM or legal determination"})
+        shutil.rmtree(bundle / "licenses")
+        write_json(bundle / "manifest.json", {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": info["binary_sha256"]["plugin"]})
+        shutil.copyfile(project / "backend/plugins/smtp/README.md", bundle / "README.md")
+        sums = "".join(hashlib.sha256((bundle / name).read_bytes()).hexdigest() + "  " + name + "\n" for name in ("LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "manifest.json", "plugin"))
+        (bundle / "SHA256SUMS").write_text(sums)
+    if output is not None:
+        write_json(Path(output), info)
+    return info
 
 
 if __name__ == "__main__":
     if sys.argv[1] == "prune":
         prune(Path(sys.argv[2]))
+    elif sys.argv[1] == "version":
+        verify_version(Path(sys.argv[2]), *sys.argv[3:])
     elif sys.argv[1] == "manifest":
         manifest(*(Path(x) for x in sys.argv[2:6]), *sys.argv[6:])
     else:

@@ -1,8 +1,12 @@
-# 官方 SMTP 传输插件
+# 官方独立 SMTP 插件 1.0.0
 
-本包只负责 SMTP 传输。核心负责管理员授权、CSRF、已保存设置、凭据加密、版本冲突、发送限速和审计；插件不读取配置文件，不访问账务数据库，也不记录凭据、邮件内容或 SMTP 原始回复。当前核心只接入管理员主动测试邮件，未接入通知、邮箱验证或密码找回。
+此 Linux amd64 程序单独编译、安装和发布，标签为 `smtp-v1.0.0`，协议为 `aster.smtp/1`，支持 Core `>=0.4.0,<0.5.0`。核心通过受限 Unix socket RPC 调用，经独立用户和握手验证后才传入本次凭据。安装或替换插件不需要重新编译核心，文件出现不会自动执行。
 
-`Send(ctx, Config, Message)` 与 `NewClient().Send(ctx, Config, Message)` 使用同一实现。`ValidateConfig`、`ValidateMessage` 和 `ValidateRecipient` 只做本地验证，不连接网络。配置包含 `Host`、`Port`、`TLSMode`、`Username`、`Password`、`FromAddress`、`FromName`，凭据由调用方仅在内存中传入。
+归档目录 `aster-smtp-1.0.0-linux-amd64/` 只含 `plugin`、`manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。先从独立可信的发布记录核对外层 SHA-256，再使用核心包 `plugin-manager.py` 安装；安装本身不启用插件。主机管理员必须批准固定版本、清单哈希、不同非特权 UID、socket 和精确 SMTP 主机/端口，并单独管理 `aster-smtp.service`。升级采用不可变版本目录和原子策略切换，失败时显式选择已验证旧版本。详细安装和回退见核心 [PLUGINS.md](https://github.com/xiaoqiqixi/betteridcsys/blob/main/vps-billing/docs/PLUGINS.md)、[PLUGIN_PROTOCOL.md](https://github.com/xiaoqiqixi/betteridcsys/blob/main/vps-billing/docs/PLUGIN_PROTOCOL.md)。
+
+本程序只负责 SMTP 传输。核心负责管理员授权、CSRF、已保存设置、凭据加密、版本冲突、发送限速和审计；插件不读取核心配置、加密密钥或账务数据库，也不记录凭据、邮件内容或 SMTP 原始回复。当前核心只接入管理员主动测试邮件，未接入通知、邮箱验证或密码找回。
+
+开发目录中的 `Send(ctx, Config, Message)` 与 `NewClient().Send(ctx, Config, Message)` 使用同一实现。`ValidateConfig`、`ValidateMessage` 和 `ValidateRecipient` 只做本地验证，不连接网络。配置包含 `Host`、`Port`、`TLSMode`、`Username`、`Password`、`FromAddress`、`FromName`，凭据由调用方仅在内存中传入。
 
 ## 传输和输入边界
 
@@ -11,6 +15,8 @@
 - 认证要求用户名与密码同时存在；在验证 TLS 后优先使用服务器声明的 AUTH PLAIN，否则使用 AUTH LOGIN。不支持匿名中继、OAuth 或未声明的认证机制。
 - 仅支持一个 ASCII 裸邮箱收件人及纯文本 UTF-8 邮件。拒绝展示名式收件人、多收件人、头部控制字符、地址注入及无效编码；主题最多 200 字节，正文最多 64 KiB，发件展示名最多 128 字节。正文规范化为 CRLF，并使用按行限制长度的 MIME base64 编码。
 - 每次调用总上限 30 秒，DNS/连接最多 5 秒，每个协议阶段最多 10 秒；调用方更短的 context 截止时间优先。取消会关闭本次连接。每次连接最多读取 512 KiB 对端字节（包括 TLS 记录），避免无界 SMTP 回复占用内存。
+
+核心 RPC 调用总期限为 12 秒、握手最多 2 秒，不能重新连接并自动重发 RPC。插件进程退出、身份/哈希不符或 socket 不可用时，核心返回安全分类错误并继续处理其他请求。运行进程隔离和 systemd 资源限制不构成任意不可信代码沙箱；本插件必然能看见交给它的 SMTP 凭据。只安装经审核和批准的程序。
 
 ## 结果与重试
 
@@ -24,4 +30,6 @@
 
 `smtp_test.go` 使用临时本地 SMTP/TLS 服务和仅测试代码可设置的信任根，覆盖两种 TLS 模式、PLAIN/LOGIN、证书与主机名拒绝、超时/取消、有限重试、DATA 不确定性、回复字节上限、头部输入及并发会话。
 
-`internal/billing/email_smtp_e2e_test.go` 在隔离子进程中通过标准系统证书入口装载临时 CA，验证真实管理员 HTTP → 加密保存配置 → 公开 SMTP 传输 API → 本地 TLS 接受 → 审计。生产接口没有跳过证书验证或注入测试信任根的开关。所有测试只连接回环地址，不发送外部邮件；真实服务商的连通性、SPF/DKIM/DMARC 和收件箱投递仍需单独授权和验证。
+`internal/billing/email_smtp_e2e_test.go` 在隔离子进程中通过标准系统证书入口装载临时 CA，验证真实管理员 HTTP → 加密保存配置 → 测试中显式注入的 SMTP 传输 → 本地 TLS 接受 → 审计。生产接口没有跳过证书验证或注入测试信任根的开关。所有测试只连接回环地址，不发送外部邮件；真实服务商的连通性、SPF/DKIM/DMARC 和收件箱投递仍需单独授权和验证。
+
+独立插件和核心的实际不同 UID/systemd 替换、崩溃与回退验收由 `deploy/ci/plugin-native.sh` 执行，并保存对应 run 的 `plugin-native.json`；是否通过以该提交的实际证据为准。原始第三方许可证文字在包内 `THIRD_PARTY_NOTICES.json`，它不是完整 SBOM 或法律合规结论。

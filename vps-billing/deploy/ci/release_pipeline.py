@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed draft release gate. Standard library only; artifact bytes are never executed.
+"""Fail-closed runtime release gate. Standard library only; artifact bytes are never executed.
 
 The publishing workflow must run this file from the trusted default-branch commit.
 Build code and dependencies run in a separate job with read-only credentials.
@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import sys
 import tarfile
 import urllib.error
@@ -35,11 +36,18 @@ TRUSTED_PATHS = (
     "vps-billing/deploy/ci/prepare-browser.py",
     "vps-billing/deploy/ci/accept-native.sh",
     "vps-billing/deploy/ci/accept-native-http.py",
+    "vps-billing/deploy/ci/plugin-native.sh",
+    "vps-billing/deploy/ci/plugin-native.py",
+    "vps-billing/deploy/ci/smtp-loopback-fixture.py",
+    "vps-billing/deploy/ci/test_plugin_native.py",
     "vps-billing/deploy/ci/browser-demo.py",
     "vps-billing/deploy/ci/mysql-native.sh",
     "vps-billing/deploy/ci/mysql-distribution.json",
     "vps-billing/deploy/scripts/package-release.sh",
     "vps-billing/deploy/scripts/release-manifest.py",
+    "vps-billing/deploy/scripts/plugin-manager.py",
+    "vps-billing/deploy/systemd/aster-api.service",
+    "vps-billing/deploy/systemd/aster-smtp.service",
 )
 MAX_ZIP = 256 * 1024 * 1024
 MAX_TAR = 256 * 1024 * 1024
@@ -52,12 +60,17 @@ HISTORICAL_MANIFEST = Path(__file__).with_name("historical-artifacts.json")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 HASH = re.compile(r"^[0-9a-f]{64}$")
 NUMBER = r"(?:0|[1-9][0-9]*)"
-TAG = re.compile(rf"^v{NUMBER}\.{NUMBER}\.{NUMBER}-(?:alpha|beta|rc)\.{NUMBER}$")
+TAG = re.compile(rf"^(?:v{NUMBER}\.{NUMBER}\.{NUMBER}(?:-(?:alpha|beta|rc)\.{NUMBER})?|smtp-v{NUMBER}\.{NUMBER}\.{NUMBER})$")
 INPUT_PATHS = (
     "LICENSE", "README.md", "vps-billing/backend/go.mod",
     "vps-billing/backend/go.sum", "vps-billing/frontend/package.json",
     "vps-billing/frontend/package-lock.json",
 )
+
+CURRENT_INPUT_PATHS = INPUT_PATHS + ("vps-billing/backend/pkg/pluginapi/protocol.go", "vps-billing/backend/plugins/smtp/VERSION")
+ROOT_LICENSE_HASH = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+SMTP_FILES = {"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"}
+CORE_DEPLOY_FILES = {"deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py"}
 
 
 class GuardError(Exception):
@@ -87,8 +100,8 @@ def sha(value):
 
 def validate_tag(tag):
     require(isinstance(tag, str) and len(tag) <= 64 and TAG.fullmatch(tag),
-            "Only vMAJOR.MINOR.PATCH-alpha|beta|rc.N tags are allowed")
-    return tag[1:]
+            "Only exact core vMAJOR.MINOR.PATCH or smtp-vMAJOR.MINOR.PATCH release tags are allowed; historical prereleases remain readable")
+    return tag[6:] if tag.startswith("smtp-v") else tag[1:]
 
 
 def sha256(data):
@@ -127,6 +140,7 @@ class GitHub:
         require(isinstance(token, str) and token and "\n" not in token, "GH_TOKEN is required")
         self.token = token
         self.opener = urllib.request.build_opener(NoRedirect())
+        self.created_releases = set()
 
     def _open(self, method, url, data=None, content_type=None, authenticated=True, limit=MAX_JSON):
         require(isinstance(url, str) and all(32 < ord(char) < 127 for char in url), "Unsafe GitHub URL characters")
@@ -159,13 +173,23 @@ class GitHub:
         require(path.startswith("/repos/" + REPOSITORY + "/") or path == "/repos/" + REPOSITORY,
                 "API path outside the fixed repository")
         require("#" not in path and "\n" not in path and not path.startswith("//"), "Unsafe API path")
-        require(method in {"GET", "POST"}, "Unsupported API method")
-        require(method != "POST" or path == api_path("/releases"), "Only draft release creation is a permitted JSON mutation")
+        require(method in {"GET", "POST", "PATCH"}, "Unsupported API method")
+        if method == "PATCH":
+            match = re.fullmatch(re.escape(api_path("/releases/")) + r"([1-9][0-9]*)", path)
+            require(match is not None and int(match[1]) in self.created_releases and
+                    isinstance(data, dict) and set(data) == {"draft", "prerelease", "make_latest"} and
+                    data["draft"] is False and data["prerelease"] is False and data["make_latest"] in {"true", "false"} and
+                    raw is None and content_type is None,
+                    "Only publication of this process's newly created verified release is a permitted PATCH")
+        require(method != "POST" or path == api_path("/releases"), "Only staging a new release is a permitted POST mutation")
         payload = json_bytes(data) if data is not None else raw
         status, _, response = self._open(method, "https://api.github.com" + path, payload,
                                         "application/json" if data is not None else content_type)
         require(status == (201 if method == "POST" else 200), "Unexpected GitHub API response")
-        return strict_json(response)
+        result = strict_json(response)
+        if method == "POST":
+            self.created_releases.add(integer(result.get("id"), "created release ID"))
+        return result
 
     def upload(self, release_id, name, data):
         integer(release_id, "release ID")
@@ -383,7 +407,9 @@ def trusted_blobs(api, commit):
 
 
 def verify_source_archive(api, files, provenance):
-    """Bind every retained source file to Git, independently of upstream manifests."""
+    """Bind copied runtime texts and BUILD inputs to exact Git; legacy source archives remain readable."""
+    if "-" not in provenance["version"]:
+        return verify_runtime_source(api, files, provenance)
     version = provenance["version"]
     source = tar_files(files[f"aster-{version}-source.tar.gz"], f"aster-{version}-source")
     tree = api.request("GET", api_path("/git/trees/" + sha(provenance["source_sha"]) + "?recursive=1"))
@@ -477,8 +503,18 @@ def prepare_build(api, env, event):
             "trusted_blobs": blobs, "artifact_name": f"candidate-{run_id}-{attempt}"}
 
 
-def package_files(version):
-    return ("BUILD.json", f"aster-{version}-linux-amd64.tar.gz", f"aster-{version}-source.tar.gz", "SHA256SUMS")
+def release_kind(tag):
+    validate_tag(tag)
+    return "smtp" if tag.startswith("smtp-v") else "core"
+
+
+def package_files(version, kind="core"):
+    require(kind in {"core", "smtp"}, "Unknown release component")
+    if "-" in version:
+        require(kind == "core", "Historical SMTP prereleases do not exist")
+        return ("BUILD.json", f"aster-{version}-linux-amd64.tar.gz", f"aster-{version}-source.tar.gz", "SHA256SUMS")
+    prefix = "aster-smtp" if kind == "smtp" else "aster"
+    return ("BUILD.json", f"{prefix}-{version}-linux-amd64.tar.gz", "SHA256SUMS")
 
 
 def safe_path(name):
@@ -535,7 +571,10 @@ def tar_files(data, root):
         raise GuardError("Invalid gzip/tar archive") from exc
 
 
-def validate_package(files, source_sha, version):
+def validate_package(files, source_sha, version, kind="core", provenance_data=None):
+    if "-" not in version:
+        return validate_runtime_package(files, source_sha, version, kind, provenance_data)
+    require(kind == "core", "Unexpected legacy component")
     sha(source_sha)
     validate_tag("v" + version)
     require(set(files) == set(package_files(version)), "Release package must contain exactly four expected files")
@@ -575,6 +614,164 @@ def validate_package(files, source_sha, version):
     return {name: {"sha256": sha256(data), "size": len(data)} for name, data in sorted(files.items())}
 
 
+def checksum_inventory(data, expected):
+    require(isinstance(data, bytes) and len(data) <= 4096, "Checksum file exceeds limit")
+    entries = {}
+    try:
+        for line in data.decode("ascii").splitlines():
+            match = re.fullmatch(r"([0-9a-f]{64})  (?:\./)?([A-Za-z0-9._-]+)", line)
+            require(match is not None and match[2] not in entries, "Invalid/duplicate checksum entry")
+            entries[match[2]] = match[1]
+    except UnicodeError as exc:
+        raise GuardError("Non-ASCII checksum file") from exc
+    require(set(entries) == set(expected), "Checksum inventory mismatch")
+    return entries
+
+
+def static_amd64(data):
+    require(64 <= len(data) <= MAX_FILE and data[:7] == b"\x7fELF\x02\x01\x01" and data[7] in (0, 3), "Binary is not Linux amd64 ELF64 executable")
+    kind, machine, revision, entry, programs, _, _, header_size, program_size, program_count = struct.unpack_from("<HHIQQQIHHH", data, 16)
+    require(kind == 2 and machine == 62 and revision == 1 and header_size == 64 and program_size == 56 and
+            1 <= program_count <= 128 and programs >= 64 and programs + program_size * program_count <= len(data), "Invalid ELF program headers")
+    executable_entry = False
+    for index in range(program_count):
+        segment, flags, offset, address, _, size, memory, alignment = struct.unpack_from("<IIQQQQQQ", data, programs + index * program_size)
+        require(segment not in (2, 3), "Dynamic executable loaders/dependencies are forbidden")
+        require(offset + size <= len(data) and size <= memory and (alignment in (0, 1) or not alignment & (alignment - 1)), "Invalid ELF segment bounds")
+        if segment == 1 and flags & 1 and address <= entry < address + memory:
+            executable_entry = True
+    require(executable_entry, "ELF entry point must be in an executable load segment")
+
+
+def archive_permissions(data, root, executables):
+    # tar_files performs the bounded parse first. Every shipped executable has an
+    # explicit permission, and no ancillary file may carry executable bits.
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        for item in archive:
+            if item.isfile():
+                path = item.name[len(root) + 1:]
+                require(item.uid == 0 and item.gid == 0 and item.mode == (0o755 if path in executables else 0o644), "Runtime archive file permission mismatch")
+            elif item.isdir():
+                require(item.uid == 0 and item.gid == 0 and item.mode == 0o755, "Runtime directory permission/owner mismatch")
+
+
+def runtime_bundle(files, version, kind):
+    root = ("aster-smtp" if kind == "smtp" else "aster") + "-" + version + "-linux-amd64"
+    return root, files[root + ".tar.gz"], tar_files(files[root + ".tar.gz"], root)
+
+
+def validate_runtime_package(files, source_sha, version, kind, provenance_data=None):
+    sha(source_sha)
+    require(kind in {"core", "smtp"}, "Unknown release component")
+    validate_tag(("smtp-v" if kind == "smtp" else "v") + version)
+    require(set(files) == set(package_files(version, kind)), "Runtime release must contain exactly three binary-only package files")
+    require(all(isinstance(value, bytes) and 0 < len(value) <= MAX_ZIP for value in files.values()), "Invalid package file size")
+    checksum_data = dict(files)
+    if provenance_data is not None:
+        require(isinstance(provenance_data, bytes) and 0 < len(provenance_data) <= MAX_JSON, "Invalid provenance data")
+        checksum_data["PROVENANCE.json"] = provenance_data
+    sums = checksum_inventory(files["SHA256SUMS"], set(checksum_data) - {"SHA256SUMS"})
+    require(all(sha256(checksum_data[name]) == digest for name, digest in sums.items()), "Package checksum mismatch")
+    build = strict_json(files["BUILD.json"])
+    require(isinstance(build, dict) and type(build.get("schema")) is int and build["schema"] == 2 and
+            build.get("release_kind") == kind and build.get("source_commit") == source_sha and
+            build.get("release_label") == version and build.get("target") == "linux/amd64" and build.get("cgo_enabled") is False,
+            "BUILD identity/target/component mismatch")
+    versions = build.get("component_versions")
+    require(isinstance(versions, dict) and set(versions) == {"core", "smtp"} and versions.get(kind) == version,
+            "Source component version mismatch")
+    for key, value in versions.items():
+        validate_tag(("smtp-v" if key == "smtp" else "v") + value)
+        require("-" not in value, "Component must use stable semantic version")
+    require(build.get("plugin_protocol") == "aster.smtp/1" and build.get("smtp_core_compatibility") == {"min": "0.4.0", "max_exclusive": "0.5.0"} and
+            tuple(int(x) for x in versions["core"].split(".")) >= (0, 4, 0) and tuple(int(x) for x in versions["core"].split(".")) < (0, 5, 0),
+            "Plugin protocol/core compatibility mismatch")
+    root, raw, bundle = runtime_bundle(files, version, kind)
+    require(sha256(bundle.get("LICENSE", b"")) == ROOT_LICENSE_HASH, "Root LICENSE must remain unchanged")
+    inputs = build.get("input_sha256")
+    require(isinstance(inputs, dict) and set(inputs) == set(CURRENT_INPUT_PATHS) and all(isinstance(v, str) and HASH.fullmatch(v) for v in inputs.values()), "BUILD input inventory mismatch")
+    require(inputs["LICENSE"] == ROOT_LICENSE_HASH, "Root LICENSE input mismatch")
+    copies = build.get("source_files")
+    require(isinstance(copies, dict) and copies.get("LICENSE") == "LICENSE" and all(isinstance(k, str) and isinstance(v, str) for k, v in copies.items()), "BUILD copied source inventory mismatch")
+    for path, source in copies.items():
+        safe_path(path); safe_path(source)
+        require(path in bundle and (source in {"LICENSE", "README.md"} or source.startswith("vps-billing/")), "Invalid copied source path")
+    binaries = build.get("binary_sha256")
+    required_binaries = {"bin/aster-api", "bin/aster-plugin-host"} if kind == "core" else {"plugin"}
+    require(isinstance(binaries, dict) and set(binaries) == required_binaries and all(isinstance(v, str) and HASH.fullmatch(v) for v in binaries.values()), "Binary inventory mismatch")
+    for path, digest in binaries.items():
+        static_amd64(bundle.get(path, b""))
+        require(sha256(bundle[path]) == digest, "Binary checksum mismatch")
+    if kind == "core":
+        require(bundle.get("manifests/BUILD.json") == files["BUILD.json"] and "web/index.html" in bundle and CORE_DEPLOY_FILES.issubset(bundle), "Core runtime bundle is incomplete")
+        require(copies.get("REPOSITORY-README.md") == "README.md" and copies.get("PROJECT-README.md") == "vps-billing/README.md", "README copy must bind to selected source")
+        allowed = required_binaries | set(copies) | {"manifests/BUILD.json", "manifests/go-dependencies.json", "manifests/npm-installed-dependencies.json", "manifests/aster-api-build.txt", "manifests/aster-plugin-host-build.txt"}
+        require(all(path in allowed or path.startswith(("web/", "licenses/")) for path in bundle), "Unexpected project source/runtime member")
+        require(all(path in copies for path in CORE_DEPLOY_FILES), "Deployment inputs must bind to source")
+        require(all(path in bundle for path in allowed), "Required core inventory file missing")
+        for src in INPUT_PATHS:
+            dest = "LICENSE" if src == "LICENSE" else "REPOSITORY-README.md" if src == "README.md" else "manifests/" + src.rsplit("/", 1)[1]
+            require(sha256(bundle[dest]) == inputs[src], "Runtime input checksum mismatch")
+        archive_permissions(raw, root, required_binaries | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py"})
+    else:
+        require(set(bundle) == SMTP_FILES and copies == {"LICENSE": "LICENSE", "README.md": "vps-billing/backend/plugins/smtp/README.md"}, "SMTP archive must contain exactly six fixed files")
+        manifest = strict_json(bundle["manifest.json"], limit=8192)
+        expected = {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.5.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": binaries["plugin"]}
+        require(manifest == expected and type(manifest.get("schema")) is int, "SMTP manifest identity/compatibility mismatch")
+        inside = checksum_inventory(bundle["SHA256SUMS"], SMTP_FILES - {"SHA256SUMS"})
+        require(all(sha256(bundle[name]) == digest for name, digest in inside.items()), "SMTP inner checksum mismatch")
+        notices = strict_json(bundle["THIRD_PARTY_NOTICES.json"])
+        require(isinstance(notices, dict) and notices.get("schema") == 1 and isinstance(notices.get("notices"), list) and notices["notices"], "Original SMTP third-party notices missing")
+        for item in notices["notices"]:
+            require(isinstance(item, dict) and set(item) == {"path", "sha256", "text"} and isinstance(item["text"], str) and sha256(item["text"].encode()) == item["sha256"], "Original third-party notice checksum mismatch")
+            safe_path(item["path"])
+        archive_permissions(raw, root, {"plugin"})
+    for data in files.values():
+        scan_obvious_secrets(data)
+    return {name: {"sha256": sha256(data), "size": len(data)} for name, data in sorted(files.items())}
+
+
+def verify_runtime_source(api, files, provenance):
+    kind = release_kind(provenance["tag"])
+    version = provenance["version"]
+    build = strict_json(files["BUILD.json"])
+    _, _, bundle = runtime_bundle(files, version, kind)
+    tree = api.request("GET", api_path("/git/trees/" + sha(provenance["source_sha"]) + "?recursive=1"))
+    require(tree.get("truncated") is False and isinstance(tree.get("tree"), list), "Incomplete source Git tree")
+    expected, sizes = {}, {}
+    for entry in tree["tree"]:
+        path = entry.get("path")
+        if path in set(build["source_files"].values()) | set(CURRENT_INPUT_PATHS):
+            require(entry.get("type") == "blob" and entry.get("mode") in {"100644", "100755"} and path not in expected, "Source contains links/submodules/duplicate Git paths")
+            expected[path] = sha(entry.get("sha")); sizes[path] = entry.get("size")
+    require(set(expected) == set(build["source_files"].values()) | set(CURRENT_INPUT_PATHS), "Copied/source input missing from selected Git tree")
+    for path, source in build["source_files"].items():
+        require(git_blob_sha(bundle[path]) == expected[source], "Runtime text differs from tagged Git blob: " + source)
+    input_bytes = {}
+    for source in CURRENT_INPUT_PATHS:
+        blob = api.request("GET", api_path("/git/blobs/" + expected[source]))
+        require(isinstance(blob, dict) and blob.get("sha") == expected[source] and type(blob.get("size")) is int and 0 <= blob["size"] <= MAX_JSON // 2 and blob.get("encoding") == "base64" and isinstance(blob.get("content"), str), "Invalid selected input Git blob")
+        try:
+            data = base64.b64decode(blob["content"].replace("\n", "").replace("\r", ""), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise GuardError("Invalid selected input Git encoding") from exc
+        require(len(data) == blob["size"] and git_blob_sha(data) == expected[source] and sha256(data) == build["input_sha256"][source], "BUILD input differs from tagged Git blob")
+        input_bytes[source] = data
+    core = re.search(rb'CoreVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', input_bytes["vps-billing/backend/pkg/pluginapi/protocol.go"])
+    require(core is not None and core[1].decode() == build["component_versions"]["core"] and
+            input_bytes["vps-billing/backend/plugins/smtp/VERSION"].decode().strip() == build["component_versions"]["smtp"], "Declared component version differs from Git source")
+
+
+def latest_release_id(api):
+    try:
+        result = api.request("GET", api_path("/releases/latest"))
+    except APIError as exc:
+        if exc.status == 404:
+            return None
+        raise
+    return integer(result.get("id"), "latest release ID")
+
+
 def seal_build(policy, directory):
     directory = Path(directory)
     require(directory.is_dir() and not directory.is_symlink(), "Invalid package directory")
@@ -582,10 +779,18 @@ def seal_build(policy, directory):
     require(all(path.is_file() and not path.is_symlink() for path in paths), "Package directory contains non-files")
     require(all(path.stat().st_size <= MAX_ZIP for path in paths), "Package file exceeds limit")
     files = {path.name: path.read_bytes() for path in paths}
-    assets = validate_package(files, policy["source_sha"], policy["version"])
-    provenance = dict(policy, assets=assets)
+    assets = validate_package(files, policy["source_sha"], policy["version"], release_kind(policy["tag"]))
+    normal = "-" not in policy["version"]
+    provenance = dict(policy, assets={name: meta for name, meta in assets.items() if name != "SHA256SUMS"} if normal else assets)
+    raw_provenance = json_bytes(provenance)
     with (directory / "PROVENANCE.json").open("xb") as stream:
-        stream.write(json_bytes(provenance))
+        stream.write(raw_provenance)
+    if normal:
+        # No circular hash dependency: provenance binds BUILD/archive; finalized
+        # SHA256SUMS binds BUILD/archive/provenance and excludes itself.
+        covered = {name: data for name, data in files.items() if name != "SHA256SUMS"}
+        covered["PROVENANCE.json"] = raw_provenance
+        (directory / "SHA256SUMS").write_bytes("".join(sha256(data) + "  " + name + "\n" for name, data in sorted(covered.items())).encode("ascii"))
     return provenance
 
 
@@ -594,7 +799,7 @@ def read_artifact_zip(data):
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             members = archive.infolist()
-            require(len(members) == 5, "Artifact ZIP must contain exactly five files")
+            require(len(members) in {4, 5}, "Artifact ZIP must contain exactly four runtime files or five legacy files")
             require(not archive.comment and data[-22:-18] == b"PK\x05\x06" and
                     min(item.header_offset for item in members) == 0,
                     "ZIP comments/prefix/trailing payload are forbidden")
@@ -726,7 +931,10 @@ def verify_provenance(files, policy, api):
     require(trusted_blobs(api, source) == policy["trusted_blobs"] and
             trusted_blobs(api, provenance["default_sha"]) == policy["trusted_blobs"], "Source/build policy differs from trusted default")
     package = {key: value for key, value in files.items() if key != "PROVENANCE.json"}
-    assets = validate_package(package, source, provenance["version"])
+    normal = "-" not in provenance["version"]
+    assets = validate_package(package, source, provenance["version"], release_kind(tag), files["PROVENANCE.json"] if normal else None)
+    if normal:
+        assets = {name: meta for name, meta in assets.items() if name != "SHA256SUMS"}
     require(provenance["assets"] == assets, "Provenance asset inventory mismatch")
     verify_source_archive(api, package, provenance)
     return provenance
@@ -758,20 +966,27 @@ def publish(api, policy, archive_bytes):
     # Never retry any mutation, even on timeout/502/422. A tag cannot be locked
     # atomically with GitHub Releases; repeated checks bound, but cannot erase,
     # this external TOCTOU window. Concurrent movers must be prohibited by policy.
+    normal = "-" not in provenance["version"]
+    kind = release_kind(provenance["tag"])
+    prior_latest = latest_release_id(api) if normal and kind == "smtp" else None
     fields = {"tag_name": provenance["tag"], "target_commitish": provenance["source_sha"],
               "name": "星屿云 " + provenance["version"],
               "body": f"Linux amd64 预发布。源码提交：`{provenance['source_sha']}`。\n\n选购页提供实际地区筛选、套餐规格与实时订单摘要。支付适配器保持禁用；官方 SMTP 默认关闭，支持加密配置及管理员测试邮件，尚未接入业务通知或密码找回。该版本已通过流水线中的原生安装、业务、备份恢复和同 schema 版本回退检查。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试：{policy['run_attempt']}。附件包含安装包、源码、校验和及构建来源记录；环境与功能限制见包内文档。" + historical_body,
-              "draft": True, "prerelease": True, "make_latest": "false", "generate_release_notes": False}
+              "draft": True, "prerelease": not normal, "make_latest": "false", "generate_release_notes": False}
+    if normal:
+        component = "Aster Core" if kind == "core" else "Aster official SMTP plugin"
+        fields["name"] = component + " " + provenance["version"]
+        fields["body"] = f"{component} {provenance['version']}，Linux amd64。源码提交：`{provenance['source_sha']}`。\n\n核心与官方 SMTP 独立分发，协议 `aster.smtp/1`，SMTP 支持 Core >=0.4.0,<0.5.0。插件需明确安装、固定哈希批准和单独的非特权进程；运行包不附手工源码归档。付款、主控/被控与自动开通尚未实现；SMTP 只提供主动管理员测试，不代表业务通知或收件箱投递。\n\n本版本通过所链接构建的回归、原生 systemd/HTTPS/备份恢复、独立插件替换与崩溃隔离、浏览器和依赖扫描门槛；这些结果只覆盖合成回环测试，不构成生产就绪声明。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。附件包含独立安装包、SHA-256、BUILD 与 PROVENANCE；安装、升级与限制见核心文档。"
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)
         release_id = integer(created.get("id"), "created release ID")
-        require(created.get("draft") is True and created.get("prerelease") is True and
+        require(created.get("draft") is True and created.get("prerelease") is (not normal) and
                 created.get("tag_name") == provenance["tag"], "Unexpected created release state")
         for name in sorted(files):
             recheck(api, policy, provenance)
             current = api.request("GET", api_path(f"/releases/{release_id}"))
-            require(current.get("id") == release_id and current.get("draft") is True and current.get("prerelease") is True and
+            require(current.get("id") == release_id and current.get("draft") is True and current.get("prerelease") is (not normal) and
                     current.get("tag_name") == provenance["tag"] and isinstance(current.get("assets"), list),
                     "Draft changed during upload")
             require(not any(asset.get("name") == name for asset in current["assets"]), "Asset already exists; overwrite forbidden")
@@ -789,13 +1004,26 @@ def publish(api, policy, archive_bytes):
         require(len(set(asset_ids)) == len(asset_ids), "Duplicate release asset IDs")
         expected = {name: (len(data), "sha256:" + sha256(data)) for name, data in files.items()}
         actual = {asset.get("name"): (asset.get("size"), asset.get("digest")) for asset in final.get("assets", [])}
-        require(final.get("draft") is True and final.get("prerelease") is True and
+        require(final.get("draft") is True and final.get("prerelease") is (not normal) and
                 final.get("tag_name") == provenance["tag"] and actual == expected and len(final["assets"]) == len(expected),
                 "Final draft asset inventory/state mismatch")
+        if normal:
+            # Only this freshly created release may transition to public. All
+            # bytes, IDs, tag, controller and successful run are rechecked first.
+            recheck(api, policy, provenance)
+            published = api.request("PATCH", api_path(f"/releases/{release_id}"), data={"draft": False, "prerelease": False, "make_latest": "true" if kind == "core" else "false"})
+            require(published.get("id") == release_id and published.get("draft") is False and published.get("prerelease") is False and published.get("tag_name") == provenance["tag"], "Unexpected public release response")
+            recheck(api, policy, provenance)
+            public = api.request("GET", api_path(f"/releases/{release_id}"))
+            require(all(asset.get("state") == "uploaded" for asset in public.get("assets", [])) and len({integer(asset.get("id"), "public asset ID") for asset in public.get("assets", [])}) == len(expected), "Public asset IDs/states mismatch")
+            public_assets = {asset.get("name"): (asset.get("size"), asset.get("digest")) for asset in public.get("assets", [])}
+            require(public.get("id") == release_id and public.get("draft") is False and public.get("prerelease") is False and public.get("tag_name") == provenance["tag"] and
+                    public.get("target_commitish") == provenance["source_sha"] and public_assets == expected and len(public.get("assets", [])) == len(expected), "Public release identity/assets mismatch")
+            require(latest_release_id(api) == (release_id if kind == "core" else prior_latest), "Public latest-release policy mismatch")
         return release_id
     except (GuardError, KeyError, TypeError, ValueError) as exc:
         if release_id is not None:
-            raise GuardError(f"Publication stopped; inspect draft release ID {release_id}. No edit/delete/retry performed. {exc}") from None
+            raise GuardError(f"Publication stopped; inspect release ID {release_id}; it may still be draft or publication outcome may be uncertain. No further mutation/delete/retry performed. {exc}") from None
         raise GuardError("Release creation failed or has an uncertain outcome; inspect repository releases for tag " + provenance["tag"] + " before any new attempt. No mutation retry performed. " + str(exc)) from None
 
 
@@ -836,7 +1064,7 @@ def main(argv=None):
         event = strict_json(Path(os.environ["GITHUB_EVENT_PATH"]).read_bytes())
         if args.command == "prepare-build":
             policy = prepare_build(api, os.environ, event)
-            outputs({key: policy[key] for key in ("source_sha", "tag", "version", "artifact_name")})
+            outputs({**{key: policy[key] for key in ("source_sha", "tag", "version", "artifact_name")}, "kind": release_kind(policy["tag"])})
         else:
             policy = prepare_publish(api, os.environ, event)
             data = api.download_artifact(policy["artifact"])
@@ -854,7 +1082,7 @@ def main(argv=None):
         require(artifact.is_file() and not artifact.is_symlink() and artifact.stat().st_size <= MAX_ZIP, "Unsafe artifact file")
         release_id = publish(api, policy, artifact.read_bytes())
         outputs({"release_id": release_id})
-        print(f"Created draft prerelease ID {release_id}; no publication/deployment performed.")
+        print(f"Release ID {release_id} verified; normal runtime tags published, historical prerelease tags remain draft; no deployment performed.")
 
 
 if __name__ == "__main__":

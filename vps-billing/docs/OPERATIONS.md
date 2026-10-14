@@ -9,6 +9,7 @@
 | 组件 | 原生路径或连接 | 权限及职责 |
 |---|---|---|
 | Nginx | 浏览器 HTTPS → `/opt/aster/current/web`，接口转发至 `127.0.0.1:18080` | 终止 TLS，静态资源与 API 同源；只暴露已审查入口 |
+| SMTP 插件 | `/opt/aster/plugins/email.smtp/VERSION/plugin`、`aster-smtp.service` | 独立 `aster-smtp` UID、`aster-plugins` socket 组，root 审批后由宿主启动 |
 | API | `/opt/aster/current/bin/aster-api`，`aster-api.service` | 无登录权限的 `aster` 身份；应用目录只读，日志写 journal |
 | MySQL | 同机 Unix socket，路径按发行版核实 | 持久化业务数据；不公开数据库端口，不给 API 读取数据库数据目录 |
 | 版本与配置 | `/opt/aster/releases/VERSION`、`/opt/aster/current`、`/etc/aster/api.env` | root 管理版本/链接，独立记录配置变更；配置不含秘密值 |
@@ -22,9 +23,9 @@
 
 ## 2. 配置和服务管理
 
-唯一的原生配置样例是 `deploy/systemd/aster-api.service`、`deploy/systemd/api.env.example` 和 `deploy/nginx.native.conf`。运行目录无须可写；MySQL 数据目录、journal 和备份由各自服务/运维身份管理。不要为解决读写错误把 `/opt/aster`、`/etc/aster` 或数据库目录递归改为可写。
+原生配置样例包括 `deploy/systemd/aster-api.service`、`aster-smtp.service`、`api.env.example` 和 `deploy/nginx.native.conf`。插件安装/策略管理用 `deploy/scripts/plugin-manager.py`，明确服务操作由管理员执行。运行目录无须可写；MySQL 数据目录、journal 和备份由各自服务/运维身份管理。不要为解决读写错误把 `/opt/aster`、`/etc/aster` 或数据库目录递归改为可写。
 
-`/etc/aster/api.env` 为 `root:aster`、0640；运行秘密目录为 `root:aster`、0750，文件为 `root:aster`、0640。环境文件只保存 `*_FILE` 路径等配置，不作为 shell 脚本执行。MySQL DSN 文件必须与真实数据库用户密码同步；仅修改文件不会修改数据库账号。
+`/etc/aster` 为 `root:root`、0755，非秘密 `/etc/aster/plugins.json` 由 root 管理；`/etc/aster/api.env` 为 `root:aster`、0640；运行秘密目录为 `root:aster`、0750，文件为 `root:aster`、0640。环境文件只保存 `*_FILE` 路径等配置，不作为 shell 脚本执行。MySQL DSN 文件必须与真实数据库用户密码同步；仅修改文件不会修改数据库账号。
 
 审查配置后，可在维护窗口执行：
 
@@ -68,6 +69,7 @@ curl --fail --show-error https://billing.example.com/readyz
 | 存活但不就绪 | 数据库状态、选定二进制的迁移编号/checksum、应用日志 | 修改迁移历史或忽略未知版本 |
 | 登录/CSRF 失败 | 实际 HTTPS Origin、Cookie、Nginx Host 转发、系统时间 | 关闭 CSRF、改用公开 HTTP |
 | 502/连接超时 | systemd 状态、回环监听、代理目的地址及数据库延迟 | 把 API 暴露到公网进行长期绕行 |
+| SMTP 不可用 | 策略 revision/批准版本、SHA/兼容区间、不同 UID、socket 权限、服务退出/重启限制、精确目的地与后台配置 | 给插件读取 API 秘密、改 manifest 掩盖错误、盲目重发不确定邮件 |
 | 磁盘空间不足 | 数据库/journal/备份占用和保留政策 | 随意删除 MySQL 文件、唯一备份或迁移记录 |
 
 应用、Nginx 和数据库日志可能包含客户/订单标识。限制读取与保留，分享前脱敏；不收集完整环境变量、秘密文件或 DSN 到工单。journal 保留和磁盘限制应结合目标主机政策制定，应用不会修改主机日志配置。
@@ -86,6 +88,6 @@ RPO/RTO 应由业务可接受的数据损失和恢复时间确定并实测。历
 
 升级必须遵循 [UPGRADE.md](UPGRADE.md)：保存已核验版本目录、配置版本与备份时点，停写后迁移，再原子切换 `/opt/aster/current`。当前不承诺滚动升级或向下迁移；旧二进制可能拒绝新 schema，因此应用目录回退不等于数据库回滚。
 
-支付保持 `payment.disabled`；保留旧注册表默认 `EMAIL_PROVIDER=email.disabled`，官方 SMTP 独立受管理设置和本机密钥控制。默认关闭，可由管理员保存后主动测试，不自动发送业务通知。紧急停用、在途结果、受限出口、TLS 与审计要求见 [PLUGINS.md](PLUGINS.md) 和 [SECURITY.md](SECURITY.md)。未知 provider ID 仍拒绝启动，不自动下载代码；新插件须审查与重建。
+支付保持 `payment.disabled`；保留旧注册表默认 `EMAIL_PROVIDER=email.disabled`，官方 SMTP 独立受 root 策略、兼容插件服务、精确目的地、后台设置和本机密钥控制。默认关闭，可由管理员保存后主动测试，不自动发送业务通知。紧急停用、在途结果、受限出口、TLS 与审计要求见 [PLUGINS.md](PLUGINS.md) 和 [SECURITY.md](SECURITY.md)。未知 provider ID 仍拒绝启动，不自动下载代码；新插件须审查、独立构建与验收；已有 Core 可安装/替换兼容插件，无需重编 Core。单独更新遵循 [插件版本切换](PLUGINS.md#3-独立更新与回退)，不随意重启 API 或在线覆盖程序。
 
 高可用、多服务器数据库、队列消费者、真实 VPS 开通、结算账务和自动邮件通知均是后续范围。当前版本保持单服务器原生方案，不自动扩展基础设施或付费能力。

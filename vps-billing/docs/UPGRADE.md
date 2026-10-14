@@ -16,6 +16,22 @@
 
 MySQL DDL 存在隐式提交，无法靠外层事务把整个迁移自动回滚。迁移重复执行和已知中断点处理必须在隔离副本验证；不要把 `IF NOT EXISTS` 当作任意结构损坏的修复器。发现 checksum 不匹配或未知 schema 版本，应停止并审查原因，禁止手改 `schema_migrations` 绕过检查。
 
+## Core 0.4.0 与独立 SMTP 迁移
+
+Core `0.4.0` 将 SMTP 移到独立程序，新增插件宿主、管理工具、root 策略与专用 service，数据库仍使用迁移 1–6。现有 `email_settings` 和加密凭据可配合原密钥继续使用；不要随机重生成密钥、清除凭据或重建数据库。升级后没有内置传输，之前后台保存为启用也不会绕过插件审批。
+
+首次从 `0.3.0-rc.4` 升级，在维护窗口完成以下配置迁移：
+
+1. 核对已验证 Core/SMTP 独立包与源码，保留旧包、schema/checksum、设置及匹配密钥。创建 `aster-plugins` 系统组并核对没有复用其他业务组；API 新 unit 的 `SupplementaryGroups=aster-plugins` 要求该组存在，即使尚不安装 SMTP。
+2. 将 `/etc/aster` 本层调整为 root:root 0755，供插件读取非秘密策略；**不递归调整**。`api.env` 保持 root:aster 0640，`secrets/` 保持 root:aster 0750，SMTP 密钥保持 aster:aster 0400。插件 UID 不得进入 aster 组。
+3. 安装 Core 到新版本目录，保留网页与 API 同步切换，更新审核过的 API unit/环境；新增 `bin/aster-plugin-host` 与 `deploy/scripts/plugin-manager.py`，不使用旧 unit/旧网页长期混运行。新版本迁移 CLI仍核对完整历史；没有新增 schema 不代表可省略核对。
+4. 按 [插件指南](PLUGINS.md)安装独立 SMTP `1.0.0`、新建 `aster-smtp` UID，选择具体版本/新主机 UID/socket/精确目标，先保持策略与后台关闭。更新 API 配置/组关系后重启一次，检查 Core 就绪。
+5. 核对原密钥可解密、`configured=true`、批准版本与目的地，再明确启用策略、启动 SMTP 并主动握手。无需向真实邮箱发送测试来证明数据库恢复。之后兼容插件替换只更新策略并重启插件，不再切换 Core。
+
+该权限变化使 `/etc/aster` 的目录名可见，但受限文件内容仍由独立模式/组保护。用插件 UID 检查无法读取 API 环境、DSN、会话秘密和密钥；遇到拒绝先检查具体配置，不扩大秘密权限。没有 Linux >=5.11 所需隔离调用的主机拒绝启动插件，不以降级宿主解决。
+
+**独立插件回退与 Core 回退不同。** 插件回退选择既有、较旧且兼容的版本，保留策略 UID/socket/目标和启用状态，随后重启插件；不改数据库或 Core。Core 回退需要确认 schema、API/网页、unit/环境兼容，先关闭并停止 SMTP 服务，再处理目录切换；历史 rc 的同进程 SMTP 与新策略不是同一开关。处理在途不确定结果，不自动重发。
+
 ## 操作流程
 
 1. 在隔离原生恢复环境测试目标版本：升级迁移、重复迁移、就绪检查、旧账单读回、设置写入、新 CNY/USD 订单和权限负向测试。确认运行库身份、socket、域名和端口不会被副本复用。核对新的 `BUILD.json` 部署模型、Linux amd64 架构、systemd/Nginx 指令兼容性，以及与已有服务的冲突。

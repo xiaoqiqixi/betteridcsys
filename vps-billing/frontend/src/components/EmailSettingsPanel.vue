@@ -81,6 +81,8 @@ const canTest = computed(
     !sendBlocked.value &&
     !!baseline.value?.enabled &&
     baseline.value.key_configured &&
+    baseline.value.plugin_available &&
+    baseline.value.destination_allowed &&
     baseline.value.username_configured &&
     baseline.value.password_configured,
 );
@@ -454,6 +456,37 @@ onBeforeUnmount(() => {
       }}
     </p>
     <template v-if="baseline">
+      <p v-if="!preview && !baseline.plugin_available" class="settings-notice">
+        {{
+          tr(
+            "SMTP 插件尚未安装、批准或启用。可以先保存配置；发送前请由服务器管理员安装并启用兼容插件，然后重新读取。",
+            "The SMTP plugin is not installed, approved or enabled. You can save settings first. Ask the server administrator to install and enable a compatible plugin, then reload.",
+          )
+        }}
+      </p>
+      <p v-else-if="!preview" class="settings-help">
+        {{ tr("已批准的 SMTP 插件版本：", "Approved SMTP plugin version: ")
+        }}{{ baseline.plugin_version }} ·
+        {{
+          tr(
+            "发送测试会验证连接与兼容性。",
+            "A test verifies the connection and compatibility.",
+          )
+        }}
+      </p>
+      <p
+        v-if="
+          !preview && baseline.plugin_available && !baseline.destination_allowed
+        "
+        class="settings-notice"
+      >
+        {{
+          tr(
+            "已保存的 SMTP 地址和端口尚未获得主机策略授权，测试发送暂不可用。",
+            "The saved SMTP host and port are not authorized by host policy. Test sending is unavailable.",
+          )
+        }}
+      </p>
       <p v-if="!baseline.key_configured && !preview" class="settings-notice">
         <LockKeyhole :size="16" />{{
           tr(

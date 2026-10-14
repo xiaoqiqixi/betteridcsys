@@ -31,6 +31,7 @@ class CheckScriptTest(unittest.TestCase):
             "import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self): self.assertTrue(True)\n"
         )
         (project / "deploy/scripts/test-release-manifest.py").write_text("pass\n")
+        (project / "deploy/scripts/test-plugin-manager.py").write_text("pass\n")
         (project / "deploy/scripts/test-backup-native.sh").write_text("#!/bin/sh\nexit 0\n")
         (project / "tests/config_smoke.py").write_text(
             "import os\nassert 'ASTER_MYSQL_TEST_DSN' not in os.environ\n"
@@ -97,6 +98,11 @@ class CheckScriptTest(unittest.TestCase):
                 print('--- SKIP: fixture (0.00s)' if os.environ.get('CI_TEST_GO_SKIP') == '1' else '--- PASS: fixture (0.00s)')
             else:
                 assert 'ASTER_MYSQL_TEST_DSN' not in os.environ
+            if sys.argv[1] == 'list':
+                print('aster/billing/cmd/server')
+                if os.environ.get('CI_TEST_GO_FORBIDDEN_DEP'):
+                    print(os.environ['CI_TEST_GO_FORBIDDEN_DEP'])
+                sys.exit(8 if os.environ.get('CI_TEST_GO_LIST_FAIL') else 0)
             if sys.argv[1] == 'build':
                 assert os.environ['CGO_ENABLED'] == '0'
                 assert os.environ['GOOS'] == 'linux' and os.environ['GOARCH'] == 'amd64'
@@ -186,10 +192,26 @@ class CheckScriptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("All required checks passed", result.stdout)
         self.assertEqual(self.events.read_text().splitlines(), [
-            "go test", "go vet", "go build", "npm ci --include=dev --no-audit --no-fund",
+            "go test", "go vet", "go list", "go build", "npm ci --include=dev --no-audit --no-fund",
             "npm run typecheck", "npm test", "npm run build", "npm run format:check",
         ])
         self.assert_api_stopped()
+
+    def test_builtin_smtp_or_process_execution_dependencies_fail_before_build(self):
+        for dependency in ("aster/billing/plugins/smtp", "net/smtp", "os/exec"):
+            with self.subTest(dependency=dependency):
+                if self.events.exists(): self.events.unlink()
+                result = self.run_check(CI_TEST_GO_FORBIDDEN_DEP=dependency)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("core imported SMTP transport or process execution", result.stderr)
+                self.assertEqual(self.events.read_text().splitlines(), ["go test", "go vet", "go list"])
+                self.assertFalse(self.pid_file.exists())
+
+    def test_failed_dependency_inventory_cannot_be_treated_as_empty_clean_result(self):
+        result = self.run_check(CI_TEST_GO_LIST_FAIL="1")
+        self.assertEqual(result.returncode, 8)
+        self.assertEqual(self.events.read_text().splitlines(), ["go test", "go vet", "go list"])
+        self.assertFalse(self.pid_file.exists())
 
     def test_http_failure_preserves_exit_code_and_stops_api(self):
         result = self.run_check(CI_TEST_HTTP_FAIL="1")

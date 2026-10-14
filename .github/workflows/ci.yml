@@ -16,7 +16,7 @@ jobs:
   checks:
     if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +53,7 @@ jobs:
           name: native-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/native-acceptance-evidence/native-acceptance.json
+            ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json
             ${{ runner.temp }}/native-acceptance-evidence/cleanup.json
             ${{ runner.temp }}/native-acceptance-evidence/https-tests.json
             ${{ runner.temp }}/native-acceptance-evidence/restored-https-tests.json

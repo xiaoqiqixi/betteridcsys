@@ -15,6 +15,9 @@ Type=simple
 # The optional private SMTP key uses the ownership/mode specified in INSTALL.md.
 User=aster
 Group=aster
+# Only this socket group is shared with the independent SMTP worker. The worker
+# must never join the aster group that can read API configuration and secrets.
+SupplementaryGroups=aster-plugins
 WorkingDirectory=/opt/aster/current
 EnvironmentFile=/etc/aster/api.env
 ExecStart=/opt/aster/current/bin/aster-api

@@ -1,8 +1,8 @@
-name: Draft prerelease publication
+name: Verified runtime publication
 
 on:
   workflow_run:
-    workflows: ['Release candidate build']
+    workflows: ['Runtime release build']
     types: [completed]
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 # Serializes this repository's publisher. External tag/release writers still
 # require the API rechecks below; this is not a repository-wide lock.
 concurrency:
-  group: draft-prerelease-publication
+  group: verified-runtime-publication
   cancel-in-progress: false
 
 jobs:
@@ -40,7 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py prepare-publish --policy "$RUNNER_TEMP/publish-policy.json" --download "$RUNNER_TEMP/candidate.zip"
-      - name: Verify again and create a new draft prerelease only
+      - name: Verify all bytes, stage new assets, then publish the normal runtime release
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py publish --policy "$RUNNER_TEMP/publish-policy.json" --artifact "$RUNNER_TEMP/candidate.zip"

@@ -11,6 +11,10 @@ export interface EmailSettings {
   username_configured: boolean;
   password_configured: boolean;
   key_configured: boolean;
+  plugin_available: boolean;
+  plugin_status: "not_installed" | "disabled" | "unavailable" | "approved";
+  plugin_version: string;
+  destination_allowed: boolean;
   updated_at: string;
 }
 
@@ -30,6 +34,10 @@ export const defaultEmailSettings: EmailSettings = {
   username_configured: false,
   password_configured: false,
   key_configured: false,
+  plugin_available: false,
+  plugin_status: "not_installed",
+  plugin_version: "",
+  destination_allowed: false,
   updated_at: "0001-01-01T00:00:00Z",
 };
 
@@ -64,8 +72,13 @@ export function readEmailSettings(value: unknown): EmailSettings {
       "username_configured",
       "password_configured",
       "key_configured",
+      "plugin_available",
+      "destination_allowed",
     ].some((key) => typeof item[key] !== "boolean") ||
-    ["host", "from_address", "from_name", "updated_at"].some(
+    !["not_installed", "disabled", "unavailable", "approved"].includes(
+      item.plugin_status as string,
+    ) ||
+    ["host", "from_address", "from_name", "updated_at", "plugin_version"].some(
       (key) => typeof item[key] !== "string",
     )
   )
@@ -75,6 +88,7 @@ export function readEmailSettings(value: unknown): EmailSettings {
     ["from_address", 254],
     ["from_name", 120],
     ["updated_at", 64],
+    ["plugin_version", 32],
   ] as const) {
     const text = item[field] as string;
     if (
@@ -84,6 +98,13 @@ export function readEmailSettings(value: unknown): EmailSettings {
       return invalid();
   }
   if (!Number.isFinite(Date.parse(item.updated_at as string))) return invalid();
+  if (
+    item.plugin_version !== "" &&
+    !/^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/.test(
+      item.plugin_version as string,
+    )
+  )
+    return invalid();
   return {
     revision: item.revision as number,
     enabled: item.enabled as boolean,
@@ -95,6 +116,10 @@ export function readEmailSettings(value: unknown): EmailSettings {
     username_configured: item.username_configured as boolean,
     password_configured: item.password_configured as boolean,
     key_configured: item.key_configured as boolean,
+    plugin_available: item.plugin_available as boolean,
+    plugin_status: item.plugin_status as EmailSettings["plugin_status"],
+    plugin_version: item.plugin_version as string,
+    destination_allowed: item.destination_allowed as boolean,
     updated_at: item.updated_at as string,
   };
 }

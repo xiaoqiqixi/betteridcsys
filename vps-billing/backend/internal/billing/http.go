@@ -2,6 +2,7 @@ package billing
 
 import (
 	"aster/billing/internal/integrations"
+	"aster/billing/internal/runtimeplugins"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -22,6 +23,7 @@ import (
 )
 
 type Config struct {
+	Plugins           *runtimeplugins.Manager
 	SMTPKey           *SMTPCipher
 	Demo              bool
 	Origin            string
@@ -54,6 +56,10 @@ func NewAppWithIntegrations(s Store, c Config, registry *integrations.Registry) 
 	}
 	h, _ := bcrypt.GenerateFromPassword([]byte(ID()), bcrypt.DefaultCost)
 	smtpService := newSMTPService(s, c.SMTPKey)
+	if c.Plugins != nil {
+		smtpService.runtime = c.Plugins
+		smtpService.sender = c.Plugins
+	}
 	return &App{SMTP: smtpService, Integrations: registry.WithManagedEmail(smtpService), Store: s, Config: c, attempts: map[string]bucket{}, dummyHash: h}
 }
 func (a *App) cookieName() string {
@@ -308,6 +314,36 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if p == "/admin/email-settings" || p == "/admin/email-settings/test" {
 		a.emailSettingsHTTP(w, r, u, p == "/admin/email-settings/test")
+		return
+	}
+	if p == "/admin/plugins" || p == "/admin/plugins/check" {
+		if p == "/admin/plugins/check" {
+			if r.Method != "POST" {
+				fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
+				return
+			}
+			var input struct{}
+			if !emailBody(w, r, &input) {
+				return
+			}
+			identity, err := a.Config.Plugins.Check(r.Context())
+			if err != nil {
+				fail(w, r, 503, "PLUGIN_UNAVAILABLE", "插件不可用，请检查安装、启用状态及兼容版本")
+				return
+			}
+			jsonOut(w, 200, identity)
+			return
+		}
+		if r.Method != "GET" {
+			fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
+			return
+		}
+		items, err := a.Config.Plugins.Discover()
+		if err != nil {
+			fail(w, r, 503, "PLUGIN_UNAVAILABLE", "插件不可用，请检查安装、启用状态及兼容版本")
+			return
+		}
+		jsonOut(w, 200, map[string]any{"items": items, "smtp": a.Config.Plugins.State()})
 		return
 	}
 	if strings.HasPrefix(p, "/invoices/") || strings.HasPrefix(p, "/admin/invoices/") {

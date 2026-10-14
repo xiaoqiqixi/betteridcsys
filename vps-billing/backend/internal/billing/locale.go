@@ -43,6 +43,7 @@ func requestLocale(header string) string {
 }
 
 var englishErrors = map[string]string{
+	"PLUGIN_UNAVAILABLE":           "The plugin is unavailable. Check installation, approval and compatible versions.",
 	"INVALID_EMAIL_SETTINGS":       "Check SMTP settings and credentials. Changing the server requires replacing both credentials; clearing requires both credentials and disabling SMTP.",
 	"SMTP_DISABLED":                "Save and enable SMTP settings before sending a test.",
 	"SMTP_KEY_UNAVAILABLE":         "The SMTP encryption key is unavailable. Contact the server administrator.",

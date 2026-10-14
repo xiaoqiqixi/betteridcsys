@@ -21,7 +21,7 @@ MySQL 必须确认为 8.4 LTS；软件列表可选版本不等于现有实例已
 
 ## 2. 构建与上传前端、后端
 
-优先使用同一 Release 的 Linux amd64 包、源码包、`BUILD.json` 和 `SHA256SUMS`，按 [安装手册](INSTALL.md) 核验来源及校验和。Linux 包已经包含 `bin/aster-api` 和完整 `web/`，服务器无需安装 Go/Node.js。
+优先使用同一 Release 的 Core Linux amd64 包、`BUILD.json`、`PROVENANCE.json` 和 `SHA256SUMS`，按 [安装手册](INSTALL.md) 核验来源及校验和。Core 包已经包含 `bin/aster-api`、`bin/aster-plugin-host` 和完整 `web/`，服务器无需安装 Go/Node.js。
 
 需要自行构建时，在独立构建环境检出同一已审查提交，使用该版本 `BUILD.json` 指定的工具链；当前验证工具链为 Go 1.27.2、Node.js 24.19.0。正式归档使用 [发布脚本](RELEASE.md)，前端单独检查步骤为：
 
@@ -39,10 +39,13 @@ npm run build
 
 ```text
 /opt/aster/releases/VERSION/bin/aster-api
+/opt/aster/releases/VERSION/bin/aster-plugin-host
 /opt/aster/releases/VERSION/web/index.html
 /opt/aster/releases/VERSION/web/assets/
 /opt/aster/current -> /opt/aster/releases/VERSION
+/opt/aster/plugins/email.smtp/PLUGIN_VERSION/
 /etc/aster/api.env
+/etc/aster/plugins.json
 /etc/aster/secrets/
 ```
 
@@ -52,9 +55,11 @@ npm run build
 
 复用已核实的 MySQL 实例，为应用建立独立 utf8mb4 数据库及运行、迁移、备份身份，具体 SQL 与权限见 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)。面板自动创建的数据库用户可能拥有本库完整权限，不能直接当作 API 运行身份；运行账号只保留 SELECT、INSERT、UPDATE、DELETE，迁移凭据不交给 API。不要为此修改数据库 root 密码或开放远程访问。
 
-按安装手册创建 `aster` 系统账号、受限秘密文件和 `/etc/aster/api.env`，设置真实 HTTPS `APP_ORIGIN`、`LISTEN_ADDR=127.0.0.1:18080`，保留禁用支付，SMTP 默认关闭；需要管理员测试发信时，按 [安装手册](INSTALL.md#可选smtp-加密密钥)准备专用密钥，再按 [插件说明](PLUGINS.md#官方-smtp-配置与测试)配置。本机 Unix socket 需显式设置 `MYSQL_ALLOW_INSECURE=true`；这只适用于已核实路径和权限的本地 socket，不能扩展到 TCP 明文连接。
+按安装手册创建 `aster` 系统账号、受限秘密文件和 `/etc/aster/api.env`，设置真实 HTTPS `APP_ORIGIN`、`LISTEN_ADDR=127.0.0.1:18080`，保留禁用支付，SMTP 默认关闭；需要管理员测试发信时，按 [安装手册](INSTALL.md#可选smtp-加密密钥)准备专用密钥，再从独立 SMTP Release 按 [插件说明](PLUGINS.md)安装、选择、批准目的地、启用 systemd 服务并保存后台设置。本机 Unix socket 需显式设置 `MYSQL_ALLOW_INSECURE=true`；这只适用于已核实路径和权限的本地 socket，不能扩展到 TCP 明文连接。
 
-使用包内 `deploy/systemd/aster-api.service`，按实际 MySQL service 名称调整启动顺序。执行迁移及管理员引导后再启动 API，完整命令见 [安装手册第 3–4 节](INSTALL.md#3-迁移与管理员)。API 仅由 systemd 管理，不再添加面板进程守护、定时重启或另一份后台启动命令。
+使用包内 `deploy/systemd/aster-api.service`，按实际 MySQL service 名称调整启动顺序。执行迁移及管理员引导后再启动 API，完整命令见 [安装手册第 3–4 节](INSTALL.md#3-迁移与管理员)。API 仅由 systemd 管理，不再添加面板进程守护、定时重启或另一份后台启动命令。独立 SMTP 同样只由 `aster-smtp.service` 管理，不能由面板 Web 账号运行；创建 `aster-plugins` 组、API 附加组和不同的 `aster-smtp` UID，按插件手册保留全部加固。`/etc/aster` 为 root:root 0755 供 worker 读非秘密策略，其下 API 环境、secrets 和加密密钥保留受限权限。
+
+SMTP 模板隐藏标准 `/run/mysqld` 和 `/var/lib/mysql`，宝塔实际 socket/数据目录可能不同。审核真实路径后在 **SMTP unit** 专用 drop-in 添加 `InaccessiblePaths=/actual/mysql.sock /actual/mysql-data`（替换为确认的真实路径），保留已有隐藏路径与加固；若 socket 路径由数据库重启替换也需复核。用 worker 身份和实际 service namespace 验证不可达，不能因模板有两个默认路径就声称面板数据库已隔离。该步骤不影响 API 自己所需的数据库连接。
 
 **socket 在 `/tmp` 时的兼容处理：** unit 保留 `PrivateTmp=true`，因此 API 看不到主机的普通 `/tmp`。不要关闭隔离。确认真实 socket 的属主、权限和所有祖先目录后，可以在 `aster-api.service` 的专用 drop-in 中只映射该 socket：
 
@@ -176,4 +181,6 @@ curl --fail --show-error --head https://billing.example.com/
 
 若数据库未变化且旧版本兼容，可停服务后切回旧目录。迁移已提交时，不能只切回二进制或手改迁移记录；优先向前修复，必要时按 [备份恢复](BACKUP_RECOVERY.md) 恢复到隔离空库、核对数据并停写切换 DSN。面板“网站备份”不能代替数据库一致性、账号/秘密恢复或实际恢复演练；本项目备份脚本需使用与实例兼容的 MySQL 客户端及实际 socket。
 
-原生 CI 已覆盖加固服务、私有测试 CA 的 HTTPS、API 重启、同 schema A→B→A 和同实例空库恢复。宝塔面板操作、公共 CA 续期、数据库进程/整机重启、独立实例灾备与生产容量仍需按部署环境分别验证，不能由一次 CI 成功推导。
+SMTP 单独更新不上传新前端、不切换 `/opt/aster/current`，只安装独立兼容版本、按 revision 更新策略并重启 SMTP 服务，Core 文件和进程保持原样。失败按 [插件回退](PLUGINS.md#3-独立更新与回退)选择已有旧版本；不要删除凭据、重生成密钥或打开插件原始日志排障。
+
+原生 CI 的历史基线已覆盖加固服务、私有测试 CA 的 HTTPS、API 重启、同 schema A→B→A 和同实例空库恢复。宝塔面板操作、公共 CA 续期、数据库进程/整机重启、独立实例灾备与生产容量仍需按部署环境分别验证，不能由一次 CI 成功推导。
