@@ -6,28 +6,53 @@ verification is disabled; proxy environment variables are never used.
 """
 import argparse
 import http.client
+from http.cookies import SimpleCookie
 import importlib.util
 import json
 import os
 from pathlib import Path
 import ssl
+import socket
 import sys
 import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+
+
+def loopback_https_request(port, context, path, *, source="127.0.0.1", method="GET", headers=None, body=None):
+    """Use a real bound loopback peer, verified localhost TLS and no proxies/redirects."""
+    if source not in ("127.0.0.1", "127.0.0.2", "127.0.0.3"):
+        raise ValueError("Only acceptance fixture loopback sources are permitted")
+    if not 1024 <= port <= 65535:
+        raise ValueError("An unprivileged localhost port is required")
+    if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+        raise ValueError("Verified TLS and hostname checking are required")
+    connection = http.client.HTTPSConnection(
+        "localhost", port, timeout=10, context=context, source_address=(source, 0)
+    )
+    try:
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        return response.status, response.read(), response.headers
+    finally:
+        connection.close()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", required=True)
     parser.add_argument("--port", required=True, type=int)
+    parser.add_argument("--http-port", required=True, type=int)
     parser.add_argument("--ca", required=True)
     parser.add_argument("--accounts", required=True)
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
-    if not 1024 <= args.port <= 65535:
+    if not all(1024 <= port <= 65535 for port in (args.port, args.http_port)):
         parser.error("Only an explicit unprivileged localhost port is accepted")
+    if args.port == args.http_port:
+        parser.error("The HTTP and HTTPS fixture ports must be different")
     origin = f"https://localhost:{args.port}"
     accounts = json.loads(Path(args.accounts).read_text())
     for key, role in (("CUSTOMER", "customer"), ("SECOND", "second"), ("ADMIN", "admin")):
@@ -57,12 +82,92 @@ def main():
             # The real shipped nginx template closes invalid Host requests with
             # 444 before they reach the application's 421 response.
             try:
-                status, _, _ = self.client.request(
-                    "/api/v1/session", headers={"Host": "attacker.invalid"}
+                status, _, _ = loopback_https_request(
+                    args.port, context, "/api/v1/session", headers={"Host": "attacker.invalid"}
                 )
-            except (http.client.RemoteDisconnected, urllib.error.URLError):
+            except http.client.RemoteDisconnected:
                 return
             self.assertIn(status, (400, 403, 421, 444))
+
+        def test_http_fixed_redirect_and_unknown_host(self):
+            path = "/settings?acceptance=redirect"
+            for host in (f"localhost:{args.http_port}", "attacker.invalid"):
+                with self.subTest(host=host):
+                    connection = http.client.HTTPConnection("127.0.0.1", args.http_port, timeout=5)
+                    try:
+                        connection.request("GET", path, headers={"Host": host})
+                        try:
+                            response = connection.getresponse()
+                        except http.client.RemoteDisconnected:
+                            self.assertEqual(host, "attacker.invalid")
+                            continue
+                        response.read()
+                        if host == "attacker.invalid":
+                            self.assertIn(response.status, (400, 403, 421, 444))
+                            self.assertIsNone(response.getheader("Location"))
+                        else:
+                            self.assertEqual(response.status, 308)
+                            self.assertEqual(response.getheader("Location"), origin + path)
+                    finally:
+                        connection.close()
+
+        def test_unknown_sni_rejected_during_handshake(self):
+            with socket.create_connection(("127.0.0.1", args.port), timeout=5) as connection:
+                try:
+                    with context.wrap_socket(connection, server_hostname="unknown.native-ci.invalid"):
+                        self.fail("Nginx accepted an unknown SNI hostname")
+                except ssl.SSLCertVerificationError:
+                    self.fail("Unknown SNI reached certificate verification instead of being rejected by nginx")
+                except ssl.SSLError as error:
+                    self.assertTrue(
+                        "UNRECOGNIZED_NAME" in error.reason or "HANDSHAKE_FAILURE" in error.reason,
+                        "Unknown SNI failed without the expected server handshake rejection",
+                    )
+
+        def test_forwarded_headers_cannot_bypass_independent_client_limit(self):
+            # Each attempt uses a fresh unknown email, isolating the IP limiter
+            # from the separate per-email limiter. Both peers use genuine
+            # session cookies/CSRF tokens obtained through verified HTTPS.
+            sessions = {}
+            for peer in ("127.0.0.2", "127.0.0.3"):
+                status, raw, headers = loopback_https_request(args.port, context, "/api/v1/session", source=peer)
+                self.assertEqual(status, 200)
+                cookie = SimpleCookie()
+                for value in headers.get_all("Set-Cookie", []):
+                    cookie.load(value)
+                self.assertTrue(cookie)
+                sessions[peer] = {
+                    "Cookie": "; ".join(f"{key}={value.value}" for key, value in cookie.items()),
+                    "X-CSRF-Token": json.loads(raw)["data"]["csrf_token"],
+                    "Origin": origin, "Content-Type": "application/json",
+                }
+
+            def rejected_login(peer, expected_status, forwarded=None):
+                headers = dict(sessions[peer])
+                headers.update(forwarded or {})
+                body = json.dumps({
+                    "email": f"missing-{uuid.uuid4().hex}@native-ci.invalid",
+                    "password": "SyntheticUnknownAccount2026!",
+                }).encode()
+                status, raw, response_headers = loopback_https_request(
+                    args.port, context, "/api/v1/auth/login", source=peer,
+                    method="POST", headers=headers, body=body,
+                )
+                self.assertEqual(status, expected_status)
+                self.assertEqual(json.loads(raw)["error"]["code"],
+                                 "RATE_LIMITED" if expected_status == 429 else "INVALID_CREDENTIALS")
+                if expected_status == 429:
+                    self.assertEqual(response_headers.get("Retry-After"), "900")
+
+            for attempt in range(20):
+                with self.subTest(peer="127.0.0.2", attempt=attempt + 1):
+                    rejected_login("127.0.0.2", 401)
+            rejected_login("127.0.0.2", 429)
+            rejected_login("127.0.0.3", 401)
+            for forged in ({"X-Real-IP": "127.0.0.3"}, {"X-Forwarded-For": "127.0.0.3"},
+                           {"X-Real-IP": "192.0.2.123", "X-Forwarded-For": "192.0.2.123, 127.0.0.3"}):
+                with self.subTest(forged=forged):
+                    rejected_login("127.0.0.2", 429, forged)
 
         def test_production_cookie_and_origin(self):
             session, headers = self.client.session()

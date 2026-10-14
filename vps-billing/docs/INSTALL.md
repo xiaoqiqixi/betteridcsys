@@ -1,14 +1,43 @@
-# 单服务器原生 Linux 安装与验收
+# Ubuntu 24.04 原生单机安装
 
-本文是修订后原生 Linux amd64 安装方案的审查检查点，**尚未在目标服务器安装或验收**。部署目标是一台服务器上的 Nginx、systemd API 和 MySQL；高可用后续单独评估。历史 `0.3.0-rc.1` 保留原样，其旧部署验证不能当作本方案已通过。修订包经审查验证后才能进入 [发布门禁](RELEASE.md)。支付、邮件、退款、VPS 开通均未接入；运行时 `production` 表示持久化及严格配置检查，不代表生产认证。
+本手册说明在一台 Ubuntu 24.04 / amd64 服务器上安装 Nginx、systemd API 与 MySQL 8.4。核心原生服务、HTTPS、权限、API 重启、同 schema 版本切换和备份恢复已在一次性 Ubuntu runner 实测通过，准确提交与范围见 [原生验证记录](NATIVE_CHECKPOINT.md)。支付、邮件、退款、VPS 开通均未接入；`production` 表示持久化及严格配置检查，不代表生产认证。新候选须满足 [发布门禁](RELEASE.md)，历史 `0.3.0-rc.1` 保持原样。
 
 ## 前置确认
 
-先确认发行版与版本、CPU 架构、内存/磁盘容量，以及服务器是否空机。当前包目标为 Linux `x86_64/amd64`，不是 arm64；不能据此推定用户服务器架构或容量。数据库、Nginx、systemd、CA 证书和时区资料应来自经审查的系统软件源，实际安装步骤须在发行版确定后制定。本文不提供自动安装器，不修改软件源，不生成真实秘密，也不设定未经负载测试的容量承诺。
+本手册目标为 **Ubuntu Server 24.04 LTS / amd64**，使用 systemd、Nginx 和 MySQL 8.4 LTS；原生自动化也以该发行版为测试环境，实际结果见 [原生验证记录](NATIVE_CHECKPOINT.md)。开始前确认 CPU、内存/磁盘容量和已有服务；其他发行版或 arm64 不能直接套用。本项目未完成容量基准测试，不据示例配置承诺并发量。
 
 原生包提供静态 Go API、编译网页、文档和配置样例，运行 API 不需要 Go 或 Node.js 工具链。单机路径为：浏览器 HTTPS → Nginx → `127.0.0.1:18080` API → 本机 MySQL Unix socket。只有经批准的 HTTPS 和管理入口对外开放；API 和数据库均不公开监听。当前源码与 CI 只提供原生运行路径；测试用临时数据库不代表目标服务器已完成安装。
 
-本轮没有连接目标服务器或设置 DNS、证书、防火墙、开机启动。以下命令是待审查的操作模板，只由获授权管理员在确认目标后执行；先替换域名、路径、数据库名和账号。保留服务器已有服务与数据，不把非空服务器当作全新安装处理。
+以下 Bash 命令供管理员在确认目标后执行；先替换域名、路径、数据库名和账号。自动化验证没有连接外部服务器，也不设置其 DNS、公共证书、防火墙或开机启动。保留服务器已有服务与数据，不把非空服务器当作全新安装处理。
+
+### Ubuntu 基础组件
+
+在全新、已获准安装软件的主机上，先核对系统与监听服务，再安装 Ubuntu 签名源中的基础工具：
+
+```sh
+cat /etc/os-release
+uname -m
+free -h
+df -h / /var
+sudo ss -ltnp
+sudo apt-get update
+sudo apt-get install --no-install-recommends nginx ca-certificates openssl python3
+```
+
+Ubuntu 的 Nginx 软件包可能随安装启动默认站点；先保留管理入口、防火墙和已有站点，再配置本应用。站点管理方式参照 [Ubuntu Nginx 指引](https://ubuntu.com/server/docs/how-to/web-services/install-nginx/)。
+
+MySQL 必须明确选择 **8.4 LTS**，本轮原生夹具固定 `8.4.11`。按 [Oracle 官方 APT 指引](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/) 获取并验证对应仓库配置包，在配置菜单选择 8.4 LTS；已有 MySQL/MariaDB/Percona 主机须先做独立迁移计划，不执行全新安装流程。不要关闭 APT 签名校验或把其他数据库系列当作等价替代。仓库配置完成后：
+
+```sh
+sudo apt-get update
+apt-cache policy mysql-server mysql-community-server
+# 确认候选来自已审核的 Oracle 8.4 LTS 源后才安装。
+sudo apt-get install mysql-server
+mysql --version
+sudo systemctl status mysql --no-pager
+```
+
+APT 安装 MySQL 会初始化并启动其系统服务；这与 CI 仅提取官方 DEB 到临时目录的机制不同。记录实际补丁版本，版本变化需重新运行相关回归。系统软件安装步骤不应在旧数据库主机上被当作无影响操作。
 
 ## 1. 核对来源与归档
 
@@ -40,9 +69,50 @@ tar -tzf aster-VERSION-linux-amd64.tar.gz
 
 `/opt/aster/releases/VERSION` 及 `current` 链接由 root 管理，API 只有读/执行权限；不要将它们归给 `aster`。API 无需可写应用状态目录，持久数据存入 MySQL，服务日志进入 journal。Nginx 的网页根目录只指向 `current/web`，不要暴露整个发布目录、配置、源码或依赖清单。
 
+全新安装时，在已验证且以普通用户解压的目录上执行以下模板。`VERSION` 和输入路径须替换；已有 `aster` 身份、`current` 链接或同名发布目录时停止，转入 [升级流程](UPGRADE.md)，不要覆盖：
+
+```sh
+set -euo pipefail
+aster_version=VERSION
+aster_input=/path/to/unpacked/aster-VERSION-linux-amd64
+[[ $aster_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+[[ -f $aster_input/bin/aster-api && -d $aster_input/web ]]
+if getent passwd aster >/dev/null || getent group aster >/dev/null; then
+  echo 'aster identity already exists; inspect the installation before continuing.' >&2
+  exit 1
+fi
+[[ ! -e /opt/aster/current && ! -L /opt/aster/current ]]
+[[ ! -e /opt/aster/releases/$aster_version ]]
+sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin aster
+sudo install -d -o root -g root -m 0755 /opt/aster/releases
+sudo install -d -o root -g root -m 0755 "/opt/aster/releases/$aster_version"
+sudo cp -R "$aster_input/." "/opt/aster/releases/$aster_version/"
+sudo chown -R root:root "/opt/aster/releases/$aster_version"
+sudo find "/opt/aster/releases/$aster_version" -type d -exec chmod 0755 '{}' +
+sudo find "/opt/aster/releases/$aster_version" -type f -exec chmod 0644 '{}' +
+sudo chmod 0755 "/opt/aster/releases/$aster_version/bin/aster-api" "/opt/aster/releases/$aster_version/deploy/scripts/backup-native.sh"
+sudo ln -s "/opt/aster/releases/$aster_version" /opt/aster/current
+sudo install -d -o root -g aster -m 0750 /etc/aster /etc/aster/secrets
+```
+
 ## 2. 数据库与秘密
 
 同机原生安装使用 MySQL 8.4 与独立 utf8mb4 数据库。由数据库管理员审查已有实例、数据目录及用户后建立身份：迁移身份仅用于本库迁移所需 DDL/DML；API 运行身份只授予本库 SELECT、INSERT、UPDATE、DELETE；备份身份按实际工具要求单独审查。不给 API root、GRANT、FILE 或跨库权限，迁移不随每次服务启动自动执行。
+
+专用单机可以在已确认加载的 MySQL `[mysqld]` 配置中设置 `skip-networking=ON`，并用 `mysqlx=0` 关闭未使用的 X Plugin，保留 Unix socket。不要对共享数据库直接套用；配置变更须在维护窗口验证并重启 MySQL。X Plugin 的关闭方式见 [MySQL 官方说明](https://dev.mysql.com/doc/refman/8.4/en/x-plugin-disabling.html)。随后确认 3306/33060 未公开监听，并通过 socket 查询实际 `VERSION()`、`@@socket` 和 `@@datadir`。
+
+通过受控的数据库管理会话先创建三个仅允许 `localhost` 的专用账号，再为全新安装创建数据库并授权。账号密码通过秘密管理途径设置，下面的 SQL 不含密码：
+
+```sql
+CREATE DATABASE aster CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+GRANT SELECT, INSERT, UPDATE, DELETE ON aster.* TO 'aster_runtime'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
+  ON aster.* TO 'aster_migrator'@'localhost';
+GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON aster.* TO 'aster_backup'@'localhost';
+GRANT SHOW_ROUTINE ON *.* TO 'aster_backup'@'localhost';
+```
+
+数据库必须尚不存在，账号必须已由管理员创建；既有对象按升级流程处理。迁移与备份身份不得有 `GRANT OPTION`，不能把全局管理权限交给 API。备份元数据权限的用途和限制详见 [备份恢复](BACKUP_RECOVERY.md)。
 
 首选本机 Unix socket；先确认实际 socket 路径、目录权限和服务隔离规则，确保 `aster` 能连接该 socket，但无权读取数据库数据文件。DSN 结构示意为 `DB_USER:SECRET@unix(/run/mysqld/mysqld.sock)/aster?parseTime=true`；路径和占位符必须替换，真实值只写入受限文件。不要把这一示意串直接当作可用凭据。
 
@@ -50,7 +120,7 @@ tar -tzf aster-VERSION-linux-amd64.tar.gz
 
 若之后改成 TCP/跨主机数据库，应单独审查拓扑，将 `MYSQL_ALLOW_INSECURE=false`，使用 `tls=true`、证书匹配主机名和可信 CA，禁止 `skip-verify`、`preferred`、`allowFallbackToPlaintext=true`。本轮不实施远程数据库方案；也不通过关闭 SELinux/AppArmor 或放宽到任意来源来解决权限错误。
 
-创建无登录权限的专用 `aster` 系统身份。应用目录由管理员所有，运行身份只有读取和执行权限。由批准的秘密管理工具提供：
+使用上一步建立的无登录权限 `aster` 系统身份。应用目录由管理员所有，运行身份只有读取和执行权限。由批准的秘密管理工具提供：
 
 - 独立随机会话秘密（至少 32 字节，不使用示例值）；放入 `/etc/aster/secrets/session_secret`。
 - 运行 DSN：`/etc/aster/secrets/mysql_runtime_dsn`。
@@ -60,6 +130,13 @@ tar -tzf aster-VERSION-linux-amd64.tar.gz
 `/etc/aster/secrets` 使用 `root:aster`、0750，运行秘密文件使用 `root:aster`、0640；用 `sudo -u aster test -r 文件路径` 验证可读，且确认 `aster` 无权修改文件。迁移/备份秘密由对应操作身份保管，运行账号不得读取。秘密的备份、轮换和销毁独立于版本归档管理。
 
 审查并复制 `deploy/systemd/api.env.example` 到 `/etc/aster/api.env`，所有者 `root:aster`、权限 0640。配置精确 HTTPS `APP_ORIGIN`、回环监听地址、可信代理和文件引用，不放秘密值。Origin 使用规范小写 ASCII 主机名，无路径、尾斜杠、查询或片段，默认 443 端口省略；必须与浏览器实际来源一致。后台“展示地址”不会修改 `APP_ORIGIN`、DNS、TLS、监听地址或可信代理范围。不要把 systemd 环境文件作为 shell 脚本 `source` 执行。
+
+```sh
+sudo install -o root -g aster -m 0640 /opt/aster/current/deploy/systemd/api.env.example /etc/aster/api.env
+sudoedit /etc/aster/api.env
+```
+
+设置真实 `APP_ORIGIN`，本机 socket 模式明确改成 `MYSQL_ALLOW_INSECURE=true`。通过秘密管理工具分别落盘 `session_secret`、`mysql_runtime_dsn` 后，核对权限，不在终端打印内容。迁移及引导密码文件放在 `/etc/aster/secrets` 之外的私密运维目录。
 
 ## 3. 迁移与管理员
 
@@ -93,6 +170,8 @@ env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
 审查 `deploy/systemd/aster-api.service` 后，按目标发行版安装到 `/etc/systemd/system/`。它假定 `/opt/aster/current` 已指向本版本、`aster` 用户存在、配置及 socket 可访问。确认本机 MySQL 的实际 service 名称、启动次序和失败恢复方式；模板不能保证每个发行版的依赖命名一致。API 只监听 `127.0.0.1:18080`，systemd 不执行迁移或备份。
 
 ```sh
+sudo install -o root -g root -m 0644 /opt/aster/current/deploy/systemd/aster-api.service /etc/systemd/system/aster-api.service
+sudo systemd-analyze verify /etc/systemd/system/aster-api.service
 sudo systemctl daemon-reload
 sudo systemctl start aster-api
 sudo systemctl status aster-api --no-pager
@@ -102,7 +181,19 @@ sudo systemctl status aster-api --no-pager
 
 在 Nginx `http {}` 中引入经过修改的 `deploy/nginx.native.conf`。替换域名、证书路径，检查 Nginx 版本支持模板指令，并审查与已有默认站点/监听端口的冲突；不要覆盖同机其他业务。执行 `nginx -t` 后才 reload。模板由 Nginx 直接终止 TLS，用实际 socket 对端的 `$remote_addr` 覆盖客户端 IP 头；若已有全局 real_ip 配置，先审查其是否会改写此值。API 只信任 Nginx 的精确回环来源。增加 CDN/前置代理时必须重新审查完整信任链，不能直接信任浏览器的转发头。
 
-先验证证书链、SNI、续期监控，再开放公众流量。生产模式 API 已发送 `Strict-Transport-Security: max-age=31536000`；需结合静态站点制定一致的 HSTS 政策，不要误以为 Nginx 没写 HSTS 就完全没有该响应头。不要用 `curl -k` 的成功结果验收证书，也不要以测试关闭浏览器安全设置。systemd 与原生 nginx 文件是待目标环境验证的样例，不是自动部署工具。
+Ubuntu 的标准配置会在 `http {}` 中加载 `sites-enabled`。确认本应用使用独立、未占用的文件名后：
+
+```sh
+sudo install -o root -g root -m 0644 /opt/aster/current/deploy/nginx.native.conf /etc/nginx/sites-available/aster.conf
+sudoedit /etc/nginx/sites-available/aster.conf
+sudo ln -s /etc/nginx/sites-available/aster.conf /etc/nginx/sites-enabled/aster.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+模板声明 80/443 默认站点；若发行版欢迎页也占用默认站点，先核对它没有承载其他业务，再停用其 `sites-enabled` 链接。真实域名及公共 CA 证书由该部署环境提供，模板不会申请证书或配置 DNS；证书路径必须存在且私钥权限受控。隔离验收使用临时私有 CA 与 localhost，只能证明该测试信任链下的 TLS 校验，不等于公共 CA 签发、真实 DNS 或续期已完成。
+
+先验证证书链、SNI、续期监控，再开放公众流量。生产模式 API 已发送 `Strict-Transport-Security: max-age=31536000`；需结合静态站点制定一致的 HSTS 政策，不要误以为 Nginx 没写 HSTS 就完全没有该响应头。不要用 `curl -k` 的成功结果验收证书，也不要以测试关闭浏览器安全设置。systemd 与 Nginx 文件需按目标路径、域名、证书和既有站点调整；它们不会自动安装服务器或申请证书。
 
 ## 5. 初次验收与站点配置
 
@@ -115,4 +206,4 @@ curl --fail --show-error https://billing.example.com/readyz
 
 至少用两个测试客户验证资源隔离、管理员专属入口、订单幂等、币种不匹配和支付失败关闭。新订单只生成待付款账单；没有任何真实扣款或 VPS 开通。完整验收见 [ACCEPTANCE.md](ACCEPTANCE.md)，实际运行证据见 [VALIDATION.md](VALIDATION.md)。
 
-最后记录本机 socket 与数据库权限、systemd 启动/停止/授权重启、Nginx Host/Origin/TLS、磁盘与日志权限，以及一次原生备份和隔离恢复的实测结果。在这些步骤尚未完成或发行版信息尚未确定时，保持此审查检查点，不宣称安装完毕。日常运维见 [OPERATIONS.md](OPERATIONS.md)。
+为本次安装留存发布提交/哈希、实际 MySQL 版本及 socket、账号权限、服务状态、证书链和恢复演练记录。整机重启、公共 CA 证书续期、独立实例或离机恢复分别安排验证，不能由 CI 的 API 重启及同实例空库恢复推定。日常运维见 [OPERATIONS.md](OPERATIONS.md)。

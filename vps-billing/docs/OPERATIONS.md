@@ -1,8 +1,8 @@
 # 单服务器原生 Linux 运维手册
 
-当前部署目标为同一台 Linux 服务器上的 Nginx、systemd API 和 MySQL，高可用暂缓。本文是修订安装包的操作审查稿，不表示已经连接、安装或重启用户服务器。目标发行版/版本、架构、资源和现有服务须先确认；原生 systemd、开机启动、真实 TLS 和原生备份恢复尚需目标环境验收。历史记录及旧 `0.3.0-rc.1` 产物保留，不覆盖，也不作为这些原生验收的替代。
+部署基线为 Ubuntu 24.04 / amd64，同一台服务器运行 Nginx、systemd API 和 MySQL 8.4 LTS。高可用暂缓。原生自动化的实际结果见 [原生验证记录](NATIVE_CHECKPOINT.md)；外部主机的资源、已有服务、真实域名、公共 CA 证书、开机恢复及运维计划需与该环境匹配。历史 `0.3.0-rc.1` 产物保持原提交和哈希。
 
-初次安装见 [INSTALL.md](INSTALL.md)，升级回滚见 [UPGRADE.md](UPGRADE.md)，备份恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)，站点与计价见 [SITE_SETTINGS.md](SITE_SETTINGS.md)。本轮实际证据见 [VALIDATION.md](VALIDATION.md)，最终放行见 [RELEASE.md](RELEASE.md)。以下为获授权管理员的操作模板，本轮未在目标主机执行。
+初次安装见 [INSTALL.md](INSTALL.md)，升级回滚见 [UPGRADE.md](UPGRADE.md)，备份恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)，站点与计价见 [SITE_SETTINGS.md](SITE_SETTINGS.md)。本轮实际证据见 [VALIDATION.md](VALIDATION.md)，最终放行见 [RELEASE.md](RELEASE.md)。以下步骤供管理已安装的原生实例使用，不会由应用或 CI 自动在外部服务器执行。
 
 ## 1. 组件与边界
 
@@ -88,4 +88,4 @@ RPO/RTO 应由业务可接受的数据损失和恢复时间确定并实测。历
 
 支付和邮件是经过代码审查的编译期适配器，继续设置 `payment.disabled` / `email.disabled`。未知 provider ID 拒绝启动，不自动下载插件。新增适配器需重建并测试，审查服务商凭据、外部出口、TLS、超时、重试、结算幂等和审计；详见 [PLUGINS.md](PLUGINS.md)。主机网络出口策略须单独设计，不能因默认适配器禁用就宣称已配置出口防火墙。
 
-高可用、多服务器数据库、队列消费者、真实 VPS 开通、结算账务和邮件交付均是后续范围。本轮保持单服务器原生方案和可审查检查点，不自动扩展基础设施或付费能力。
+高可用、多服务器数据库、队列消费者、真实 VPS 开通、结算账务和邮件交付均是后续范围。当前版本保持单服务器原生方案，不自动扩展基础设施或付费能力。

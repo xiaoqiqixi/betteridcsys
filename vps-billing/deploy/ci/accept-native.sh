@@ -106,13 +106,15 @@ cleanup() {
     if getent passwd "$user" >/dev/null || getent group "$user" >/dev/null; then cleanup_failed=true; fi
   done
   for path in "${created_paths[@]}"; do [[ ! -e $path ]] || cleanup_failed=true; done
+  rm -rf -- "$scratch" || cleanup_failed=true
   result=$test_result
   [[ $cleanup_failed == false ]] || result=1
   if [[ -d $evidence ]]; then
     printf '{"test_exit_code":%s,"exit_code":%s,"owned_resources_removed":%s}\n' "$test_result" "$result" "$([[ $cleanup_failed == false ]] && echo true || echo false)" > "$evidence/cleanup.json"
+    printf 'NATIVE_CLEANUP_JSON=%s\n' "$(cat -- "$evidence/cleanup.json")"
   fi
+  if [[ $test_result != 0 && -f $evidence/failure-unit-status.txt ]]; then cat -- "$evidence/failure-unit-status.txt"; fi
   [[ $cleanup_failed == false ]] || printf 'FAIL: owned native acceptance resources could not all be cleaned; inspect cleanup.json and the isolated runner.\n' >&2
-  rm -rf -- "$scratch"
   exit "$result"
 }
 trap cleanup EXIT
@@ -174,6 +176,7 @@ for role in ('runtime','migrator','backup','restore','restore_runtime'):
     lines += [f"CREATE USER '{user}'@'localhost' IDENTIFIED BY '{values[role]}';"]
     target = restored if role in ('restore','restore_runtime') else database
     privileges = 'SELECT,INSERT,UPDATE,DELETE' if role in ('runtime','restore_runtime') else 'ALL PRIVILEGES'
+    if role == 'migrator': privileges = 'SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,INDEX,REFERENCES'
     if role == 'backup': privileges = 'SELECT,SHOW VIEW,TRIGGER,EVENT'
     lines += [f"GRANT {privileges} ON `{target}`.* TO '{user}'@'localhost';"]
     if role == 'backup': lines += [f"GRANT SHOW_ROUTINE ON *.* TO '{user}'@'localhost';"]
@@ -298,7 +301,7 @@ sudo -n -u "$api_user" test -r "$config/secrets/session"
 if sudo -n -u "$api_user" test -w "$opt/current/bin/aster-api" || sudo -n -u "$api_user" test -w "$config/secrets/session" || sudo -n -u "$api_user" test -r "$scratch/migrator.dsn"; then fail 'Runtime OS identity can modify releases/secrets or read migration credentials.'; fi
 actual_pid=$(sudo -n systemctl show "$api_unit" -p MainPID --value)
 [[ $(ps -o user= -p "$actual_pid" | xargs) == "$api_user" ]] || fail 'API did not run as its dedicated non-root account.'
-python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --report "$evidence/https-tests.json"
+python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --report "$evidence/https-tests.json"
 
 step 'API restart and same-schema versioned symlink upgrade/rollback'
 count_before=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM orders')
@@ -317,13 +320,21 @@ done
 step 'Real native logical backup, isolated empty-database restore and data comparison'
 sudo -n systemctl stop "$api_unit"
 mkdir -m 700 "$scratch/backups"
+monotonic_ns() { python3 -c 'import time; print(time.monotonic_ns())'; }
+backup_started=$(monotonic_ns)
 PATH="$mysql_root/bin:$PATH" bash "$project/deploy/scripts/backup-native.sh" --client-config "$scratch/backup.cnf" --socket "$mysql_socket" --database "$db" --output-dir "$scratch/backups" > "$scratch/backup.log"
 mapfile -t archives < <(find "$scratch/backups" -type f -name database.sql.gz)
 [[ ${#archives[@]} == 1 ]] || fail 'Backup did not publish exactly one complete archive.'
 backup_dir=$(dirname -- "${archives[0]}")
 (cd "$backup_dir" && sha256sum --check --status SHA256SUMS && gzip -t database.sql.gz)
+backup_finished=$(monotonic_ns)
 [[ $("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()') == 0 ]] || fail 'Restore target is not empty.'
+restore_started=$(monotonic_ns)
 gzip -dc "${archives[0]}" | "$mysql_root/bin/mysql" "--defaults-file=$scratch/restore.cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" "$restored" > "$scratch/restore.log" 2>&1
+restore_finished=$(monotonic_ns)
+source_tables=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
+restored_tables=$("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
+[[ $source_tables =~ ^[0-9]+$ && $source_tables -gt 0 && $restored_tables == "$source_tables" ]] || fail 'Restored table count does not match the nonempty source schema.'
 for target in "$db" "$restored"; do
   "$mysql_root/bin/mysqldump" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --single-transaction --no-tablespaces --set-gtid-purged=OFF --no-create-info --skip-comments --compact --skip-extended-insert --order-by-primary --skip-triggers "$target" 2> "$scratch/compare.log" | sha256sum | cut -d' ' -f1 > "$scratch/$target.sha256"
 done
@@ -331,24 +342,30 @@ cmp "$scratch/$db.sha256" "$scratch/$restored.sha256" || fail 'Restored table da
 sudo -n install -o root -g "$api_user" -m 640 "$scratch/restore_runtime.service.dsn" "$config/secrets/runtime.service.dsn"
 sudo -n systemctl start "$api_unit"
 wait_ready
-python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --report "$evidence/restored-https-tests.json"
-python3 - "$evidence" "$source_root" "$count_before" <<'PY'
+python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --report "$evidence/restored-https-tests.json"
+python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" <<'PY'
 import json
 from pathlib import Path
 import subprocess
 import sys
-out, source, count = sys.argv[1:]
+out, source, count, source_tables, restored_tables, backup_started, backup_finished, restore_started, restore_finished = sys.argv[1:]
 summary = {
     'source_commit': subprocess.check_output(['git','-C',source,'rev-parse','HEAD'],text=True).strip(),
     'environment': 'isolated Ubuntu 24.04 GitHub-hosted runner',
     'systemd_hardened_api': True, 'nginx_verified_tls': True,
     'runtime_dml_migrator_separation': True, 'native_backup_restore_equal_data': True,
     'same_schema_release_a_b_a': True, 'persisted_orders_before_restart': int(count),
+    'source_table_count': int(source_tables), 'restored_table_count': int(restored_tables),
+    'backup_elapsed_seconds': round((int(backup_finished) - int(backup_started)) / 1e9, 3),
+    'restore_import_elapsed_seconds': round((int(restore_finished) - int(restore_started)) / 1e9, 3),
+    'timing_scope': 'isolated small-fixture exercise; backup includes archive verification, restore measures SQL import only',
+    'production_rto_rpo_validated': False,
     'database_process_restart': False, 'machine_reboot': False,
     'browser_visual_qa': False, 'production_deployment': False,
     'paid_services_or_real_providers': False,
     'fixture_socket_mapping': 'single readonly systemd bind mount into private /run path',
 }
 Path(out,'native-acceptance.json').write_text(json.dumps(summary,ensure_ascii=False,sort_keys=True,indent=2)+'\n')
+print('NATIVE_ACCEPTANCE_JSON=' + json.dumps(summary, ensure_ascii=False, sort_keys=True))
 PY
 step 'Passed; cleaning only owned test services, accounts, databases and paths'

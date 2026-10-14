@@ -56,7 +56,9 @@ jobs:
       - name: Required regressions with native MySQL
         run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE/source"
       - name: Native systemd, TLS, business, backup and rollback acceptance
-        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/accept-native.sh --allow-isolated-runner "$GITHUB_WORKSPACE/source" "$RUNNER_TEMP/native-acceptance-evidence"
+        run: |
+          acceptance_evidence="$RUNNER_TEMP/native-acceptance-evidence"
+          RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/accept-native.sh --allow-isolated-runner "$GITHUB_WORKSPACE/source" "$acceptance_evidence"
       - name: npm vulnerability gate
         working-directory: source/vps-billing/frontend
         run: npm audit --audit-level=high
