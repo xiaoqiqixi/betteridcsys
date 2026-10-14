@@ -155,7 +155,11 @@ func main() {
 	if integrationErr != nil {
 		fatal("invalid integration configuration; check installed provider IDs and required settings")
 	}
-	app := billing.NewAppWithIntegrations(store, billing.Config{Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: proxyCIDRs}, registry)
+	smtpKey, smtpKeyErr := billing.LoadSMTPKey(os.Getenv("SMTP_ENCRYPTION_KEY_FILE"))
+	if smtpKeyErr != nil {
+		fatal("invalid SMTP encryption key file; require a readable private regular 32-byte file and safe parent directories")
+	}
+	app := billing.NewAppWithIntegrations(store, billing.Config{SMTPKey: smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: proxyCIDRs}, registry)
 	server := &http.Server{Addr: listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)

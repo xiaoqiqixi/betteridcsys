@@ -87,7 +87,7 @@ class CheckScriptTest(unittest.TestCase):
             import sys
             for name in ('APP_MODE', 'MYSQL_DSN', 'SESSION_SECRET', 'BOOTSTRAP_PASSWORD',
                          'PAYMENT_PROVIDER', 'EMAIL_PROVIDER', 'INTEGRATIONS_CONFIG_FILE', 'LISTEN_ADDR',
-                         'TRUSTED_PROXY_CIDRS', 'TEST_CUSTOMER_PASSWORD'):
+                         'TRUSTED_PROXY_CIDRS', 'SMTP_ENCRYPTION_KEY_FILE', 'TEST_CUSTOMER_PASSWORD'):
                 assert name not in os.environ, name
             with open(os.environ['CI_TEST_EVENTS'], 'a') as output:
                 output.write('go ' + sys.argv[1] + '\\n')
@@ -128,7 +128,7 @@ class CheckScriptTest(unittest.TestCase):
         })
         for name in ("APP_MODE", "MYSQL_DSN", "SESSION_SECRET", "BOOTSTRAP_PASSWORD",
                      "PAYMENT_PROVIDER", "EMAIL_PROVIDER", "INTEGRATIONS_CONFIG_FILE", "LISTEN_ADDR",
-                     "TRUSTED_PROXY_CIDRS", "TEST_CUSTOMER_PASSWORD"):
+                     "TRUSTED_PROXY_CIDRS", "SMTP_ENCRYPTION_KEY_FILE", "TEST_CUSTOMER_PASSWORD"):
             self.env[name] = "must-be-scrubbed-fixture"
         self.addCleanup(self.stop_leftover_fixture)
 

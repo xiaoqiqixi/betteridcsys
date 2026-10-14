@@ -22,6 +22,7 @@ import (
 )
 
 type Config struct {
+	SMTPKey           *SMTPCipher
 	Demo              bool
 	Origin            string
 	Secret            string
@@ -33,6 +34,7 @@ type bucket struct {
 	Start time.Time
 }
 type App struct {
+	SMTP         *SMTPService
 	Integrations *integrations.Registry
 	Store        Store
 	Config       Config
@@ -51,7 +53,8 @@ func NewAppWithIntegrations(s Store, c Config, registry *integrations.Registry) 
 		registry = integrations.Default()
 	}
 	h, _ := bcrypt.GenerateFromPassword([]byte(ID()), bcrypt.DefaultCost)
-	return &App{Integrations: registry, Store: s, Config: c, attempts: map[string]bucket{}, dummyHash: h}
+	smtpService := newSMTPService(s, c.SMTPKey)
+	return &App{SMTP: smtpService, Integrations: registry.WithManagedEmail(smtpService), Store: s, Config: c, attempts: map[string]bucket{}, dummyHash: h}
 }
 func (a *App) cookieName() string {
 	if a.Config.SecureCookie {
@@ -303,6 +306,10 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.result(w, r, updated, err)
 		return
 	}
+	if p == "/admin/email-settings" || p == "/admin/email-settings/test" {
+		a.emailSettingsHTTP(w, r, u, p == "/admin/email-settings/test")
+		return
+	}
 	if strings.HasPrefix(p, "/invoices/") || strings.HasPrefix(p, "/admin/invoices/") {
 		invoicePath := "/invoices/"
 		if admin {
@@ -339,17 +346,26 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch p {
 	case "/admin/integrations":
-		summaries := a.Integrations.Summaries()
+		summaries, err := a.Integrations.SummariesContext(r.Context())
+		if err != nil {
+			a.internal(w, r, err)
+			return
+		}
 		if requestLocale(r.Header.Get("Accept-Language")) == "en" {
 			for n := range summaries {
 				if summaries[n].ID == "payment.disabled" || summaries[n].ID == "email.disabled" {
 					if summaries[n].ID == "payment.disabled" {
 						summaries[n].Name = "Payments not connected"
 					} else {
-						summaries[n].Name = "Email not connected"
+						summaries[n].Name = "Disabled email adapter"
 					}
 					summaries[n].Description = "Disabled adapter; no external operations"
-					summaries[n].Limitations = []string{"No live provider is installed. No charges, emails or billing state changes are performed."}
+					summaries[n].Limitations = []string{"This disabled adapter performs no external operations or billing state changes."}
+				}
+				if summaries[n].ID == "email.smtp" {
+					summaries[n].Name = "Official SMTP email"
+					summaries[n].Description = "Send administrator test messages using saved TLS SMTP settings"
+					summaries[n].Limitations = []string{"Administrator test sending only; notifications, email verification and password recovery are not connected.", "Accepted means the SMTP server accepted the message; inbox delivery is not guaranteed."}
 				}
 			}
 		}

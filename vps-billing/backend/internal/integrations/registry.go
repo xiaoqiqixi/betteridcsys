@@ -19,6 +19,7 @@ var identifier = regexp.MustCompile(`^[a-z][a-z0-9_.-]{1,63}$`)
 var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 type Registry struct {
+	managedEmail  ManagedEmailProvider
 	summaries     []Summary
 	payment       PaymentProvider
 	email         EmailProvider
@@ -28,6 +29,34 @@ type Registry struct {
 	currencies    []string
 	timeout       time.Duration
 }
+
+// ManagedEmailProvider is a core-owned, administrator-configured email boundary.
+// SMTP currently exposes only the explicit admin test template.
+type ManagedEmailProvider interface {
+	EmailProvider
+	Summary(context.Context) (Summary, error)
+}
+
+func (r *Registry) WithManagedEmail(provider ManagedEmailProvider) *Registry {
+	copy := *r
+	copy.managedEmail = provider
+	return &copy
+}
+
+func (r *Registry) SummariesContext(ctx context.Context) ([]Summary, error) {
+	out := r.Summaries()
+	if r.managedEmail != nil {
+		s, err := r.managedEmail.Summary(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.Manifest = cloneManifest(s.Manifest)
+		out = append(out, s)
+		sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	}
+	return out, nil
+}
+
 type disabled struct{}
 
 func (disabled) CreateCheckout(context.Context, CheckoutRequest) (Checkout, error) {
@@ -61,7 +90,7 @@ func New(ctx context.Context, definitions []Definition, o Options) (*Registry, e
 	defs := map[string]Definition{}
 	for _, kind := range []Kind{Payment, Email} {
 		id := string(kind) + ".disabled"
-		defs[id] = Definition{Manifest: Manifest{ID: id, Kind: kind, Name: map[Kind]string{Payment: "支付未接入", Email: "邮件未接入"}[kind], Description: "安全关闭的默认适配器，不执行外部操作", Capabilities: []string{}, SupportedCurrencies: []string{}, ConfigurationFields: []ConfigurationField{}, Limitations: []string{"未安装真实服务商；不会扣款、发送邮件或变更账务状态"}}}
+		defs[id] = Definition{Manifest: Manifest{ID: id, Kind: kind, Name: map[Kind]string{Payment: "支付未接入", Email: "禁用邮件适配器"}[kind], Description: "安全关闭的默认适配器，不执行外部操作", Capabilities: []string{}, SupportedCurrencies: []string{}, ConfigurationFields: []ConfigurationField{}, Limitations: []string{"此禁用适配器不会扣款、发送邮件或变更账务状态"}}}
 	}
 	for _, d := range definitions {
 		if err := validateDefinition(d); err != nil {
@@ -277,22 +306,30 @@ func (r *Registry) CreateCheckout(ctx context.Context, in CheckoutRequest) (Chec
 	return out, nil
 }
 func (r *Registry) SendEmail(ctx context.Context, m EmailMessage) (EmailReceipt, error) {
-	if r.emailID == "email.disabled" {
+	managed := r.managedEmail != nil && m.Template == "smtp.test"
+	if !managed && r.emailID == "email.disabled" {
 		return EmailReceipt{}, ErrUnavailable
 	}
 	address, err := mail.ParseAddress(m.To)
 	if err != nil || address.Address != m.To || strings.TrimSpace(m.Template) == "" || strings.TrimSpace(m.IdempotencyKey) == "" {
 		return EmailReceipt{}, ErrInvalidResult
 	}
-	c, cancel := context.WithTimeout(ctx, r.timeout)
+	timeout := r.timeout
+	if managed {
+		timeout = 30 * time.Second
+	}
+	c, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	v, e := r.email.Send(c, m)
+	provider := r.email
+	if managed {
+		provider = r.managedEmail
+	}
+	v, e := provider.Send(c, m)
 	if e != nil {
 		return EmailReceipt{}, e
 	}
-	if c.Err() != nil {
-		return EmailReceipt{}, c.Err()
-	}
+	// A valid acceptance receipt is authoritative even if the deadline races
+	// with completion. Downgrading it could encourage duplicate delivery.
 	if strings.TrimSpace(v.ProviderMessageID) == "" {
 		return EmailReceipt{}, ErrInvalidResult
 	}

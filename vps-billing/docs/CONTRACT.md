@@ -1,6 +1,6 @@
 # 当前 API 与业务约定
 
-本文件对应可配置品牌、简体中文/English、CNY/USD 候选里程碑。默认站点名“星屿云”、语言 `zh-CN`、币种 `CNY`。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、邮件、真实 VPS 开通与完整财务账本均未实现。
+本文件对应可配置品牌、简体中文/English、CNY/USD 候选里程碑。默认站点名“星屿云”、语言 `zh-CN`、币种 `CNY`。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、真实 VPS 开通与完整财务账本均未实现；官方 SMTP 默认关闭，仅提供管理员配置和测试邮件，未接入通知、邮箱验证或密码找回。
 
 ## 共通规则
 
@@ -30,6 +30,9 @@
 | `GET /admin/site-settings` | 管理员 | 完整站点设置及 revision |
 | `POST /admin/site-settings` | 管理员 + CSRF | 校验字段与 revision；同事务更新设置与审计，冲突拒绝 |
 | `GET /admin/integrations` | 管理员 | 只读适配器能力/配置字段说明，永不返回秘密值或引用 |
+| `GET /admin/email-settings` | 管理员 | SMTP 非秘密配置、revision、凭据存在标志和 key_configured |
+| `POST /admin/email-settings` | 管理员 + CSRF | 保存 SMTP 配置及加密凭据；revision 冲突拒绝，配置/审计同事务 |
+| `POST /admin/email-settings/test` | 管理员 + CSRF | `{revision,to}`；仅按已保存启用配置发送单封固定测试邮件 |
 
 上表除健康路径外均相对于 `/api/v1`。确切路由与响应结构以同提交 `backend/internal/billing/http.go`、`models.go` 和测试为准；实现新增字段应同步更新前后端类型。
 
@@ -49,4 +52,8 @@
 
 ## 适配器
 
-支付和邮件是可信的编译期类型化适配器，当前只注册禁用实现。新增适配器需要代码审查、重建及独立验收；它们不是运行时上传插件或第三方代码沙箱。提供商仅接收核心授予的不可变业务数据，不获得数据库/Store；金融状态仍由核心控制。见 [PLUGINS.md](PLUGINS.md)。
+支付保持禁用；官方 `email.smtp` 是受核心管理的编译期插件，默认关闭。SMTP 保存请求必须包含 `revision/enabled/host/port/tls_mode/from_address/from_name`；`username/password` 只写，空值保留；显式清除须同时清除两项并关闭。更改服务器地址、端口或 TLS 模式时必须替换完整凭据或同时清除并关闭。请求拒绝重复/未知字段、null 和超过 8 KiB 的正文。
+
+读取不返回用户名、密码或密文，仅返回 `username_configured/password_configured/key_configured`；最后一项仅表示已加载本机密钥。测试成功 `{data:{status:"accepted"}}` 表示 SMTP 接受，非收件箱投递证明。未启用返回 409 `SMTP_DISABLED`，配置版本冲突 409 `SETTINGS_CONFLICT`，密钥不可用 503 `SMTP_KEY_UNAVAILABLE`，限速 429 `RATE_LIMITED`，未确认接受 502 `SMTP_UNAVAILABLE`，结果不确定 502 `SMTP_DELIVERY_UNCERTAIN`。客户端不得自动重发不确定请求。
+
+插件不获得数据库/Store；金融状态仍由核心控制。它们不是运行时上传插件或第三方代码沙箱，新增实现需代码审查、重建及独立验收。配置、TLS、时限、审计与恢复要求见 [PLUGINS.md](PLUGINS.md)。

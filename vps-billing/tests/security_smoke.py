@@ -78,7 +78,8 @@ class SecuritySmoke(unittest.TestCase):
 
     def test_unauthenticated_data_and_admin_denied(self):
         for path in ('overview', 'services', 'orders', 'invoices', 'audit', 'admin/overview',
-                     'admin/customers', 'admin/orders', 'admin/invoices', 'admin/integrations', 'admin/site-settings'):
+                     'admin/customers', 'admin/orders', 'admin/invoices', 'admin/integrations', 'admin/site-settings',
+                     'admin/email-settings'):
             with self.subTest(path=path):
                 self.assertIn(self.client.request('/api/v1/' + path)[0], (401, 403))
 
@@ -92,7 +93,7 @@ class SecuritySmoke(unittest.TestCase):
 
     def test_customer_admin_boundary(self):
         client = self.customer()
-        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings'):
+        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings', 'email-settings'):
             with self.subTest(path=path):
                 self.assertEqual(client.request('/api/v1/admin/' + path)[0], 403)
 
@@ -176,7 +177,7 @@ class SecuritySmoke(unittest.TestCase):
         if not ARGS.admin_password:
             self.skipTest('TEST_ADMIN_PASSWORD not supplied')
         admin = Client().login(ARGS.admin_email, ARGS.admin_password)
-        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings'):
+        for path in ('overview', 'customers', 'orders', 'invoices', 'integrations', 'site-settings', 'email-settings'):
             with self.subTest(path=path):
                 status, payload, _ = admin.request('/api/v1/admin/' + path)
                 self.assertEqual(status, 200, payload)
@@ -194,7 +195,8 @@ class SecuritySmoke(unittest.TestCase):
         for item in items:
             self.assertIn(item['kind'], ('payment', 'email'))
             self.assertIn(item['status'], ('disabled', 'ready', 'unavailable'))
-            self.assertEqual(item['configuration_mode'], 'environment')
+            expected_mode = 'admin_api' if item['id'] == 'email.smtp' else 'environment'
+            self.assertEqual(item['configuration_mode'], expected_mode)
             self.assertNotIn('configuration_values', item)
             self.assertNotIn('config', item)
             for field in item['configuration_fields']:

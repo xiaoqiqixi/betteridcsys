@@ -758,7 +758,7 @@ def publish(api, policy, archive_bytes):
     # this external TOCTOU window. Concurrent movers must be prohibited by policy.
     fields = {"tag_name": provenance["tag"], "target_commitish": provenance["source_sha"],
               "name": "星屿云 " + provenance["version"],
-              "body": f"Linux amd64 预发布。源码提交：`{provenance['source_sha']}`。\n\n支付和邮件适配器保持禁用。该版本已通过流水线中的原生安装、业务、备份恢复和同 schema 版本回退检查。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试：{policy['run_attempt']}。附件包含安装包、源码、校验和及构建来源记录；环境与功能限制见包内文档。" + historical_body,
+              "body": f"Linux amd64 预发布。源码提交：`{provenance['source_sha']}`。\n\n支付适配器保持禁用；官方 SMTP 默认关闭，支持加密配置及管理员测试邮件，尚未接入业务通知或密码找回。该版本已通过流水线中的原生安装、业务、备份恢复和同 schema 版本回退检查。\n\n[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试：{policy['run_attempt']}。附件包含安装包、源码、校验和及构建来源记录；环境与功能限制见包内文档。" + historical_body,
               "draft": True, "prerelease": True, "make_latest": "false", "generate_release_notes": False}
     release_id = None
     try:

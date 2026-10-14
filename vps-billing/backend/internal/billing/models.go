@@ -106,6 +106,9 @@ type Summary struct {
 	Customers       int
 }
 type Store interface {
+	EmailSettings(context.Context) (EmailSettingsRecord, error)
+	UpdateEmailSettings(context.Context, User, EmailSettingsRecord) (EmailSettingsRecord, error)
+	RecordEmailTest(context.Context, User, int64, string) error
 	Settings(context.Context) (SiteSettings, error)
 	UpdateSettings(context.Context, User, SiteSettings) (SiteSettings, error)
 	Summary(context.Context, string, string) (Summary, error)

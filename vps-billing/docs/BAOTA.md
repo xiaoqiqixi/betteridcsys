@@ -52,7 +52,7 @@ npm run build
 
 复用已核实的 MySQL 实例，为应用建立独立 utf8mb4 数据库及运行、迁移、备份身份，具体 SQL 与权限见 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)。面板自动创建的数据库用户可能拥有本库完整权限，不能直接当作 API 运行身份；运行账号只保留 SELECT、INSERT、UPDATE、DELETE，迁移凭据不交给 API。不要为此修改数据库 root 密码或开放远程访问。
 
-按安装手册创建 `aster` 系统账号、受限秘密文件和 `/etc/aster/api.env`，设置真实 HTTPS `APP_ORIGIN`、`LISTEN_ADDR=127.0.0.1:18080`，保留禁用的支付/邮件适配器。本机 Unix socket 需显式设置 `MYSQL_ALLOW_INSECURE=true`；这只适用于已核实路径和权限的本地 socket，不能扩展到 TCP 明文连接。
+按安装手册创建 `aster` 系统账号、受限秘密文件和 `/etc/aster/api.env`，设置真实 HTTPS `APP_ORIGIN`、`LISTEN_ADDR=127.0.0.1:18080`，保留禁用支付，SMTP 默认关闭；需要管理员测试发信时，按 [安装手册](INSTALL.md#可选smtp-加密密钥)准备专用密钥，再按 [插件说明](PLUGINS.md#官方-smtp-配置与测试)配置。本机 Unix socket 需显式设置 `MYSQL_ALLOW_INSECURE=true`；这只适用于已核实路径和权限的本地 socket，不能扩展到 TCP 明文连接。
 
 使用包内 `deploy/systemd/aster-api.service`，按实际 MySQL service 名称调整启动顺序。执行迁移及管理员引导后再启动 API，完整命令见 [安装手册第 3–4 节](INSTALL.md#3-迁移与管理员)。API 仅由 systemd 管理，不再添加面板进程守护、定时重启或另一份后台启动命令。
 
@@ -164,7 +164,7 @@ curl --fail --show-error https://billing.example.com/readyz
 curl --fail --show-error --head https://billing.example.com/
 ```
 
-核对浏览器证书可信、静态资源和 SPA 刷新、登录/注销、Cookie/CSRF、客户隔离、管理员设置及 CNY/USD 独立价格。更改展示域名不会修改 `APP_ORIGIN`。API 和数据库不公开监听，支付与邮件保持禁用。具体项目见 [验收范围](ACCEPTANCE.md)。
+核对浏览器证书可信、静态资源和 SPA 刷新、登录/注销、Cookie/CSRF、客户隔离、管理员设置及 CNY/USD 独立价格。更改展示域名不会修改 `APP_ORIGIN`。API 和数据库不公开监听，支付保持禁用；未使用 SMTP 时不配置其加密密钥。SMTP 配置不依赖面板邮件插件，不安装或修改面板邮局服务；测试仅连接已获准且证书有效的 SMTP 目标。具体项目见 [验收范围](ACCEPTANCE.md)。
 
 更新按 [升级与回滚](UPGRADE.md) 执行，顺序为：
 

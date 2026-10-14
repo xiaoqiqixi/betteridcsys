@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--ca", required=True)
     parser.add_argument("--accounts", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument("--expect-smtp-settings", action="store_true")
     args = parser.parse_args()
     if not all(1024 <= port <= 65535 for port in (args.port, args.http_port)):
         parser.error("Only an explicit unprivileged localhost port is accepted")
@@ -205,6 +206,58 @@ def main():
         def test_database_backed_readiness(self):
             for path in ("/healthz", "/readyz"):
                 self.assertEqual(self.client.request(path)[0], 200)
+
+        def test_smtp_disabled_settings_survive_restore_without_exposing_credentials(self):
+            admin = module.Client().login(module.ARGS.admin_email, module.ARGS.admin_password)
+            path = "/api/v1/admin/email-settings"
+            status, response, _ = admin.request(path)
+            self.assertEqual(status, 200)
+            settings = response["data"]
+            self.assertTrue(settings["key_configured"])
+            self.assertFalse(settings["enabled"])
+            if not args.expect_smtp_settings:
+                self.assertFalse(settings["username_configured"])
+                self.assertFalse(settings["password_configured"])
+                body = {
+                    "revision": settings["revision"], "enabled": False,
+                    "host": "localhost", "port": 465, "tls_mode": "implicit_tls",
+                    "from_address": "smtp@native-ci.invalid", "from_name": "Native SMTP fixture",
+                    "username": accounts["smtp_username"], "password": accounts["smtp_password"],
+                }
+                status, response, _ = admin.request(path, "POST", body)
+                self.assertEqual(status, 200)
+                settings = response["data"]
+                # A stale writer cannot overwrite the encrypted configuration.
+                self.assertEqual(admin.request(path, "POST", body)[0], 409)
+            self.assertEqual(settings["host"], "localhost")
+            self.assertEqual(settings["port"], 465)
+            self.assertEqual(settings["tls_mode"], "implicit_tls")
+            self.assertTrue(settings["username_configured"])
+            self.assertTrue(settings["password_configured"])
+            self.assertTrue(settings["key_configured"])
+            # This flag requires decryption and config validation, unlike key_configured.
+            status, integrations, _ = admin.request("/api/v1/admin/integrations")
+            self.assertEqual(status, 200)
+            smtp = next(item for item in integrations["data"]["items"] if item["id"] == "email.smtp")
+            self.assertTrue(smtp["configured"])
+            self.assertFalse(smtp["enabled"])
+            self.assertNotIn("username", settings)
+            self.assertNotIn("password", settings)
+            self.assertNotIn("credentials_ciphertext", settings)
+            serialized = json.dumps(response)
+            self.assertTrue(all(accounts[key] not in serialized for key in ("smtp_username", "smtp_password")),
+                            "SMTP settings response exposed a fixture credential")
+            saved = {key: settings[key] for key in (
+                "revision", "enabled", "host", "port", "tls_mode", "from_address", "from_name"
+            )}
+            self.assertEqual(admin.request(path, "POST", saved, csrf=False)[0], 403)
+            self.assertEqual(self.customer().request(path, "POST", saved)[0], 403)
+            # Disabled means no network delivery is attempted, even by an admin.
+            status, failure, _ = admin.request(path + "/test", "POST", {
+                "revision": settings["revision"], "to": "operator@native-ci.invalid"
+            })
+            self.assertEqual(status, 409)
+            self.assertEqual(failure["error"]["code"], "SMTP_DISABLED")
 
     result = unittest.TextTestRunner(verbosity=2).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(NativeHTTPSAcceptance)

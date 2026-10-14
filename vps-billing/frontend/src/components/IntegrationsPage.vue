@@ -16,6 +16,7 @@ import {
 } from "@lucide/vue";
 import { locale, tr } from "../lib/i18n";
 import { api } from "../lib/api";
+import EmailSettingsPanel from "./EmailSettingsPanel.vue";
 import {
   readIntegrationManifest,
   localizedPreviewIntegrations,
@@ -27,6 +28,8 @@ const items = ref<IntegrationSummary[]>([]),
   error = ref("");
 const selected = ref<IntegrationSummary>(),
   drawer = ref<HTMLDialogElement>();
+const smtpAvailable = ref(props.preview),
+  smtpPanel = ref<HTMLElement>();
 const groups = computed(() => [
   {
     kind: "payment",
@@ -67,7 +70,10 @@ async function load() {
     const result = props.preview
       ? localizedPreviewIntegrations()
       : readIntegrationManifest(await api<unknown>("/admin/integrations"));
-    if (current === generation) items.value = result;
+    if (current === generation) {
+      items.value = result;
+      smtpAvailable.value = result.some((item) => item.id === "email.smtp");
+    }
   } catch {
     // Do not echo backend diagnostics: configuration errors may contain secrets.
     if (current === generation)
@@ -80,9 +86,32 @@ async function load() {
   }
 }
 async function open(item: IntegrationSummary) {
+  if (item.id === "email.smtp") {
+    smtpPanel.value?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    smtpPanel.value
+      ?.querySelector<HTMLElement>("h3")
+      ?.focus({ preventScroll: true });
+    return;
+  }
   selected.value = item;
   await nextTick();
   drawer.value?.showModal();
+}
+async function refreshManifest() {
+  const current = generation;
+  try {
+    const result = readIntegrationManifest(
+      await api<unknown>("/admin/integrations"),
+    );
+    if (current === generation && !props.preview) items.value = result;
+  } catch {
+    // The saved settings remain authoritative; never echo provider diagnostics.
+    if (current === generation)
+      error.value = tr(
+        "SMTP 配置已保存，但扩展状态刷新失败。请稍后刷新。",
+        "SMTP settings were saved, but integration status could not refresh. Refresh it later.",
+      );
+  }
 }
 const label = (item: IntegrationSummary) =>
   !item.enabled || item.status === "disabled"
@@ -151,8 +180,8 @@ onBeforeUnmount(() => {
         }}
         {{
           tr(
-            "首版通过环境变量与密钥管理配置，本页仅供查看。",
-            "This page is read only. Configuration uses server environment variables and secret management.",
+            "官方 SMTP 插件可在此配置；其他适配器按各自的配置说明管理。",
+            "Configure the official SMTP plugin here; manage other adapters using their configuration guides.",
           )
         }}
       </p>
@@ -220,14 +249,20 @@ onBeforeUnmount(() => {
               ><button
                 class="text-button"
                 :aria-label="
-                  tr(
-                    `查看 ${item.name} 配置说明`,
-                    `Configuration guide for ${item.name}`,
-                  )
+                  item.id === 'email.smtp'
+                    ? tr('配置 SMTP', 'Configure SMTP')
+                    : tr(
+                        `查看 ${item.name} 配置说明`,
+                        `Configuration guide for ${item.name}`,
+                      )
                 "
                 @click="open(item)"
               >
-                {{ tr("配置说明", "Configuration guide") }}
+                {{
+                  item.id === "email.smtp"
+                    ? tr("配置 SMTP", "Configure SMTP")
+                    : tr("配置说明", "Configuration guide")
+                }}
                 <ArrowUpRight :size="15" />
               </button>
             </div>
@@ -249,6 +284,13 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </template>
+    <div v-if="smtpAvailable || preview" ref="smtpPanel">
+      <EmailSettingsPanel
+        :preview="preview"
+        :refresh-token="refreshToken"
+        @saved="refreshManifest"
+      />
+    </div>
     <section class="integration-roadmap">
       <div>
         <p class="eyebrow">{{ tr("后续扩展", "PLANNED EXTENSIONS") }}</p>
@@ -319,7 +361,13 @@ onBeforeUnmount(() => {
           </div>
           <div>
             <dt>{{ tr("配置方式", "Configuration method") }}</dt>
-            <dd>{{ tr("服务端环境变量", "Server environment variables") }}</dd>
+            <dd>
+              {{
+                selected.configuration_mode === "admin_api"
+                  ? tr("管理员设置", "Administrator settings")
+                  : tr("服务端环境变量", "Server environment variables")
+              }}
+            </dd>
           </div>
         </dl>
         <section

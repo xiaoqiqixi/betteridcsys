@@ -11,7 +11,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-# A fixed, non-login system account; never owns releases, configuration or keys.
+# A fixed, non-login system account; releases and configuration are root-owned.
+# The optional private SMTP key uses the ownership/mode specified in INSTALL.md.
 User=aster
 Group=aster
 WorkingDirectory=/opt/aster/current

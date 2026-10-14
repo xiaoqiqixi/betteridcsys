@@ -108,7 +108,7 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
         "input_sha256": inputs,
         "source_archive": "Git commit paths LICENSE, README.md, vps-billing; local secrets, build/dependency directories and recorded test outputs excluded",
         "dependency_inventory": "Go module graph (unlinked nodes explicitly marked) and npm installed package metadata plus original lockfiles; not a complete SPDX/CycloneDX SBOM or license compliance certification",
-        "release_status": "review candidate; disabled payment/email; no deployment or publication performed",
+        "release_status": "review candidate; payments disabled; official SMTP opt-in and disabled by default; no production deployment",
     }
     write_json(bundle / "manifests/BUILD.json", info)
     (bundle / "licenses/README.txt").write_text(

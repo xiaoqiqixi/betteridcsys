@@ -43,6 +43,11 @@ func requestLocale(header string) string {
 }
 
 var englishErrors = map[string]string{
+	"INVALID_EMAIL_SETTINGS":       "Check SMTP settings and credentials. Changing the server requires replacing both credentials; clearing requires both credentials and disabling SMTP.",
+	"SMTP_DISABLED":                "Save and enable SMTP settings before sending a test.",
+	"SMTP_KEY_UNAVAILABLE":         "The SMTP encryption key is unavailable. Contact the server administrator.",
+	"SMTP_UNAVAILABLE":             "The SMTP server did not confirm acceptance. Check configuration and server status.",
+	"SMTP_DELIVERY_UNCERTAIN":      "Delivery outcome is uncertain. Check SMTP server records before any manual retry.",
 	"INTERNAL_ERROR":               "Unable to complete the request. Please try again later.",
 	"JSON_REQUIRED":                "Use an application/json request.",
 	"INVALID_BODY":                 "Invalid JSON object or unsupported fields.",

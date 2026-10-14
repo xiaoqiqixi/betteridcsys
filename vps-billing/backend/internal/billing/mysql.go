@@ -42,7 +42,7 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	return &MySQL{db}, nil
 }
 
-var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes}
+var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings}
 
 func (m *MySQL) Ping(ctx context.Context) error {
 	rows, err := m.DB.QueryContext(ctx, "SELECT version,checksum FROM schema_migrations ORDER BY version")
@@ -160,6 +160,11 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 		if version == 2 {
 			raw, _ := json.Marshal(DefaultSettings())
 			if _, err = conn.ExecContext(ctx, "INSERT IGNORE INTO site_settings(id,document) VALUES(1,?)", raw); err != nil {
+				return err
+			}
+		}
+		if version == 6 {
+			if err = initializeEmailSettings(ctx, conn); err != nil {
 				return err
 			}
 		}

@@ -13,22 +13,24 @@ type memoRequest struct {
 	Order       Order
 }
 type Memory struct {
-	settings SiteSettings
-	mu       sync.Mutex
-	users    map[string]User
-	sessions map[string]Session
-	plans    []Plan
-	prices   map[string]map[string]PlanPrice
-	orders   []Order
-	invoices []Invoice
-	services []Service
-	audits   []Audit
-	requests map[string]memoRequest
+	emailSettings EmailSettingsRecord
+	settings      SiteSettings
+	mu            sync.Mutex
+	users         map[string]User
+	sessions      map[string]Session
+	plans         []Plan
+	prices        map[string]map[string]PlanPrice
+	orders        []Order
+	invoices      []Invoice
+	services      []Service
+	audits        []Audit
+	requests      map[string]memoRequest
 }
 
 func NewMemory() *Memory {
 	m := &Memory{users: map[string]User{}, sessions: map[string]Session{}, plans: Catalog(), orders: []Order{}, invoices: []Invoice{}, services: []Service{}, audits: []Audit{}, requests: map[string]memoRequest{}}
 	m.settings = DefaultSettings()
+	m.emailSettings = DefaultEmailSettings()
 	m.prices = map[string]map[string]PlanPrice{
 		"starter":     {"CNY": {3900, true}, "USD": {600, true}},
 		"standard":    {"CNY": {7900, true}, "USD": {1200, true}},

@@ -34,7 +34,7 @@ done
 
 # Ignore any inherited production, bootstrap, provider or smoke-test settings.
 # Preserve the explicit disposable test DSN only until the Go test suite finishes.
-for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@} ${!TEST_@}; do
+for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@} ${!TEST_@}; do
   unset "$variable"
 done
 export NO_PROXY=127.0.0.1,localhost,::1

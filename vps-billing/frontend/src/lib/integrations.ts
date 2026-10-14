@@ -18,7 +18,7 @@ export interface IntegrationSummary {
     required: boolean;
     secret: boolean;
   }[];
-  configuration_mode: "environment";
+  configuration_mode: "environment" | "admin_api";
   limitations: string[];
 }
 
@@ -54,7 +54,7 @@ export function readIntegrationManifest(data: unknown): IntegrationSummary[] {
       !["disabled", "ready", "unavailable"].includes(v.status as string) ||
       typeof v.enabled !== "boolean" ||
       typeof v.configured !== "boolean" ||
-      v.configuration_mode !== "environment" ||
+      !["environment", "admin_api"].includes(v.configuration_mode as string) ||
       !strings(v.capabilities) ||
       !strings(v.supported_currencies) ||
       !v.supported_currencies.every(
@@ -91,7 +91,8 @@ export function readIntegrationManifest(data: unknown): IntegrationSummary[] {
       status: v.status as IntegrationSummary["status"],
       enabled: v.enabled,
       configured: v.configured,
-      configuration_mode: "environment",
+      configuration_mode:
+        v.configuration_mode as IntegrationSummary["configuration_mode"],
       capabilities: v.capabilities,
       supported_currencies: v.supported_currencies as ("CNY" | "USD")[],
       limitations: v.limitations,
@@ -132,27 +133,51 @@ export const previewIntegrations: IntegrationSummary[] = [
 ];
 
 export function localizedPreviewIntegrations(): IntegrationSummary[] {
-  return previewIntegrations.map((item) => ({
-    ...item,
-    name:
-      item.kind === "payment"
-        ? tr("支付 · 未接入", "Payments · Disabled")
-        : tr("邮件 · 未接入", "Email · Disabled"),
-    description:
-      item.kind === "payment"
-        ? tr(
-            "此样例展示支付适配器的注册位置，不提供真实收款能力。",
-            "Sample payment adapter registration. Real payments are unavailable.",
-          )
-        : tr(
-            "此样例展示邮件适配器的注册位置，不提供真实邮件投递。",
-            "Sample email adapter registration. Real email delivery is unavailable.",
-          ),
-    limitations: [
-      tr(
-        "只读样例，未连接外部服务。",
-        "Read-only sample. No external service is connected.",
+  return [
+    ...previewIntegrations.map((item) => ({
+      ...item,
+      name:
+        item.kind === "payment"
+          ? tr("支付 · 未接入", "Payments · Disabled")
+          : tr("邮件 · 未接入", "Email · Disabled"),
+      description:
+        item.kind === "payment"
+          ? tr(
+              "此样例展示支付适配器的注册位置，不提供真实收款能力。",
+              "Sample payment adapter registration. Real payments are unavailable.",
+            )
+          : tr(
+              "此样例展示邮件适配器的注册位置，不提供真实邮件投递。",
+              "Sample email adapter registration. Real email delivery is unavailable.",
+            ),
+      limitations: [
+        tr(
+          "只读样例，未连接外部服务。",
+          "Read-only sample. No external service is connected.",
+        ),
+      ],
+    })),
+    {
+      id: "email.smtp",
+      kind: "email",
+      name: tr("SMTP · 官方邮件插件", "SMTP · Official email plugin"),
+      description: tr(
+        "配置受 TLS 保护的 SMTP 服务并发送测试邮件。",
+        "Configure a TLS-protected SMTP service and send a test message.",
       ),
-    ],
-  }));
+      enabled: false,
+      configured: false,
+      status: "disabled",
+      capabilities: [],
+      supported_currencies: [],
+      configuration_fields: [],
+      configuration_mode: "admin_api",
+      limitations: [
+        tr(
+          "样例预览，不连接邮件服务。",
+          "Sample preview; no email service is connected.",
+        ),
+      ],
+    },
+  ];
 }

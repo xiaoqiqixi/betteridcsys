@@ -16,3 +16,6 @@ var BillingSnapshots string
 
 //go:embed 005_exact_currency_codes.sql
 var ExactCurrencyCodes string
+
+//go:embed 006_email_settings.sql
+var EmailSettings string

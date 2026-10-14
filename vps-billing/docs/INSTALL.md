@@ -1,6 +1,6 @@
 # Ubuntu 24.04 原生单机安装
 
-本手册说明在一台 Ubuntu 24.04 / amd64 服务器上安装 Nginx、systemd API 与 MySQL 8.4。核心原生服务、HTTPS、权限、API 重启、同 schema 版本切换和备份恢复已在一次性 Ubuntu runner 实测通过，准确提交与范围见 [原生验证记录](VALIDATION.md)。支付、邮件、退款、VPS 开通均未接入；`production` 表示持久化及严格配置检查，不代表生产认证。新候选须满足 [发布门禁](RELEASE.md)，历史 `0.3.0-rc.1` 保持原样。
+本手册说明在一台 Ubuntu 24.04 / amd64 服务器上安装 Nginx、systemd API 与 MySQL 8.4。核心原生服务、HTTPS、权限、API 重启、同 schema 版本切换和备份恢复已在一次性 Ubuntu runner 实测通过，准确提交与范围见 [原生验证记录](VALIDATION.md)。支付、退款、VPS 开通均未接入；官方 SMTP 默认关闭，仅支持管理员配置和主动测试邮件；`production` 表示持久化及严格配置检查，不代表生产认证。新候选须满足 [发布门禁](RELEASE.md)，历史 `0.3.0-rc.1` 保持原样。
 
 已使用宝塔管理 Nginx/MySQL 的服务器请使用 [宝塔部署与更新指南](BAOTA.md)，避免重复安装系统服务。
 
@@ -129,7 +129,7 @@ GRANT SHOW_ROUTINE ON *.* TO 'aster_backup'@'localhost';
 - 迁移 DSN：放入仅迁移操作身份可读的位置；**不要**放在运行账号可读的秘密目录。
 - 初始化管理员密码：独立的 16–72 字节强口令，保存在临时受限文件；不放进命令行、聊天或源码。
 
-`/etc/aster/secrets` 使用 `root:aster`、0750，运行秘密文件使用 `root:aster`、0640；用 `sudo -u aster test -r 文件路径` 验证可读，且确认 `aster` 无权修改文件。迁移/备份秘密由对应操作身份保管，运行账号不得读取。秘密的备份、轮换和销毁独立于版本归档管理。
+`/etc/aster/secrets` 使用 `root:aster`、0750，会话秘密与运行 DSN 使用 `root:aster`、0640；用 `sudo -u aster test -r 文件路径` 验证可读，且确认 `aster` 无权修改文件。迁移/备份秘密由对应操作身份保管，运行账号不得读取。秘密的备份、轮换和销毁独立于版本归档管理。
 
 审查并复制 `deploy/systemd/api.env.example` 到 `/etc/aster/api.env`，所有者 `root:aster`、权限 0640。配置精确 HTTPS `APP_ORIGIN`、回环监听地址、可信代理和文件引用，不放秘密值。Origin 使用规范小写 ASCII 主机名，无路径、尾斜杠、查询或片段，默认 443 端口省略；必须与浏览器实际来源一致。后台“展示地址”不会修改 `APP_ORIGIN`、DNS、TLS、监听地址或可信代理范围。不要把 systemd 环境文件作为 shell 脚本 `source` 执行。
 
@@ -139,6 +139,36 @@ sudoedit /etc/aster/api.env
 ```
 
 设置真实 `APP_ORIGIN`，本机 socket 模式明确改成 `MYSQL_ALLOW_INSECURE=true`。通过秘密管理工具分别落盘 `session_secret`、`mysql_runtime_dsn` 后，核对权限，不在终端打印内容。迁移及引导密码文件放在 `/etc/aster/secrets` 之外的私密运维目录。
+
+### 可选：SMTP 加密密钥
+
+不启用 SMTP 时，保留 `SMTP_ENCRYPTION_KEY_FILE` 未设置。此时不能发信，即使恢复库保存了启用状态也不会发送。`EMAIL_PROVIDER=email.disabled` 不是受管理 SMTP 的总开关；后台保存配置与启用后才允许管理员主动测试。
+
+启用前在已核验、由 root 控制且不可被其他用户替换的 `/etc/aster/secrets` 中生成一次专用密钥。文件必须是 **32 字节原始随机数据**，不是十六进制、base64 或带换行的文本；不能是软链接或硬链接。所有父目录归 root 或运行身份所有，不允许组/其他用户写入。该文件与其他秘密不同，不能用 0640：下面使用 `aster:aster`、0400，API 需可读，systemd 保留 `ProtectSystem=strict` 以禁止运行进程修改 `/etc`。
+
+以下命令只用于首次生成，已有文件会拒绝覆盖；不要在普通升级或故障恢复时重新执行。密钥不会输出到终端：
+
+```sh
+sudo python3 - <<'PYKEY'
+import os
+import pwd
+import secrets
+account = pwd.getpwnam("aster")
+path = "/etc/aster/secrets/smtp_encryption_key"
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, "wb") as key_file:
+    key_file.write(secrets.token_bytes(32))
+    key_file.flush()
+    os.fsync(key_file.fileno())
+    os.fchown(key_file.fileno(), account.pw_uid, account.pw_gid)
+    os.fchmod(key_file.fileno(), 0o400)
+PYKEY
+sudo -u aster test -r /etc/aster/secrets/smtp_encryption_key
+```
+
+生成失败时先检查私密文件状态，不盲目覆盖。将 `SMTP_ENCRYPTION_KEY_FILE=/etc/aster/secrets/smtp_encryption_key` 加入 `/etc/aster/api.env`。已有服务需重启；首次安装完成下文迁移后再按第 4 节启动并检查就绪。无效文件会阻止启动，未设置变量则保持发信不可用。不要把内容复制到环境变量、浏览器、日志、Git 或 Release。密钥加载一次，后续文件变化需重启。
+
+完成迁移后按 [官方 SMTP 配置](PLUGINS.md#官方-smtp-配置与测试)保存服务器、TLS 与凭据，再向获准地址主动发送测试邮件。普通配置保存不会发信，测试也不启用通知或找回密码。启用前完成 [独立密钥备份与恢复准备](BACKUP_RECOVERY.md#smtp-密钥备份恢复与轮换)；只备份数据库不能恢复 SMTP 凭据。
 
 ## 3. 迁移与管理员
 
@@ -153,7 +183,7 @@ env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
   /opt/aster/releases/VERSION/bin/aster-api -migrate
 ```
 
-CLI 要求完整的生产模式配置，连接必须确实是本机 Unix socket。核对迁移版本和 checksum；当前应用包含迁移 1–5，以选定发布源码为准。迁移成功后，用运行身份 DSN 和独立初始化密码文件创建管理员；不要为引导账号而给运行身份 DDL 权限：
+CLI 要求完整的生产模式配置，连接必须确实是本机 Unix socket。核对迁移版本和 checksum；当前应用包含迁移 1–6，迁移 006 新建 SMTP 配置表；以选定发布源码为准。迁移成功后，用运行身份 DSN 和独立初始化密码文件创建管理员；不要为引导账号而给运行身份 DDL 权限：
 
 ```sh
 env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \

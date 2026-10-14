@@ -2075,6 +2075,7 @@ onMounted(init);
         />
         <IntegrationsPage
           v-else-if="page === 'integrations' && isAdmin"
+          :key="session.user?.id"
           :preview="preview"
           :refresh-token="integrationRefresh"
         />

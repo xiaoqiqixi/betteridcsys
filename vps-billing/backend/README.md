@@ -1,6 +1,6 @@
 # Aster Billing API（星屿云）
 
-Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。当前候选范围为可配置运营身份、简体中文/English、独立 CNY/USD 报价及订单/账单；支付、邮件、退款、财务账本和 VPS 开通仍未接入。完整 API 约定见 [CONTRACT.md](../docs/CONTRACT.md)，实际验证见 [VALIDATION.md](../docs/VALIDATION.md)。
+Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。当前候选范围为可配置运营身份、简体中文/English、独立 CNY/USD 报价及订单/账单；官方 SMTP 默认关闭，仅支持管理员保存配置和测试邮件；支付、退款、财务账本、自动邮件通知和 VPS 开通仍未接入。完整 API 约定见 [CONTRACT.md](../docs/CONTRACT.md)，实际验证见 [VALIDATION.md](../docs/VALIDATION.md)。
 
 ## 本机演示
 
@@ -38,7 +38,8 @@ demo 无初始服务或假已付账单；创建订单只生成待付款记录，
 | TRUSTED_PROXY_CIDRS | 直接可信代理精确 CIDR；空值不信任转发地址 |
 | BOOTSTRAP_EMAIL / NAME / ROLE | CLI 创建用户；role 默认 customer，管理员需显式 admin |
 | BOOTSTRAP_PASSWORD / BOOTSTRAP_PASSWORD_FILE | 唯一 16–72 字节强口令，不用 demo/示例值 |
-| PAYMENT_PROVIDER / EMAIL_PROVIDER | 默认 payment.disabled / email.disabled |
+| PAYMENT_PROVIDER / EMAIL_PROVIDER | 保留 payment.disabled / email.disabled；后者不是受管理 SMTP 总开关 |
+| SMTP_ENCRYPTION_KEY_FILE | 可选32字节原始私密文件；未设置不能发送，无效则拒绝启动；不支持内联秘密值 |
 | INTEGRATIONS_CONFIG_FILE | 可选受限本地 JSON；当前禁用适配器无需配置 |
 
 FILE 形式优先。生产拒绝弱/示例会话秘密、无 DSN、非 HTTPS 来源、无效代理 CIDR/未知模式。强制 TLS 时拒绝 skip-verify、preferred 和明文回退。不要在源码、命令行、聊天或日志中存密码/DSN。
@@ -47,7 +48,7 @@ FILE 形式优先。生产拒绝弱/示例会话秘密、无 DSN、非 HTTPS 来
 
 ## 数据库、迁移与身份
 
-迁移 1/2/3 保持原文，迁移 4 新增订单 issuer 快照和受支持币种/精确金额约束，迁移 5 对订单/账单/服务加入二进制币种约束，拒绝小写或带重音的近似值。全部嵌入二进制，经数据库 advisory lock 串行执行，schema_migrations 保存编号/checksum；就绪检查验证完整 1–5 历史并拒绝未知新版本。MySQL DDL 不能整体事务回滚，已知中断恢复有专门处理，不能手改迁移记录绕过错误。
+迁移 1/2/3 保持原文，迁移 4 新增订单 issuer 快照和受支持币种/精确金额约束，迁移 5 对订单/账单/服务加入二进制币种约束，拒绝小写或带重音的近似值。全部嵌入二进制，经数据库 advisory lock 串行执行，schema_migrations 保存编号/checksum；迁移 6 新建 SMTP 配置表；就绪检查验证完整 1–6 历史并拒绝未知新版本。MySQL DDL 不能整体事务回滚，已知中断恢复有专门处理，不能手改迁移记录绕过错误。
 
 以独立 DDL 身份执行 `aster-api -migrate`，API 用只有本库 SELECT/INSERT/UPDATE/DELETE 的 DML 身份。CLI 仍需完整生产配置。以 BOOTSTRAP_* 配置执行 `aster-api -create-user` 创建测试用户；没有公开注册、密码找回、自助改密、MFA、角色修改或完整账号管理 API。详细配置和权限步骤见 [INSTALL.md](../docs/INSTALL.md)。
 
@@ -74,7 +75,13 @@ GET /site-settings 公开展示子集；管理员 GET/POST /admin/site-settings 
 
 管理员 GET /admin/invoices/{id} 提供直接只读详情；客户 GET /invoices/{id} 仍按所有权查询，避免用最多 1,000 条列表筛选漏掉旧账单。
 
-POST /invoices/{id}/checkout 核对所有权和待付状态后调用类型化注册表。当前只装禁用适配器，返回 503 PAYMENT_NOT_CONFIGURED，不改变订单/账单/服务。没有支付 webhook、真实验签落账、退款、续费、余额更新或 outbox 消费者。order.created 不是开通授权。详见 [PLUGINS.md](../docs/PLUGINS.md)。
+POST /invoices/{id}/checkout 核对所有权和待付状态后调用类型化注册表。当前支付只装禁用适配器，返回 503 PAYMENT_NOT_CONFIGURED，不改变订单/账单/服务。没有支付 webhook、真实验签落账、退款、续费、余额更新或 outbox 消费者。order.created 不是开通授权。详见 [PLUGINS.md](../docs/PLUGINS.md)。
+
+## 官方 SMTP
+
+`plugins/smtp` 只处理 TLS 传输；核心通过 `GET/POST /admin/email-settings` 管理 revision、权限、审计和 AES-256-GCM 凭据，`POST /admin/email-settings/test` 仅发送固定测试内容。读取仅返回凭据存在标志，用户名/密码不回显。SMTP 密钥与数据库分开保护，具体权限、一次性生成、备份及手动轮换见 [安装手册](../docs/INSTALL.md#可选smtp-加密密钥)和 [备份恢复](../docs/BACKUP_RECOVERY.md#smtp-密钥备份恢复与轮换)。
+
+SMTP 默认关闭，保留 `EMAIL_PROVIDER=email.disabled`，不要改为 `email.smtp`。设置保存后生效，密钥文件变更须重启。使用已保存的启用配置与当前 revision 才能测试；每进程 30 秒限速且仅一个在途请求。`accepted` 只证明 SMTP 接受；不确定结果先核对后再决定是否重试。未接入通知、邮箱验证或密码找回，真实服务商投递不能由本地 TLS 测试证明。完整字段和错误见 [API 约定](../docs/CONTRACT.md)。
 
 ## 测试
 

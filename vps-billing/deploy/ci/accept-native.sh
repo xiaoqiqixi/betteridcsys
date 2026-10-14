@@ -41,7 +41,7 @@ sudo -n true || fail 'Passwordless sudo is required on this disposable runner.'
 mysql_cmd=("$mysql_root/bin/mysql" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --batch --skip-column-names)
 server_data=$("${mysql_cmd[@]}" --execute='SELECT @@datadir' 2>/dev/null) || fail 'Could not verify owned native MySQL identity.'
 [[ $(realpath -e "$server_data") == "$fixture_root/data" ]] || fail 'Refusing any database outside the owned fixture data directory.'
-for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@}; do unset "$variable"; done
+for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@}; do unset "$variable"; done
 export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 PYTHONDONTWRITEBYTECODE=1
 mkdir -m 700 -- "$evidence"
 scratch=$(mktemp -d "${RUNNER_TEMP:?}/aster-native-accept.XXXXXXXX")
@@ -157,7 +157,8 @@ import secrets
 import sys
 root, database, restored, socket, run = sys.argv[1:]
 p = Path(root)
-values = {key: secrets.token_hex(24) for key in ('runtime','migrator','backup','restore','restore_runtime','session','admin','customer','second')}
+values = {key: secrets.token_hex(24) for key in ('runtime','migrator','backup','restore','restore_runtime','session','admin','customer','second','smtp_username','smtp_password')}
+(p/'smtp-key').write_bytes(secrets.token_bytes(32))
 (p/'accounts.json').write_text(json.dumps(values))
 for key in ('admin','customer','second','session'):
     (p/key).write_text(values[key]+'\n')
@@ -187,6 +188,7 @@ PY
 db_created=true
 "${mysql_cmd[@]}" < "$scratch/setup.sql" > "$scratch/setup.log" 2>&1 || fail 'Isolated database role setup failed.'
 for name in session runtime.service.dsn; do sudo -n install -o root -g "$api_user" -m 640 "$scratch/$name" "$config/secrets/$name"; done
+sudo -n install -o "$api_user" -g "$api_user" -m 400 "$scratch/smtp-key" "$config/secrets/smtp-key"
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$scratch/ca.key" -out "$scratch/ca.pem" -days 1 -subj '/CN=Aster isolated CI test CA' -addext 'basicConstraints=critical,CA:TRUE' > "$scratch/openssl.log" 2>&1
 openssl req -new -newkey rsa:2048 -nodes -keyout "$scratch/server.key" -out "$scratch/server.csr" -subj '/CN=localhost' >> "$scratch/openssl.log" 2>&1
 printf 'subjectAltName=DNS:localhost\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' > "$scratch/server.ext"
@@ -234,6 +236,7 @@ unit=unit.replace('After=network-online.target mysql.service','After=network-onl
 unit=unit.replace('[Install]',f'BindReadOnlyPaths={mysql_socket}:{run}/mysql.sock\n\n[Install]')
 (p/'api.service').write_text(unit)
 env=Path(project+'/deploy/systemd/api.env.example').read_text().replace('https://billing.example.com','https://localhost:'+tls_port).replace('127.0.0.1:18080','127.0.0.1:'+api_port).replace('/etc/aster',config).replace('session_secret','session').replace('mysql_runtime_dsn','runtime.service.dsn').replace('MYSQL_ALLOW_INSECURE=false','MYSQL_ALLOW_INSECURE=true')
+env='\n'.join(line for line in env.splitlines() if not line.startswith('SMTP_ENCRYPTION_KEY_FILE='))+'\nSMTP_ENCRYPTION_KEY_FILE='+config+'/secrets/smtp-key\n'
 (p/'api.env').write_text(env)
 web=Path(project+'/deploy/nginx.native.conf').read_text().replace('/opt/aster',opt).replace('billing.example.com','localhost')
 web=web.replace('/etc/letsencrypt/live/localhost/fullchain.pem',config+'/server.pem').replace('/etc/letsencrypt/live/localhost/privkey.pem',config+'/server.key')
@@ -298,6 +301,8 @@ wait_ready
 sudo -n systemctl show "$api_unit" -p User -p NoNewPrivileges -p PrivateTmp -p ProtectSystem -p ProtectHome -p CapabilityBoundingSet -p MainPID > "$evidence/api-properties.txt"
 grep -Fxq 'NoNewPrivileges=yes' "$evidence/api-properties.txt" && grep -Fxq 'ProtectSystem=strict' "$evidence/api-properties.txt" || fail 'API hardening properties were not active.'
 sudo -n -u "$api_user" test -r "$config/secrets/session"
+sudo -n -u "$api_user" test -r "$config/secrets/smtp-key"
+if sudo -n -u "$api_user" test -w "$config/secrets/smtp-key"; then fail 'SMTP key fixture is writable by the API identity.'; fi
 if sudo -n -u "$api_user" test -w "$opt/current/bin/aster-api" || sudo -n -u "$api_user" test -w "$config/secrets/session" || sudo -n -u "$api_user" test -r "$scratch/migrator.dsn"; then fail 'Runtime OS identity can modify releases/secrets or read migration credentials.'; fi
 actual_pid=$(sudo -n systemctl show "$api_unit" -p MainPID --value)
 [[ $(ps -o user= -p "$actual_pid" | xargs) == "$api_user" ]] || fail 'API did not run as its dedicated non-root account.'
@@ -336,13 +341,13 @@ source_tables=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM informat
 restored_tables=$("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
 [[ $source_tables =~ ^[0-9]+$ && $source_tables -gt 0 && $restored_tables == "$source_tables" ]] || fail 'Restored table count does not match the nonempty source schema.'
 for target in "$db" "$restored"; do
-  "$mysql_root/bin/mysqldump" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --single-transaction --no-tablespaces --set-gtid-purged=OFF --no-create-info --skip-comments --compact --skip-extended-insert --order-by-primary --skip-triggers "$target" 2> "$scratch/compare.log" | sha256sum | cut -d' ' -f1 > "$scratch/$target.sha256"
+  "$mysql_root/bin/mysqldump" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --single-transaction --no-tablespaces --set-gtid-purged=OFF --hex-blob --no-create-info --skip-comments --compact --skip-extended-insert --order-by-primary --skip-triggers "$target" 2> "$scratch/compare.log" | sha256sum | cut -d' ' -f1 > "$scratch/$target.sha256"
 done
 cmp "$scratch/$db.sha256" "$scratch/$restored.sha256" || fail 'Restored table data differs from the stopped source database.'
 sudo -n install -o root -g "$api_user" -m 640 "$scratch/restore_runtime.service.dsn" "$config/secrets/runtime.service.dsn"
 sudo -n systemctl start "$api_unit"
 wait_ready
-python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --report "$evidence/restored-https-tests.json"
+python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --expect-smtp-settings --report "$evidence/restored-https-tests.json"
 python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" <<'PY'
 import json
 from pathlib import Path
@@ -354,6 +359,7 @@ summary = {
     'environment': 'isolated Ubuntu 24.04 GitHub-hosted runner',
     'systemd_hardened_api': True, 'nginx_verified_tls': True,
     'runtime_dml_migrator_separation': True, 'native_backup_restore_equal_data': True,
+    'smtp_encrypted_settings_restored': True, 'smtp_disabled_fixture_no_mail_sent': True,
     'same_schema_release_a_b_a': True, 'persisted_orders_before_restart': int(count),
     'source_table_count': int(source_tables), 'restored_table_count': int(restored_tables),
     'backup_elapsed_seconds': round((int(backup_finished) - int(backup_started)) / 1e9, 3),
