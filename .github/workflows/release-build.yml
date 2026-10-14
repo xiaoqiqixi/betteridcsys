@@ -70,7 +70,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format=text -show=version,verbose ./...
       - name: Sandboxed browser acceptance with the loopback demo
         run: |
-          chrome_path=$(command -v google-chrome)
+          chrome_path=/opt/google/chrome/chrome
           "$chrome_path" --version
           python3 -I controller/vps-billing/deploy/ci/browser-demo.py --repo-root "$GITHUB_WORKSPACE/source" --output "$RUNNER_TEMP/browser-acceptance" --chromium-path "$chrome_path"
       - name: Reproducible Linux amd64 packages from the validated commit

@@ -59,7 +59,7 @@ Go 漏洞扫描独立于数据库 job，数据库准备失败不会使它被前�
 
 ## 隔离浏览器检查
 
-常规 CI 与候选构建使用 `browser-demo.py` 启动本次源码的回环内存 API 和已构建前端，再执行源码中的浏览器回归。使用标准 Ubuntu runner 预装的 Google Chrome，保持 Chromium 沙箱开启；沙箱或浏览器不可用即失败，不修改主机安全设置。运行日志记录实际 Chrome 版本，临时 runner 从 Ubuntu 已验证的软件源安装 CJK 字体，支持中文截图。预装软件以 [GitHub runner 镜像清单](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) 和实际运行版本为准。
+常规 CI 与候选构建使用 `browser-demo.py` 启动本次源码的回环内存 API 和已构建前端，再执行源码中的浏览器回归。使用标准 Ubuntu runner 预装的 Google Chrome 实际二进制 `/opt/google/chrome/chrome`，独立校验可执行权限、所有者及不可共享写入；不调用 runner 中可能全局可写的启动包装脚本。保持 Chromium 沙箱开启；沙箱或浏览器不可用即失败，不修改主机安全设置。运行日志记录实际 Chrome 版本，临时 runner 从 Ubuntu 已验证的软件源安装 CJK 字体，支持中文截图。预装软件以 [GitHub runner 镜像清单](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) 和实际运行版本为准。
 
 检查仅使用公开演示账号和合成订单，不加载生产配置、SMTP 密钥或数据库 DSN。独立临时端口、启动就绪和自有进程检查限制测试目标；退出时清理本次进程与私有临时目录。上传内容仅含结果摘要和合成数据截图，保留 7 天，不上传 API/Vite 日志。截图不进入源码或运行安装包。该检查覆盖指定桌面/手机视口及自动化断言，不代表所有设备、完整无障碍或真实业务环境的视觉验收；实际通过结果按提交记录。
 
