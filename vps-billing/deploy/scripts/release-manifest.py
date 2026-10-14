@@ -101,6 +101,7 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch):
     info = {
         "release_label": version, "source_commit": commit, "source_date_epoch": int(epoch),
         "target": "linux/amd64", "cgo_enabled": False,
+        "deployment_model": "single-server native Linux: systemd, Nginx and local MySQL; target-host validation pending",
         "tools": {"go": tool("go", "version"), "node": tool("node", "--version"), "npm": tool("npm", "--version"), "tar": tool("tar", "--version").splitlines()[0], "gzip": tool("gzip", "--version").splitlines()[0], "python": tool("python3", "--version")},
         "go_build_flags": ["-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w"],
         "frontend_build": ["npm ci --no-audit --no-fund", "npm run build"],

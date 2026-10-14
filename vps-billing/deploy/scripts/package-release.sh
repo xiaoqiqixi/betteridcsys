@@ -66,7 +66,11 @@ mkdir -p "$bundle/bin" "$bundle/web" "$bundle/manifests" "$bundle/licenses"
 )
 cp -R "$build/frontend/dist/." "$bundle/web/"
 cp -R "$build/docs" "$bundle/docs"
-cp -R "$build/deploy" "$bundle/deploy"
+# Runtime delivery contains only the native Linux installation kit.
+mkdir -p "$bundle/deploy/scripts"
+cp -R "$build/deploy/systemd" "$bundle/deploy/systemd"
+cp "$build/deploy/nginx.native.conf" "$bundle/deploy/"
+cp "$build/deploy/scripts/backup-native.sh" "$bundle/deploy/scripts/"
 cp "$snapshot/LICENSE" "$bundle/LICENSE"
 cp "$snapshot/README.md" "$bundle/REPOSITORY-README.md"
 cp "$build/README.md" "$bundle/PROJECT-README.md"

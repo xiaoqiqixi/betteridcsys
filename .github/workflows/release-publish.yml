@@ -1,0 +1,46 @@
+name: Draft prerelease publication
+
+on:
+  workflow_run:
+    workflows: ['Release candidate build']
+    types: [completed]
+
+permissions:
+  contents: read
+
+# Serializes this repository's publisher. External tag/release writers still
+# require the API rechecks below; this is not a repository-wide lock.
+concurrency:
+  group: draft-prerelease-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'xiaoqiqixi/betteridcsys' &&
+      github.event.repository.private == false &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      # workflow_run's github.sha is the trusted default branch commit, not the
+      # upstream application ref. Every step in this job is trusted; permission
+      # is job-wide, even though the token env is passed only to Python.
+      - name: Trusted default-branch publisher only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Recheck upstream run and download bounded data without executing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py prepare-publish --policy "$RUNNER_TEMP/publish-policy.json" --download "$RUNNER_TEMP/candidate.zip"
+      - name: Verify again and create a new draft prerelease only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py publish --policy "$RUNNER_TEMP/publish-policy.json" --artifact "$RUNNER_TEMP/candidate.zip"

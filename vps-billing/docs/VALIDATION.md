@@ -2,11 +2,21 @@
 
 本文件区分“实现了配置”和“实际跑通”。编写日期：2026-10-14 UTC。
 
-## 本次维护里程碑（当前记录）
+## 当前原生修订的证据边界
 
-本节替代下方早期快照中的“USD-only / MySQL 从未运行 / 仅迁移 1”等状态描述；历史记录仍保留原测试范围和时间，不向过去补写今天的结果。当前功能约定见 [CONTRACT.md](CONTRACT.md)，完整发布条件见 [RELEASE.md](RELEASE.md)。
+本轮实现、已跑测试与具体停止点见 [原生检查点](NATIVE_CHECKPOINT.md)，以其结果区分当前验证和下面的历史事实。
 
-当前源码已完成以下云端验收；保留明确未完成的发布条件，不据此声称生产就绪。证据目录：`/workspace/aster-validation-20261014/`。实际工具链为 Go 1.27.2、Node 24.19.0、MySQL 8.4.11。
+最新要求是只保留单服务器原生 Linux 方案：当前部署脚本、配置、文档和 CI 不再提供 Docker 路径。原生 MySQL 8.4 一次性进程夹具正在替换旧 CI 服务依赖；最终结果必须绑定修订提交和实际日志，不能沿用旧夹具的通过状态。工作流代码尚未安装到默认分支或触发；目标系统、systemd 开机、真实 TLS、升级及原生恢复的验收仍需单独完成。
+
+**下方全部为旧候选或更早交付的历史记录。** 其中 Docker/Compose、镜像、旧备份脚本、当时工具可用性和当时进程状态只说明原测试发生过什么；相关实现已从当前源码路径移除，不是当前操作指引、依赖或待恢复的支持方案。历史提交和 `0.3.0-rc.1` 产物保持原样，不改写测试事实，也不把旧证据转换成原生验收。
+
+本次修订的原生安装与放行条件见 [INSTALL.md](INSTALL.md)、[ACCEPTANCE.md](ACCEPTANCE.md) 和 [CI_RELEASE_AUTOMATION.md](CI_RELEASE_AUTOMATION.md)。根 LICENSE/README 保留原文；项目 `vps-billing/README.md` 已获准更新为原生路径。当前云端 Go 漏洞数据库访问仍返回 Forbidden，未完成扫描。
+
+## 历史：0.3.0-rc.1 维护里程碑
+
+本节记录旧候选相对更早快照的“USD-only / MySQL 从未运行 / 仅迁移 1”等状态变化；历史记录保留原测试范围和时间，不向过去补写今天的结果。当前功能约定见 [CONTRACT.md](CONTRACT.md)，完整发布条件见 [RELEASE.md](RELEASE.md)。
+
+该历史候选源码完成了以下云端验收；保留当时明确未完成的发布条件，不据此声称生产就绪。证据目录：`/workspace/aster-validation-20261014/`。实际工具链为 Go 1.27.2、Node 24.19.0、MySQL 8.4.11。
 
 - Go：全量 `go test -race -count=1 -v ./...` 38 个顶层测试、50 个子测试通过，0 失败、0 跳过；真实 MySQL 覆盖 35 个独立迁移场景，以及双币种、快照、并发幂等、金额边界和事务故障回滚。`go vet` 通过。证据 `backend-race-mysql.log`、`backend-vet.log`。
 - 前端：62 项单元/组件测试、typecheck、Vite 生产构建和格式检查通过。浏览器截图复核后把窄屏三列统计改为单列，重新构建和浏览器验收通过；这次纯 CSS 调整不改变业务逻辑。证据 `frontend-final.log`、`frontend-mobile-build.log`、`frontend-format-final.log`。

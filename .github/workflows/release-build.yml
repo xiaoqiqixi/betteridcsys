@@ -1,0 +1,118 @@
+name: Release candidate build
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*-rc.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*-beta.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*-alpha.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing reviewed prerelease tag, e.g. v0.3.0-rc.2; dispatch from the default branch'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-build-${{ github.ref }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Read-only workflow controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Validate existing tag, public repository and trusted source
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py prepare-build --policy "$RUNNER_TEMP/build-policy.json"
+      - name: Exact validated source checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.policy.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Prepare disposable native runner
+        run: bash controller/vps-billing/deploy/ci/prepare-native-runner.sh
+      - name: Required regressions with native MySQL
+        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE/source"
+      - name: Native systemd, TLS, business, backup and rollback acceptance
+        run: |
+          acceptance_evidence="$RUNNER_TEMP/native-acceptance-evidence"
+          RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/accept-native.sh --allow-isolated-runner "$GITHUB_WORKSPACE/source" "$acceptance_evidence"
+      - name: npm vulnerability gate
+        working-directory: source/vps-billing/frontend
+        run: npm audit --audit-level=high
+      - name: Workflow syntax and expression checks
+        working-directory: source
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/release-build.yml .github/workflows/release-publish.yml
+      - name: Go vulnerability gate (no bypass on scan failure)
+        working-directory: source/vps-billing/backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format=text -show=version,verbose ./...
+      - name: Reproducible Linux amd64 packages from the validated commit
+        env:
+          SOURCE_SHA: ${{ steps.policy.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.policy.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/candidate"
+          bash source/vps-billing/deploy/scripts/package-release.sh --commit "$SOURCE_SHA" --version "$RELEASE_VERSION" --output "$RUNNER_TEMP/rebuild"
+          diff -r "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/rebuild"
+      - name: Validate packages and bind provenance to this exact run
+        run: python3 -I controller/vps-billing/deploy/ci/release_pipeline.py seal-build --policy "$RUNNER_TEMP/build-policy.json" --directory "$RUNNER_TEMP/candidate"
+      - name: Retain immutable candidate data for the separate publisher
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.policy.outputs.artifact_name }}
+          path: ${{ runner.temp }}/candidate/*
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+          compression-level: 0
+          retention-days: 7
+          archive: true
+      - name: Retain nonsecret native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/native-acceptance-evidence/native-acceptance.json
+            ${{ runner.temp }}/native-acceptance-evidence/cleanup.json
+            ${{ runner.temp }}/native-acceptance-evidence/https-tests.json
+            ${{ runner.temp }}/native-acceptance-evidence/restored-https-tests.json
+            ${{ runner.temp }}/native-acceptance-evidence/api-properties.txt
+            ${{ runner.temp }}/native-acceptance-evidence/systemd-verify.log
+            ${{ runner.temp }}/native-acceptance-evidence/nginx-config.log
+            ${{ runner.temp }}/native-acceptance-evidence/failure-unit-status.txt
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: false
+      - name: Remove owned native runner scratch
+        if: always()
+        run: |
+          if [[ -n ${ASTER_NATIVE_FIXTURE_ROOT:-} ]]; then
+            [[ $ASTER_NATIVE_FIXTURE_ROOT =~ ^/run/aster-native\.[A-Za-z0-9]{8}$ ]]
+            [[ -d $ASTER_NATIVE_FIXTURE_ROOT && ! -L $ASTER_NATIVE_FIXTURE_ROOT ]]
+            [[ $(stat -c %u "$ASTER_NATIVE_FIXTURE_ROOT") == "$(id -u)" ]]
+            sudo rm -rf --one-file-system -- "$ASTER_NATIVE_FIXTURE_ROOT"
+          fi

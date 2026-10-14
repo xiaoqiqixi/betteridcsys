@@ -1,5 +1,7 @@
 # 云端维护交付记录（候选版本）
 
+> 历史记录：本文件描述 `0.3.0-rc.1` 及之前的交付，不代表当前部署路径或待办清单。当前版本已移除旧部署实现，仅支持单服务器原生 Linux；最新范围与阻塞见 [验证记录](VALIDATION.md)。原记录及旧产物保留用于追溯，不执行其中已移除的历史操作。
+
 日期：2026-10-14 UTC。原始基线：`338d98b23bf190198a0efa34b7200aabc4ead35c`；上一检查点：`dc489395428b664a6664ed4c1a679007b184f7c7`。
 开发分支：`codex/security-maintenance-20261014`；草稿 PR：https://github.com/xiaoqiqixi/betteridcsys/pull/1 。根 LICENSE、根 README 和项目 README 保持原文。
 

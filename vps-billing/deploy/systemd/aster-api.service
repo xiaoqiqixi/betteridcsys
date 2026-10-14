@@ -1,13 +1,17 @@
 [Unit]
 Description=Aster Billing API
 Documentation=file:/opt/aster/current/docs/INSTALL.md
-After=network-online.target
+# MySQL is managed separately. Change mysql.service to the distribution's unit
+# name if necessary; this ordering never installs or initializes a database.
+After=network-online.target mysql.service
 Wants=network-online.target
+RequiresMountsFor=/opt/aster /etc/aster
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
 Type=simple
+# A fixed, non-login system account; never owns releases, configuration or keys.
 User=aster
 Group=aster
 WorkingDirectory=/opt/aster/current
@@ -16,23 +20,39 @@ ExecStart=/opt/aster/current/bin/aster-api
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
+KillMode=control-group
 UMask=0077
+
+# All durable application data lives in MySQL; output goes to journald.
+# No StateDirectory/ReadWritePaths is needed. The API cannot modify /opt,
+# /etc, or /var/lib. Private temporary space is not a backup or persistent data.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
 RestrictSUIDSGID=true
 RestrictRealtime=true
+RestrictNamespaces=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
 CapabilityBoundingSet=
 AmbientCapabilities=
+# Unix sockets for local MySQL; IP sockets for the loopback HTTP listener.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=aster-api
 
+# No ExecStartPre migration/bootstrap: reviewed database changes run separately
+# with a distinct credential that the aster runtime account cannot read.
 [Install]
 WantedBy=multi-user.target

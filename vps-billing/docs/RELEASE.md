@@ -1,15 +1,17 @@
 # 候选发布、复现与放行条件
 
-本次维护里程碑是可配置站点品牌、简体中文/English 和独立 CNY/USD 定价，以及已发现安全/正确性问题的修复。仅在私有开发分支与草稿 PR/Release 中审查；不合并、不部署外部主机、不接真实付款或邮件。功能与验证是否完成，以 [VALIDATION.md](VALIDATION.md) 的本轮记录为准，不能把“文档已写”当作验收通过。
+本里程碑包含可配置站点品牌、简体中文/English、独立 CNY/USD 定价，以及安全和正确性修复。源码、文档、构建包和校验和交付到公开仓库 `xiaoqiqixi/betteridcsys`；秘密、实际服务器配置、客户数据和敏感日志必须排除。应用维护 PR #1 已合并到 `main`（`95ca53ed2cf280ea49b5e1f2c7bb6e342c9d3512`），原生安装与发布自动化 PR #2 仍在验收；未部署外部主机或接通真实付款/邮件。功能与验证状态以 [VALIDATION.md](VALIDATION.md) 及 [原生验证记录](NATIVE_CHECKPOINT.md) 的提交与实际记录为准。
 
-根 LICENSE、README 及原项目 README 保留原文，其中 USD-only、迁移/数据库未验证等文字是早期快照。**当前接口与能力以 [CONTRACT.md](CONTRACT.md)、[SITE_SETTINGS.md](SITE_SETTINGS.md) 和本轮验证记录为准。** 历史 README 不作为本次已完成范围的证明。
+后续部署目标已调整为 **单服务器原生 Linux**，当前源码、部署工具和 CI 都只保留原生路径，高可用暂缓。现有 `0.3.0-rc.1` 保留为历史候选，不覆盖或重新命名；新候选须通过 Ubuntu 24.04 原生服务、权限、HTTPS、升级切换与备份恢复等工程验证；外部主机的开机恢复、真实域名和公共 CA 证书另行记录，不宣称已部署。
+
+根 LICENSE、README 保留原文；项目 `vps-billing/README.md` 已更新为当前原生路径。**当前接口与能力以 [CONTRACT.md](CONTRACT.md)、[SITE_SETTINGS.md](SITE_SETTINGS.md) 和本轮验证记录为准。** 旧提交中的 USD-only、迁移/数据库未验证等文字属于早期快照，不作为当前能力证明。
 
 ## 可审查的交付物
 
-- 干净已提交的开发分支、同一草稿 PR、变更记录与实际测试证据。
-- `aster-VERSION-linux-amd64.tar.gz`：静态 API、编译网页、文档、部署样例、依赖清单和许可证材料。
-- `aster-VERSION-source.tar.gz`：同一提交中的根 LICENSE/README 和项目源码，排除本地秘密、依赖目录、构建输出与旧测试日志。
-- `BUILD.json`：准确 Git 提交、提交时间作为 SOURCE_DATE_EPOCH、目标架构、构建参数、工具链及关键输入 SHA-256。
+- 已审查提交及对应 PR/合并记录、变更说明与实际测试证据。
+- `aster-VERSION-linux-amd64.tar.gz`：静态 API、编译网页、文档、依赖清单和许可证材料；修订后的运行包只带原生 systemd/Nginx 样例及 `backup-native.sh`。
+- `aster-VERSION-source.tar.gz`：同一修订提交中的根 LICENSE/README 和项目源码，排除本地秘密、依赖目录、构建输出与旧测试日志；不重新加入已从当前源码删除的旧部署实现。
+- `BUILD.json`：准确 Git 提交、提交时间作为 SOURCE_DATE_EPOCH、目标架构、构建参数、工具链及关键输入 SHA-256；修订包新增 `deployment_model`，明确单服务器原生模型和目标主机验证状态。
 - `SHA256SUMS`：验证两个归档和 BUILD.json。尚无签名、来源证明或完整 SPDX/CycloneDX SBOM；依赖清单及收集的 license/notice 文件不等于法律合规结论。
 
 归档不带部署秘密、真实数据、数据库备份或本机缓存。测试日志留在受限证据目录，不自动塞入发布包，避免暴露运行路径、账号与 DSN。
@@ -39,13 +41,17 @@ diff -u /workspace/release-a/SHA256SUMS /workspace/release-b/SHA256SUMS
 2. 真实一次性 MySQL：迁移 1–5 与重复迁移、升级/已知中断恢复、完整 checksum、未知版本拒绝、16 并发幂等、冲突/回滚、CNY/USD 分组汇总与不可变身份；数据库拒绝小写/带重音币种近似值。
 3. 管理员设置权限/CSRF/revision/审计，危险链接/文本拒绝，客户无法写，公开设置不泄露私有字段。两语言/两币种分别切换与错误回退。
 4. 两个客户隔离、直接账单详情、迟到请求处理、错误/超时后的订单安全重试；禁用支付不改变已付状态。
-5. 本云端合成数据的 Compose 构建/启动、runtime 最小权限、真实备份与隔离恢复，以及受支持浏览器的明确范围验收。无法完成的项必须列出具体阻塞，不能把模拟替代为真实通过。
-6. Go/npm/镜像依赖扫描及来源检查；扫描端点受阻时记录“不确定/未扫描”，不写“0 漏洞”。每种扫描的覆盖范围分别记录。
+5. Ubuntu 24.04 上的真实原生 MySQL、加固 systemd API、Nginx 与验证证书的 HTTPS、runtime 最小权限、API 重启、同 schema A → B → A 切换，以及原生备份/同实例新空库恢复后的业务验证。明确记录实际浏览器覆盖范围。数据库进程重启、整机开机恢复、跨应用/schema 版本回滚、独立实例灾备、公共 CA/真实 DNS/续期不在该自动化结论内；不能用模拟或相邻测试宣称通过。
+6. Go/npm 依赖扫描、原生系统软件及来源检查；扫描端点受阻时记录“不确定/未扫描”，不写“0 漏洞”。每种扫描的覆盖范围分别记录。
 7. 打包两次校验和相同、归档内容/权限检查、不含秘密、静态二进制实际启动、源码根 LICENSE/README 哈希不变。
 
 当前 npm 审计或单元测试结果不能替代浏览器、TLS 边界、压力或恢复验收。最终验证应在最后代码变更后运行；只改文档需核对链接和打包内容，无需伪造应用回归时间。
 
 ## 发布与安装
+
+只读 CI、标签候选构建与默认分支受信草稿发布流程，见 [CI 与草稿 Release 自动化](CI_RELEASE_AUTOMATION.md)。`9ed815c` 已通过真实原生数据库回归、systemd/HTTPS、API 重启、同 schema 切换及备份恢复；完整 CI 在后续 actionlint 失败，修复后的最终重跑和候选构建至草稿上传仍待完成，见 [原生验证记录](NATIVE_CHECKPOINT.md)。应用合并、自动化合并、CI 成功和 Release 创建分别记录，不互相替代。
+
+`cf971f1` 的 Go 扫描成功，报告 0 项可达函数、0 项导入包、19 项模块级告警；后者涉及当前应用未导入的 `x/crypto` SSH/OpenPGP 包，不能表述为“零已知漏洞”。扫描使用 Go `1.27.2`、`govulncheck v1.9.0` 与 2026-10-08 的漏洞库快照；每次候选按该次真实输出重新记录。
 
 先将源码提交/草稿 PR、生成的包和证据相互对应，再上传到明确标记的草稿 Release。没有可用 Release API 或授权凭据时，保留本地完整发布目录并报告出版阻塞；不要把上传失败说成发布成功，也不要为此创建长期凭据。
 
