@@ -189,13 +189,14 @@ for tool in core-manager.py update-manager.py; do
 done
 public_version=$(python3 - "$project/deploy/scripts/update-manager.py" "$scratch/public-read-token" "$core_version" <<'PYPUBLIC'
 import importlib.util
-from pathlib import Path
+import os
 import sys
 spec = importlib.util.spec_from_file_location('public_prepare_metadata', sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
-release = module.Official(Path(sys.argv[2]).read_text()).json('/releases/latest')
+token = module.load_protected_token(sys.argv[2], module._Trust(owner=os.geteuid()))
+release = module.Official(token).json('/releases/latest')
 tag = release.get('tag_name', '')
 module.require(isinstance(tag, str) and tag.startswith('v'), 'Latest must be a normal Core release.')
 version = tag[1:]

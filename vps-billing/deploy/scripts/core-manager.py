@@ -346,10 +346,7 @@ def main(argv=None):
             updater.stable(options.version)
             token = ""
             if options.github_token_file:
-                try:
-                    token = updater.read_protected(options.github_token_file, 256, private=True).decode("ascii").strip()
-                except UnicodeError:
-                    raise Rejected("Invalid protected credential encoding.") from None
+                token = updater.load_protected_token(options.github_token_file)
             result = prepare(options.version, options.release_directory or "/opt/aster/releases/" + options.version, options.assets_directory, updater.Official(token))
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
         return 1 if result["status"] == "blocked" else 0

@@ -21,6 +21,8 @@
 
 私有仓库或API访问策略需要只读凭据时，API使用主机受保护的 `UPDATE_RELEASE_TOKEN_FILE` 引用；值只由获准秘密管理途径提供，不从网页输入、不自动创建。API文件无软/硬链接、仅owner可读，建议在 `/etc/aster/secrets/` 以 aster:aster 0400保存，父目录保持root控制；不能使用其他DSN文件的0640模式。引用变更需明确重启API，无效私密文件会拒绝启动。没有访问权限、被限流或官方来源无法核实时显示不可用，不把失败改成“已是最新”。主机暂存工具的token-file是另一独立root秘密引用，不从Web取得API秘密。
 
+凭据按不透明 Bearer 值处理，只检查安全 HTTP 传输字符及 1–4096 字节上限；文件可有一个末尾 LF 或 CRLF，最多 4098 字节，不接受空值、空白、嵌入换行或控制字符。不会解析 JWT 或据其声明判断权限。此边界适用于 API 与两个主机工具；各自文件权限要求保持不变。GitHub 的[安装令牌格式变更说明](https://github.blog/changelog/2026-04-24-notice-about-upcoming-new-format-for-github-app-installation-tokens/)包含较长、可变长度的 Actions 临时令牌，不能继续假定旧令牌长度或字母数字模式；字符约束依据 [RFC 6750 §2.1](https://datatracker.ietf.org/doc/html/rfc6750#section-2.1)。这不是自动续期、权限验证或创建凭据的功能。
+
 ## 运维核验与暂存
 
 主机工具 `deploy/scripts/update-manager.py` 随 Core 资源交付，仅提供 `stage/status`，没有 `apply` 命令。新后台对两种分发统一生成 schema 2 交接，以 `distribution_format` 区分 raw-binaries-v1 与 archive-v1；raw BUILD 为 schema 3。既有 schema 1 交接仍可读取，但只适用于旧四资产布局。`stage`：从固定官方渠道独立核对交接、仓库身份、稳定标签/源码、资产清单/摘要、BUILD/PROVENANCE、成功构建来源与归档内容，再下载到受限暂存目录。它**不安装、不执行新程序、不运行备份、不迁移、不改 current 链接、不管理 systemd**。不能将 `stage` 返回成功当作更新已应用。

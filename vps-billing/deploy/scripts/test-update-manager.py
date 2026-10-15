@@ -165,6 +165,71 @@ class Fixture:
         return self.files[asset["name"]]
 
 
+class CredentialTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="aster-opaque-credential-")
+        self.base = Path(self.temp.name)
+        self.base.chmod(0o700)
+        self.path = self.base / "read-token"
+        self.trust = manager._Trust(owner=os.getuid(), ancestor=os.stat("/").st_uid)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def save(self, raw):
+        self.path.write_bytes(raw)
+        self.path.chmod(0o600)
+
+    def test_opaque_legacy_new_and_bounded_transport_syntax(self):
+        # Deliberately synthetic strings, never credentials or JWT assertions.
+        for value in ("a", "github_pat_fixture", "ghs_42_" + "a-_." * 130,
+                      "AZaz09-._~+/==", "x" * manager.MAX_GITHUB_TOKEN):
+            with self.subTest(length=len(value)):
+                self.assertTrue(manager.valid_github_token(value))
+                self.assertEqual(manager.Official(value).token, value)
+        self.assertEqual(manager.Official().token, "")
+
+    def test_header_injection_non_ascii_malformed_and_oversized_rejected_redacted(self):
+        for value in (None, 7, b"bytes", "", "x" * (manager.MAX_GITHUB_TOKEN + 1),
+                      " leading", "trailing ", "a b", "a\tb", "a\rb", "a\nb",
+                      "a\r\nInjected: value", "a\x00b", "a\x7fb", "a\u00e9b", "a=b", "===", "a:b"):
+            with self.subTest(kind=type(value).__name__):
+                self.assertFalse(manager.valid_github_token(value))
+                if value != "":
+                    with self.assertRaises(manager.Rejected) as caught:
+                        manager.Official(value)
+                    self.assertEqual(str(caught.exception), "Invalid protected GitHub credential format.")
+
+    def test_protected_file_exact_bound_and_one_optional_line_ending(self):
+        for token in (b"ghs_42_" + b"a-_." * 130, b"x" * manager.MAX_GITHUB_TOKEN):
+            for ending in (b"", b"\n", b"\r\n"):
+                with self.subTest(length=len(token), ending=ending):
+                    self.save(token + ending)
+                    self.assertEqual(manager.load_protected_token(str(self.path), self.trust), token.decode("ascii"))
+        for raw in (b"", b"\n", b"\r\n", b"a\r", b"a\n\n", b"a\r\n\r\n", b" a ", b"a\nInjected: value",
+                    b"a\x00b", b"a\xffb", b"a=b", b"=" * 20, b"x" * (manager.MAX_GITHUB_TOKEN + 1),
+                    b"x" * (manager.MAX_GITHUB_TOKEN + 3)):
+            with self.subTest(length=len(raw)):
+                self.save(raw)
+                with self.assertRaises(manager.Rejected):
+                    manager.load_protected_token(str(self.path), self.trust)
+
+    def test_private_protection_links_and_modes_still_required(self):
+        self.save(b"ghs_fixture")
+        self.path.chmod(0o640)
+        with self.assertRaises(manager.Rejected):
+            manager.load_protected_token(str(self.path), self.trust)
+        self.path.chmod(0o600)
+        link = self.base / "link"
+        link.symlink_to(self.path)
+        with self.assertRaises(manager.Rejected):
+            manager.load_protected_token(str(link), self.trust)
+        link.unlink()
+        os.link(self.path, link)
+        with self.assertRaises(manager.Rejected):
+            manager.load_protected_token(str(self.path), self.trust)
+
+
 class LongNameArchiveTest(unittest.TestCase):
     """The historical producer uses exactly GNU's bounded LongLink marker."""
     root = "aster-core-0.5.0-linux-amd64-resources"
@@ -693,14 +758,15 @@ class HandoffTest(unittest.TestCase):
                 parsed = urllib.parse.urlsplit(request.full_url)
                 local = "http://127.0.0.1:" + str(server.server_port) + parsed.path + ("?" + parsed.query if parsed.query else "")
                 return self.inner.open(urllib.request.Request(local, headers=dict(request.header_items())), timeout=timeout)
-        official = manager.Official("fixture_read_only_token")
+        synthetic_token = "ghs_42_" + "a-_." * 130
+        official = manager.Official(synthetic_token)
         official.opener = FixtureOpener()
         try:
             result = manager.stage(str(self.handoff), str(self.state), "0.4.0", "1.0.0", api=official, trust=self.trust, now=NOW)
             self.assertEqual(result["status"], "awaiting_host_operator")
             self.assertEqual(len([x for x in observed if x[0].startswith("/fixture/")]), 4)
             self.assertTrue(all(not authorization for path, authorization in observed if path.startswith("/fixture/")))
-            self.assertTrue(all(authorization == "Bearer fixture_read_only_token" for path, authorization in observed if path.startswith(prefix)))
+            self.assertTrue(all(authorization == "Bearer " + synthetic_token for path, authorization in observed if path.startswith(prefix)))
         finally:
             server.shutdown()
             thread.join()

@@ -36,6 +36,7 @@ MAX_JSON = 2 << 20
 MAX_ARCHIVE = 80 << 20
 MAX_EXPANDED = 160 << 20
 MAX_FILE = 64 << 20
+MAX_GITHUB_TOKEN = 4096
 MAX_BACKUP = 256 << 20
 MAX_BACKUP_EXPANDED = 2 << 30
 VERSION = re.compile(r"(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\Z")
@@ -125,6 +126,26 @@ def read_protected(path, limit, trust=_Trust(), private=False):
         return raw
     finally:
         os.close(descriptor)
+
+
+def valid_github_token(token):
+    # RFC 6750 transport syntax only. GitHub credentials are opaque, including
+    # the variable-length installation tokens issued to Actions since 2026.
+    return isinstance(token, str) and 0 < len(token) <= MAX_GITHUB_TOKEN and re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", token) is not None
+
+
+def load_protected_token(path, trust=_Trust()):
+    raw = read_protected(path, MAX_GITHUB_TOKEN + 2, trust=trust, private=True)
+    if raw.endswith(b"\r\n"):
+        raw = raw[:-2]
+    elif raw.endswith(b"\n"):
+        raw = raw[:-1]
+    try:
+        token = raw.decode("ascii")
+    except UnicodeError:
+        raise Rejected("Invalid protected GitHub credential format.") from None
+    require(valid_github_token(token), "Invalid protected GitHub credential format.")
+    return token
 
 
 def strict_json(raw, limit=MAX_JSON):
@@ -223,7 +244,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Official:
     """Read-only fixed-repository HTTPS. No environment proxy or credential redirect."""
     def __init__(self, token=""):
-        require(isinstance(token, str) and (not token or re.fullmatch(r"[A-Za-z0-9_]{1,255}", token)), "Invalid protected GitHub credential format.")
+        require(isinstance(token, str) and (not token or valid_github_token(token)), "Invalid protected GitHub credential format.")
         self.token = token
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
@@ -740,10 +761,7 @@ def main(argv=None):
         else:
             token = ""
             if options.github_token_file:
-                try:
-                    token = read_protected(options.github_token_file, 256, private=True).decode("ascii").strip()
-                except UnicodeError as exc:
-                    raise Rejected("Invalid protected credential encoding.") from exc
+                token = load_protected_token(options.github_token_file)
             result = stage(options.handoff, options.state_directory, options.current_core_version, options.current_plugin_version, Official(token), options.backup, options.backup_sha256, options.backup_metadata)
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
         return 0

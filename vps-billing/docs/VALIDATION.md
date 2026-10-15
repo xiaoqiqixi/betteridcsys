@@ -8,6 +8,8 @@
 
 修正源码 `8a0ee4d34f76dd6495b595a8f7d7c38d2a040d98` 的 [CI 38669136092](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669136092) 通过了真实 MySQL 回归及 305 项前端测试，但随后两项未知插件配置验收因提前校验改变错误信息而失败，原生与浏览器验收未执行到。现恢复统一的 integration configuration 诊断，保留数据库操作前的拒绝检查；本地九项配置验收和 server 单元检查通过，仍须新提交完整 CI 放行。
 
+源码 `54ec61a11ee104dbfcb8e8c2e4fb7fddec9123d3` 的 [CI 38669842637](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669842637) 完成 516 个 Go PASS、0 失败/跳过、305 项前端和 329 项 Python 检查，但原生公开准备测试在下载前被过窄的 GitHub 凭据格式限制阻断；自有资源清理成功，后续原生与浏览器结论仍未形成。现按 GitHub 官方变更说明改为有界不透明 Bearer 值，保留文件保护、固定目的地和重定向去凭据规则；不读取、记录或解析真实临时令牌。修正后的完整结果须由新提交重新证明。
+
 ## 历史 Core 0.5.0 / SMTP 1.1.0 的验证与来源
 
 已验证源码：`6be81aaed4868adb3c60b30accbfd87d0bb899c5`，执行日期为 2026-10-14 UTC。[完整 CI 38655661440](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440) 的[应用、原生与浏览器检查](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687273)、[独立 Go 扫描](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687106)及[官方发布元数据读取](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687294)均成功。以下结果绑定该源码，不沿用历史版本或未提交修改的结论。
