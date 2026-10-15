@@ -4,22 +4,58 @@
 
 ## Core 0.5.0 / SMTP 1.1.0 的验证与来源
 
-财务登记、迁移 007 / 14 表、报价确认与原始程序/资源拆分属于新的源码范围。每个正式标签构建独立执行完整门禁、重复构建与来源校验，失败不发布；最终程序资产的源码、run/attempt 与哈希以对应 Release 的 BUILD、PROVENANCE、SHA256SUMS 为准。下列 0.4.0 / 1.0.0 及 rc 结果均为历史，不证明新规则已验收。
+已验证源码：`6be81aaed4868adb3c60b30accbfd87d0bb899c5`，执行日期为 2026-10-14 UTC。[完整 CI 38655661440](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440) 的[应用、原生与浏览器检查](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687273)、[独立 Go 扫描](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687106)及[官方发布元数据读取](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687294)均成功。以下结果绑定该源码，不沿用历史版本或未提交修改的结论。
 
-首轮源码 `c1bf8a952af38c3ea8dcaedefcf59e0140e959ce` 的 [CI 38654191416](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38654191416) **整体失败，没有放行发布**。应用、真实数据库及原生验收已完成，浏览器测试仍断言旧 `0.4.0`，页面实际显示正确的 `0.5.0`。本源码已将夹具改为读取所选源码版本，并同时核对 API 与页面；修复后的完整浏览器结果由后续运行记录证明。
-
-| 首轮检查 | 实际结果与范围 |
+| 检查 | 实际结果与范围 |
 |---|---|
-| Go / MySQL | 403 个 PASS 事件（含子测试），0 失败、0 跳过；真实财务迁移、报价并发、历史快照、事务回滚及权限回归通过，vet/编译通过 |
-| 前端与工具 | 前端 194，Python CI 198，清单 8、插件安装 39、更新暂存 33、配置 9、回环 HTTP 14 项通过 |
-| 原生数据库与恢复 | 7 次迁移，原库/恢复库各 14 表完整数据哈希一致；HTTPS 各 22 项通过；先验证新库仅 CNY，再由管理员明确登记其他币种及独立价格；恢复后加密 SMTP 配置保持关闭 |
-| 独立插件 | 9 项检查、0 跳过；SMTP `1.1.0 → 测试夹具 1.1.1 → 1.1.0` 安装/替换/回退，11 阶段 Core PID/磁盘及存活文件哈希均不变，含一次受控崩溃及不自动重发；只接收两封合成回环消息，无外部中继 |
-| 浏览器 | Chrome 155.0.8059.39，沙箱开启，旧版本断言失败；清理成功，未保留截图，不填写浏览器通过 |
-| 扫描与清理 | npm 审计 0；Go 可达函数/导入包告警 0，未导入模块代码告警 19；原生自有资源清理成功。hosted workflow 语法步骤因浏览器失败未执行，本地 actionlint 通过 |
+| Go / MySQL | 403 个 PASS 事件（含子测试），0 失败、0 跳过；race、vet、编译及真实 MySQL 财务迁移、报价确认、历史快照、事务回滚与权限回归通过 |
+| 前端与工具 | 前端 194，Python CI 198，清单 8、插件安装 39、更新暂存 33、配置 9、回环 HTTP 14 项通过；类型、格式、生产构建及 actionlint 通过 |
+| 原生业务与恢复 | Ubuntu 24.04 / amd64，MySQL 8.4.11；systemd API、验证证书的 Nginx HTTPS、DML/迁移权限分离通过；7 次迁移，原库和恢复库各 14 表完整数据哈希一致，HTTPS 各 22 项通过 |
+| 财务与状态保留 | 先验证新库仅 CNY，再由管理员明确登记其他币种及独立价格；API 重启及同 schema A→B→A 保留 6 个订单；加密 SMTP 设置恢复后可解密，保持关闭且未外发 |
+| 独立 SMTP 插件 | 9 项检查、0 失败、0 跳过；双摘要安装、危险审批拒绝、独立 UID/进程隔离及受控崩溃恢复通过；`1.1.0 → 测试夹具 1.1.1 → 1.1.0` 的 11 阶段 Core PID、磁盘与存活程序哈希不变，健康及订单接口持续正常 |
+| 浏览器 | Chrome 155.0.8059.39，沙箱开启；桌面/手机及财务配置等自动交互通过；日志记录 16 张合成截图的名称、大小、SHA-256，未下载截图或逐张人工视觉审阅 |
+| 扫描与清理 | npm 审计 0；Go 可达函数 0、导入包 0、模块级告警 19；原生及浏览器自有资源清理成功，原生测试与清理退出码均为 0 |
 
-原生插件检查的 Core PID 为 `26870`，磁盘与存活程序 SHA-256 为 `af2615c54857753c76367c7710678f564a07c6b8b733a0e2539b38717c46ae19`。它是验收脚本编译的未剥离程序，**不是最终 raw Release 程序的哈希或最终资产安装证明**。同一首轮源码的 Core/SMTP 本地独立重复构建字节一致，已核对原始静态 ELF、资源无 ELF、全部七个 SQL 及 Git 复制内容；本地输出不包含真实 Actions PROVENANCE，不能当作官方发布证明。
+插件回环 TLS 夹具只接受两封固定合成消息，没有外部中继。投递到 DATA 后发生一次受控 worker 崩溃，Core 保留“投递不确定”结果且未自动重发；systemd 重启 worker，Core 没有因安装、替换、回退或崩溃而重编或重启。`1.1.1` 是未发布的测试版本。Go 扫描使用 Go 1.27.2 / govulncheck 1.9.0；19 项模块级告警不等于可达漏洞，也不能据此概括为全部依赖无已知漏洞。
 
-发布仍必须满足 [ACCEPTANCE.md](ACCEPTANCE.md) 与 [RELEASE.md](RELEASE.md)，以对应标签成功构建和最终公开资产核验为准。没有用户服务器部署、真实付款/外部邮件、数据库降级、整机恢复或商业运营认证结论。
+原生验收脚本编译的未剥离 Core SHA-256 为 `af2615c54857753c76367c7710678f564a07c6b8b733a0e2539b38717c46ae19`。同一冻结源码另行构建的精简 raw Core SHA-256 为 `18a7f7da11f5f500b3c07265d6e8d804d8c79941cc6826330271f31a44333254`，该实际程序通过 9 项配置和 14 项回环 HTTP 检查，程序哈希保持不变且测试资源已清理；这项补充检查使用内存存储，没有运行 MySQL、systemd 或原生安装。
+
+本地 Core、SMTP 各独立构建两次，所有对应产物字节一致；已核对静态 Linux amd64 ELF、资源包不含 ELF、所选源码的全部七个 SQL 及复制文件。未封装真实 Actions 来源证明的本地输出分别为 Core 5 项、SMTP 4 项，不含真实 `PROVENANCE.json`，不作为官方发布证据。最终 Release 的程序摘要、资源摘要和来源以实际公开的 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS` 为准。
+
+首轮源码 `c1bf8a952af38c3ea8dcaedefcf59e0140e959ce` 的 [CI 38654191416](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38654191416) 因浏览器仍断言旧 `0.4.0` 而整体失败，未放行发布。夹具改为读取所选源码版本并核对 API/页面后，上述 `6be81aa` 完整运行通过；旧失败记录保留。
+
+验收使用隔离 runner、私有测试 CA 和合成数据；没有用户服务器部署、真实付款或外部邮件。A→B→A 使用相同程序与 schema，不证明数据库降级；恢复使用同一 MySQL 实例的新空库，未验证 MySQL 进程重启、整机重启、异地恢复、PITR 或生产 RPO/RTO。浏览器结论限于自动化检查，宝塔实际面板仍未验收。
+
+### Core v0.5.0 正式交付
+
+[Core v0.5.0](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.0) 已于 2026-10-14 23:56:26 UTC 公开，Release ID `413283648`，源码为上述 `6be81aa`。[标签构建 38656286815](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38656286815) 独立重跑完整门禁，应用/真实数据库、原生恢复、浏览器、依赖扫描及工作流检查均通过；测试数量与上表一致。该运行另完成 raw 产物重复构建、封装后的字节比较与实际 Actions 来源绑定。[发布 38657033711](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38657033711) 成功，GitHub API 已核对 `draft=false`、`prerelease=false`、latest 指向该 Core Release，且恰有下列六项已上传附件。
+
+| Core 公开附件 | GitHub SHA-256 摘要 |
+|---|---|
+| `aster-api-0.5.0-linux-amd64` | `18a7f7da11f5f500b3c07265d6e8d804d8c79941cc6826330271f31a44333254` |
+| `aster-plugin-host-0.5.0-linux-amd64` | `d439a39214ba0d238b4dcb01806ff7b9ff71786b8095539e7460cc49386d64bc` |
+| `aster-core-0.5.0-linux-amd64-resources.tar.gz` | `ed83f461b7db3199a948dc0530d518aeda06a6d4c44abd9e978905c767f6a2d5` |
+| `BUILD.json` | `0fc77cc49ab8bf394eca1e657e5bf908068e38a5b0cac77af57b9a797de1fa4a` |
+| `PROVENANCE.json` | `35204c2bb88beba95e34b85133f78235f9337a4a38af7721c04493191eef91c2` |
+| `SHA256SUMS` | `583f5515f833c5b57c48021b33ec248c72294daa6f7ebfbb5437a4f65304ef74` |
+
+已公开 API 程序摘要与上述实际 raw 程序冒烟测试一致。资源包使用此次正式构建的摘要，不以本地构建摘要代替。Core 0.5.0 交付范围为可配置币种、独立价格、报价确认、订单/账单快照及相关审计；尚未实现完整财务账本、结算、续费、退款或控制器自动开通，正式版本发布不代表生产就绪认证。
+
+### SMTP smtp-v1.1.0 正式交付
+
+[SMTP smtp-v1.1.0](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/smtp-v1.1.0) 已于 2026-10-15 00:06:23 UTC 公开，Release ID `413288577`，与 Core 使用相同源码 `6be81aa`。[独立标签构建 38657298153](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38657298153) 重跑完整应用、真实数据库、原生恢复、扫描及浏览器门禁，并完成重复构建与实际 Actions 来源绑定；[发布 38658019739](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38658019739) 成功。GitHub API 已核对 `draft=false`、`prerelease=false`、恰有五项已上传附件；latest 仍为 Core `v0.5.0`。
+
+| SMTP 公开附件 | GitHub SHA-256 摘要 |
+|---|---|
+| `aster-smtp-1.1.0-linux-amd64` | `70127fd84e8d8c6339318b52da892b554d5644145da7a7b2587ca30bf570c068` |
+| `aster-smtp-1.1.0-linux-amd64-resources.tar.gz` | `c597dbd736820be9d618afd580b8cbb3264ff557f7fd7db7e4fc4a7088ab9577` |
+| `BUILD.json` | `625e3f83ad689b4c3e7e1949ae0109a6b63894d953e35df85617ff4cd171fd08` |
+| `PROVENANCE.json` | `44d9f94929626fedf4055822dea20fa962cef52d96aa79fd438bc7b39b676976` |
+| `SHA256SUMS` | `34491447e78ff7c3d88ba43bc7b9285da2d7a64c4859d2047c4ef3ca70f5be13` |
+
+GitHub API 返回的三个公开 raw 程序摘要均与本地已核验程序一致。历史 `v0.3.0-rc.3`、`v0.3.0-rc.4`、`v0.4.0`、`smtp-v1.0.0` 的 Release 与附件元数据、摘要对照未变；本次核对未下载 Actions 归档或截图。SMTP 仍须独立安装、审批及启用，既有 Core 0.4.0 应先按 [升级说明](UPGRADE.md) 处理插件兼容性，不能因两个版本已公开而跳过迁移备份或自动启用邮件。
+
+后续仅文档提交的 CI 结果单独记录；本节的程序、资源与发布结论始终绑定上述冻结源码和实际运行。
 
 ## 历史 Core 0.4.0 / SMTP 1.0.0 正式交付
 
