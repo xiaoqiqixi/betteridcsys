@@ -92,6 +92,7 @@ func ExampleValidateSettlement() {
 	fixture.AmountMinor, fixture.CurrencyDecimalPlaces = want.AmountMinor, 3
 	fmt.Println("changed precision rejected:", errors.Is(integrations.ValidateSettlement(fixture, want), integrations.ErrInvalidResult))
 	// This pure predicate does not verify signatures, deduplicate or write a payment.
+
 	// Output:
 	// matching fields: true
 	// changed amount rejected: true

@@ -12,6 +12,24 @@
 
 新的原生验收固定正式 Core 0.5.2、来源 `9ed610a283020f50e2cfc529f8b5145b4a9c8fc3`、Release 413559379、构建 38702170922 和六项精确资产为升级起点。候选须严格高于基线，保留完整安装、实际升级、独立旧 schema、备份恢复、中断、兼容回退及两类未知 schema 人工恢复场景；不因旧 Release 清理而省略验收。
 
+### 已完成的精确源码 CI
+
+实现提交 [`96db42107cb50ee3870b987aa6cc8fdc7d51263b`](https://github.com/xiaoqiqixi/betteridcsys/commit/96db42107cb50ee3870b987aa6cc8fdc7d51263b) 的 [CI 38708160584](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38708160584) 已完成成功。[主检查 116332632944](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38708160584/job/116332632944)、[官方元数据 116332633101](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38708160584/job/116332633101) 和[Go 扫描 116332633222](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38708160584/job/116332633222) 均通过：
+
+| 检查 | 96db421 实际结果 |
+|---|---|
+| Go / MySQL | race 644 个 PASS，含 169 个顶层测试及子测试，0 FAIL／0 SKIP；真实隔离 MySQL、vet、静态 Linux amd64 构建及依赖边界通过 |
+| 前端 | 14 文件／421 项通过，类型、格式与生产构建通过；包括新增列表范围、筛选导出及财务服务器拒绝反馈回归 |
+| Python | 237、8、39、44、22、80、9、14 项编排与回归，再加基础／恢复后 HTTPS 各 22 项，共 497 项通过，不累加重复本地运行 |
+| 正式基线与安装升级 | 正式 v0.5.2 六资产与真实来源完整核验，prepare 不执行程序；实际新装和 v0.5.2 → 0.5.3 候选升级成功，非 root PID、HTTPS、管理员只读回执与终态幂等通过 |
+| 恢复及失败保护 | 独立旧 schema、实际备份／同一 MySQL 的独立空库恢复、停机后 SIGKILL 续跑、端口故障兼容回退、激活前及激活后未知 schema 停写与人工修复均通过；激活后修复使用原 ID，迁移仅一次、目标启动总两次、完整数据摘要不变，不自动恢复数据库 |
+| 插件、系统与供应链 | 9 项独立插件场景通过，Core PID／摘要保持；TLS 回环只接收两封合成邮件、外投为 0；实际 typed hook 与自有默认 ACL 冒烟通过。npm audit 为 0；Go 受影响代码 0、导入包 0、模块级未调用告警 19 |
+| 浏览器与清理 | sandbox Chrome `154.0.8037.97` 功能脚本通过，包含键盘与 720／721px 切换；16 项截图元数据有效，未查看图片。内外层自有资源清理成功，测试及最终退出码均为 0 |
+
+该次候选 API 原始、磁盘及存活程序 SHA-256 为 `28dc8db1f04b66dd0d1edb8f5c02bf71a02b425c41b72aa55c920ee9bb9c13cb`，插件宿主为 `3c74744f3b008dbd09f5ce3f9f9bc1b323610a920093bf97f109a7e6dd73392e`；它们是验收构建，未发布成正式资产。保存的解码主检查日志 SHA-256 为 `5abdd42663104cfbca7145605a9cd6bb168ce35987c97e452d54f2f8affabb25`。
+
+日志复核确认该次只实际运行了 `ExamplePaymentProvider`；第二个示例的 `Output` 与说明注释处于同组，因此只编译未执行。随后修正注释分组，本地 `go test -race -v ./internal/integrations -run '^Example'` 已实际执行并通过两个示例（1.030 秒）。此修正不改变应用行为，也不倒改上方 CI 的实际计数。
+
 发布后的 [`b8ad28d`](https://github.com/xiaoqiqixi/betteridcsys/commit/b8ad28d5f6bf0b92e2f4152667c07ecf13c280da) / [CI 38704975698](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38704975698) 实际成功核验并准备公开 Core 0.5.2，`source_and_integrity_verified=true`，没有程序执行、服务／数据库操作或切换活动版本。该次完整 CI **失败**：后续仍要求 0.5.1 的夹具收到复用的 0.5.2 路径，在入口护栏被拒绝。Go 643/0/0、前端 358/13、Python 494、基础与恢复后 HTTPS、插件隔离已通过；执行器主场景和浏览器未执行，外层自有资源清理成功。后续基线调整与该失败历史分别保留，不将其写成完整成功。
 
 人工视觉验收尚未完成：本地 Chromium 的 SUID helper 所有权不符合沙箱要求，先前启动在页面前失败；当前未通过关闭沙箱或修改权限重试。Actions 截图下载曾被拒绝，未改用其他路径或编码重试。托管浏览器的功能脚本与截图元数据不能替代实际看过桌面／手机图片；因此本轮不发布 UI 完成结论。
