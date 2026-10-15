@@ -112,21 +112,20 @@ def safe_reply_shape(raw, call, unit):
     report['keys_exact'] = set(value) == {'type', 'data'}
     kind = value.get('type')
     report['type_is_string'] = isinstance(kind, str)
-    report['type'] = kind if kind in ('o', 'a(sasbttttuii)', 'v') else 'other_or_absent'
+    report['type'] = kind if kind in ('s', 'a(sasbttttuii)', 'v') else 'other_or_absent'
     data = value.get('data')
     report['data_kind'] = 'list' if isinstance(data, list) else 'string' if isinstance(data, str) else 'object' if isinstance(data, dict) else 'other_or_absent'
     if isinstance(data, list):
         report['list_length'] = min(len(data), 10000)
         if len(data) == 1 and isinstance(data[0], list):
             report['nested_single_list_length'] = min(len(data[0]), 10000)
-    if call == 'get-unit':
-        encoded = ''.join(c if c.isascii() and c.isalnum() else '_' + format(ord(c), '02x') for c in unit)
-        report['object_path_matches'] = data == ['/org/freedesktop/systemd1/unit/' + encoded]
+    if call == 'unit-id':
+        report['identity_matches'] = data == unit
     return report
 
 class ObservedNative(module.Native):
     def run(self, argv, env=None, data=None, timeout=90, allow_failure=False, identity=None):
-        call = 'get-unit' if 'GetUnit' in argv else argv[-1] if argv[-1] in module.SERVICE_HOOKS else 'other-fixed-native-call'
+        call = 'unit-id' if argv[-1] == 'Id' else argv[-1] if argv[-1] in module.SERVICE_HOOKS else 'other-fixed-native-call'
         diagnostics['last_call'] = call
         result = super().run(argv, env=env, data=data, timeout=timeout, allow_failure=True, identity=identity)
         diagnostics['calls'] = (diagnostics['calls'] + [{
@@ -168,7 +167,7 @@ try:
                     'smoke_unit_metadata_mismatch')
         run(['sudo', '-n', '/usr/bin/systemctl', 'daemon-reload'])
         def inactive(target):
-            # show loads the unit for GetUnit without starting it.
+            # Read fixture state without starting it; typed properties load metadata independently.
             raw = run(['/usr/bin/systemctl', 'show', '--all', target.name,
                        '--property=LoadState', '--property=ActiveState', '--property=MainPID'])
             values = dict(line.split('=', 1) for line in raw.decode('ascii').splitlines() if '=' in line)
@@ -201,7 +200,7 @@ except Exception as failure:
     # Only the bounded phase/result below is public, never exception bodies.
     diagnostics['rejection'] = {
         'A fixed native operation failed; raw diagnostics were suppressed.': 'fixed_native_command_failed',
-        'Typed systemd unit object does not match the reviewed service.': 'unit_object_shape_or_identity_mismatch',
+        'Typed systemd unit identity does not match the reviewed service.': 'unit_identity_shape_or_value_mismatch',
         'Typed systemd service hooks are missing, nonempty or malformed.': 'hook_array_missing_nonempty_or_malformed',
     }.get(str(failure), 'other_fixed_or_suppressed_failure')
 finally:

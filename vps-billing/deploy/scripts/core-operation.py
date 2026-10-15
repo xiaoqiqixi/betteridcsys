@@ -484,21 +484,24 @@ class Native:
     def verify_empty_service_hooks(self):
         """Read all six typed service hook arrays; CLI omission never proves empty.
 
-        The v255 systemd D-Bus XML defines a(sasbttttuii). busctl get-property
-        unwraps a variant, giving data:[]; a method reply wraps its arguments,
-        so GetUnit returns type:o and data:[object_path]. See upstream v255
-        man/org.freedesktop.systemd1.xml and src/busctl/busctl.c.
+        v255 src/core/dbus.c:253-315 resolves the exact encoded object path by
+        loading unit metadata; src/core/dbus-manager.c:424-503 GetUnit instead
+        only finds an already loaded unit, which can be garbage collected.
+        Verify typed Unit.Id before its Service arrays. v255
+        man/org.freedesktop.systemd1.xml defines Id:s and a(sasbttttuii) hooks;
+        src/busctl/busctl.c:1983-2019 unwraps each property variant, so Id has
+        data:unit_name and an empty hook has data:[]. No service is started.
         """
         unit = self.spec["api_unit"]
         require(isinstance(unit, str) and UNIT.fullmatch(unit), "Unsupported service unit for typed hook inspection.")
         binary(SYSTEM_BUSCTL, "busctl")
         base = [SYSTEM_BUSCTL, "--system", "--json=short", "--no-pager", "--auto-start=no", "--allow-interactive-authorization=no", "--timeout=10"]
         service = "org.freedesktop.systemd1"
-        raw = self.run(base + ["call", service, "/org/freedesktop/systemd1", service + ".Manager", "GetUnit", "s", unit], timeout=15).stdout
-        reply = updater.strict_json(raw, 8192)
         encoded = "".join(character if character.isascii() and character.isalnum() else "_" + format(ord(character), "02x") for character in unit)
         expected = "/org/freedesktop/systemd1/unit/" + encoded
-        require(isinstance(reply, dict) and set(reply) == {"type", "data"} and reply["type"] == "o" and reply["data"] == [expected], "Typed systemd unit object does not match the reviewed service.")
+        raw = self.run(base + ["get-property", service, expected, service + ".Unit", "Id"], timeout=15).stdout
+        reply = updater.strict_json(raw, 8192)
+        require(isinstance(reply, dict) and set(reply) == {"type", "data"} and reply["type"] == "s" and reply["data"] == unit, "Typed systemd unit identity does not match the reviewed service.")
         result = {}
         for hook in SERVICE_HOOKS:
             raw = self.run(base + ["get-property", service, expected, service + ".Service", hook], timeout=15).stdout

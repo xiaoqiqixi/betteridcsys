@@ -395,12 +395,11 @@ class ExecutorTests(unittest.TestCase):
 
     def typed_bus_response(self, argv):
         unit = self.spec["api_unit"]
-        encoded = unit.replace("_", "_5f").replace("-", "_2d").replace(".", "_2e")
-        expected = "/org/freedesktop/systemd1/unit/" + encoded
-        if "call" in argv:
-            value = {"type": "o", "data": [expected]}
+        self.assertIn("get-property", argv)
+        self.assertNotIn("call", argv)
+        if argv[-1] == "Id":
+            value = {"type": "s", "data": unit}
         else:
-            self.assertIn("get-property", argv)
             value = {"type": "a(sasbttttuii)", "data": []}
         return subprocess.CompletedProcess(argv, 0, stdout=updater.json_bytes(value))
 
@@ -610,7 +609,7 @@ class ExecutorTests(unittest.TestCase):
             native.validate_service(str(self.old))
         run.assert_not_called()
 
-    def test_typed_service_hooks_follow_v255_get_unit_and_property_json_contract(self):
+    def test_typed_service_hooks_follow_direct_unit_id_and_property_json_contract(self):
         native = operation.Native(self.spec, self.trust)
         hooks = ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload")
         self.assertEqual(operation.SERVICE_HOOKS, hooks)
@@ -619,8 +618,9 @@ class ExecutorTests(unittest.TestCase):
         base = ["/usr/bin/busctl", "--system", "--json=short", "--no-pager", "--auto-start=no",
                 "--allow-interactive-authorization=no", "--timeout=10"]
         self.assertEqual(run.call_args_list[0].args[0], base + [
-            "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
-            "org.freedesktop.systemd1.Manager", "GetUnit", "s", self.spec["api_unit"]])
+            "get-property", "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1/unit/aster_2dtest_2eservice",
+            "org.freedesktop.systemd1.Unit", "Id"])
         self.assertEqual(len(run.call_args_list), 7)
         for call, hook in zip(run.call_args_list[1:], hooks):
             self.assertEqual(call.args[0], base + [
@@ -628,17 +628,19 @@ class ExecutorTests(unittest.TestCase):
                 "/org/freedesktop/systemd1/unit/aster_2dtest_2eservice",
                 "org.freedesktop.systemd1.Service", hook])
         self.assertTrue(all(call.kwargs == {"timeout": 15} for call in run.call_args_list))
+        self.assertTrue(all("get-property" in call.args[0] and "call" not in call.args[0]
+                            for call in run.call_args_list))
 
-    def test_typed_service_get_unit_rejects_wrong_object_signature_and_malformed_json(self):
+    def test_typed_service_unit_id_rejects_wrong_identity_signature_and_malformed_json(self):
         native = operation.Native(self.spec, self.trust)
-        expected = "/org/freedesktop/systemd1/unit/aster_2dtest_2eservice"
+        expected = self.spec["api_unit"]
         invalid = [
             {"type": "s", "data": [expected]}, {"type": "o", "data": expected},
-            {"type": "o", "data": []}, {"type": "o", "data": [expected, expected]},
-            {"type": "o", "data": ["/org/freedesktop/systemd1/unit/aster_2dother_2eservice"]},
-            {"type": "o", "data": [False]}, {"type": "o"},
-            {"type": "o", "data": [expected], "unrecognized": CANARY},
-            b'{"type":"o","type":"o","data":[]}', b'{"type":',
+            {"type": "s", "data": []}, {"type": "s", "data": {}},
+            {"type": "s", "data": "aster-other.service"}, {"type": "s", "data": ""},
+            {"type": "s", "data": False}, {"type": "s", "data": None}, {"type": "s"},
+            {"type": "s", "data": expected, "unrecognized": CANARY},
+            b'{"type":"s","type":"s","data":"aster-test.service"}', b'{"type":',
         ]
         for index, value in enumerate(invalid):
             raw = value if isinstance(value, bytes) else updater.json_bytes(value)
@@ -648,6 +650,19 @@ class ExecutorTests(unittest.TestCase):
                 native.verify_empty_service_hooks()
             self.assertEqual(run.call_count, 1)
             self.assertNotIn(CANARY, str(failure.exception))
+
+    def test_typed_service_derives_exact_object_path_for_unit_with_underscore(self):
+        self.spec["api_unit"] = "aster_ci-test.service"
+        native = operation.Native(self.spec, self.trust)
+        with patch.object(native, "run", side_effect=lambda argv, **kwargs: self.typed_bus_response(argv)) as run:
+            native.verify_empty_service_hooks()
+        self.assertEqual(len(run.call_args_list), 7)
+        for call in run.call_args_list:
+            argv = call.args[0]
+            self.assertIn("get-property", argv)
+            self.assertNotIn("call", argv)
+            self.assertEqual(argv[argv.index("get-property") + 2],
+                             "/org/freedesktop/systemd1/unit/aster_5fci_2dtest_2eservice")
 
     def test_typed_service_hooks_reject_each_nonempty_missing_mixed_or_malformed_property(self):
         native = operation.Native(self.spec, self.trust)
@@ -675,11 +690,11 @@ class ExecutorTests(unittest.TestCase):
                     native.verify_empty_service_hooks()
                 self.assertNotIn(CANARY, str(failure.exception))
 
-    def test_typed_service_hooks_require_successful_get_unit_and_every_property_command(self):
+    def test_typed_service_hooks_require_successful_unit_id_and_every_property_command(self):
         native = operation.Native(self.spec, self.trust)
-        for missing in ("GetUnit", "ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload"):
+        for missing in ("Id", "ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload"):
             def response(argv, **kwargs):
-                if (missing == "GetUnit" and "call" in argv) or argv[-1] == missing:
+                if argv[-1] == missing:
                     raise updater.Rejected("A fixed native operation failed; raw diagnostics were suppressed.")
                 return self.typed_bus_response(argv)
             with self.subTest(missing=missing), patch.object(native, "run", side_effect=response), \
