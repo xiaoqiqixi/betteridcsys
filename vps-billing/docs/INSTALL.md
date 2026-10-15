@@ -82,11 +82,13 @@ sudo python3 /var/lib/aster-bootstrap/0.5.2/core-manager.py prepare --version 0.
 sudo install -d -o root -g root -m 0700 /root/aster-install
 ```
 
-执行器为本次新实例生成独立随机数据库密码和会话秘密，创建 `<database>_runtime`、`<database>_migrator`、`<database>_backup` 本机账号。API 运行账号仅本库 SELECT/INSERT/UPDATE/DELETE；迁移和备份身份分开，DBA 凭据不进入运行配置。运行 DSN、会话秘密与 `api.env` 使用受限文件权限；迁移/备份凭据保存在 root 私密操作目录。保留这些恢复资料，另行受控备份，不上传 Git、Release 或网页。
+执行器为本次新实例生成独立随机数据库密码和会话秘密，创建 `<database>_runtime`、`<database>_migrator`、`<database>_backup` 本机账号。API 运行账号仅本库 SELECT/INSERT/UPDATE/DELETE；迁移和备份身份分开，DBA 凭据不进入运行配置。运行 DSN、会话秘密与 `api.env` 使用受限文件权限；迁移/备份凭据保存在 root 私密操作目录。备份账号除本库 SELECT/SHOW VIEW/TRIGGER/EVENT 外，还获全局 SHOW_ROUTINE，其例程元数据可见范围不限于本库；管理员须在确认计划前接受这一权限范围，详见 [备份权限与限制](BACKUP_RECOVERY.md#范围与前提)。保留这些恢复资料，另行受控备份，不上传 Git、Release 或网页。
 
 ### 可选：SMTP 加密密钥
 
-全新安装不启用 SMTP，不生成替代旧密钥。需要 SMTP 时，按 [PLUGINS.md](PLUGINS.md)独立安装/批准 SMTP 1.1.0、不同 worker 身份和 Unix socket；按 [密钥备份与恢复](BACKUP_RECOVERY.md#smtp-密钥备份恢复与轮换)准备专用 **32 字节原始随机密钥**，由 Core 读取、worker 不可读取。普通升级或恢复不能重新随机生成密钥来替代原密钥。SMTP 安装、目的地审批和主动发信不属于 Core 安装的隐式动作。
+全新安装不启用 SMTP，不生成替代旧密钥。需要 SMTP 时，按 [PLUGINS.md](PLUGINS.md)独立安装/批准 SMTP 1.1.0、不同 worker 身份和 Unix socket；专用密钥的备份与恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md#smtp-密钥备份恢复与轮换)。
+
+密钥必须恰为 **32 字节原始随机数据**，不是十六进制、base64 或带换行文本。由获准秘密管理途径在新的规范绝对路径写入，采用 API 运行身份所有、0400、单一硬链接的普通文件；所有祖先无软链接，归 root 或运行身份所有且不可被组/其他用户写入。建议放在 root 控制的 `/etc/aster/secrets/`，通过 `SMTP_ENCRYPTION_KEY_FILE` 引用。以实际 API 身份核对可读，同时确认独立 worker 无法读取、未加入可读 API 秘密的组；不要用会话/DSN 的 0640 模式处理此密钥。普通升级或恢复不能重新随机生成密钥替代原密钥，密钥值不进入命令参数、终端或日志。SMTP 安装、目的地审批和主动发信不属于 Core 安装的隐式动作。
 
 ## 3. 迁移与管理员
 
@@ -135,7 +137,7 @@ sudo python3 /var/lib/aster-bootstrap/0.5.2/core-operation.py apply \
   --confirm-plan-sha256 REVIEWED_PLAN_SHA256
 ```
 
-`apply` 在任何创建前拒绝已有用户/同名组、数据库/三个应用账号、配置根、`current` 或实例 unit；冲突应调查或转升级，不能删除未知数据来继续。确认后它使用锁和私密 journal 记录进度，创建身份、受限文件与专用数据库，安装审查过的配置/unit，执行所选版本的迁移及首次管理员引导，然后切换 Core/网页、启动服务并核查 HTTPS/静态资源。迁移和引导不在服务开机时自动重复。不能单凭 `-preflight` 退出 0 判断 schema 已就绪：`empty`、`pending_migrations`、`current` 含义不同，实际执行器核对结构化结果。
+`apply` 在任何创建前拒绝已有用户/同名组、数据库/三个应用账号、配置根、`current` 或实例 unit；冲突应调查或转升级，不能删除未知数据来继续。确认后它使用锁和私密 journal 记录进度，创建身份、受限文件与专用数据库，安装审查过的配置/unit，执行所选版本的迁移及首次管理员引导，然后切换 Core/网页、启动服务并核查 HTTPS/静态入口。迁移和引导不在服务开机时自动重复。不能单凭 `-preflight` 退出 0 判断 schema 已就绪：`empty`、`pending_migrations`、`current` 含义不同，实际执行器核对结构化结果。
 
 ## 4. 服务与 HTTPS
 

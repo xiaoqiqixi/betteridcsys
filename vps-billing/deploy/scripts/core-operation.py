@@ -485,14 +485,16 @@ class Native:
             web = pwd.getpwnam("www-data")
             require(web.pw_uid != 0 and web.pw_gid != 0 and web.pw_uid != account.pw_uid and web.pw_gid != account.pw_gid, "API and Nginx worker must have separate non-root identities.")
         properties = ("LoadState", "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
-        argv = ["/usr/bin/systemctl", "show", self.spec["api_unit"]] + ["--property=" + name for name in properties]
+        # Ubuntu systemd can omit empty command arrays without --all. Require
+        # explicit empty values so absence never becomes proof of no hooks.
+        argv = ["/usr/bin/systemctl", "show", "--all", self.spec["api_unit"]] + ["--property=" + name for name in properties]
         values = dict(line.split("=", 1) for line in self.run(argv).stdout.decode("utf-8").splitlines() if "=" in line)
         current = self.spec["instance_root"] + "/current"
         executable = current + "/bin/aster-api"
         command = re.search(r"(?:^|[ {])path=([^ ;]+) ; argv\[\]=([^;]+?) ;", values.get("ExecStart", ""))
         require(values.get("LoadState") == "loaded" and values.get("FragmentPath") == UNIT_DIRECTORY + "/" + self.spec["api_unit"] and values.get("DropInPaths") == "" and values.get("User") == values.get("Group") == self.spec["runtime_user"] and values.get("WorkingDirectory") == current and command is not None and command[1] == executable and command[2].strip() == executable and values.get("EnvironmentFiles") == self.spec["config_root"] + "/api.env (ignore_errors=no)" and all(values.get(name) == "" for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")), "Effective systemd API service differs from the reviewed dedicated instance.")
         if self.spec["edge_mode"] == "managed":
-            argv = ["/usr/bin/systemctl", "show", edge_unit(self.spec), "--property=FragmentPath", "--property=DropInPaths"]
+            argv = ["/usr/bin/systemctl", "show", "--all", edge_unit(self.spec), "--property=FragmentPath", "--property=DropInPaths"]
             edge = dict(line.split("=", 1) for line in self.run(argv).stdout.decode("utf-8").splitlines() if "=" in line)
             require(edge.get("FragmentPath") == UNIT_DIRECTORY + "/" + edge_unit(self.spec) and edge.get("DropInPaths") == "", "Effective managed edge service differs from its reviewed unit.")
         return {"service_configuration_verified": True}

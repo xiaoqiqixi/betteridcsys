@@ -202,6 +202,12 @@ class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
         report = CORE.selected_unit_diagnostics(spec, "api", values)
         self.assertTrue(all(report["checks"].values()))
         self.assertEqual(report["ExecMainStatus"], 203)
+        for key in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
+            values.pop(key)
+        missing = CORE.selected_unit_diagnostics(spec, "api", values)
+        for key in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
+            self.assertFalse(missing["properties_present"][key])
+            self.assertFalse(missing["checks"][key + "_empty"])
         values.update(ExecStart="private-command-with-secret", EnvironmentFiles="private-credentials",
                       ActiveState="private-provider-reply", ExecMainStatus="private-password")
         report = CORE.selected_unit_diagnostics(spec, "api", values)

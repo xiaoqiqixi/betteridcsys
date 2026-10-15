@@ -558,23 +558,40 @@ class ExecutorTests(unittest.TestCase):
             "ExecStartPre": "", "ExecStartPost": "", "ExecStop": "", "ExecReload": "",
         }
         account = types.SimpleNamespace(pw_uid=11001, pw_gid=11001)
+        hooks = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
         def service_account(name):
             return types.SimpleNamespace(pw_uid=33, pw_gid=33) if name == "www-data" else account
         def completed(argv, values):
-            selected = values if self.spec["api_unit"] in argv else {
+            selected = dict(values) if self.spec["api_unit"] in argv else {
                 "FragmentPath": str(self.units / operation.edge_unit(self.spec)), "DropInPaths": ""}
+            # Ubuntu 255 omits empty command arrays without an explicit --all,
+            # even when each requested property has its own --property option.
+            if "--all" not in argv:
+                for hook in hooks:
+                    if selected.get(hook) == "":
+                        selected.pop(hook)
             return subprocess.CompletedProcess(argv, 0, stdout="".join(k + "=" + v + "\n" for k, v in selected.items()).encode())
         with patch.object(operation.pwd, "getpwnam", side_effect=service_account), \
-                patch.object(native, "run", side_effect=lambda argv: completed(argv, valid)):
+                patch.object(native, "run", side_effect=lambda argv: completed(argv, valid)) as run:
             self.assertTrue(native.validate_service(str(self.old))["service_configuration_verified"])
-        for key, value in (("DropInPaths", "/etc/override.conf"), ("User", "root"),
-                           ("ExecStartPre", CANARY), ("EnvironmentFiles", "/unrelated/api.env")):
+        self.assertEqual(len(run.call_args_list), 2)
+        self.assertTrue(all("--all" in call.args[0] for call in run.call_args_list))
+        invalid = (("DropInPaths", "/etc/override.conf"), ("User", "root"),
+                   ("EnvironmentFiles", "/unrelated/api.env")) + tuple((hook, CANARY) for hook in hooks)
+        for key, value in invalid:
             changed = dict(valid, **{key: value})
             with self.subTest(key=key), patch.object(operation.pwd, "getpwnam", side_effect=service_account), \
                     patch.object(native, "run", side_effect=lambda argv: completed(argv, changed)), \
                     self.assertRaises(updater.Rejected) as failure:
                 native.validate_service(str(self.old))
             self.assertNotIn(CANARY, str(failure.exception))
+        for hook in hooks:
+            missing = {key: value for key, value in valid.items() if key != hook}
+            with self.subTest(missing_hook=hook), patch.object(operation.pwd, "getpwnam", side_effect=service_account), \
+                    patch.object(native, "run", side_effect=lambda argv: completed(argv, missing)) as run, \
+                    self.assertRaises(updater.Rejected):
+                native.validate_service(str(self.old))
+            self.assertIn("--all", run.call_args.args[0])
         with patch.object(operation.pwd, "getpwnam", return_value=types.SimpleNamespace(pw_uid=0, pw_gid=0)), \
                 patch.object(native, "run") as run, self.assertRaises(updater.Rejected):
             native.validate_service(str(self.old))

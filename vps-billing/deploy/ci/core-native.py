@@ -204,7 +204,7 @@ def actual_unit_diagnostics(spec):
                   "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
     output = []
     for role, unit in (("api", spec["api_unit"]), ("edge", spec["api_unit"][:-8] + "-edge.service")):
-        result = subprocess.run(["/usr/bin/systemctl", "show", unit, *["--property=" + key for key in properties]],
+        result = subprocess.run(["/usr/bin/systemctl", "show", "--all", unit, *["--property=" + key for key in properties]],
                                 capture_output=True, timeout=5, cwd="/")
         require(len(result.stdout) <= 64 << 10, "Selected unit properties exceeded their diagnostic bound")
         values = dict(line.split("=", 1) for line in result.stdout.decode("utf-8", errors="replace").splitlines() if "=" in line)
