@@ -82,10 +82,72 @@ def write(path, value, mode=0o600):
         os.fsync(output.fileno())
 
 
+def new_public_directory(path):
+    """Set an exact mode on this newly created fixture directory despite umask."""
+    os.mkdir(path, 0o755)
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        os.fchmod(descriptor, 0o755)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def create_public_controls(control, mount):
+    # Public binaries/certificates/status and the socket need traversal by the
+    # dedicated API/edge identities. Secret files retain their separate modes.
+    new_public_directory(control)
+    new_public_directory(control / "public")
+    new_public_directory(mount)
+
+
+def create_release_parent(root):
+    for path in (root, root / "releases"):
+        if not path.exists():
+            new_public_directory(path)
+        else:
+            info = path.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o755,
+                    "Existing fixture release parent must already be protected and traversable")
+
+
 def fact(evidence, name, value):
     require(re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name), "Invalid fixed fact name")
     write(Path(evidence) / (name + ".json"), json.dumps(value, sort_keys=True, indent=2) + "\n", 0o644)
     print("CORE_NATIVE_" + name.upper().replace("-", "_") + "_JSON=" + json.dumps(value, sort_keys=True), flush=True)
+
+
+def failure_diagnostics(resources, failure):
+    """Only fixed reasons, validated public receipts and file metadata escape."""
+    reasons = {
+        "Public status ancestors must be traversable by the non-root API.": "public_status_parent_not_traversable",
+        "Public status ancestors cannot be shared writable or privileged directories.": "public_status_parent_unsafe_mode",
+        "A fixed native operation failed; raw diagnostics were suppressed.": "fixed_native_command_failed",
+        "Native operation stopped; inspect its redacted status and private journal. No database rollback was performed.": "executor_recorded_recovery_checkpoint",
+    }
+    reason = reasons.get(str(failure), "unclassified_failure_details_suppressed")
+    report = {"stage": STAGE, "reason": reason, "failure_class": type(failure).__name__, "fixtures": []}
+    for fixture in getattr(resources, "fixtures", []):
+        entry = {"action": fixture.spec["action"], "operation_id": fixture.spec["operation_id"],
+                 "checkpoint_available": False, "path_metadata": []}
+        try:
+            entry["checkpoint"] = fixture.status()
+            entry["checkpoint_available"] = True
+        except Exception:
+            pass
+        paths = {"instance_root": fixture.root, "releases_parent": fixture.root / "releases",
+                 "config_root": fixture.config, "state_directory": fixture.state,
+                 "status_parent": Path(fixture.spec["status_file"]).parent,
+                 "controls": resources.control, "socket_parent": resources.mount}
+        for label, path in paths.items():
+            try:
+                info = path.lstat()
+                entry["path_metadata"].append({"label": label, "uid": info.st_uid, "gid": info.st_gid,
+                    "mode": oct(stat.S_IMODE(info.st_mode)), "directory": stat.S_ISDIR(info.st_mode)})
+            except OSError:
+                entry["path_metadata"].append({"label": label, "unavailable": True})
+        report["fixtures"].append(entry)
+    return report
 
 
 def verify_source_candidate(source, assets, installed):
@@ -168,9 +230,7 @@ class Resources:
         self.dump = self.control / "mysqldump"
         self.nginx = self.control / "nginx"
         require(not self.control.exists() and not self.mount.exists(), "Refusing to reuse Core fixture controls")
-        self.control.mkdir(mode=0o755)
-        (self.control / "public").mkdir(mode=0o755)
-        self.mount.mkdir(mode=0o755)
+        create_public_controls(self.control, self.mount)
         for source, target in ((args.mysql_root / "bin/mysql", self.mysql),
                                (args.mysql_root / "bin/mysqldump", self.dump), (args.nginx, self.nginx)):
             require(source.is_file() and not source.is_symlink(), "Native distribution tool is unavailable")
@@ -279,6 +339,7 @@ class Resources:
 class Fixture:
     def __init__(self, resources, executor, name, candidate, baseline, overrides):
         self.resources, self.executor = resources, executor
+        self.name = name
         suffix = resources.args.fixture_root.name.removeprefix("aster-ci-")
         short = sha256((suffix + name).encode())[:10]
         self.root = resources.args.fixture_root / ("core-" + name)
@@ -288,7 +349,7 @@ class Fixture:
         self.private = resources.control / name
         require(not self.private.exists() and not self.config.exists() and not self.state.exists(), "Refusing existing Core fixture paths")
         self.private.mkdir(mode=0o700)
-        (self.root / "releases").mkdir(parents=True, exist_ok=True, mode=0o755)
+        create_release_parent(self.root)
         candidate_path = self.root / "releases" / candidate["version"]
         require(not candidate_path.exists(), "Candidate fixture release already exists")
         shutil.copytree(candidate["directory"], candidate_path, copy_function=shutil.copyfile)
@@ -336,11 +397,13 @@ class Fixture:
         return str(path)
 
     def plan(self):
+        stage(self.name + "-plan")
         self.spec_path = self.save_spec()
         self.planned = self.executor.plan(self.spec_path)
         return self.planned
 
     def execute(self, native=None, resume=False):
+        stage(self.name + ("-resume" if resume else "-apply"))
         return self.executor.execute(self.spec_path, self.planned["plan_sha256"], resume=resume, native=native)
 
     def upgrade(self):
@@ -407,7 +470,9 @@ class Fixture:
         """The published baseline also exercises the unmodified root CLI."""
         self.spec_path = self.save_spec()
         arguments = ["/usr/bin/python3", "-I", self.executor.__file__]
+        stage(self.name + "-cli-plan")
         planned = json.loads(command([*arguments, "plan", "--spec", self.spec_path]))
+        stage(self.name + "-cli-apply")
         return json.loads(command([*arguments, "apply", "--spec", self.spec_path,
                          "--confirm-plan-sha256", planned["plan_sha256"]], timeout=600))
 
@@ -585,6 +650,7 @@ def run_scenarios(args, candidate, baseline):
         fresh.plan()
         result = fresh.execute()
         require(result["status"] == "succeeded" and result["https_ready"] is True, "Fresh actual executor install failed")
+        stage("fresh-verify-live-and-cny")
         live = fresh.confirm_current(fresh.candidate)
         status, config = fresh.login().request("/api/v1/admin/currencies")
         require(status == 200 and config["data"]["default_currency"] == "CNY" and
@@ -593,8 +659,10 @@ def run_scenarios(args, candidate, baseline):
         require(resources.sql("SELECT COUNT(*) FROM users WHERE role='admin';", database=fresh.spec["database"]) == "1", "First administrator was duplicated")
         require(fresh.execute(resume=True) == result, "Successful install resume changed its result")
         require(fresh.confirm_current(fresh.candidate)["api_pid"] == live["api_pid"], "Idempotent install resume restarted the API")
+        stage("fresh-status-permissions")
         receipt = fresh.verify_status_api(result)
         enabled = fresh.verify_enabled()
+        stage("fresh-database-grants")
         grants = fresh.verify_database_grants()
         fact(args.evidence, "fresh-install", dict(result, **live, **receipt, **enabled, **grants, production_https_login=True, fresh_cny_only=True,
              first_administrator_count=1, terminal_resume_idempotent=True, candidate_trust=candidate["trust"]))
@@ -771,6 +839,11 @@ def run_scenarios(args, candidate, baseline):
              "separate_empty_database_restore": True, "new_release_schema_delta": False,
              "production_deployment": False, "real_mail_or_payment": False})
         complete = True
+    except BaseException as failure:
+        # Export before cleanup removes the private checkpoint. Never expose the
+        # journal, command stderr, provider replies, SQL or arbitrary exceptions.
+        fact(args.evidence, "failure", failure_diagnostics(resources, failure))
+        raise
     finally:
         try:
             if hasattr(resources, "fixtures"):

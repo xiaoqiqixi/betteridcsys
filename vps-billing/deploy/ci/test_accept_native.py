@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 
 
@@ -187,6 +188,50 @@ class CoreExecutorAcceptanceGuardTests(NativeAcceptanceGuardTests):
 
 
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
+    def test_real_umask_077_keeps_new_public_ancestors_traversable_and_secrets_private(self):
+        with tempfile.TemporaryDirectory(prefix="aster-core-umask-") as directory:
+            root = Path(directory)
+            control, mount, instance = root / "control", root / "socket", root / "instance"
+            previous = os.umask(0o077)
+            try:
+                CORE.create_public_controls(control, mount)
+                CORE.create_release_parent(instance)
+                private = control / "private"
+                private.mkdir(mode=0o700)
+                CORE.write(private / "secret", "synthetic-fixture-secret")
+            finally:
+                os.umask(previous)
+            for path in (control, control / "public", mount, instance, instance / "releases"):
+                self.assertEqual(path.stat().st_mode & 0o7777, 0o755, str(path))
+            self.assertEqual(private.stat().st_mode & 0o7777, 0o700)
+            self.assertEqual((private / "secret").stat().st_mode & 0o7777, 0o600)
+            # An already prepared public baseline is accepted without mutation.
+            CORE.create_release_parent(instance)
+            instance.chmod(0o700)
+            with self.assertRaises(CORE.AcceptanceFailure):
+                CORE.create_release_parent(instance)
+            self.assertEqual(instance.stat().st_mode & 0o7777, 0o700)
+
+    def test_failure_diagnostics_emit_fixed_reason_and_metadata_without_exception_body(self):
+        with tempfile.TemporaryDirectory(prefix="aster-core-diagnostics-") as directory:
+            root = Path(directory)
+            control, mount, instance = root / "control", root / "socket", root / "instance"
+            CORE.create_public_controls(control, mount)
+            CORE.create_release_parent(instance)
+            def no_checkpoint():
+                raise RuntimeError("private SQL/password/DSN must not escape")
+            fixture = SimpleNamespace(root=instance, config=root / "config", state=root / "state", status=no_checkpoint,
+                spec={"action": "install", "operation_id": "a" * 32, "status_file": str(control / "public/status.json")})
+            resources = SimpleNamespace(control=control, mount=mount, fixtures=[fixture])
+            output = CORE.failure_diagnostics(resources, RuntimeError("private SQL/password/DSN must not escape"))
+            self.assertEqual(output["reason"], "unclassified_failure_details_suppressed")
+            self.assertFalse(output["fixtures"][0]["checkpoint_available"])
+            self.assertNotIn("private SQL/password/DSN", json.dumps(output))
+            metadata = {row["label"]: row for row in output["fixtures"][0]["path_metadata"]}
+            self.assertEqual(metadata["status_parent"]["mode"], "0o755")
+            fixed = CORE.failure_diagnostics(resources, RuntimeError("Public status ancestors must be traversable by the non-root API."))
+            self.assertEqual(fixed["reason"], "public_status_parent_not_traversable")
+
     def test_failed_native_command_never_exposes_raw_diagnostics(self):
         with self.assertRaises(CORE.AcceptanceFailure) as failure:
             CORE.command(["python3", "-c", "import sys; print('private-dsn'); print('private-password',file=sys.stderr); sys.exit(17)"])
