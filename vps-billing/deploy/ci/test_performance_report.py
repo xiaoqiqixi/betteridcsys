@@ -59,6 +59,7 @@ def fixture(baseline=False):
     plan_tables = {
         "session_lookup": "sessions", "user_lookup": "users",
         "currency_configuration": "currency_settings", "customer_orders": "orders",
+        "customer_recent_orders": "orders",
         "customer_services_summary": "services", "customer_invoices_summary": "invoices",
         "admin_services_summary": "services", "admin_invoices_summary": "invoices",
         "admin_customer_count": "users",
@@ -286,6 +287,40 @@ class PerformanceReportTest(unittest.TestCase):
                 mutate(value["explain"])
                 self.write(value)
                 self.assert_rejected(self.run_cli())
+
+    def test_recent_orders_exact_limit_five_template_retains_legacy_order_query(self):
+        columns = "id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot,currency_snapshot,plan_snapshot"
+        legacy = "SELECT " + columns + " FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 1000"
+        recent = "SELECT " + columns + " FROM orders WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 5"
+        self.assertEqual(REPORT.EXPLAIN_SQL["customer_orders"], legacy)
+        self.assertEqual(REPORT.EXPLAIN_SQL["customer_recent_orders"], recent)
+        self.assertEqual(REPORT.EXPLAIN_TABLES["customer_orders"], "orders")
+        self.assertEqual(REPORT.EXPLAIN_TABLES["customer_recent_orders"], "orders")
+        self.write(fixture())
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        public = json.loads(result.stdout.splitlines()[0].removeprefix("PERFORMANCE_REPORT_JSON "))
+        plans = {item["name"]: item for item in public["explain"]}
+        self.assertEqual(len(plans), 10)
+        self.assertEqual(plans["customer_orders"]["sql"], legacy)
+        self.assertEqual(plans["customer_recent_orders"]["sql"], recent)
+
+    def test_order_explain_templates_reject_changed_limit_or_tie_break_order(self):
+        mutations = (
+            ("customer_orders", lambda sql: sql.replace("LIMIT 1000", "LIMIT 5")),
+            ("customer_orders", lambda sql: sql.replace("created_at DESC", "created_at DESC,id DESC")),
+            ("customer_recent_orders", lambda sql: sql.replace("LIMIT 5", "LIMIT 1000")),
+            ("customer_recent_orders", lambda sql: sql.replace("DESC,id DESC", "DESC")),
+            ("customer_recent_orders", lambda sql: sql.replace("id DESC LIMIT", "id ASC LIMIT")),
+            ("customer_recent_orders", lambda sql: sql.replace("user_id=?", "user_id='" + CANARY + "'")),
+        )
+        for index, (name, mutate) in enumerate(mutations):
+            with self.subTest(name=name, mutation=index):
+                value = fixture()
+                plan = next(item for item in value["explain"] if item["name"] == name)
+                plan["sql"] = mutate(plan["sql"])
+                self.write(value)
+                self.assert_rejected(self.run_cli(), "EXPLAIN")
 
     def test_machine_strings_are_bounded_reviewed_formats(self):
         for key, invalid in {

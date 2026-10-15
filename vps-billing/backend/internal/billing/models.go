@@ -123,6 +123,9 @@ type Summary struct {
 	Revenue         int64
 	Customers       int
 }
+
+const recentOrderLimit = 5
+
 type Store interface {
 	Currencies(context.Context, bool) (CurrencyConfiguration, error)
 	UpdateCurrencies(context.Context, User, CurrencyUpdate) (CurrencyConfiguration, error)
@@ -145,6 +148,9 @@ type Store interface {
 	DeleteSession(context.Context, string) error
 	Plans(context.Context, string) ([]Plan, error)
 	Orders(context.Context, string) ([]Order, error)
+	// RecentOrders requires a nonempty owner and returns at most five orders
+	// across currencies, ordered by created_at then id, both descending.
+	RecentOrders(context.Context, string) ([]Order, error)
 	Invoices(context.Context, string) ([]Invoice, error)
 	Services(context.Context, string) ([]Service, error)
 	Audits(context.Context, string) ([]Audit, error)

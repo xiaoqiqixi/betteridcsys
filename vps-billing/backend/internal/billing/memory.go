@@ -148,6 +148,45 @@ func (m *Memory) Orders(_ context.Context, uid string) ([]Order, error) {
 	}
 	return r, nil
 }
+
+func (m *Memory) RecentOrders(ctx context.Context, uid string) ([]Order, error) {
+	if uid == "" {
+		return nil, ErrNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Keep only the five newest candidates. Historical fixtures need not be
+	// inserted in timestamp order; cloning the selected snapshots happens once.
+	out := make([]Order, 0, recentOrderLimit)
+	for _, order := range m.orders {
+		if order.UserID != uid {
+			continue
+		}
+		position := 0
+		for position < len(out) && (out[position].CreatedAt.After(order.CreatedAt) || (out[position].CreatedAt.Equal(order.CreatedAt) && out[position].ID > order.ID)) {
+			position++
+		}
+		if position >= recentOrderLimit {
+			continue
+		}
+		if len(out) < recentOrderLimit {
+			out = append(out, Order{})
+		}
+		copy(out[position+1:], out[position:len(out)-1])
+		out[position] = order
+	}
+	for n := range out {
+		out[n] = cloneOrder(out[n])
+	}
+	return out, nil
+}
+
 func (m *Memory) Invoices(_ context.Context, uid string) ([]Invoice, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

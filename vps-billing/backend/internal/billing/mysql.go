@@ -375,6 +375,27 @@ func (m *MySQL) Orders(c context.Context, uid string) ([]Order, error) {
 	}
 	return out, r.Err()
 }
+
+func (m *MySQL) RecentOrders(ctx context.Context, uid string) ([]Order, error) {
+	if uid == "" {
+		return nil, ErrNotFound
+	}
+	rows, err := m.DB.QueryContext(ctx, "SELECT "+orderColumns+" FROM orders WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 5", uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Order, 0, recentOrderLimit)
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, order)
+	}
+	return out, rows.Err()
+}
+
 func (m *MySQL) Invoices(c context.Context, uid string) ([]Invoice, error) {
 	w, a := filter(uid)
 	r, e := m.DB.QueryContext(c, "SELECT id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,paid_at,issuer_snapshot,currency_snapshot FROM invoices"+w+" ORDER BY issued_at DESC LIMIT 1000", a...)

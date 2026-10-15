@@ -659,13 +659,10 @@ func (a *App) overview(w http.ResponseWriter, r *http.Request, uid string, admin
 		jsonOut(w, 200, map[string]any{"currency_format": cur.CurrencyFormat, "customers": s.Customers, "total_services": s.TotalServices, "unpaid_invoices": s.PendingInvoices, "revenue_minor": s.Revenue, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "customers_scope": "all"})
 		return
 	}
-	os, e := a.Store.Orders(r.Context(), uid)
+	os, e := a.Store.RecentOrders(r.Context(), uid)
 	if e != nil {
 		a.internal(w, r, e)
 		return
-	}
-	if len(os) > 5 {
-		os = os[:5]
 	}
 	jsonOut(w, 200, map[string]any{"currency_format": cur.CurrencyFormat, "active_services": s.ActiveServices, "pending_invoices": s.PendingInvoices, "monthly_total_minor": s.MonthlyTotal, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "recent_orders": os, "recent_orders_scope": "all"})
 }

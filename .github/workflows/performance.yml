@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       baseline_sha:
-        description: 'Optional full ancestor commit SHA; compare baseline/candidate/baseline with this harness and one dataset'
+        description: 'Optional full ancestor commit SHA; overrides the fixed measured baseline for same-harness baseline/candidate/baseline'
         required: false
         default: ''
         type: string
@@ -45,8 +45,10 @@ jobs:
       - name: Prepare disposable native runner
         run: bash vps-billing/deploy/ci/prepare-native-runner.sh
       - name: Measure the fixed synthetic HTTP profile
+        # Both binaries include the current test harness. Baseline production
+        # source and harness hashes remain separate; this is not a release build.
         env:
-          PERF_BASELINE_SHA: ${{ github.event.inputs.baseline_sha || '' }}
+          PERF_BASELINE_SHA: ${{ github.event.inputs.baseline_sha || '58961d4ee6710a7bb249b98bbe0141227c3ffa79' }}
         run: |
           set +x
           set -euo pipefail
