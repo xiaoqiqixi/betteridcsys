@@ -296,6 +296,10 @@ class ExecutorTests(unittest.TestCase):
             source = "vps-billing/" + path
             fixture.source[source] = (SCRIPTS.parent / "systemd" / name).read_bytes()
             fixture.bundle[path] = (fixture.source[source], 0o644)
+        fixture.bundle["licenses/go/filippo.io__edwards25519@v1.1.1/LICENSE"] = (
+            b"Explicit offline Go dependency license fixture; not an official artifact.\n", 0o644)
+        fixture.bundle["licenses/npm/@babel_types@7.29.8/LICENSE"] = (
+            b"Explicit offline scoped npm license fixture; not an official artifact.\n", 0o644)
         fixture.refresh()
         target = self.instance / "releases" / version
         operation.manager.prepare(version, str(target), api=fixture, trust=self.trust)
@@ -489,6 +493,86 @@ class ExecutorTests(unittest.TestCase):
         extra = self.target / "extra-secret"
         extra.write_bytes(CANARY.encode())
         extra.chmod(0o644)
+        with self.assertRaises(updater.Rejected):
+            operation.prepared_release(str(self.target), self.trust)
+
+    def test_scoped_license_members_hash_without_relaxing_operator_paths(self):
+        names = ("licenses/go/filippo.io__edwards25519@v1.1.1/LICENSE",
+                 "licenses/npm/@babel_types@7.29.8/LICENSE")
+        for root in (self.old, self.target):
+            facts = operation.prepared_release(str(root), self.trust)
+            for relative in names:
+                path = root / relative
+                with self.subTest(root=root.name, relative=relative):
+                    # This is the old hashing call's rejection, retained for
+                    # operator paths while prepared-member hashing is scoped.
+                    with self.assertRaises(updater.Rejected):
+                        operation.sha_file(str(path), self.trust)
+                    self.assertEqual(operation.sha_prepared_member(str(root), relative, self.trust),
+                                     updater.digest(path.read_bytes()))
+                    self.assertEqual(facts["files_sha256"][relative], updater.digest(path.read_bytes()))
+            for relative in ("LICENSE", "PROJECT-README.md", "deploy/scripts/update-manager.py"):
+                self.assertEqual(operation.sha_prepared_member(str(root), relative, self.trust),
+                                 facts["files_sha256"][relative])
+
+    def test_prepared_member_hash_rejects_noncanonical_and_escaping_relatives(self):
+        invalid = ("", ".", "..", "../LICENSE", "../0.5.1/LICENSE", "licenses/../LICENSE",
+                   "licenses//LICENSE", "licenses/./LICENSE", "/etc/passwd", str(self.private / "spec.json"),
+                   "licenses/bad file/LICENSE", "licenses/bad\nfile/LICENSE", "licenses/bad\tfile/LICENSE",
+                   "licenses/back\\slash/LICENSE", "licenses/bad\0file/LICENSE")
+        for relative in invalid:
+            with self.subTest(relative=relative), self.assertRaises(updater.Rejected):
+                operation.sha_prepared_member(str(self.target), relative, self.trust)
+        for root in (str(self.target) + "/../0.5.2", str(self.target) + "@unapproved"):
+            with self.subTest(root=root), self.assertRaises(updater.Rejected):
+                operation.sha_prepared_member(root, "LICENSE", self.trust)
+
+    def test_prepared_scoped_license_links_empty_files_and_tamper_are_rejected(self):
+        relative = "licenses/npm/@babel_types@7.29.8/LICENSE"
+        path = self.target / relative
+        original_raw = path.read_bytes()
+        original = self.private / "original-scoped-license"
+        path.rename(original)
+        for link in (lambda: path.symlink_to(original), lambda: os.link(original, path)):
+            link()
+            with self.assertRaises(updater.Rejected):
+                operation.sha_prepared_member(str(self.target), relative, self.trust)
+            with self.assertRaises(updater.Rejected):
+                operation.prepared_release(str(self.target), self.trust)
+            path.unlink()
+        original.rename(path)
+        path.write_bytes(b"")
+        with self.assertRaises(updater.Rejected):
+            operation.sha_prepared_member(str(self.target), relative, self.trust)
+        with self.assertRaises(updater.Rejected):
+            operation.prepared_release(str(self.target), self.trust)
+        path.write_bytes(CANARY.encode())
+        self.assertNotEqual(operation.sha_prepared_member(str(self.target), relative, self.trust),
+                            updater.digest(original_raw))
+        with self.assertRaises(updater.Rejected) as failure:
+            operation.prepared_release(str(self.target), self.trust)
+        self.assertNotIn(CANARY, str(failure.exception))
+
+    def test_prepared_tree_rejects_resealed_bad_member_names_and_symlink_ancestors(self):
+        for name in ("bad license", "bad\nlicense"):
+            path = self.target / "licenses" / name
+            path.write_bytes(b"Invalid-name fixture\n")
+            path.chmod(0o644)
+            self.reseal(self.target)
+            with self.subTest(name=name), self.assertRaises(updater.Rejected):
+                operation.prepared_release(str(self.target), self.trust)
+            path.unlink()
+        self.reseal(self.target)
+        alias = self.base / "prepared-alias"
+        alias.symlink_to(self.target, target_is_directory=True)
+        with self.assertRaises(updater.Rejected):
+            operation.sha_prepared_member(str(alias), "LICENSE", self.trust)
+        directory = self.target / "licenses/npm"
+        original = self.private / "original-npm-licenses"
+        directory.rename(original)
+        directory.symlink_to(original, target_is_directory=True)
+        with self.assertRaises(updater.Rejected):
+            operation.sha_prepared_member(str(self.target), "licenses/npm/@babel_types@7.29.8/LICENSE", self.trust)
         with self.assertRaises(updater.Rejected):
             operation.prepared_release(str(self.target), self.trust)
 

@@ -239,6 +239,30 @@ class NativePreparationSmokeGuardTests(unittest.TestCase):
 
 
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
+    def test_prepared_verification_fixed_rejections_have_complete_safe_categories(self):
+        scripts = SCRIPT.parent.parent / "scripts"
+        targets = {
+            "core-operation.py": {"protected_path", "read_file", "sha_file", "sha_prepared_member", "_sha_protected_file", "prepared_release", "read_environment"},
+            "update-manager.py": {"stable", "exact_path", "protected_open", "read_protected", "strict_json", "static_elf"},
+        }
+        fixed = set()
+        for filename, names in targets.items():
+            parsed = ast.parse((scripts / filename).read_text())
+            found = {node.name: node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name in names}
+            self.assertEqual(set(found), names)
+            for function in found.values():
+                for node in ast.walk(function):
+                    if isinstance(node, ast.Call):
+                        name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+                        argument = node.args[1] if name == "require" and len(node.args) >= 2 else node.args[0] if name == "Rejected" and node.args else None
+                        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                            fixed.add(argument.value)
+        self.assertGreaterEqual(len(fixed), 40)
+        self.assertEqual(fixed - CORE.SAFE_REJECTIONS.keys(), set())
+        for message in fixed:
+            self.assertRegex(CORE.SAFE_REJECTIONS[message], r"^[a-z][a-z0-9_]{1,63}$")
+            self.assertNotEqual(CORE.SAFE_REJECTIONS[message], message)
+
     def test_legacy_api_report_projection_never_echoes_arbitrary_values(self):
         raw = json.dumps({"schema": 1, "read_only": True, "configuration_checked": True,
             "error": "private-provider-password", "database": {"status": "pending_migrations", "schema_version": 6,

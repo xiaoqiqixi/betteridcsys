@@ -104,7 +104,24 @@ def read_file(path, limit=1 << 20, trust=updater._Trust(), private=False):
 
 
 def sha_file(path, trust=updater._Trust(), maximum=updater.MAX_FILE):
-    descriptor = updater.protected_open(protected_path(path), trust=trust)
+    return _sha_protected_file(protected_path(path), trust, maximum)
+
+
+def sha_prepared_member(root, relative, trust=updater._Trust()):
+    """Hash only a canonical runtime member, including scoped license names.
+
+    These are the same component rules used by updater.tar_files for verified
+    resources. They do not change the stricter operator/configuration grammar.
+    The resulting absolute path still passes protected_open's no-link, owner,
+    permissions and canonical-path checks before bounded stable-file hashing.
+    """
+    protected_path(root)
+    require(isinstance(relative, str) and 0 < len(relative) <= 1024 and all(re.fullmatch(r"[A-Za-z0-9@_.+-]+", part) and part not in {".", ".."} for part in relative.split("/")), "Prepared member paths must use canonical reviewed resource components.")
+    return _sha_protected_file(root + "/" + relative, trust, updater.MAX_FILE)
+
+
+def _sha_protected_file(path, trust, maximum):
+    descriptor = updater.protected_open(path, trust=trust)
     try:
         before = os.fstat(descriptor)
         require(0 < before.st_size <= maximum, "Protected file exceeds its hashing bound.")
@@ -149,7 +166,7 @@ def prepared_release(root, trust=updater._Trust()):
             finally:
                 os.close(fd)
             if relative != manager.RECEIPT:
-                require(sha_file(directory + "/" + name, trust) == inventory[relative], "Prepared release bytes changed.")
+                require(sha_prepared_member(root, relative, trust) == inventory[relative], "Prepared release bytes changed.")
                 found.add(relative)
     require(found == set(inventory), "Prepared release inventory is incomplete.")
     for binary in ("bin/aster-api", "bin/aster-plugin-host"):
