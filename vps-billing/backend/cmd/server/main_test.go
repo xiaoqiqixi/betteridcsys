@@ -22,12 +22,30 @@ func TestRejectDefaultSessionSecrets(t *testing.T) {
 
 func preflightTestEnv(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"APP_MODE", "APP_ORIGIN", "SESSION_SECRET", "SESSION_SECRET_FILE", "LISTEN_ADDR", "TRUSTED_PROXY_CIDRS", "INTEGRATIONS_CONFIG_FILE", "PAYMENT_PROVIDER", "EMAIL_PROVIDER", "SMTP_ENCRYPTION_KEY_FILE", "UPDATE_RELEASE_TOKEN_FILE", "MYSQL_DSN", "MYSQL_DSN_FILE", "MYSQL_ALLOW_INSECURE"} {
+	for _, name := range []string{"APP_MODE", "APP_ORIGIN", "SESSION_SECRET", "SESSION_SECRET_FILE", "LISTEN_ADDR", "TRUSTED_PROXY_CIDRS", "INTEGRATIONS_CONFIG_FILE", "PAYMENT_PROVIDER", "EMAIL_PROVIDER", "SMTP_ENCRYPTION_KEY_FILE", "UPDATE_RELEASE_TOKEN_FILE", "HOST_OPERATION_STATUS_FILE", "MYSQL_DSN", "MYSQL_DSN_FILE", "MYSQL_ALLOW_INSECURE"} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("APP_MODE", "production")
 	t.Setenv("APP_ORIGIN", "https://billing.example")
 	t.Setenv("SESSION_SECRET", "a928e01f683bc470d2f50911a6e0938745dcefca89b1043452ead5fac7cd3251")
+}
+
+func TestHostOperationStatusConfigurationIsFixedAndOptional(t *testing.T) {
+	preflightTestEnv(t)
+	for _, path := range []string{"", "/var/lib/aster/operations/STATUS.json"} {
+		t.Setenv("HOST_OPERATION_STATUS_FILE", path)
+		cfg, err := loadLocalConfiguration("127.0.0.1:18080", false)
+		if err != nil || cfg.hostOperations == nil {
+			t.Fatal("optional or absent receipt prevented API startup", err)
+		}
+	}
+	for _, path := range []string{"private-relative-secret", "/var/lib/../private-secret", "/var/lib/private-secret\n"} {
+		t.Setenv("HOST_OPERATION_STATUS_FILE", path)
+		_, err := loadLocalConfiguration("127.0.0.1:18080", false)
+		if err == nil || strings.Contains(err.Error(), "private-secret") {
+			t.Fatal("unsafe receipt configuration accepted or exposed")
+		}
+	}
 }
 
 func TestPreflightReturnsRedactedJSONForConfigurationErrors(t *testing.T) {

@@ -233,6 +233,26 @@ class CorePreparationTests(unittest.TestCase):
         self.fixture.reseal()
         self.assert_prepared(self.prepare())
 
+    def test_published_prepare_and_current_executor_inventory_are_version_bound(self):
+        for version, expected in (("0.5.1", updater.PREPARE_TRUSTED_PATHS), ("0.5.2", updater.TRUSTED_PATHS)):
+            with self.subTest(version=version):
+                self.fixture = fixtures.Fixture("core", raw=True, core_version=version)
+                self.target = self.releases / version
+                self.assertEqual(set(self.fixture.provenance["trusted_blobs"]), expected)
+                self.assert_prepared(self.prepare())
+
+    def test_current_executor_policy_cannot_be_downgraded_to_prepare_inventory(self):
+        self.fixture = fixtures.Fixture("core", raw=True, core_version="0.5.2")
+        self.target = self.releases / self.fixture.version
+        self.fixture.provenance["trusted_blobs"] = {
+            path: value for path, value in self.fixture.provenance["trusted_blobs"].items()
+            if path in updater.PREPARE_TRUSTED_PATHS
+        }
+        self.fixture.reseal()
+        with self.assertRaisesRegex(updater.Rejected, "exact reviewed trust inventory"):
+            self.prepare()
+        self.assert_no_publication()
+
     def test_new_release_cannot_omit_new_host_tool_policy_inventory(self):
         self.fixture.version, self.fixture.tag = "0.5.1", "v0.5.1"
         protocol = "vps-billing/backend/pkg/pluginapi/protocol.go"

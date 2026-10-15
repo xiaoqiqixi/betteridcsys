@@ -1,82 +1,87 @@
 # 原生 Linux 升级、数据库兼容与回滚
 
-适用于修订后的单服务器原生 Linux 方案：systemd 管理 API，Nginx 提供 HTTPS 与网页，本机 MySQL 保存数据。不提供自动升级、向下迁移或高可用切换。本手册以 Ubuntu 24.04 / amd64 为基线；实际服务器资源、已有服务和维护窗口须在执行前核实。自动化验证范围见 [原生验证记录](VALIDATION.md)，不等于外部主机已执行升级。旧 `0.3.0-rc.1` 为保留的历史候选，不重写其文件或哈希。
+Core 0.5.2 的主机执行器在管理员核对私密规格、审查计划并确认精确 SHA-256 后，执行受支持单实例的停写、备份、schema 检查/迁移、Core 与网页切换、服务启动和 HTTPS 检查。网页不取得主机执行权。目标为 Ubuntu 24.04 / amd64、systemd、Nginx 与本机 MySQL 8.4；系统组件、DNS/证书及恢复方案仍由管理员准备。没有滚动升级、向下迁移或自动数据库恢复。历史候选与正式附件不重写，实际测试范围见 [VALIDATION.md](VALIDATION.md)。
 
-升级前先完成原生独立恢复演练，见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)。保留源码提交、Linux 包与校验和、旧版本目录、配置版本、秘密引用和数据库备份时点。若现有服务器运行的是另一种拓扑，须先制定数据及配置迁移方案；不能把旧拓扑的备份成功解释为原生升级已验证。
+升级前保留旧版本、源码提交、配置、秘密引用、插件策略/manifest、UID、完整数据库恢复点及备份时点。先按 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)完成隔离恢复和业务检查；文件摘要/gzip/metadata 通过不证明数据库内容或业务可恢复。
 
-## Core 0.5.1：财务数据与兼容边界
+## Core 0.5.2：财务数据与兼容边界
 
-迁移 1–6 保持原始内容及 checksum。Core 0.5.0 引入的迁移 007 将 schema 扩展到 14 张基础表，0.5.1 沿用这七项迁移：`currency_settings` 保存币种登记和价格 revision，订单/账单/服务保存币种格式快照，新订单另保存套餐快照。旧 CNY/USD 历史按旧版已知两位小数格式回填；旧订单没有当时套餐规格则保持缺失，不从当前套餐补造。
+迁移 1–6 保持原始内容及 checksum；Core 0.5.0 引入的迁移 007 在 0.5.1/0.5.2 保持一致，当前为 14 张基础表。`currency_settings` 保存币种登记和价格 revision，订单/账单/服务保存币种格式快照，新订单另有套餐快照。旧 CNY/USD 按旧版已知精度回填；缺失的历史套餐规格不从当前套餐补造。
 
-**全新安装和升级行为不同。** 全新安装只有启用且默认的 CNY，示例报价不可售；升级保留旧 USD 报价、业务记录及合法默认值。新增币种和各币种独立价格须由运营者审核配置；没有自动换汇、历史币种转换或跨币种合计。已有价格/订单/账单/服务的精度永久锁定，停用币种须无待付款订单、未付账单或未终止服务。规则见 [财务模型](FINANCIAL_MODEL.md)。
+全新安装只有启用且默认的 CNY，示例报价不可售；升级保留旧 USD 报价、业务历史与合法默认值。不自动换汇或转换历史金额。已使用代码和精度锁定，停用须无未完成付款或服务义务，见 [财务模型](FINANCIAL_MODEL.md)。
 
-迁移器锁定并核对完整版本/checksum、原约束和已有列，保留不属于已知旧定义的自定义约束；冲突应停止调查。007 放宽数据库的旧币种枚举为三个大写 ASCII 字母，登记成员与启用状态由应用事务校验，不代表可直接 SQL 写任意代码。执行前停止全部旧 API 写入，不能让旧代码在快照回填期间继续插入记录。
-
-MySQL DDL 隐式提交，无法靠事务回滚整个迁移。中断或 CLI 返回失败都不能推定数据库未变；不要删除新表/快照、改 schema 记录或 checksum 来启动旧版本。仅理解 1–6 的旧二进制会拒绝新版 schema；**没有破坏性向下迁移**。必须保留匹配旧二进制、配置、插件、秘密及数据库恢复点，实际回退走核验过的隔离恢复和停写切换。
+MySQL DDL 隐式提交，整个迁移不能靠事务回滚。中断、超时或 CLI 返回失败都不能证明数据库未变。仅理解旧前缀的程序可能拒绝新 schema；不要删除新列/表、改 checksum 或强行忽略版本。程序回退只有在实际旧 schema 仍完整匹配且旧程序就绪通过时才允许，不自动导入备份。
 
 ## SMTP 与拆分发行的升级顺序
 
-Core 0.5.1 仍提供六个原始 Linux amd64 程序/资源与元数据资产，SMTP 1.1.0 保持原来的五资产独立 Release。Core 的 API、插件宿主和资源由 `core-manager.py prepare --version 0.5.1` 独立核验后自动组装到新目录；SMTP 继续使用插件管理工具。公开旧 Core 0.4.0 / 0.5.0 和 SMTP 1.0.0 / 1.1.0 资产保持原样，不重打包或修改兼容声明。
+Core 0.5.2 使用六资产原始分发，SMTP 仍为独立 **1.1.0**、五资产及 `aster.smtp/1`，兼容 `>=0.4.0,<0.6.0`。SMTP 1.0.0 的上界为 `<0.5.0`，不能直接用于新 Core。先按 [PLUGINS.md](PLUGINS.md)独立核验、安装并批准兼容版本，或明确停用旧插件、停止 worker 并保留匹配恢复资料；不能伪造兼容范围。
 
-首次引导新版工具时，按 [安装手册](INSTALL.md#1-核对来源与归档)从明确的新 Release 核对摘要/来源并审查资源内的 `core-manager.py` 与同目录 `update-manager.py`，放入 root 保护目录后再执行。不要下载后直接交给 shell，也不要执行未核验二进制来证明它自己可信。已发布 Core 0.4.0 网页/工具不认识 raw 格式；0.5.0 更新工具虽然认识 raw 格式，其完整策略清单也不含新工具，会拒绝 0.5.1。新版工具明确识别旧版完整清单与新版完整清单，不接受任意子集；旧程序不会自动更新自身的格式或策略知识。不要手改交接 JSON、伪造当前版本或删减策略绕过。
+升级计划核对受保护插件目录、实际策略、manifest/程序摘要和目标 Core 兼容区间；不要省略真实已配置插件来绕过。执行器不隐式更新/启用 SMTP、不重新生成加密密钥、不主动发送邮件。独立插件升级不要求重编 Core。旧 0.4.0 工具不认识 raw 分发，旧 0.5.0/0.5.1 校验器不会自动认识后续完整策略，首次使用 0.5.2 必须引导已核验新工具。
 
-SMTP 1.0.0 的 Core 范围为 `>=0.4.0,<0.5.0`，不能在新 Core 上使用。升级前明确选择一种路径：
+## 准备目标版本与既有实例
 
-- 先独立核验新版管理工具和 SMTP 1.1.0 原始程序/资源，在 Core 0.4.x 上按真实版本参数安装并批准兼容 `>=0.4.0,<0.6.0` 的 1.1.0，核对独立服务与握手，再升级 Core。先前发布的 0.4.0 工具不能直接处理新拆分输入，勿修改旧资产来假装支持。
-- 暂不使用 SMTP：以最新策略 revision 明确停用插件，处理在途测试，再停止 worker；完整保留数据库加密设置、匹配密钥和旧插件，升级 Core 后按需要核验安装新兼容版本。不要删除凭据或随机生成替代密钥。
-
-Core 读取批准的真实 manifest 区间，不能根据版本号猜兼容。后台交接和 root 暂存只记录检查结果，均不替代本机策略/manifest/UID/socket/哈希/区间的独立核对。`compatibility_review_required` 不是安装就绪，详见 [更新交接](UPDATES.md)。插件安装、批准与启停见 [PLUGINS.md](PLUGINS.md)。
-
-更早单体 SMTP 版本升级还须准备独立 `aster-smtp` 身份、共享 socket 组、root 策略和 service；没有内置传输回退。API 只持本库 DML，插件身份不能读取 API 配置、数据库/会话/加密秘密。初始化身份或修改 API unit 时需一次明确重启；之后单独替换兼容插件不要求重编或重启 Core。
-
-## 准备目标版本
-
-以下命令使用已按安装手册核验、审查并保护的新版工具；明确目标为 0.5.1，不自动选择 latest。输出目录必须尚不存在：
+按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对 `v0.5.2` 的来源、六资产和新工具，使用明确版本准备新目录：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.1/core-manager.py doctor \
-  --release-directory /opt/aster/releases/0.5.1 \
-  --socket /run/mysqld/mysqld.sock --listen-address 127.0.0.1:18080
-sudo python3 /var/lib/aster-bootstrap/0.5.1/core-manager.py prepare --version 0.5.1
+sudo python3 /var/lib/aster-bootstrap/0.5.2/core-manager.py prepare --version 0.5.2
 ```
 
-`doctor` 只读主机事实，已有 API 占用声明端口会提示核对，不停止它。`prepare` 可使用 root 保护的六资产输入目录 `--assets-directory`，仍独立访问官方来源检查，不依赖未签名网页交接作为安装许可。它只原子发布新的完整版本目录，不停旧服务、不执行候选文件、不迁移或切链接。本地 `manifests/PREPARED.json` 明确为非官方的运维回执；`status=prepared`、文件存在或 `CORE_PREPARE.jsonl` 中的记录均不证明正在运行新版本。失败后保留旧版本与准备记录，发布结果不确定时先检查，不能覆盖或删除后重跑。
+`prepare` 不停服、不迁移、不切链接；已有目标拒绝覆盖。候选必须为实例 `releases/` 下新的 root 保护完整目录，具有真实本地 `PREPARED.json`、匹配 BUILD 和完整文件摘要。`current` 必须是 root 管理、指向该实例已验证发行目录的链接；新版本须严格更新，已应用迁移前缀不得改动。
 
-## 操作流程
+0.5.1 经官方准备器安装的既有实例，只有 unit 字节与受支持的原版模板或执行器模板完全匹配、并满足配置、权限、schema 和插件检查时才可接纳；这不表示任意手工 0.5.1 安装均已受支持。必须保留原始准备回执，`api.env` 只使用受支持的字面非秘密配置与文件引用，origin/listener 与规格一致；运行 DSN 和独立迁移 DSN 均精确选择同一本机 socket/数据库。unit/drop-in 或秘密引用不符合支持边界时停止调查，不覆盖旧配置、伪造回执或把升级伪装成全新安装。较早手工拼装、缺少来源回执或自定义拓扑须先制定并审查迁移方案。
 
-1. 核对准备目录的 `BUILD.json`、本地回执及版本/提交。在隔离原生恢复环境测试目标版本：先用新二进制 `-preflight` / `-schema-status` 读取配置和数据库现状，再测试升级迁移、重复迁移、就绪检查、旧账单读回、设置写入、新配置币种的独立报价、精度锁定、停用义务、历史快照和权限负向测试。只读结果 `empty`、`pending_migrations` 或 `current` 均可能退出 0；它们不证明升级或恢复完成。确认运行库身份、socket、域名和端口不会被副本复用。核对新的 `BUILD.json` 部署模型、Linux amd64 架构、systemd/Nginx 指令兼容性，以及与已有服务的冲突。
-2. 宣布维护窗口并阻断新增业务写入。当前没有滚动升级兼容性保证；保持单版本 API，避免旧客户端/旧 API 与新库并行写入。保存旧版未完成订单及其原幂等键，不用新键盲目重试。
-3. 完成最终备份与隔离恢复验证，记录数据时点、完整 schema/checksum、币种登记及匹配 SMTP 密钥。使用已核验新版备份脚本，并明确 `--release-directory` 为当前已安装且与备份 schema 相符的真实旧版本路径，保留自动生成的 `BACKUP.json`、SQL、文本说明及校验和；不要手写 metadata 或把候选版本信息冒充备份来源。保留旧应用文件和依赖清单；发行归档不得含秘密。
-4. 停止 API，用目标版本的明确二进制路径和独立迁移身份执行 `-migrate`，按 [安装手册](INSTALL.md#3-迁移与管理员)的干净环境与本机 socket 配置操作。socket 连接需 `MYSQL_ALLOW_INSECURE=true`，0.5.1 将其限制为绝对路径的 Unix socket，不能沿用到 TCP。核对迁移输出、记录版本和校验和，再用运行身份执行只读检查，确认 `current`；运行身份继续保持 DML 权限。升级不重新初始化管理员或重置密码。
-5. 把 `/opt/aster/current` 原子切换到已经解压并核验、由 root 管理的新目录。配置文件及秘密保留在 `/etc/aster`，逐项审查差异，不用新版样例覆盖真实配置。若 unit 改动先校验并 daemon-reload，若 Nginx 配置改动先 `nginx -t`；启动 API，检查 `/readyz` 后再恢复网页与写入。
-6. 验证两种语言与运营者已启用币种独立选择、各币种独立价格、历史账单身份/格式/金额不变、管理员保存冲突提示、客户无权更新设置、禁用支付仍返回明确失败。检查日志与数据库错误率，完成观察窗口。
+使用现有运行身份及 unit，不重新建立首位管理员。迁移 DSN 与备份 client 文件须 root 所有、0600、单一硬链接、祖先受保护；迁移凭据在运行配置根之外。运行账号保持本库 DML，备份身份按 [备份权限说明](BACKUP_RECOVERY.md#范围与前提)提供元数据可见性。API 不获得迁移或 DBA 权限。
 
-只读检查仅核对直接 SELECT 元数据可见性，不证明运行身份仅有 DML、隐藏非表对象、完整业务数据、停写、插件运行或 TLS。只有实际 HTTPS `/readyz`、正确版本的网页资源和管理员登录/业务验证通过后，才记录实际 `APP_ORIGIN` 入口已恢复可用。
+## 规格与精确计划确认
 
-原生 symlink 切换示例（在维护窗口执行；目标目录已经创建并验证，VERSION 由管理员替换）：
+将升级规格保存为 root 私密普通文件，例如 `/root/aster-upgrade/upgrade.json`。通用字段与 [安装规格](INSTALL.md#3-迁移与管理员)一致，`action` 改为 `upgrade`；不带 `dba_client_config` 或任何 `bootstrap_*` 字段，改为：
+
+| 字段 | 含义 |
+|---|---|
+| `migrator_dsn_file` | root 私密迁移 DSN，精确选择原数据库/socket，位于运行配置根之外 |
+| `backup_client_config` | 本机专用备份账号的私密 `[client]` 文件 |
+| `acknowledge_backup_restore_limits` | 必须明确设为 `true`：确认文件备份校验不等于隔离恢复，恢复准备由管理员负责 |
+
+完整规格仍包含新 operation ID、候选目录、三个互不嵌套的根目录、原 runtime user/unit、origin/listener、`edge_listen_address`、MySQL/Nginx 真实程序路径及 Nginx 摘要、TLS 和 `edge_mode`。共享 Nginx 另提供原完整配置路径/摘要；维护门禁须预先纳入并审查，见 [BAOTA.md](BAOTA.md)。可选 `status_file` 只能是实例/配置/私密状态根之外的单独脱敏导出路径，并须与既有 `HOST_OPERATION_STATUS_FILE` 完全相同；需要新设引用时先独立审查配置和服务重启。升级不带仅适用于新安装的 `enable_at_boot` 字段。
 
 ```sh
-sudo systemctl stop aster-api
-# 先按安装手册执行新二进制 -migrate，成功后再切换。
-sudo ln -s /opt/aster/releases/VERSION /opt/aster/current.next
-sudo mv -T /opt/aster/current.next /opt/aster/current
-sudo systemctl start aster-api
+sudo python3 /var/lib/aster-bootstrap/0.5.2/core-operation.py plan \
+  --spec /root/aster-upgrade/upgrade.json
+sudo python3 /var/lib/aster-bootstrap/0.5.2/core-operation.py apply \
+  --spec /root/aster-upgrade/upgrade.json \
+  --confirm-plan-sha256 REVIEWED_PLAN_SHA256
 ```
 
-`current.next` 若已存在，应检查上次操作结果后处理，不用 `ln -sf` 隐藏未知状态。链接替换应在同一文件系统完成；先确认 `/opt/aster/current` 是预期链接而非实际数据目录。Nginx 读取 `current/web`，API 与网页应在同一维护窗口切换；不要长期混用旧网页缓存和新接口。切换后记录实际链接目标、BUILD 提交、schema 历史与测试结果，不只记录一个易变的 VERSION 名称。
+先审查本次完整计划，再手工使用实际 `plan_sha256` 确认；不要将计划输出自动传入 apply。计划固定当前/目标提交、文件、配置/秘密引用、插件和工具摘要，任一输入变化应重新判断。网页交接、下载成功、`prepared` 或暂存 `awaiting_host_operator` 都不代替此授权。
 
-原生包更新不会替你升级 MySQL/Nginx/操作系统；这些更新需要各自兼容性、备份和维护窗口。服务 `start` 成功不证明开机可用；涉及 unit、socket 或启动顺序的变更，还需在独立授权的重启窗口验收。
+## 维护窗口内的实际流程
 
-## 升级验证的范围
+管理员先安排维护窗口、确认没有其他 API/客户端或外部作业继续写库，保存未完成订单及原幂等键。执行器的维护门禁只控制本站入口，不证明外部 SQL 写入者已停止；迁移期间还须禁止其他 DDL。
 
-原生自动化中的 A → B → A 使用同一源码构建的二进制和相同数据库 schema，只改变受控发布目录及静态版本标记。它用于核验服务停止/启动、链接切换和数据保留，不能证明两个不同应用版本之间的迁移兼容或数据库降级。真实跨版本升级仍应在恢复副本上运行目标版本的完整迁移及业务回归。数据库进程重启、整机重启与公共 CA 证书续期另行记录，不从 API 重启测试推导。具体已完成结果以 [原生验证记录](VALIDATION.md) 为准。
+执行器持锁和持久 journal，启用本站维护门禁并核查 HTTPS 拒绝业务请求，停止 API并确认状态；随后创建新私密备份，检查 gzip、摘要、来源版本/提交、metadata 和实际迁移前缀。备份基于已验证旧版本，不能拿候选 BUILD 冒充备份来源。它不声称自动完成隔离恢复，不向运行库导入 SQL。
+
+备份和兼容门禁通过后，用候选明确二进制与独立身份检查/迁移 schema，再用运行配置核对 `current`、checksum 和已有管理员，原子切换同提交 API/网页，启动服务并检查实际 HTTPS 就绪、TLS/主机名及静态网页资源。成功后撤除本站维护门禁；管理员仍须登录和完成业务验收。unit、Nginx 或插件变更不授权修改其他站点/服务。
+
+## 检查点与恢复执行
+
+```sh
+sudo python3 /var/lib/aster-bootstrap/0.5.2/core-operation.py status \
+  --state-directory /var/lib/aster-operations --operation-id ACTUAL_OPERATION_ID
+sudo python3 /var/lib/aster-bootstrap/0.5.2/core-operation.py resume \
+  --spec /root/aster-upgrade/upgrade.json \
+  --confirm-plan-sha256 ORIGINAL_REVIEWED_PLAN_SHA256
+```
+
+先读状态和 root 私密 `PLAN.json`、`JOURNAL.json`，再决定恢复。`resume` 只接受原规格、原 ID、原确认摘要，并重新核验受保护输入及检查点；不盲目重放不确定的迁移/引导或覆盖已有请求。超时、断电或日志同步失败时，服务、链接或数据库可能已变化；保留现场，不删除 journal、手改状态或另建 ID 重跑。
+
+公开状态 `needs_manual_recovery`（私密 journal 为 `recovery_required`）表示尚需调查，并不表示什么都没执行。若工具核实实际旧 schema 仍完全匹配，可恢复旧程序链接并验证旧程序就绪，状态为 `rolled_back`；维护门禁保持，业务检查和恢复流量由管理员进一步确认。旧 schema 不兼容、状态不明或就绪失败时阻止程序回退，保留维护状态。没有将 SQL 自动导入旧库或删除新对象的路径。
 
 ## 失败后的判断
 
-**迁移尚未开始、库未变更**：停止新版本，恢复旧目录链接与配置，验证旧应用就绪后再恢复写入。前提是已经核实本次操作没有改变数据库，不能只根据 CLI 返回失败推定迁移未执行。
+**数据库实际未变且旧程序兼容**：核对 journal、链接、schema 和服务实际状态，再按已审查方案恢复旧程序。不能只因命令失败就推断可回退。
 
-**迁移已提交**：旧二进制可能因新 schema 版本而拒绝启动。本版本没有向下迁移；不能承诺只切换旧二进制即可回滚。优先保留现状、诊断并向前修复，或按审查过的恢复方案重建隔离库再切换。不要删除新字段、手改 checksum 或强行让旧代码忽略版本。
+**数据库已经变化或无法证明未变**：优先保留现场并向前修复；旧二进制可能拒绝启动，不手改迁移记录或强行降级。
 
-**必须恢复数据库**：先停写、保存失败现场和当前数据副本，确认备份时点及之后可能丢失的所有写入，再由负责人员批准切换。先在另一个原生数据库实例或明确隔离的新库恢复，核验业务数据后更换受限 DSN 文件并重启 API。禁止直接把 SQL 导入运行库、删除数据库数据目录或执行 `DROP DATABASE` 当作快捷回滚。
+**确需恢复数据库**：停写并保存失败现场和当前数据副本，确认恢复点之后所有写入及可能损失，由负责人员批准。按 [备份恢复](BACKUP_RECOVERY.md)在隔离的新空库恢复并验证，再于维护窗口更换受限 DSN、启动匹配程序并验收。禁止向运行库直接导入、`DROP DATABASE` 或删除数据目录作为快捷回退。
 
-回滚结束也需要完整业务验收。记录失败原因、影响时段、选择的恢复点、数据差异及后续行动；不得把“进程启动”当作数据正确性结论。
+恢复流量前检查真实 HTTPS 入口、管理员登录、两种语言、各启用币种独立报价、历史账单金额/格式、幂等与权限、支付失败关闭。记录实际提交、schema/checksum、插件、备份时点和观察结果。历史 CI 的 A → B → A 使用同源码/同 schema，只证明当时的目录切换和数据保留；不推导跨版本迁移、数据库降级、公共 CA 续期或整机恢复已通过。

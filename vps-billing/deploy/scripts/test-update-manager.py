@@ -74,17 +74,20 @@ def archive(files, component, version, edit=None, extras=(), distribution_format
 
 
 class Fixture:
-    def __init__(self, component="smtp", raw=False):
+    def __init__(self, component="smtp", raw=False, core_version=None):
         self.format = "raw-binaries-v1" if raw else "archive-v1"
         self.component = component
         self.version = "1.0.1" if component == "smtp" else "0.4.1"
         if raw: self.version = "1.1.0" if component == "smtp" else "0.5.0"
+        selected_core = core_version or ("0.5.0" if raw else "0.4.1")
+        if component == "core" and core_version is not None:
+            self.version = core_version
         self.tag = ("smtp-v" if component == "smtp" else "v") + self.version
         self.source = {path: (REPO / path).read_bytes() for path in manager.INPUTS}
         self.source["vps-billing/backend/pkg/pluginapi/protocol.go"] = b'package pluginapi\nconst CoreVersion = "0.4.1"\n'
         self.source["vps-billing/backend/plugins/smtp/VERSION"] = b"1.0.1\n"
         if raw:
-            self.source["vps-billing/backend/pkg/pluginapi/protocol.go"] = b'package pluginapi\nconst CoreVersion = "0.5.0"\n'
+            self.source["vps-billing/backend/pkg/pluginapi/protocol.go"] = ('package pluginapi\nconst CoreVersion = "' + selected_core + '"\n').encode()
             self.source["vps-billing/backend/plugins/smtp/VERSION"] = b"1.1.0\n"
         for path in manager.TRUSTED_PATHS:
             self.source[path] = b"Reviewed policy fixture " + path.encode() + b"\n"
@@ -103,6 +106,9 @@ class Fixture:
             for path in ("deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py", "deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf"):
                 copies[path] = "vps-billing/" + path
                 self.source[copies[path]] = b"Reviewed fixture deployment file\n"
+            for minimum, path in (((0, 5, 1), "deploy/scripts/core-manager.py"), ((0, 5, 2), "deploy/scripts/core-operation.py")):
+                if manager.stable(selected_core) >= minimum:
+                    copies[path] = "vps-billing/" + path
             for path in ("manifests/go-dependencies.json", "manifests/npm-installed-dependencies.json", "manifests/aster-api-build.txt", "manifests/aster-plugin-host-build.txt", "web/index.html"):
                 self.bundle[path] = (b"Fixture runtime metadata\n", 0o644)
         if raw and component == "core":
@@ -113,7 +119,7 @@ class Fixture:
             self.bundle[destination] = (self.source[source], 0o755 if destination.startswith("deploy/scripts/") else 0o644)
         self.build = {"schema": 2, "release_kind": component, "release_label": self.version, "source_commit": SOURCE, "target": "linux/amd64", "cgo_enabled": False, "component_versions": {"core": "0.4.1", "smtp": "1.0.1"}, "plugin_protocol": "aster.smtp/1", "smtp_core_compatibility": {"min": "0.4.0", "max_exclusive": "0.5.0"}, "input_sha256": {path: manager.digest(raw) for path, raw in self.source.items() if path in manager.INPUTS}, "source_files": copies, "binary_sha256": {path: manager.digest(raw) for path, raw in binaries.items()}}
         if raw:
-            self.build.update(schema=3, distribution_format=self.format, component_versions={"core": "0.5.0", "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=manager.binary_assets(component, self.version), resources_asset=manager.archive_name(component, self.version, self.format))
+            self.build.update(schema=3, distribution_format=self.format, component_versions={"core": selected_core, "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=manager.binary_assets(component, self.version), resources_asset=manager.archive_name(component, self.version, self.format))
         self.files = {}
         self.refresh()
         self.calls = []
@@ -129,7 +135,7 @@ class Fixture:
             for path, name in manager.binary_assets(self.component, self.version).items():
                 raw_assets[name] = resources.pop(path)[0]
         self.files = {"BUILD.json": encoded(self.build), manager.archive_name(self.component, self.version, self.format): archive(resources, self.component, self.version, distribution_format=self.format), **raw_assets}
-        self.provenance = {"schema": 1, "repository": manager.REPOSITORY, "repository_id": manager.REPOSITORY_ID, "run_id": 1234, "run_attempt": 1, "event": "push", "tag": self.tag, "version": self.version, "source_sha": SOURCE, "run_head_sha": SOURCE, "workflow_sha": SOURCE, "workflow_path": manager.WORKFLOW, "default_branch": "main", "default_sha": SOURCE, "trusted_blobs": {path: manager.blob_sha(self.source[path]) for path in manager.TRUSTED_PATHS}, "artifact_name": "candidate-1234-1", "assets": {path: {"size": len(raw), "sha256": manager.digest(raw)} for path, raw in self.files.items()}}
+        self.provenance = {"schema": 1, "repository": manager.REPOSITORY, "repository_id": manager.REPOSITORY_ID, "run_id": 1234, "run_attempt": 1, "event": "push", "tag": self.tag, "version": self.version, "source_sha": SOURCE, "run_head_sha": SOURCE, "workflow_sha": SOURCE, "workflow_path": manager.WORKFLOW, "default_branch": "main", "default_sha": SOURCE, "trusted_blobs": {path: manager.blob_sha(self.source[path]) for path in manager.trusted_paths_for_core(self.build["component_versions"]["core"])}, "artifact_name": "candidate-1234-1", "assets": {path: {"size": len(raw), "sha256": manager.digest(raw)} for path, raw in self.files.items()}}
         self.files["PROVENANCE.json"] = encoded(self.provenance)
         self.files["SHA256SUMS"] = "".join(manager.digest(raw) + "  " + path + "\n" for path, raw in sorted(self.files.items())).encode()
         self.assets = [{"name": path, "id": index + 100, "size": len(raw), "sha256": manager.digest(raw)} for index, (path, raw) in enumerate(sorted(self.files.items()))]

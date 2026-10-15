@@ -28,13 +28,13 @@ else
 fi
 source_root=$(cd -- "$source_path" && pwd -P)
 project_root="$source_root/vps-billing"
-for required in backend/go.mod frontend/package-lock.json tests/config_smoke.py tests/security_smoke.py deploy/scripts/test-release-manifest.py deploy/scripts/test-plugin-manager.py deploy/scripts/test-update-manager.py deploy/scripts/test-core-manager.py deploy/scripts/test-backup-native.sh deploy/ci/test_release_pipeline.py; do
+for required in backend/go.mod frontend/package-lock.json tests/config_smoke.py tests/security_smoke.py deploy/scripts/test-release-manifest.py deploy/scripts/test-plugin-manager.py deploy/scripts/test-update-manager.py deploy/scripts/test-core-manager.py deploy/scripts/test-core-operation.py deploy/scripts/test-backup-native.sh deploy/ci/test_release_pipeline.py; do
   [[ -f "$project_root/$required" ]] || fail "Source checkout is missing $required"
 done
 
 # Ignore any inherited production, bootstrap, provider or smoke-test settings.
 # Preserve the explicit disposable test DSN only until the Go test suite finishes.
-for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!PLUGIN_@} ${!UPDATE_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@} ${!TEST_@}; do
+for variable in ${!APP_@} ${!SESSION_SECRET@} ${!MYSQL_@} ${!BOOTSTRAP_@} ${!TRUSTED_PROXY@} ${!PAYMENT_PROVIDER@} ${!EMAIL_PROVIDER@} ${!SMTP_@} ${!PLUGIN_@} ${!UPDATE_@} ${!HOST_OPERATION_@} ${!INTEGRATIONS_CONFIG@} ${!LISTEN_ADDR@} ${!TEST_@}; do
   unset "$variable"
 done
 export NO_PROXY=127.0.0.1,localhost,::1
@@ -120,6 +120,7 @@ step 'Release pipeline and dependency notice generator tests'
   python3 deploy/scripts/test-plugin-manager.py -v
   python3 deploy/scripts/test-update-manager.py -v
   python3 deploy/scripts/test-core-manager.py -v
+  python3 deploy/scripts/test-core-operation.py -v
 )
 
 step 'Shell/Python syntax and mock backup regression'

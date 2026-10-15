@@ -201,7 +201,7 @@ func main() {
 		state := plugins.State()
 		return updates.Current{CoreVersion: pluginapi.CoreVersion, SMTPVersion: state.Version, SMTPStatus: state.Status, PluginPolicyRevision: state.PolicyRevision, SMTPProtocol: state.SMTPProtocol, SMTPCoreMin: state.SMTPCoreMin, SMTPCoreMaxExclusive: state.SMTPCoreMaxExclusive}
 	})
-	app := billing.NewAppWithIntegrations(store, billing.Config{Updates: updateService, Plugins: plugins, SMTPKey: local.smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: local.proxyCIDRs}, registry)
+	app := billing.NewAppWithIntegrations(store, billing.Config{Updates: updateService, HostOperations: local.hostOperations, Plugins: plugins, SMTPKey: local.smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: local.proxyCIDRs}, registry)
 	server := &http.Server{Addr: listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
@@ -253,10 +253,11 @@ func validProductionOrigin(origin string) bool {
 }
 
 type localConfiguration struct {
-	proxyCIDRs   []string
-	integrations map[string]integrations.Config
-	smtpKey      *billing.SMTPCipher
-	releaseToken string
+	proxyCIDRs     []string
+	integrations   map[string]integrations.Config
+	smtpKey        *billing.SMTPCipher
+	releaseToken   string
+	hostOperations *updates.OperationReader
 }
 
 // Only local validation belongs here: no provider construction, plugin RPC,
@@ -297,6 +298,10 @@ func loadLocalConfiguration(listen string, demo bool) (cfg localConfiguration, e
 	cfg.releaseToken, e = updates.LoadTokenFile(os.Getenv("UPDATE_RELEASE_TOKEN_FILE"))
 	if e != nil {
 		return cfg, errors.New("invalid private release credential file")
+	}
+	cfg.hostOperations, e = updates.NewOperationReader(os.Getenv("HOST_OPERATION_STATUS_FILE"))
+	if e != nil {
+		return cfg, errors.New("invalid host operation status configuration")
 	}
 	return cfg, nil
 }

@@ -1,6 +1,6 @@
 # 当前 API 与业务约定
 
-本文件对应 Core 0.5.1 的可配置财务币种、独立报价、历史快照与独立 SMTP 插槽。默认站点名“星屿云”、语言 `zh-CN`；全新安装只启用默认币种 `CNY`，升级保留旧币种及合法默认值。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、真实 VPS 开通与完整财务账本均未实现；官方 SMTP 默认关闭，仅提供管理员配置和测试邮件，未接入通知、邮箱验证或密码找回。
+本文件对应 Core 0.5.2 的可配置财务币种、独立报价、历史快照、主机执行回执与独立 SMTP 插槽。默认站点名“星屿云”、语言 `zh-CN`；全新安装只启用默认币种 `CNY`，升级保留旧币种及合法默认值。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、真实 VPS 开通与完整财务账本均未实现；官方 SMTP 默认关闭，仅提供管理员配置和测试邮件，未接入通知、邮箱验证或密码找回。
 
 ## 共通规则
 
@@ -93,6 +93,10 @@
 交接请求严格限定 `{component,tag,source_sha,release_id,catalog_sha256,acknowledge_manual_handoff:true}`，不得传任意URL、命令、目录或token。请求最多4KiB，拒绝未知/重复/null/错误类型；未明确确认返回400 `UPDATE_ACK_REQUIRED`。服务端重查官方信息，确认选择指纹、本地版本/策略仍一致且候选可更新，再持久审计后以202返回交接封装；新后台统一返回 `{schema:2,status:"awaiting_host_operator",intent:{...}}`，intent 同为 schema 2，声明 `distribution_format`（`raw-binaries-v1` 或 `archive-v1`）及对应资产；主机工具兼容读取既有 schema 1 交接，但仅接受旧四资产归档。intent 包含请求/操作者ID、创建/到期时间、固定仓库身份、组件/版本/源码、构建与资产、当时Core/插件/策略信息，有效期30分钟。交接未签名，不是主机安装授权或安装成功。
 
 官方不可用返回503 `UPDATE_UNAVAILABLE`，已有检查返回409 `UPDATE_BUSY`，选择/现场变化返回409 `UPDATE_STALE`，不兼容/不是新版本返回409 `UPDATE_INCOMPATIBLE`。权限与CSRF/Origin/Host沿用通用规则；审计/网络失败或响应不确定不能假称交接成功或自动重复提交。主机工具独立核验与暂存，实际应用仍按 [UPDATES.md](UPDATES.md)及 [UPGRADE.md](UPGRADE.md)执行。
+
+`GET /api/v1/admin/updates/operation` 独立读取本机受保护回执，管理员权限必需；匿名 401、客户 403、其他请求方式 405，不调用官方仓库、不启动程序或服务。`Cache-Control: no-store`。返回 `{data:{state,operation?}}`，`state` 为 `unconfigured`（未配置路径）、`absent`（文件不存在）、`available`（严格校验通过）或 `unavailable`（读取/权限/格式/一致性检查失败）。不可用状态不携带原始内容、路径或主机诊断。配置仅来自进程 `HOST_OPERATION_STATUS_FILE`，请求不能提供路径。
+
+`operation` 为 schema 1 的只读投影：32 位十六进制 `operation_id`，`action` 为 `install|upgrade|recover`，`status` 为 `checking|prepared|executing|succeeded|failed|needs_manual_recovery|rolled_back`，以及阶段、目标/原 Core 版本与源码 SHA、维护标记、迁移开始/完成、链接变化、服务和程序回退结果、HTTPS 就绪、业务复核标记、UTC 开始/更新时间及固定安全错误码。所有字段必需，拒绝重复、未知、null、类型和状态矛盾。文件须 root 所有、单链接普通文件、至多 64KiB，不可组或其他用户写入；父目录也须 root 控制且无软链接。回执是最近一次主机报告，不是持续健康监控，也不证明已有网页交接被执行。
 
 ## 未付款订单取消
 

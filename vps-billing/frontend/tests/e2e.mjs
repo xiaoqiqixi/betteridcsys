@@ -765,7 +765,9 @@ try {
     expectedCoreVersion,
   );
   await expect(
-    page.getByText("尚未检查官方版本。不会自动检查或安装。", { exact: true }),
+    page.getByText("尚未检查官方版本。网页不会自动检查或启动安装。", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "检查官方更新", exact: true }),
@@ -773,6 +775,33 @@ try {
   await expect(
     page.getByRole("button", { name: "生成更新交接单", exact: true }),
   ).toHaveCount(0);
+  const hostOperation = await json("/admin/updates/operation");
+  expect(hostOperation).toEqual({ state: "unconfigured" });
+  const operationPanel = page.locator(".native-operation");
+  await expect(operationPanel).toHaveAttribute(
+    "data-operation-state",
+    "unconfigured",
+  );
+  await expect(
+    operationPanel.getByText(
+      "主机回执读取未配置，无法确认安装或升级执行状态。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  const receiptRead = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/v1/admin/updates/operation" &&
+      response.request().method() === "GET",
+  );
+  await operationPanel
+    .getByRole("button", { name: "读取主机回执", exact: true })
+    .click();
+  expect((await receiptRead).ok()).toBeTruthy();
+  await expect(operationPanel).toHaveAttribute("aria-busy", "false");
+  await expect(operationPanel).toHaveAttribute(
+    "data-operation-state",
+    "unconfigured",
+  );
   await shot("updates-local-status-desktop");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect
@@ -973,7 +1002,7 @@ try {
   expect(errors).toEqual([]);
   expect(blockedRequests).toEqual([]);
   console.log(
-    "PASS: real demo API, fresh CNY-only registry, JPY zero-decimal and KWD three-decimal currencies and independent prices saved through financial UI with exact revisioned payloads, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, actual core version and update status without automatic check or handoff, financial default JPY and read-only site currency, admin settings save/preview, new-visitor English/JPY defaults, immutable invoice issuer, explicit customer/admin cancellation with required reason and confirmation, no mutation on opening/closing/incomplete confirmation, retained order/invoice snapshots with cancelled/void statuses, exact unpaid summary deductions and unchanged services/other-currency totals, one audit per cancellation and idempotent repeats, customer history retained across sessions, original site/default settings restored while added demo currencies remain until disposable teardown; no browser runtime errors.",
+    "PASS: real demo API, fresh CNY-only registry, JPY zero-decimal and KWD three-decimal currencies and independent prices saved through financial UI with exact revisioned payloads, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, actual core version, update status, unconfigured host receipt and explicit read-only receipt refresh without automatic check or handoff, financial default JPY and read-only site currency, admin settings save/preview, new-visitor English/JPY defaults, immutable invoice issuer, explicit customer/admin cancellation with required reason and confirmation, no mutation on opening/closing/incomplete confirmation, retained order/invoice snapshots with cancelled/void statuses, exact unpaid summary deductions and unchanged services/other-currency totals, one audit per cancellation and idempotent repeats, customer history retained across sessions, original site/default settings restored while added demo currencies remain until disposable teardown; no browser runtime errors.",
   );
 } finally {
   try {

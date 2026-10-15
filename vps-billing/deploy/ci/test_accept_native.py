@@ -15,6 +15,10 @@ import unittest
 
 SCRIPT = Path(__file__).with_name("accept-native.sh")
 HTTP_SCRIPT = Path(__file__).with_name("accept-native-http.py")
+CORE_SCRIPT = Path(__file__).with_name("core-native.sh")
+CORE_SPEC = importlib.util.spec_from_file_location("core_native_acceptance", CORE_SCRIPT.with_suffix(".py"))
+CORE = importlib.util.module_from_spec(CORE_SPEC)
+CORE_SPEC.loader.exec_module(CORE)
 SPEC = importlib.util.spec_from_file_location("native_acceptance_http", HTTP_SCRIPT)
 HTTP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HTTP)
@@ -26,6 +30,7 @@ class NativeReleaseModeTests(unittest.TestCase):
             'bin/aster-api', 'bin/aster-plugin-host', 'deploy/scripts/backup-native.sh',
             'deploy/scripts/plugin-manager.py', 'deploy/scripts/update-manager.py',
             'deploy/scripts/core-manager.py',
+            'deploy/scripts/core-operation.py',
         }
         files = executable | {'manifests/BUILD.json', 'migrations/001_schema.sql', 'web/index.html', 'licenses/NOTICE'}
         with tempfile.TemporaryDirectory(prefix='aster public release ') as temp:
@@ -129,6 +134,8 @@ class NativeHTTPSTransportTests(unittest.TestCase):
 
 
 class NativeAcceptanceGuardTests(unittest.TestCase):
+    script = SCRIPT
+
     def run_guard(self, supplied, arguments=None):
         with tempfile.TemporaryDirectory(prefix="aster-native-guard-") as directory:
             root = Path(directory)
@@ -141,7 +148,7 @@ class NativeAcceptanceGuardTests(unittest.TestCase):
             env = {"PATH": str(root) + ":" + os.environ["PATH"]}
             env.update(supplied)
             result = subprocess.run(
-                ["bash", str(SCRIPT), *(arguments if arguments is not None else [
+                ["bash", str(self.script), *(arguments if arguments is not None else [
                     "--allow-isolated-runner", str(root), str(root / "evidence")
                 ])],
                 env=env, text=True, capture_output=True, timeout=10,
@@ -173,6 +180,35 @@ class NativeAcceptanceGuardTests(unittest.TestCase):
                     "GITHUB_REPOSITORY": "xiaoqiqixi/betteridcsys",
                     "GITHUB_RUN_ID": identity, "GITHUB_RUN_ATTEMPT": "1",
                 }))
+
+
+class CoreExecutorAcceptanceGuardTests(NativeAcceptanceGuardTests):
+    script = CORE_SCRIPT
+
+
+class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
+    def test_failed_native_command_never_exposes_raw_diagnostics(self):
+        with self.assertRaises(CORE.AcceptanceFailure) as failure:
+            CORE.command(["python3", "-c", "import sys; print('private-dsn'); print('private-password',file=sys.stderr); sys.exit(17)"])
+        self.assertIn("exit 17", str(failure.exception))
+        self.assertNotIn("private-dsn", str(failure.exception))
+        self.assertNotIn("private-password", str(failure.exception))
+
+    def test_evidence_is_created_without_overwriting_existing_facts(self):
+        with tempfile.TemporaryDirectory(prefix="aster-core-facts-") as directory:
+            root = Path(directory)
+            CORE.fact(root, "fixture", {"checked": True})
+            self.assertEqual(json.loads((root / "fixture.json").read_text()), {"checked": True})
+            with self.assertRaises(FileExistsError):
+                CORE.fact(root, "fixture", {"checked": False})
+            self.assertEqual(json.loads((root / "fixture.json").read_text()), {"checked": True})
+
+    def test_noncanonical_fact_name_cannot_escape_evidence_directory(self):
+        with tempfile.TemporaryDirectory(prefix="aster-core-facts-") as directory:
+            for name in ("../outside", "/absolute", "contains space", "", "secret\nvalue"):
+                with self.subTest(name=name), self.assertRaises(CORE.AcceptanceFailure):
+                    CORE.fact(directory, name, {})
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ import (
 
 type Config struct {
 	Updates           UpdateService
+	HostOperations    HostOperationSource
 	Plugins           *runtimeplugins.Manager
 	SMTPKey           *SMTPCipher
 	Demo              bool
@@ -342,7 +343,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.emailSettingsHTTP(w, r, u, p == "/admin/email-settings/test")
 		return
 	}
-	if p == "/admin/updates" || p == "/admin/updates/check" || p == "/admin/updates/handoff" {
+	if p == "/admin/updates" || p == "/admin/updates/check" || p == "/admin/updates/handoff" || p == "/admin/updates/operation" {
 		a.updateHTTP(w, r, u, p)
 		return
 	}

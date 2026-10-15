@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CoreVersion    = "0.5.1"
+	CoreVersion    = "0.5.2"
 	SMTPProtocol   = "aster.smtp/1"
 	SMTPCapability = "smtp.send"
 	// JSON can expand a valid 64 KiB plain-text message up to sixfold. Include

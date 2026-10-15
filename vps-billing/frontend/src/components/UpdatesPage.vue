@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ArrowUpRight, Download, RefreshCw, ShieldCheck } from "@lucide/vue";
 import { api, ApiError } from "../lib/api";
 import { tr } from "../lib/i18n";
+import NativeOperationStatus from "./NativeOperationStatus.vue";
 import {
   componentName,
   readUpdateHandoff,
@@ -297,8 +298,8 @@ onBeforeUnmount(() => {
           <p>
             {{
               tr(
-                "分别检查官方版本，确认后生成主机更新交接单。安装需要主机运维执行。",
-                "Check official versions separately and request a host handoff. A host operator performs the installation.",
+                "检查官方版本并生成主机更新交接单。主机管理员明确启动受限工具后，才会执行安装或升级；下方单独显示执行回执。",
+                "Check official versions and create a host handoff. A host administrator explicitly launches the restricted tool to install or upgrade; its receipt is shown separately below.",
               )
             }}
           </p>
@@ -327,6 +328,10 @@ onBeforeUnmount(() => {
           tr("正在读取版本…", "Loading versions…")
         }}
       </div>
+      <NativeOperationStatus
+        :preview="preview"
+        :administrator="administrator"
+      />
       <template v-if="status">
         <div class="updates-current">
           <section
@@ -395,8 +400,8 @@ onBeforeUnmount(() => {
           <p v-if="status.source.status === 'not_checked'">
             {{
               tr(
-                "尚未检查官方版本。不会自动检查或安装。",
-                "Official versions have not been checked. Checks and installations are never automatic.",
+                "尚未检查官方版本。网页不会自动检查或启动安装。",
+                "Official versions have not been checked. This page does not automatically check releases or start installation.",
               )
             }}
           </p>
@@ -548,8 +553,8 @@ onBeforeUnmount(() => {
           <h3 id="handoff-pending-title">
             {{
               tr(
-                "交接单已生成 · 等待主机运维",
-                "Handoff created · awaiting host operator",
+                "交接单已生成 · 仅供主机核验",
+                "Handoff created · for host verification",
               )
             }}
           </h3>
@@ -558,16 +563,16 @@ onBeforeUnmount(() => {
             {{ handoff.intent.version }} ·
             {{
               tr(
-                "尚未开始安装，当前程序没有升级。",
-                "Installation has not started. The current installation has not been upgraded.",
+                "交接单仅表示准备请求；此网页操作未执行安装或升级。主机执行情况请查看独立回执。",
+                "The handoff is a preparation request. This page action did not install or upgrade software. Check the separate receipt for host execution.",
               )
             }}
           </p>
           <p>
             {{
               tr(
-                "下载 JSON 并交给授权主机运维，按更新文档完成检查。此交接单只是待核验的请求，不是安装授权凭据。",
-                "Download the JSON and give it to an authorized host operator for the documented checks. It is a proposal to verify, not an installation credential.",
+                "下载 JSON 并交给授权主机管理员，按更新文档核验后，由管理员在主机上明确确认并启动受限执行工具。交接单只是待核验的请求，不能授予网页主机权限。",
+                "Download the JSON for an authorized host administrator to verify using the update guide, then explicitly confirm and launch the restricted executor on the host. The proposal grants no host privileges to this page.",
               )
             }}
           </p>

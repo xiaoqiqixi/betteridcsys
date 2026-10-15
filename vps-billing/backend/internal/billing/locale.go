@@ -47,7 +47,7 @@ var englishErrors = map[string]string{
 	"UPDATE_BUSY":                  "A release check is in progress. Try again later.",
 	"UPDATE_STALE":                 "Release or host state changed. Check again before selecting an update.",
 	"UPDATE_INCOMPATIBLE":          "The target is incompatible or not newer. Complete host compatibility checks first.",
-	"UPDATE_ACK_REQUIRED":          "Explicitly acknowledge that the host operator must continue the update handoff.",
+	"UPDATE_ACK_REQUIRED":          "Explicitly acknowledge that the host administrator must launch the protected update tool on the server.",
 	"PLUGIN_UNAVAILABLE":           "The plugin is unavailable. Check installation, approval and compatible versions.",
 	"INVALID_EMAIL_SETTINGS":       "Check SMTP settings and credentials. Changing the server requires replacing both credentials; clearing requires both credentials and disabling SMTP.",
 	"SMTP_DISABLED":                "Save and enable SMTP settings before sending a test.",

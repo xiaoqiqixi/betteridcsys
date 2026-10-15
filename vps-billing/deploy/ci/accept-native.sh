@@ -14,7 +14,7 @@ normalize_fixture_release() {
   local release=$1 program
   sudo -n find "$release" -type d -exec chmod 755 '{}' +
   sudo -n find "$release" -type f -exec chmod 644 '{}' +
-  for program in bin/aster-api bin/aster-plugin-host deploy/scripts/backup-native.sh deploy/scripts/plugin-manager.py deploy/scripts/update-manager.py deploy/scripts/core-manager.py; do
+  for program in bin/aster-api bin/aster-plugin-host deploy/scripts/backup-native.sh deploy/scripts/plugin-manager.py deploy/scripts/update-manager.py deploy/scripts/core-manager.py deploy/scripts/core-operation.py; do
     sudo -n chmod 755 "$release/$program"
   done
 }
@@ -104,6 +104,24 @@ cleanup() {
     if [[ $stopped != true ]]; then units_stopped=false; cleanup_failed=true; fi
   done
   if [[ $units_stopped == true ]]; then
+    # The nested executor owns additional units and a socket bind mount. A
+    # failed/missing cleanup receipt means its programs must be retained for
+    # manual inspection; never recursively delete a potentially live release.
+    if [[ -d $evidence/core-native ]]; then
+      if ! python3 - "$evidence/core-native/cleanup.json" <<'PYCORECLEAN'
+import json
+from pathlib import Path
+import sys
+try:
+    value = json.loads(Path(sys.argv[1]).read_text())
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if value.get('owned_resources_removed') is True else 1)
+PYCORECLEAN
+      then units_stopped=false; cleanup_failed=true; fi
+    fi
+  fi
+  if [[ $units_stopped == true ]]; then
     for unit in "${created_units[@]}"; do
       sudo -n systemctl reset-failed "$unit" >/dev/null 2>&1
       sudo -n rm -f -- "/etc/systemd/system/$unit" || cleanup_failed=true
@@ -189,8 +207,8 @@ for path in "$opt" "$config" "$logs" "$run"; do
   sudo -n mkdir -- "$path"; created_paths+=("$path")
   sudo -n chmod 755 "$path"
 done
-sudo -n install -d -m 755 "$opt/releases/a/bin" "$opt/releases/a/web" "$opt/releases/b/bin" "$opt/releases/b/web" "$opt/tools"
-for version in a b; do
+sudo -n install -d -m 755 "$opt/releases/a/bin" "$opt/releases/a/web" "$opt/tools"
+for version in a; do
   sudo -n cp -R "$assembled/." "$opt/releases/$version/"
   normalize_fixture_release "$opt/releases/$version"
   [[ -r "$opt/releases/$version/manifests/BUILD.json" ]] || fail 'The ordinary backup operator cannot read the installed public BUILD.'
@@ -209,24 +227,8 @@ sudo -n install -o root -g root -m 600 "$scratch/public-read-token" "$config/pub
 for tool in core-manager.py update-manager.py; do
   sudo -n install -o root -g root -m 755 "$project/deploy/scripts/$tool" "$opt/tools/$tool"
 done
-public_version=$(python3 - "$project/deploy/scripts/update-manager.py" "$scratch/public-read-token" "$core_version" <<'PYPUBLIC'
-import importlib.util
-import os
-import sys
-spec = importlib.util.spec_from_file_location('public_prepare_metadata', sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-token = module.load_protected_token(sys.argv[2], module._Trust(owner=os.geteuid()))
-release = module.Official(token).json('/releases/latest')
-tag = release.get('tag_name', '')
-module.require(isinstance(tag, str) and tag.startswith('v'), 'Latest must be a normal Core release.')
-version = tag[1:]
-module.require((0, 5, 0) <= module.stable(version) <= module.stable(sys.argv[3]), 'Public prepare fixture version is outside this source compatibility.')
-print(version)
-PYPUBLIC
-)
-public_target="$opt/public-prepared-$public_version"
+public_version=0.5.1
+public_target="$opt/core-upgrade/releases/$public_version"
 sudo -n python3 -I "$opt/tools/core-manager.py" doctor --release-directory "$public_target" --socket "$mysql_socket" --listen-address 127.0.0.1:18080 > "$evidence/host-doctor.json"
 [[ ! -e $public_target && ! -L $public_target ]] || fail 'Read-only host doctor changed the target.'
 emit_json_fact HOST_DOCTOR_JSON host-doctor.json
@@ -449,19 +451,12 @@ ASTER_PLUGIN_API_USER="$api_user" ASTER_PLUGIN_WORKER_USER="$smtp_user" ASTER_PL
 ASTER_PLUGIN_SOCKET_GROUP="$socket_group" ASTER_PLUGIN_HTTPS_PORT="$tls_port" \
 bash "$project/deploy/ci/plugin-native.sh" --allow-isolated-runner "$source_root" "$evidence/plugin-native"
 
-step 'API restart and same-schema versioned symlink upgrade/rollback'
+step 'API restart and persistence before logical backup'
 count_before=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM orders')
 [[ $count_before =~ ^[0-9]+$ && $count_before -gt 0 ]] || fail 'Business suite did not persist orders.'
-for version in b a; do
-  sudo -n systemctl stop "$api_unit"
-  [[ ! -e $opt/current.next && -L $opt/current ]] || fail 'Unexpected release link state.'
-  sudo -n ln -s "$opt/releases/$version" "$opt/current.next"
-  sudo -n mv -T "$opt/current.next" "$opt/current"
-  sudo -n systemctl start "$api_unit"
-  wait_ready
-  [[ $(curl --noproxy '*' --silent --show-error --fail --cacert "$scratch/ca.pem" "$origin/release-id.txt") == "$version" ]] || fail 'Nginx did not serve the selected version.'
-  [[ $("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM orders') == "$count_before" ]] || fail 'Order persistence changed across same-schema restart.'
-done
+sudo -n systemctl restart "$api_unit"
+wait_ready
+[[ $("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM orders') == "$count_before" ]] || fail 'Order persistence changed across API restart.'
 
 step 'Real native logical backup, isolated empty-database restore and data comparison'
 sudo -n systemctl stop "$api_unit"
@@ -492,6 +487,11 @@ sudo -n install -o root -g "$api_user" -m 640 "$scratch/restore_runtime.service.
 sudo -n systemctl start "$api_unit"
 wait_ready
 python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --expect-smtp-settings --report "$evidence/restored-https-tests.json"
+step 'Actual Core install, published v0.5.1 upgrade, fault recovery and idempotent retry'
+ASTER_CORE_FIXTURE_OPT="$opt" ASTER_CORE_CANDIDATE_ASSETS="$scratch/core-distribution" \
+ASTER_CORE_CANDIDATE_RELEASE="$opt/releases/a" ASTER_CORE_BASELINE_RELEASE="$public_target" \
+ASTER_CORE_GITHUB_TOKEN_FILE="$config/public-read-token" \
+bash "$project/deploy/ci/core-native.sh" --allow-isolated-runner "$source_root" "$evidence/core-native"
 python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" "$migration_count" <<'PY'
 import json
 from pathlib import Path
@@ -506,7 +506,8 @@ summary = {
     'smtp_encrypted_settings_restored': True, 'smtp_disabled_restore_check_no_send': True,
     'runtime_plugins_native_evidence': 'plugin-native/plugin-native.json',
     'smtp_synthetic_loopback_only_no_external_delivery': True,
-    'same_schema_release_a_b_a': True, 'persisted_orders_before_restart': int(count),
+    'api_restart_persistence': True, 'persisted_orders_before_restart': int(count),
+    'actual_core_executor_evidence': 'core-native/core-native.json',
     'source_table_count': int(source_tables), 'restored_table_count': int(restored_tables),
     'schema_migration_count': int(migration_count),
     'fresh_cny_only_before_explicit_admin_currency_approval': True,

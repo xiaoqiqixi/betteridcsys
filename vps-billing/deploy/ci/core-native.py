@@ -1,0 +1,823 @@
+#!/usr/bin/env python3
+"""Real executor scenarios on fresh, dedicated hosted-runner native instances.
+
+The only candidate-verifier injection lives in this CI helper's Python API.
+Production CLI verification stays unchanged. Candidate metadata is explicitly
+source-built; no official PREPARED receipt or PROVENANCE is manufactured.
+"""
+import argparse
+import contextlib
+import hashlib
+import grp
+import http.cookiejar
+import importlib.util
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import secrets
+import shutil
+import signal
+import socket
+import ssl
+import stat
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+
+class AcceptanceFailure(RuntimeError):
+    pass
+
+
+STAGE = "initializing"
+
+
+def stage(name):
+    global STAGE
+    require(re.fullmatch(r"[a-z0-9-]{1,64}", name), "Invalid fixed diagnostic stage")
+    STAGE = name
+    print("CORE_NATIVE_STAGE=" + name, flush=True)
+
+
+def require(value, message):
+    if not value:
+        raise AcceptanceFailure(message)
+
+
+def module(name, filename):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(filename))
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[name] = loaded
+    spec.loader.exec_module(loaded)
+    return loaded
+
+
+def sha256(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def command(args, *, data=None, timeout=120, allowed=(0,), environment=None):
+    """Never publish raw command output: SQL, cookies and DSNs are private."""
+    try:
+        result = subprocess.run(list(map(str, args)), input=data, capture_output=True,
+                                timeout=timeout, env=environment, cwd="/")
+    except subprocess.TimeoutExpired:
+        raise AcceptanceFailure("Native command exceeded its fixed timeout: " + Path(str(args[0])).name) from None
+    require(result.returncode in allowed,
+            "Native command failed: " + Path(str(args[0])).name + " (exit " + str(result.returncode) + ")")
+    return result.stdout
+
+
+def write(path, value, mode=0o600):
+    path = Path(path)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(value.encode() if isinstance(value, str) else value)
+        output.flush()
+        os.fchmod(output.fileno(), mode)
+        os.fsync(output.fileno())
+
+
+def fact(evidence, name, value):
+    require(re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name), "Invalid fixed fact name")
+    write(Path(evidence) / (name + ".json"), json.dumps(value, sort_keys=True, indent=2) + "\n", 0o644)
+    print("CORE_NATIVE_" + name.upper().replace("-", "_") + "_JSON=" + json.dumps(value, sort_keys=True), flush=True)
+
+
+def verify_source_candidate(source, assets, installed):
+    """Verify actual package and every source copy against the selected Git commit."""
+    pipeline = module("core_acceptance_pipeline", "release_pipeline.py")
+    source, assets, installed = map(Path, (source, assets, installed))
+    git = ["git", "-c", "safe.directory=" + str(source), "-C", str(source)]
+    commit = command([*git, "rev-parse", "--verify", "HEAD"]).decode().strip()
+    require(re.fullmatch(r"[a-f0-9]{40}", commit), "Invalid selected Git commit")
+    build = pipeline.strict_json((assets / "BUILD.json").read_bytes())
+    version = build["component_versions"]["core"]
+    require(tuple(map(int, version.split("."))) > (0, 5, 1), "Candidate must be newer than the published baseline")
+    names = pipeline.package_files(version, "core", "raw-binaries-v1")
+    require(set(item.name for item in assets.iterdir()) == set(names), "Source-built assets must have exact local package inventory")
+    files = {name: (assets / name).read_bytes() for name in names}
+    inventory = pipeline.validate_package(files, commit, version, "core")
+    _, _, bundle = pipeline.runtime_bundle(files, version, "core")
+    copies = build["source_files"]
+    for destination, source_path in copies.items():
+        expected = command([*git, "show", commit + ":" + source_path])
+        require(bundle[destination] == expected, "Candidate resource differs from selected Git source")
+    for source_path, digest in build["input_sha256"].items():
+        require(sha256(command([*git, "show", commit + ":" + source_path])) == digest,
+                "Candidate build input differs from selected Git source")
+    sql_paths = command([*git, "ls-tree", "-r", "--name-only", commit, "vps-billing/backend/migrations"]).decode().splitlines()
+    expected_sql = {"migrations/" + Path(name).name: name for name in sql_paths if name.endswith(".sql")}
+    require({name: path for name, path in copies.items() if name.startswith("migrations/")} == expected_sql,
+            "Candidate is missing selected SQL resources")
+    # The installed candidate is root-controlled and exactly the checked bundle;
+    # only the parent fixture's harmless marker may be added by its web checks.
+    installed_files = {str(path.relative_to(installed)) for path in installed.rglob("*") if path.is_file()}
+    require(installed_files - {"web/release-id.txt"} == set(bundle), "Installed source candidate inventory differs")
+    for name, raw in bundle.items():
+        path = installed / name
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and not info.st_mode & 0o022,
+                "Source candidate file is not protected")
+        require(path.read_bytes() == raw, "Installed candidate bytes differ from checked assets")
+    for path in (installed, *(path for path in installed.rglob("*") if path.is_dir())):
+        info = path.lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o755,
+                "Source candidate directory is not protected")
+    return {"version": version, "source_commit": commit, "directory": str(installed),
+            "trust": "selected-source-built-candidate-not-official-release",
+            "official_provenance_fabricated": False, "package_inventory": inventory,
+            "copied_source_files_verified": len(copies), "migration_count": len(expected_sql),
+            "binary_sha256": build["binary_sha256"]}
+
+
+def verify_published_baseline(directory):
+    """Read the receipt created by real official prepare; never synthesize it."""
+    directory = Path(directory)
+    receipt = json.loads((directory / "manifests/PREPARED.json").read_text())
+    build = json.loads((directory / "manifests/BUILD.json").read_text())
+    require(build["component_versions"]["core"] == "0.5.1", "Baseline is not actual published Core v0.5.1")
+    require(build["source_commit"] == "91cc3c18e50b51f01ca0003e3d18de3ade69f25d", "Published baseline source changed")
+    require(receipt.get("version") == "0.5.1" and receipt.get("source_sha") == build["source_commit"], "Published baseline receipt identity mismatch")
+    require(receipt.get("release_id") == 413373046 and receipt.get("run_id") == 38672929446 and len(receipt.get("assets", [])) == 6,
+            "Published baseline release/build identity changed")
+    for name, digest in build["binary_sha256"].items():
+        require(sha256((directory / name).read_bytes()) == digest, "Published baseline executable differs from verified BUILD")
+    return {"version": "0.5.1", "source_commit": build["source_commit"],
+            "directory": str(directory), "trust": "actual-official-published-release-prepared-independently",
+            "tag": "v0.5.1", "release_id": receipt["release_id"], "build_run_id": receipt["run_id"],
+            "assets": receipt["assets"],
+            "binary_sha256": build["binary_sha256"], "prepared_receipt_sha256": sha256((directory / "manifests/PREPARED.json").read_bytes()),
+            "official_provenance_fabricated": False}
+
+
+class Resources:
+    """Track only new fixture resources, including partially provisioned ones."""
+    def __init__(self, args):
+        self.args = args
+        self.fixtures = []
+        self.restores = []
+        self.mount = args.fixture_root / "core-socket"
+        self.control = args.fixture_root / "core-control"
+        self.bound = False
+        self.mysql = self.control / "mysql"
+        self.dump = self.control / "mysqldump"
+        self.nginx = self.control / "nginx"
+        require(not self.control.exists() and not self.mount.exists(), "Refusing to reuse Core fixture controls")
+        self.control.mkdir(mode=0o755)
+        (self.control / "public").mkdir(mode=0o755)
+        self.mount.mkdir(mode=0o755)
+        for source, target in ((args.mysql_root / "bin/mysql", self.mysql),
+                               (args.mysql_root / "bin/mysqldump", self.dump), (args.nginx, self.nginx)):
+            require(source.is_file() and not source.is_symlink(), "Native distribution tool is unavailable")
+            write(target, source.read_bytes(), 0o755)
+        write(self.control / "dba.cnf", args.mysql_admin.read_bytes())
+        write(self.mount / "mysql.sock", b"")
+        command(["/usr/bin/mount", "--bind", args.mysql_socket, self.mount / "mysql.sock"])
+        self.bound = True
+        self.socket = self.mount / "mysql.sock"
+        require(self.sql("SELECT @@datadir;") == str(args.mysql_fixture / "data") + "/", "Native database fixture identity mismatch")
+        require(self.sql("SELECT @@skip_networking;") == "1", "Native install fixture must have TCP disabled")
+        self.tls()
+
+    def sql(self, query, config=None, database=None):
+        arguments = [self.mysql, "--defaults-file=" + str(config or self.control / "dba.cnf"),
+                     "--no-login-paths", "--protocol=SOCKET", "--socket=" + str(self.socket),
+                     "--batch", "--skip-column-names"]
+        if database:
+            arguments += ["--database=" + database]
+        return command(arguments, data=query.encode()).decode().strip()
+
+    def tls(self):
+        c = self.control
+        command(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                 "-subj", "/CN=Aster isolated executor CI CA", "-addext", "basicConstraints=critical,CA:TRUE",
+                 "-keyout", c / "ca.key", "-out", c / "ca.pem"])
+        command(["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
+                 "-keyout", c / "server.key", "-out", c / "server.csr"])
+        write(c / "server.ext", "subjectAltName=DNS:localhost\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
+        command(["openssl", "x509", "-req", "-in", c / "server.csr", "-CA", c / "ca.pem", "-CAkey", c / "ca.key",
+                 "-CAcreateserial", "-days", "1", "-extfile", c / "server.ext", "-out", c / "server.pem"])
+        for name in ("ca.pem", "server.pem"):
+            (c / name).chmod(0o644)
+
+    def cleanup(self):
+        failed = []
+        for fixture in reversed(self.fixtures):
+            fixture_stopped = True
+            for unit in (fixture.spec["api_unit"], fixture.edge_unit):
+                try:
+                    command(["systemctl", "disable", unit], allowed=(0, 1, 5), timeout=20)
+                    loaded = command(["systemctl", "show", unit, "--property=LoadState", "--value"], allowed=(0, 1)).decode().strip()
+                    if loaded != "not-found":
+                        command(["systemctl", "stop", unit], allowed=(0, 5), timeout=45)
+                        state = command(["systemctl", "show", unit, "--property=ActiveState", "--value"]).decode().strip()
+                        require(state in {"inactive", "failed"}, "Owned service did not stop")
+                except (AcceptanceFailure, OSError):
+                    failed.append("service-stop")
+                    fixture_stopped = False
+            if not fixture_stopped:
+                # Never remove executable/configuration paths from a live unit.
+                continue
+            for unit in (fixture.spec["api_unit"], fixture.edge_unit):
+                with contextlib.suppress(FileNotFoundError):
+                    Path("/etc/systemd/system", unit).unlink()
+                command(["systemctl", "reset-failed", unit], allowed=(0, 1, 5))
+            try:
+                if pwd.getpwnam(fixture.spec["runtime_user"]):
+                    command(["userdel", fixture.spec["runtime_user"]])
+                    command(["groupdel", fixture.spec["runtime_user"]], allowed=(0, 6))
+            except KeyError:
+                pass
+            for path in (fixture.config, fixture.state):
+                if path.exists():
+                    shutil.rmtree(path)
+            database = fixture.spec["database"]
+            try:
+                self.sql("DROP DATABASE IF EXISTS `" + database + "`;\n" + "\n".join(
+                    "DROP USER IF EXISTS '" + database + "_" + role + "'@'localhost';" for role in ("runtime", "migrator", "backup")))
+                require(self.sql("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='" + database + "';") == "0" and
+                        self.sql("SELECT COUNT(*) FROM mysql.user WHERE User IN ('" + database + "_runtime','" + database + "_migrator','" + database + "_backup');") == "0", "Core fixture database/accounts remain")
+            except AcceptanceFailure:
+                failed.append("database-cleanup")
+        for database, account in self.restores:
+            try:
+                self.sql("DROP DATABASE IF EXISTS `" + database + "`; DROP USER IF EXISTS '" + account + "'@'localhost';")
+            except AcceptanceFailure:
+                failed.append("restore-cleanup")
+        command(["systemctl", "daemon-reload"])
+        if self.bound and not failed:
+            command(["/usr/bin/umount", self.socket])
+            self.bound = False
+        require(not failed and not self.bound, "Owned Core native fixture cleanup was incomplete")
+        for fixture in self.fixtures:
+            require(not fixture.config.exists() and not fixture.state.exists(), "Core private fixture paths remain")
+            for unit in (fixture.spec["api_unit"], fixture.edge_unit):
+                require(not Path("/etc/systemd/system", unit).exists(), "Core fixture unit remains")
+                require(not Path("/etc/systemd/system/multi-user.target.wants", unit).is_symlink(), "Core fixture enablement link remains")
+            try:
+                pwd.getpwnam(fixture.spec["runtime_user"])
+            except KeyError:
+                pass
+            else:
+                raise AcceptanceFailure("Core fixture service account remains")
+            try:
+                grp.getgrnam(fixture.spec["runtime_user"])
+            except KeyError:
+                pass
+            else:
+                raise AcceptanceFailure("Core fixture service group remains")
+            shutil.rmtree(fixture.root)
+        shutil.rmtree(self.mount)
+        shutil.rmtree(self.control)
+
+
+class Fixture:
+    def __init__(self, resources, executor, name, candidate, baseline, overrides):
+        self.resources, self.executor = resources, executor
+        suffix = resources.args.fixture_root.name.removeprefix("aster-ci-")
+        short = sha256((suffix + name).encode())[:10]
+        self.root = resources.args.fixture_root / ("core-" + name)
+        self.config = Path("/etc/aster-core-ci-" + short)
+        self.state = Path("/var/lib/aster-core-ci-" + short)
+        self.password = secrets.token_hex(24)
+        self.private = resources.control / name
+        require(not self.private.exists() and not self.config.exists() and not self.state.exists(), "Refusing existing Core fixture paths")
+        self.private.mkdir(mode=0o700)
+        (self.root / "releases").mkdir(parents=True, exist_ok=True, mode=0o755)
+        candidate_path = self.root / "releases" / candidate["version"]
+        require(not candidate_path.exists(), "Candidate fixture release already exists")
+        shutil.copytree(candidate["directory"], candidate_path, copy_function=shutil.copyfile)
+        for path in (candidate_path, *candidate_path.rglob("*")):
+            path.chmod(0o755 if path.is_dir() or str(path.relative_to(candidate_path)) in {"bin/aster-api", "bin/aster-plugin-host"} or str(path.relative_to(candidate_path)).startswith("deploy/scripts/") else 0o644)
+        overrides[str(candidate_path)] = candidate
+        self.candidate = str(candidate_path)
+        self.baseline = str(self.root / "releases/0.5.1")
+        with contextlib.ExitStack() as stack:
+            sockets = [stack.enter_context(socket.socket()) for _ in range(2)]
+            for connection in sockets:
+                connection.bind(("127.0.0.1", 0))
+            api_port, tls_port = (connection.getsockname()[1] for connection in sockets)
+        self.spec = {"schema": 1, "action": "install", "operation_id": secrets.token_hex(16),
+            "release_directory": self.candidate, "instance_root": str(self.root), "config_root": str(self.config),
+            "state_directory": str(self.state), "origin": "https://localhost:" + str(tls_port),
+            "status_file": str(resources.control / "public" / (name + ".json")),
+            "listen_address": "127.0.0.1:" + str(api_port), "edge_listen_address": "127.0.0.1",
+            "runtime_user": "astcore" + short, "api_unit": "aster-core-ci-" + short + ".service",
+            "socket": str(resources.socket), "database": "ac_" + short,
+            "mysql_binary": str(resources.mysql), "mysqldump_binary": str(resources.dump),
+            "nginx_binary": str(resources.nginx), "nginx_sha256": sha256(resources.nginx.read_bytes()),
+            "edge_mode": "managed", "certificate": str(resources.control / "server.pem"),
+            "certificate_key": str(resources.control / "server.key"), "ca_file": str(resources.control / "ca.pem"),
+            "dba_client_config": str(resources.control / "dba.cnf"), "bootstrap_email": "admin@executor-ci.invalid",
+            "enable_at_boot": True,
+            "bootstrap_name": "Executor CI Admin", "bootstrap_password_file": str(self.private / "bootstrap")}
+        self.edge_unit = executor.edge_unit(self.spec)
+        for unit in (self.spec["api_unit"], self.edge_unit):
+            require(not Path("/etc/systemd/system", unit).exists(), "Refusing an existing Core fixture unit")
+        try:
+            pwd.getpwnam(self.spec["runtime_user"])
+        except KeyError:
+            pass
+        else:
+            raise AcceptanceFailure("Refusing an existing Core fixture account")
+        resources.fixtures.append(self)
+        write(self.private / "bootstrap", self.password + "\n")
+        self.install_id = self.spec["operation_id"]
+
+    def save_spec(self):
+        path = self.private / (self.spec["operation_id"] + ".json")
+        if not path.exists():
+            write(path, json.dumps(self.spec, sort_keys=True) + "\n")
+        return str(path)
+
+    def plan(self):
+        self.spec_path = self.save_spec()
+        self.planned = self.executor.plan(self.spec_path)
+        return self.planned
+
+    def execute(self, native=None, resume=False):
+        return self.executor.execute(self.spec_path, self.planned["plan_sha256"], resume=resume, native=native)
+
+    def upgrade(self):
+        self.spec = {key: value for key, value in self.spec.items() if key not in self.executor.INSTALL_KEYS}
+        self.spec.update(action="upgrade", operation_id=secrets.token_hex(16), release_directory=self.candidate,
+            migrator_dsn_file=str(self.state / self.install_id / "credentials/migrator_dsn"),
+            backup_client_config=str(self.state / self.install_id / "credentials/backup.cnf"),
+            acknowledge_backup_restore_limits=True)
+        return self.plan()
+
+    def status(self):
+        return self.executor.status(str(self.state), self.spec["operation_id"])
+
+    def login(self):
+        return HTTPSClient(self.spec["origin"], self.resources.control / "ca.pem").login("admin@executor-ci.invalid", self.password)
+
+    def verify_status_api(self, expected):
+        status, report = self.login().request("/api/v1/admin/updates/operation")
+        require(status == 200 and report["data"]["state"] == "available" and report["data"]["operation"] == expected,
+                "Read-only API operation receipt differs from actual executor result")
+        target = Path(self.spec["status_file"])
+        account = pwd.getpwnam(self.spec["runtime_user"])
+        require(account.pw_uid != 0 and target.stat().st_uid == 0 and stat.S_IMODE(target.stat().st_mode) == 0o644,
+                "Operation receipt ownership/mode is not root controlled")
+        for path in (target, *target.parents):
+            result = subprocess.run(["/usr/sbin/runuser", "-u", account.pw_name, "--", "/usr/bin/test", "-w", str(path)],
+                                    capture_output=True, timeout=5, cwd="/")
+            require(result.returncode == 1, "Runtime identity can modify an operation status path")
+        return {"admin_get_receipt_exact": True, "runtime_uid": account.pw_uid,
+                "runtime_cannot_write_status_or_ancestors": True}
+
+    def verify_enabled(self):
+        for unit in (self.spec["api_unit"], self.edge_unit):
+            require(command(["systemctl", "is-enabled", unit]).decode().strip() == "enabled", "Owned native unit was not enabled at boot")
+        return {"api_and_managed_edge_enabled_at_boot": True, "machine_reboot_tested": False}
+
+    def verify_database_grants(self):
+        """Inspect actual stored grant scope and exercise the runtime account."""
+        database = self.spec["database"]
+        mode = self.resources.sql("SELECT @@GLOBAL.partial_revokes;")
+        require(mode in {"0", "1"} and "_" in database, "Expected an explicit MySQL grant mode and underscore fixture")
+        pattern = database.replace("_", "\\_") if mode == "0" else database
+        roles = [database + "_" + role for role in ("runtime", "migrator", "backup")]
+        rows = self.resources.sql("SELECT User,HEX(Db) FROM mysql.db WHERE Host='localhost' AND User IN (" +
+            ",".join("'" + role + "'" for role in roles) + ") ORDER BY User;")
+        expected = "\n".join(role + "\t" + pattern.encode().hex().upper() for role in sorted(roles))
+        require(rows == expected, "Actual MySQL database grant pattern is broader than the fixture database")
+        runtime_dsn = (self.config / "secrets/mysql_runtime_dsn").read_text().strip()
+        match = re.fullmatch(re.escape(database + "_runtime") + r":([a-f0-9]{64})@unix\(" +
+                             re.escape(str(self.resources.socket)) + r"\)/" + re.escape(database) + r"\?parseTime=true", runtime_dsn)
+        require(match is not None, "Runtime DSN differs from the owned fixture role/database")
+        config = self.private / "runtime-grant-probe.cnf"
+        write(config, "[client]\nuser=" + database + "_runtime\npassword=" + match[1] + "\n")
+        grants = self.resources.sql("SHOW GRANTS;", config).replace("\\\\", "\\")
+        require(" ON `" + pattern + "`.* TO " in grants, "Actual runtime SHOW GRANTS differs from the reviewed database scope")
+        observed = self.resources.sql("SELECT DATABASE(); SELECT JSON_UNQUOTE(JSON_EXTRACT(document,'$.default_currency')) FROM currency_settings WHERE id=1; SELECT COUNT(*) FROM plan_prices WHERE currency='CNY';", config, database).splitlines()
+        require(len(observed) == 3 and observed[:2] == [database, "CNY"] and observed[2].isdigit() and int(observed[2]) > 0,
+                "Actual runtime account could not read the intended fresh CNY database")
+        return {"database_name_contains_underscore": True, "partial_revokes": mode == "1",
+                "stored_database_grant_pattern": pattern, "all_three_role_scopes_verified": True,
+                "runtime_show_grants_scope_verified": True, "runtime_actual_cny_database_read": True}
+
+    def cli_install(self):
+        """The published baseline also exercises the unmodified root CLI."""
+        self.spec_path = self.save_spec()
+        arguments = ["/usr/bin/python3", "-I", self.executor.__file__]
+        planned = json.loads(command([*arguments, "plan", "--spec", self.spec_path]))
+        return json.loads(command([*arguments, "apply", "--spec", self.spec_path,
+                         "--confirm-plan-sha256", planned["plan_sha256"]], timeout=600))
+
+    def confirm_current(self, directory):
+        require(os.readlink(self.root / "current") == directory, "Executor selected an unexpected release")
+        pid = int(command(["systemctl", "show", self.spec["api_unit"], "--property=MainPID", "--value"]).strip())
+        require(pid > 1 and os.readlink("/proc/" + str(pid) + "/exe") == directory + "/bin/aster-api", "Live native process is not the selected executable")
+        require(sha256(Path("/proc/" + str(pid) + "/exe").read_bytes()) == sha256(Path(directory, "bin/aster-api").read_bytes()), "Live process hash differs from selected Core")
+        return {"api_pid": pid, "live_api_sha256": sha256(Path("/proc/" + str(pid) + "/exe").read_bytes())}
+
+    def full_data_hash(self, database=None):
+        raw = command([self.resources.dump, "--defaults-file=" + str(self.resources.control / "dba.cnf"),
+            "--no-login-paths", "--protocol=SOCKET", "--socket=" + str(self.resources.socket),
+            "--single-transaction", "--no-tablespaces", "--set-gtid-purged=OFF", "--hex-blob", "--no-create-info",
+            "--skip-comments", "--compact", "--skip-extended-insert", "--order-by-primary", "--skip-triggers",
+            database or self.spec["database"]])
+        return sha256(raw)
+
+    def restore(self):
+        """Actual old-release backup and restore into another empty dedicated DB."""
+        source_hash = self.full_data_hash()
+        target = "ar" + secrets.token_hex(5)
+        account = target + "_restore"
+        password = secrets.token_hex(24)
+        self.resources.restores.append((target, account))
+        self.resources.sql("CREATE DATABASE `" + target + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;\n" +
+            "CREATE USER '" + account + "'@'localhost' IDENTIFIED BY '" + password + "';\n" +
+            "GRANT ALL PRIVILEGES ON `" + target + "`.* TO '" + account + "'@'localhost';")
+        require(self.resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='" + target + "';") == "0", "Restore target was not empty")
+        output = self.private / ("restore-backups-" + secrets.token_hex(4))
+        output.mkdir(mode=0o700)
+        native = self.executor.Native(self.spec)
+        backup = native.backup(self.baseline, str(output))
+        archive = Path(backup["directory"], "database.sql.gz")
+        import gzip
+        restore_config = self.private / (target + ".cnf")
+        write(restore_config, "[client]\nuser=" + account + "\npassword=" + password + "\n")
+        self.resources.sql(gzip.decompress(archive.read_bytes()).decode(), restore_config, target)
+        restored_hash = self.full_data_hash(target)
+        require(source_hash == restored_hash, "Restored data differs from stopped source")
+        restored_dsn = self.private / (target + ".dsn")
+        write(restored_dsn, account + ":" + password + "@unix(" + str(self.resources.socket) + ")/" + target + "?parseTime=true\n")
+        environment = self.executor.read_environment(str(self.config / "api.env"))[0]
+        environment["MYSQL_DSN_FILE"] = str(restored_dsn)
+        restored_report = native.preflight(self.baseline, environment)
+        require(restored_report["exit_code"] == 0 and restored_report["database"]["database"] == target and
+                restored_report["database"]["status"] == "current" and restored_report["database"]["admin_count"] == 1,
+                "Actual published old program did not validate the restored database")
+        return {"backup_source_core_version": "0.5.1", "source_database": self.spec["database"], "restore_database": target,
+                "empty_target_verified": True, "full_table_data_sha256": source_hash, "restored_table_data_sha256": restored_hash,
+                "actual_published_old_program_preflight_on_restored_database": "current",
+                "same_mysql_instance_separate_empty_database": True, "independent_server_restore": False}
+
+
+class HTTPSClient:
+    """Real verified localhost HTTPS, cookie/CSRF login, no proxy or redirects."""
+    def __init__(self, origin, ca):
+        self.origin = origin
+        self.csrf = None
+        context = ssl.create_default_context(cafile=str(ca))
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context),
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def request(self, path, body=None):
+        headers = {"Origin": self.origin}
+        if body is not None:
+            headers.update({"Content-Type": "application/json", "X-CSRF-Token": self.csrf or ""})
+        request = urllib.request.Request(self.origin + path,
+                    data=json.dumps(body).encode() if body is not None else None, headers=headers)
+        try:
+            with self.opener.open(request, timeout=5) as response:
+                raw = response.read(1 << 20)
+                return response.status, json.loads(raw) if "json" in response.headers.get("Content-Type", "") else raw
+        except urllib.error.HTTPError as failure:
+            return failure.code, failure.read(4096)
+
+    def login(self, email, password):
+        status, session = self.request("/api/v1/session")
+        require(status == 200 and session["data"]["demo_mode"] is False, "Production HTTPS session failed")
+        self.csrf = session["data"]["csrf_token"]
+        status, _ = self.request("/api/v1/auth/login", {"email": email, "password": password})
+        require(status == 200, "Bootstrap administrator HTTPS login failed")
+        return self
+
+
+def legacy_schema_migration(resources, executor, fresh, baseline):
+    """Real unchanged SQL 1..6 fixture, then actual candidate 6 -> 7 migration.
+
+    This is a separate schema compatibility exercise. Published Core v0.5.1
+    itself already requires schema 7; the version upgrade is honestly 7 -> 7.
+    """
+    database = "al" + secrets.token_hex(5)
+    account = database + "_migrate"
+    password = secrets.token_hex(24)
+    resources.restores.append((database, account))
+    resources.sql("CREATE DATABASE `" + database + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;\n" +
+        "CREATE USER '" + account + "'@'localhost' IDENTIFIED BY '" + password + "';\n" +
+        "GRANT ALL PRIVILEGES ON `" + database + "`.* TO '" + account + "'@'localhost';")
+    resources.sql("CREATE TABLE schema_migrations(version INT PRIMARY KEY, checksum CHAR(64) NOT NULL, applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)) ENGINE=InnoDB;", database=database)
+    files = sorted(Path(fresh.candidate, "migrations").glob("*.sql"))
+    require(len(files) == 7, "Legacy fixture requires the reviewed seven-migration inventory")
+    for number, path in enumerate(files[:6], 1):
+        if number == 3:
+            # Match the actual migration runner's documented legacy USD check
+            # removal. SQL resources remain byte-identical and fully hashed.
+            resources.sql("ALTER TABLE orders DROP CHECK orders_chk_2; ALTER TABLE invoices DROP CHECK invoices_chk_2;", database=database)
+        resources.sql(path.read_text(), database=database)
+        if number == 1:
+            resources.sql("INSERT INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available) " +
+                "SELECT id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,500,'USD',FALSE FROM `" + fresh.spec["database"] + "`.plans;", database=database)
+        if number in (2, 6):
+            table = "site_settings" if number == 2 else "email_settings"
+            resources.sql("INSERT INTO " + table + "(id,document) SELECT id,document FROM `" + fresh.spec["database"] + "`." + table + ";", database=database)
+        resources.sql("INSERT INTO schema_migrations(version,checksum) VALUES(" + str(number) + ",'" + sha256(path.read_bytes()) + "');", database=database)
+    dsn = resources.control / "legacy-migrator-dsn"
+    write(dsn, account + ":" + password + "@unix(" + str(resources.socket) + ")/" + database + "?parseTime=true\n")
+    environment = executor.runtime_environment(fresh.spec)
+    environment["MYSQL_DSN_FILE"] = str(dsn)
+    native = executor.Native(fresh.spec)
+    before = native.preflight(fresh.candidate, environment)
+    require(before["exit_code"] == 0 and before["database"]["status"] == "pending_migrations" and
+            before["database"]["schema_version"] == 6, "Unchanged legacy prefix did not pass actual candidate preflight")
+    count_before = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
+    usd_before = resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database)
+    native.api(fresh.candidate, environment, "-migrate")
+    after = native.preflight(fresh.candidate, environment)
+    old = native.preflight(baseline["directory"], environment)
+    require(after["exit_code"] == old["exit_code"] == 0 and after["database"]["status"] == old["database"]["status"] == "current" and
+            after["database"]["schema_version"] == old["database"]["schema_version"] == 7,
+            "Actual 6 to 7 migration is not compatible with the published old program")
+    count_after = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
+    require(count_before == "13" and count_after == "14", "Actual migration did not add the required registry table")
+    require(resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database) == usd_before,
+            "Actual migration rewrote historical independent USD prices")
+    digest_before = fresh.full_data_hash(database)
+    native.api(fresh.candidate, environment, "-migrate")
+    require(fresh.full_data_hash(database) == digest_before, "Repeated migration changed actual database data")
+    return {"schema_before": 6, "schema_after": 7, "tables_before": 13, "tables_after": 14,
+            "actual_candidate_binary_migrate": True, "unchanged_selected_sql_prefix": True,
+            "published_0_5_1_preflight_after_migration": "current", "historical_usd_prices_preserved": True,
+            "repeat_migration_data_unchanged": True, "scope": "separate-legacy-schema-fixture-not-version-upgrade"}
+
+
+def run_scenarios(args, candidate, baseline):
+    executor = module("core_acceptance_executor", "core-operation.py")
+    original_prepared = executor.prepared_release
+    overrides = {}
+
+    def prepared(root, trust=executor.updater._Trust()):
+        if root not in overrides:
+            return original_prepared(root, trust)
+        proof = overrides[root]
+        # Recheck actual protected bytes on every executor preflight/activation.
+        # This internal descriptor is CI trust, never an official receipt file.
+        actual = verify_source_candidate(args.source, args.candidate_assets, root)
+        require(actual["version"] == proof["version"] and actual["source_commit"] == proof["source_commit"], "Candidate identity changed")
+        files = {str(path.relative_to(root)): sha256(path.read_bytes()) for path in Path(root).rglob("*") if path.is_file()}
+        migrations = {str(int(Path(name).name[:3])): value for name, value in files.items() if name.startswith("migrations/")}
+        return {"version": proof["version"], "source_sha": proof["source_commit"],
+                "receipt_sha256": sha256(("CI selected-source candidate\n" + proof["source_commit"]).encode()),
+                "files_sha256": files, "migration_checksums": migrations}
+
+    executor.prepared_release = prepared
+    resources = Resources.__new__(Resources)
+    complete = False
+    try:
+        stage("owned-native-controls")
+        resources.__init__(args)
+        fact(args.evidence, "native-tools", {name: sha256(path.read_bytes()) for name, path in
+             (("mysql", resources.mysql), ("mysqldump", resources.dump), ("nginx", resources.nginx))})
+        stage("fresh-install")
+        fresh = Fixture(resources, executor, "fresh", candidate, baseline, overrides)
+        fresh.plan()
+        result = fresh.execute()
+        require(result["status"] == "succeeded" and result["https_ready"] is True, "Fresh actual executor install failed")
+        live = fresh.confirm_current(fresh.candidate)
+        status, config = fresh.login().request("/api/v1/admin/currencies")
+        require(status == 200 and config["data"]["default_currency"] == "CNY" and
+                len(config["data"]["currencies"]) == 1 and config["data"]["currencies"][0]["code"] == "CNY",
+                "Fresh executor install is not CNY-only")
+        require(resources.sql("SELECT COUNT(*) FROM users WHERE role='admin';", database=fresh.spec["database"]) == "1", "First administrator was duplicated")
+        require(fresh.execute(resume=True) == result, "Successful install resume changed its result")
+        require(fresh.confirm_current(fresh.candidate)["api_pid"] == live["api_pid"], "Idempotent install resume restarted the API")
+        receipt = fresh.verify_status_api(result)
+        enabled = fresh.verify_enabled()
+        grants = fresh.verify_database_grants()
+        fact(args.evidence, "fresh-install", dict(result, **live, **receipt, **enabled, **grants, production_https_login=True, fresh_cny_only=True,
+             first_administrator_count=1, terminal_resume_idempotent=True, candidate_trust=candidate["trust"]))
+        stage("legacy-schema-migration")
+        fact(args.evidence, "legacy-schema-migration", legacy_schema_migration(resources, executor, fresh, baseline))
+
+        stage("published-baseline-cli-install-and-restore")
+        upgrade = Fixture(resources, executor, "upgrade", candidate, baseline, overrides)
+        require(upgrade.baseline == baseline["directory"], "Published baseline must have its actual prepare target")
+        upgrade.spec["release_directory"] = upgrade.baseline
+        old_install = upgrade.cli_install()
+        require(old_install["status"] == "succeeded", "Actual published Core v0.5.1 install failed")
+        old_live = upgrade.confirm_current(upgrade.baseline)
+        upgrade.verify_enabled()
+        upgrade.login()
+        upgrade.upgrade()
+        executor.Native(upgrade.spec).service("stop", upgrade.spec["api_unit"])
+        restore = upgrade.restore()
+        executor.Native(upgrade.spec).service("start", upgrade.spec["api_unit"])
+        wait_ready(executor.Native(upgrade.spec))
+        fact(args.evidence, "backup-restore", restore)
+
+        class PauseAfterStop(executor.Native):
+            def service(self, verb, unit=None):
+                value = super().service(verb, unit)
+                if verb == "stop" and unit == self.spec["api_unit"]:
+                    # The real stop completed. SIGKILL below bypasses Python
+                    # exception recovery and leaves a genuine durable checkpoint.
+                    os.kill(os.getpid(), signal.SIGSTOP)
+                return value
+
+        stage("interrupted-checkpoint")
+        child = os.fork()
+        if child == 0:
+            try:
+                upgrade.execute(native=PauseAfterStop(upgrade.spec))
+            except BaseException:
+                os._exit(70)
+            os._exit(0)
+        stopped = False
+        try:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                observed, child_status = os.waitpid(child, os.WNOHANG | os.WUNTRACED)
+                if observed:
+                    require(os.WIFSTOPPED(child_status), "Interrupt fixture child exited before the real service stop")
+                    stopped = True
+                    break
+                time.sleep(0.1)
+            require(stopped, "Interrupt fixture did not reach its bounded checkpoint")
+            interrupted = upgrade.status()
+            require(interrupted["maintenance"] is True and interrupted["database_migration"]["started"] is False,
+                    "Interruption happened after database migration began")
+            require(executor.Native(upgrade.spec).service("show", upgrade.spec["api_unit"]) in {"inactive", "failed"}, "Interrupted API was not stopped")
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child, signal.SIGKILL)
+            with contextlib.suppress(ChildProcessError):
+                os.waitpid(child, 0)
+
+        class OccupiedAPIPort(executor.Native):
+            def __init__(self, spec):
+                super().__init__(spec)
+                self.blocker = None
+                self.injected = False
+            def service(self, verb, unit=None):
+                if verb == "stop" and self.blocker is not None:
+                    self.blocker.close()
+                    self.blocker = None
+                if verb == "start" and unit == self.spec["api_unit"] and not self.injected and os.readlink(upgrade.root / "current") == upgrade.candidate:
+                    self.blocker = socket.socket()
+                    self.blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    self.blocker.bind(("127.0.0.1", int(self.spec["listen_address"].split(":")[1])))
+                    self.blocker.listen(1)
+                    self.injected = True
+                value = super().service(verb, unit)
+                if verb == "stop" and unit == self.spec["api_unit"] and self.injected:
+                    # The intentionally crashing fixture may have exhausted its
+                    # restart burst. Reset only this owned unit's failure count
+                    # after the port condition is gone, before real old startup.
+                    command(["systemctl", "reset-failed", unit])
+                if verb == "start" and unit == self.spec["api_unit"] and self.injected and self.blocker is None:
+                    wait_ready(self)
+                return value
+
+        stage("resume-and-occupied-port-rollback")
+        fault = OccupiedAPIPort(upgrade.spec)
+        try:
+            upgrade.execute(native=fault, resume=True)
+            raise AcceptanceFailure("Real occupied-port candidate startup unexpectedly succeeded")
+        except executor.Rejected:
+            pass
+        finally:
+            if fault.blocker is not None:
+                fault.blocker.close()
+        rollback = upgrade.status()
+        require(fault.injected and rollback["status"] == "rolled_back" and rollback["program_rollback"] == "verified_old_schema",
+                "Compatible failure did not recover the actual published old program")
+        require(rollback["database_migration"] == {"started": True, "completed": True}, "Resumed operation did not complete the real migration command")
+        old_recovered = upgrade.confirm_current(upgrade.baseline)
+        require(rollback["maintenance"] is True and fault.https("/api/v1/session")[0] == 503,
+                "Program rollback incorrectly reopened customer writes")
+        require(upgrade.execute(resume=True) == rollback, "Terminal rollback retry changed state")
+        fact(args.evidence, "interrupt-resume", {"process_killed_after_real_service_stop": True,
+             "before_database_migration": interrupted["database_migration"], "original_operation_id_reused": True,
+             "resume_reached_migration_and_candidate_start": True, "fault": "actual-bound-api-port"})
+        fact(args.evidence, "compatible-rollback", dict(rollback, **old_recovered, old_program_was_actual_published_0_5_1=True,
+             migration_command_completed=True, schema_before=7, schema_after=7, new_schema_migration_added=False,
+             automatic_database_restore=False, maintenance_until_explicit_validation=True))
+        # Explicit fixture recovery after the independent old-program checks.
+        # This is an operator step, never an executor auto-open or DB rollback.
+        stage("reviewed-recovery-and-version-upgrade")
+        (upgrade.config / "maintenance").unlink()
+        upgrade.login()
+        upgrade.upgrade()
+        upgraded = upgrade.execute()
+        require(upgraded["status"] == "succeeded", "Published Core v0.5.1 to candidate upgrade failed")
+        live = upgrade.confirm_current(upgrade.candidate)
+        upgrade.login()
+        require(upgrade.execute(resume=True) == upgraded and upgrade.confirm_current(upgrade.candidate)["api_pid"] == live["api_pid"], "Successful upgrade retry repeated activation")
+        receipt = upgrade.verify_status_api(upgraded)
+        fact(args.evidence, "published-upgrade", dict(upgraded, **live, **receipt, previous_live_api_sha256=old_live["live_api_sha256"],
+             actual_published_previous_version="0.5.1", candidate_trust=candidate["trust"], https_login=True,
+             previous_install_used_unmodified_root_cli=True,
+             terminal_resume_idempotent=True, no_fabricated_official_metadata=True))
+
+        stage("unknown-schema-hold-and-manual-recovery")
+        unknown = Fixture(resources, executor, "unknown", candidate, baseline, overrides)
+        token = executor.updater.load_protected_token(str(args.github_token_file), executor.updater._Trust())
+        actual = executor.manager.prepare("0.5.1", unknown.baseline, api=executor.updater.Official(token))
+        require(actual["status"] == "prepared", "Second actual official baseline preparation failed")
+        verify_published_baseline(unknown.baseline)
+        unknown.spec["release_directory"] = unknown.baseline
+        unknown.plan()
+        require(unknown.execute()["status"] == "succeeded", "Unknown-schema fixture baseline install failed")
+        unknown.upgrade()
+
+        class UnknownSchema(executor.Native):
+            def __init__(self, spec):
+                super().__init__(spec)
+                self.migration_calls = 0
+            def api(self, release, environment, command_name, allow_failure=False):
+                value = super().api(release, environment, command_name, allow_failure)
+                if command_name == "-migrate" and release == unknown.candidate:
+                    self.migration_calls += 1
+                    resources.sql("ALTER TABLE plans MODIFY COLUMN cpu SMALLINT NOT NULL;", database=self.spec["database"])
+                return value
+
+        schema_fault = UnknownSchema(unknown.spec)
+        for resume in (False, True):
+            try:
+                unknown.execute(native=schema_fault, resume=resume)
+                raise AcceptanceFailure("Unknown physical schema unexpectedly passed executor recovery")
+            except executor.Rejected:
+                pass
+            hold = unknown.status()
+            require(hold["status"] == "needs_manual_recovery" and hold["maintenance"] is True and
+                    hold["program_rollback"] == "blocked_schema_or_readiness", "Unknown schema did not hold for manual recovery")
+            require(executor.Native(unknown.spec).service("show", unknown.spec["api_unit"]) in {"inactive", "failed"}, "Uncertain migration left API writes running")
+            require(resources.sql("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='plans' AND COLUMN_NAME='cpu';", database=unknown.spec["database"]) == "smallint", "Executor blindly restored or removed uncertain database state")
+        require(schema_fault.migration_calls == 1, "Uncertain migration command was repeated blindly")
+        fact(args.evidence, "unknown-schema-hold", dict(hold, fixture_fault="real-required-cpu-column-changed-to-smallint-after-migrate",
+             failed_resume_retained_incompatible_column_type=True, migration_command_count=1, automatic_database_restore=False,
+             incompatible_released_schema_claimed=False))
+        # Synthetic canary removal is the explicitly reviewed manual repair.
+        resources.sql("ALTER TABLE plans MODIFY COLUMN cpu INT NOT NULL;", database=unknown.spec["database"])
+        require(unknown.execute(resume=True)["status"] == "succeeded", "Manual fixture schema repair could not safely resume")
+        unknown.login()
+        fact(args.evidence, "core-native", {"status": "passed", "candidate_source_commit": candidate["source_commit"],
+             "candidate_version": candidate["version"], "published_baseline": "0.5.1", "actual_native_executor": True,
+             "fresh_install": True, "published_to_candidate_upgrade": True, "interrupt_resume": True,
+             "compatible_program_rollback": True, "unknown_schema_manual_recovery": True,
+             "separate_actual_legacy_schema_6_to_7_migration": True,
+             "separate_empty_database_restore": True, "new_release_schema_delta": False,
+             "production_deployment": False, "real_mail_or_payment": False})
+        complete = True
+    finally:
+        try:
+            if hasattr(resources, "fixtures"):
+                resources.cleanup()
+            fact(args.evidence, "cleanup", {"owned_resources_removed": True, "test_completed": complete})
+        except BaseException:
+            fact(args.evidence, "cleanup", {"owned_resources_removed": False, "test_completed": complete})
+            raise
+
+
+def wait_ready(native):
+    for attempt in range(50):
+        try:
+            if native.https("/readyz")[0] == 200:
+                return
+        except Exception as failure:
+            if type(failure).__name__ != "Rejected":
+                raise
+        time.sleep(0.1)
+    raise AcceptanceFailure("Actual HTTPS service did not become ready")
+
+
+def parser():
+    result = argparse.ArgumentParser(description=__doc__)
+    for name in ("source", "evidence", "fixture-root", "candidate-assets", "candidate-release", "baseline-release",
+                 "nginx", "mysql-root", "mysql-socket", "mysql-admin", "mysql-fixture", "github-token-file"):
+        result.add_argument("--" + name, type=Path, required=True)
+    return result
+
+
+def main():
+    args = parser().parse_args()
+    require(os.geteuid() == 0 and os.environ.get("GITHUB_ACTIONS") == "true" and
+            os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and
+            os.environ.get("GITHUB_REPOSITORY") == "xiaoqiqixi/betteridcsys", "Hosted native CI guard required")
+    require(re.fullmatch(r"/opt/aster-ci-[0-9]+-[0-9]+-[0-9]+", str(args.fixture_root)), "Unexpected parent fixture root")
+    candidate = verify_source_candidate(args.source, args.candidate_assets, args.candidate_release)
+    baseline = verify_published_baseline(args.baseline_release)
+    fact(args.evidence, "artifact-trust", {"candidate": candidate, "baseline": baseline})
+    run_scenarios(args, candidate, baseline)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as failure:
+        # Raw errors may contain a database URL, token, password or SQL text.
+        detail = (": " + str(failure)) if isinstance(failure, AcceptanceFailure) else ""
+        print("FAIL Core native executor acceptance: " + STAGE + ": " + type(failure).__name__ + detail, file=sys.stderr)
+        raise SystemExit(1)

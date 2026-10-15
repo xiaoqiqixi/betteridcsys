@@ -61,6 +61,7 @@ jobs:
             ${{ runner.temp }}/native-acceptance-evidence/preflight-empty.json
             ${{ runner.temp }}/native-acceptance-evidence/preflight-current.json
             ${{ runner.temp }}/native-acceptance-evidence/public-core-prepare.json
+            ${{ runner.temp }}/native-acceptance-evidence/core-native/*.json
             ${{ runner.temp }}/native-acceptance-evidence/host-doctor.json
             ${{ runner.temp }}/native-acceptance-evidence/backup-metadata.json
             ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json

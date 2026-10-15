@@ -30,7 +30,8 @@ REPOSITORY = "xiaoqiqixi/betteridcsys"
 REPOSITORY_ID = 1418618420
 WORKFLOW = ".github/workflows/release-build.yml"
 LEGACY_TRUSTED_PATHS = {WORKFLOW, "vps-billing/deploy/ci/release_pipeline.py", "vps-billing/deploy/ci/historical-artifacts.json", "vps-billing/deploy/ci/check.sh", "vps-billing/deploy/ci/prepare-native-runner.sh", "vps-billing/deploy/ci/prepare-browser.py", "vps-billing/deploy/ci/accept-native.sh", "vps-billing/deploy/ci/accept-native-http.py", "vps-billing/deploy/ci/plugin-native.sh", "vps-billing/deploy/ci/plugin-native.py", "vps-billing/deploy/ci/smtp-loopback-fixture.py", "vps-billing/deploy/ci/test_plugin_native.py", "vps-billing/deploy/ci/browser-demo.py", "vps-billing/deploy/ci/mysql-native.sh", "vps-billing/deploy/ci/mysql-distribution.json", "vps-billing/deploy/scripts/package-release.sh", "vps-billing/deploy/scripts/release-manifest.py", "vps-billing/deploy/scripts/plugin-manager.py", "vps-billing/deploy/scripts/update-manager.py", "vps-billing/deploy/scripts/test-update-manager.py", "vps-billing/deploy/systemd/aster-api.service", "vps-billing/deploy/systemd/aster-smtp.service"}
-TRUSTED_PATHS = LEGACY_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-manager.py", "vps-billing/deploy/scripts/test-core-manager.py"}
+PREPARE_TRUSTED_PATHS = LEGACY_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-manager.py", "vps-billing/deploy/scripts/test-core-manager.py"}
+TRUSTED_PATHS = PREPARE_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-operation.py", "vps-billing/deploy/scripts/test-core-operation.py", "vps-billing/deploy/ci/core-native.sh", "vps-billing/deploy/ci/core-native.py"}
 LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 MAX_JSON = 2 << 20
 MAX_ARCHIVE = 80 << 20
@@ -70,6 +71,11 @@ def digest(raw):
 def stable(value):
     require(isinstance(value, str) and VERSION.fullmatch(value), "A stable semantic version is required.")
     return tuple(map(int, value.split(".")))
+
+
+def trusted_paths_for_core(version):
+    parsed = stable(version)
+    return LEGACY_TRUSTED_PATHS if parsed <= (0, 5, 0) else PREPARE_TRUSTED_PATHS if parsed == (0, 5, 1) else TRUSTED_PATHS
 
 
 def positive(value):
@@ -427,10 +433,11 @@ def blob_sha(raw):
 def verify_source(api, build, bundle, source, provenance):
     trusted_blobs = provenance["trusted_blobs"]
     trusted_paths = set(trusted_blobs)
-    # Published releases through Core 0.5.0 predate the host preparation tool.
-    # Recognize that complete, fixed inventory only for those source versions;
-    # newer releases must carry the new complete policy, never a subset.
-    require(trusted_paths == TRUSTED_PATHS or stable(build["component_versions"]["core"]) <= (0, 5, 0) and trusted_paths == LEGACY_TRUSTED_PATHS, "The build policy must contain the exact reviewed trust inventory.")
+    # Historical inventories are exact, version-bound policies. In particular,
+    # installing published 0.5.1 before upgrading must not silently accept a
+    # subset of the executor policy introduced in 0.5.2.
+    expected_trust = trusted_paths_for_core(build["component_versions"]["core"])
+    require(trusted_paths == expected_trust, "The build policy must contain the exact reviewed trust inventory.")
     tree = api.json("/git/trees/" + source + "?recursive=1")
     require(isinstance(tree, dict) and tree.get("truncated") is False and isinstance(tree.get("tree"), list) and len(tree["tree"]) <= 20000, "Complete tagged source tree is required.")
     require(all(isinstance(path, str) and path.startswith((".github/", "vps-billing/")) and not any(part in {"", ".", ".."} for part in path.split("/")) for path in trusted_blobs), "Invalid trusted build policy paths.")
@@ -541,6 +548,8 @@ def verify_downloads(api, intent, files, current_core, *, with_bundle=False):
         required_deploy = {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py", "deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf"}
         if stable(version) >= (0, 5, 1):
             required_deploy.add("deploy/scripts/core-manager.py")
+        if stable(version) >= (0, 5, 2):
+            required_deploy.add("deploy/scripts/core-operation.py")
         allowed = required | set(copies) | {"manifests/BUILD.json", "manifests/go-dependencies.json", "manifests/npm-installed-dependencies.json", "manifests/aster-api-build.txt", "manifests/aster-plugin-host-build.txt"}
         executable = required | {path for path in required_deploy if path.startswith("deploy/scripts/")}
         exact_copies = {"LICENSE": "LICENSE", "REPOSITORY-README.md": "README.md", "PROJECT-README.md": "vps-billing/README.md", "manifests/go.mod": "vps-billing/backend/go.mod", "manifests/go.sum": "vps-billing/backend/go.sum", "manifests/package.json": "vps-billing/frontend/package.json", "manifests/package-lock.json": "vps-billing/frontend/package-lock.json"}

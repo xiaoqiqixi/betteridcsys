@@ -20,6 +20,77 @@ type fakeUpdates struct {
 	handoff          updates.Handoff
 }
 
+type fakeHostOperations struct {
+	reads int
+	view  updates.OperationView
+}
+
+func (f *fakeHostOperations) Snapshot() updates.OperationView {
+	f.reads++
+	return f.view
+}
+
+func TestHostOperationReceiptIsAdminOnlyReadOnlyAndIndependent(t *testing.T) {
+	f := updateFixture()
+	host := &fakeHostOperations{view: updates.OperationView{State: "absent"}}
+	m := NewMemory()
+	app := NewApp(m, Config{Updates: f, HostOperations: host, Demo: true, Origin: "http://localhost", Secret: ID() + ID()})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	anonymous := client(t, srv.URL, "", "")
+	customer := client(t, srv.URL, "demo@aster.local", "DemoCustomer!2026")
+	admin := client(t, srv.URL, "admin@aster.local", "DemoAdmin!2026")
+	const path = "/api/v1/admin/updates/operation"
+	for _, tc := range []struct {
+		client *testClient
+		want   int
+	}{{anonymous, 401}, {customer, 403}} {
+		if status, _ := tc.client.request("GET", path, nil, ""); status != tc.want {
+			t.Fatal("receipt authorization", status, tc.want)
+		}
+	}
+	if host.reads != 0 {
+		t.Fatal("unauthorized request reached receipt source")
+	}
+	// A body/query may not supply another receipt path or an operation command.
+	status, out := admin.request("GET", path+"?path=/etc/private-secret&action=install", map[string]any{"path": "/etc/private-secret", "command": "id"}, "")
+	if status != 200 || out["data"].(map[string]any)["state"] != "absent" || host.reads != 1 {
+		t.Fatal("fixed read-only source", status, out)
+	}
+	if status, _ := admin.request("POST", path, map[string]any{"action": "upgrade"}, ""); status != 405 || host.reads != 1 {
+		t.Fatal("receipt endpoint allowed mutation", status)
+	}
+	if f.checks != 0 || f.prepares != 0 {
+		t.Fatal("receipt triggered release or handoff work")
+	}
+	audits, err := m.Audits(context.Background(), "")
+	if err != nil || len(audits) != 0 {
+		t.Fatal("receipt read created operation audit", len(audits), err)
+	}
+	req, _ := http.NewRequest("GET", srv.URL+path, nil)
+	res, err := admin.c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 || res.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("operation status may be cached")
+	}
+	for _, state := range []string{"unconfigured", "absent", "unavailable"} {
+		host.view = updates.OperationView{State: state}
+		status, out = admin.request("GET", path, nil, "")
+		data := out["data"].(map[string]any)
+		if status != 200 || data["state"] != state || data["operation"] != nil || len(data) != 1 {
+			t.Fatal("receipt state confused with execution", status, out)
+		}
+	}
+	app.Config.HostOperations = nil
+	status, out = admin.request("GET", path, nil, "")
+	if status != 200 || out["data"].(map[string]any)["state"] != "unconfigured" {
+		t.Fatal("default receipt configuration", status, out)
+	}
+}
+
 func (f *fakeUpdates) Snapshot() updates.View                      { return f.view }
 func (f *fakeUpdates) Check(context.Context) (updates.View, error) { f.checks++; return f.view, f.err }
 func (f *fakeUpdates) Prepare(_ context.Context, actor, component, tag, source string, id int64, catalog string) (updates.Handoff, error) {

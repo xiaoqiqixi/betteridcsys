@@ -26,7 +26,26 @@ type UpdateService interface {
 	Prepare(context.Context, string, string, string, string, int64, string) (updates.Handoff, error)
 }
 
+// HostOperationSource exposes only a trusted local receipt snapshot. It cannot
+// launch or authorize an operation and is independent of release catalog GETs.
+type HostOperationSource interface {
+	Snapshot() updates.OperationView
+}
+
 func (a *App) updateHTTP(w http.ResponseWriter, r *http.Request, actor User, path string) {
+	if path == "/admin/updates/operation" {
+		if r.Method != "GET" {
+			fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		view := updates.OperationView{State: "unconfigured"}
+		if a.Config.HostOperations != nil {
+			view = a.Config.HostOperations.Snapshot()
+		}
+		jsonOut(w, 200, view)
+		return
+	}
 	service := a.Config.Updates
 	if path == "/admin/updates" {
 		if r.Method != "GET" {
@@ -77,7 +96,7 @@ func (a *App) updateHTTP(w http.ResponseWriter, r *http.Request, actor User, pat
 		return
 	}
 	if !input.Acknowledged {
-		fail(w, r, 400, "UPDATE_ACK_REQUIRED", "请明确确认需要由主机管理员继续执行更新交接")
+		fail(w, r, 400, "UPDATE_ACK_REQUIRED", "请明确确认需要由主机管理员在服务器启动受保护的更新工具")
 		return
 	}
 	if service == nil {

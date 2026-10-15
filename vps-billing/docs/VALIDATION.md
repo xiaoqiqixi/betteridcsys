@@ -2,6 +2,12 @@
 
 各项结果绑定实际执行时的提交、日期和 GitHub run；后续源码或界面修改不沿用旧提交的通过结论。
 
+## Core 0.5.2：原生安装与升级执行
+
+本轮新增管理员明确启动的主机执行器及后台只读回执，准备完整隔离验收：真实全新实例、正式 0.5.1 起点升级、独立 6→7 迁移、进程中断续跑、端口故障后的兼容程序回退、未知物理 schema 保持维护及空库恢复。发布前的新程序使用明确标记的源码构建候选，不伪造正式 PREPARED/PROVENANCE。
+
+此开发提交尚未完成新增执行器的 hosted systemd 实跑，不能据旧 0.5.1 记录或本地单元测试声称安装升级验收通过。对应 CI、构建与 Release 来源完成后在此补录实际结果。支付、外部邮件、用户主机、Mac、公共 CA、整机重启及生产负载均不属于本轮隔离检查。
+
 ## Core 0.5.1：安装准备、只读预检与未付取消
 
 [Core v0.5.1](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.1) 已于 **2026-10-15 02:57:17 UTC** 正常公开，Release ID **413373046**，非草稿、非预发布，latest 指向 `v0.5.1`。标签与发布来源均为 `91cc3c18e50b51f01ca0003e3d18de3ade69f25d`（下称 F）；[源码完整 CI 38672137982](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672137982)、[标签构建 38672929446](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672929446) 和[发布 38673669158](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38673669158) 均完成成功，相关全部 job/步骤通过。发布仅生成正常发行资产，没有执行部署。

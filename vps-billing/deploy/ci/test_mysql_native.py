@@ -116,6 +116,7 @@ class NativeMySQLFixtureTest(unittest.TestCase):
                     print('[ERROR] [MY-999999] fixture-private-text=inherited-must-not-escape')
                 raise SystemExit(2 if os.environ.get('CI_FIXTURE_INIT_FAIL') else 0)
             assert '--bind-address=127.0.0.1' in sys.argv
+            assert '--skip-networking' in sys.argv
             assert '--mysqlx=0' in sys.argv
             assert '--skip-name-resolve' in sys.argv
             init = Path(next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--init-file=')))

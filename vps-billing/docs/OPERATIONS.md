@@ -23,6 +23,8 @@
 
 ## 2. 配置和服务管理
 
+Core 0.5.2 的新装和受支持实例升级优先使用 [安装](INSTALL.md)及 [升级](UPGRADE.md)中的管理员受限执行器。它管理专用 API/可选独立边缘 unit，实际执行初始化、迁移和激活；网页仅只读回执。本节的日常服务命令用于已核对实例的维护，不代替执行器计划、备份或迁移检查点。独立边缘与共享面板 Nginx 使用各自明确的管理方式，不能混用服务名。
+
 原生配置样例包括 `deploy/systemd/aster-api.service`、`aster-smtp.service`、`api.env.example` 和 `deploy/nginx.native.conf`。插件安装/策略管理用 `deploy/scripts/plugin-manager.py`，明确服务操作由管理员执行。运行目录无须可写；MySQL 数据目录、journal 和备份由各自服务/运维身份管理。不要为解决读写错误把 `/opt/aster`、`/etc/aster` 或数据库目录递归改为可写。
 
 `/etc/aster` 为 `root:root`、0755，非秘密 `/etc/aster/plugins.json` 由 root 管理；`/etc/aster/api.env` 为 `root:aster`、0640；运行秘密目录为 `root:aster`、0750，文件为 `root:aster`、0640。环境文件只保存 `*_FILE` 路径等配置，不作为 shell 脚本执行。MySQL DSN 文件必须与真实数据库用户密码同步；仅修改文件不会修改数据库账号。

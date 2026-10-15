@@ -1,6 +1,6 @@
 # 版本、构建与发布
 
-Core 与运行时插件分别采用语义化版本、构建包和 Release。本次源码版本为 Core `0.5.1`、官方 SMTP `1.1.0`；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
+Core 与运行时插件分别采用语义化版本、构建包和 Release。本次源码版本为 Core `0.5.2`、官方 SMTP `1.1.0`；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
 
 本项目在 `main` 维护。正常发布采用公开、非草稿、非预发布的 Release；这是版本交付状态，不宣称支付、主控/被控、商业运营或安全认证已完成。发布流程不部署服务器、不操作真实付款、不发送外部邮件。root `LICENSE` 和第三方版权材料保留；根 README 可随产品变化更新。
 
@@ -8,12 +8,12 @@ Core 与运行时插件分别采用语义化版本、构建包和 Release。本�
 
 | 项目 | 标签 | 原始 Linux amd64 程序 | 单独资源包 |
 |---|---|---|---|
-| Core | `v0.5.1` | `aster-api-0.5.1-linux-amd64`、`aster-plugin-host-0.5.1-linux-amd64` | `aster-core-0.5.1-linux-amd64-resources.tar.gz` |
+| Core | `v0.5.2` | `aster-api-0.5.2-linux-amd64`、`aster-plugin-host-0.5.2-linux-amd64` | `aster-core-0.5.2-linux-amd64-resources.tar.gz` |
 | SMTP | `smtp-v1.1.0` | `aster-smtp-1.1.0-linux-amd64` | `aster-smtp-1.1.0-linux-amd64-resources.tar.gz` |
 
 每个 Release 另含 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`：Core 共 6 个手工发布资产，SMTP 共 5 个。程序为未压缩的静态 ELF 可执行文件；下载后须按固定目标名安装和赋予执行权限。资源包不含 ELF，不能把它当作已经带程序的旧运行包。
 
-Core 资源根目录为 `aster-core-0.5.1-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。资源内 `core-manager.py prepare` 核验同版本资产并自动组装 `bin/aster-api`、`bin/aster-plugin-host`；仍须配置 MySQL、秘密和 HTTPS。单个 API 程序不能替代网页、配置、数据库或插件宿主。
+Core 资源根目录为 `aster-core-0.5.2-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。资源内 `core-manager.py prepare` 核验同版本资产并自动组装 `bin/aster-api`、`bin/aster-plugin-host`；管理员再审查私密规格和计划摘要，明确确认 `core-operation.py apply` 完成专用实例的初始化、迁移、配置和激活。MySQL 系统服务、Nginx 程序、TLS 证书和宿主环境须先准备；网页没有执行权限。单个 API 程序不能替代网页、配置、数据库或插件宿主。
 
 SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。管理工具同时核验资源与原始程序，再组装为不可覆盖的六文件版本目录；安装不批准、不启动。两种 Release 分别记录来源，不能用 Core 校验和证明 SMTP 程序。
 
@@ -25,7 +25,7 @@ SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `mani
 
 ## 后台版本查询与安装交接
 
-后台更新只接受固定官方仓库的正常 Core/SMTP Release，显示来源、版本/说明与兼容条件；草稿、预发布、不兼容或资料不完整的资产不能被当作可自动安装候选。管理员明确交接后状态为“待运维处理”，不更改运行服务。主机工具独立重查官方资产、锁/日志与文件备份条件，只暂存已核验版本；数据库恢复/schema/维护窗口仍由运维核对，实际应用、Core迁移及回退限制见 [UPDATES.md](UPDATES.md) 和 [UPGRADE.md](UPGRADE.md)。
+后台更新只接受固定官方仓库的正常 Core/SMTP Release，显示来源、版本/说明与兼容条件；草稿、预发布、不兼容或资料不完整的资产不能被当作可自动安装候选。管理员明确交接后状态为“待运维处理”，不更改运行服务。`update-manager.py stage` 只暂存，`core-manager.py prepare` 只准备目录；独立的 `core-operation.py` 在主机管理员审查规格并确认计划摘要后，才实际初始化、迁移和激活。后台只读受保护执行回执，数据库恢复/schema/维护窗口仍须核对，见 [UPDATES.md](UPDATES.md) 和 [UPGRADE.md](UPGRADE.md)。
 
 归档摘要和PROVENANCE目前没有独立发行签名。官方下载与API的TLS来源校验不能描述为签名验真或防止仓库管理员恶意发布；发布和更新流程各自验证一致性，不能只复用网页给出的校验值。
 
@@ -35,9 +35,9 @@ SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `mani
 
 ```sh
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.1 --output /workspace/core-a
+  --commit COMMIT_SHA --kind core --version 0.5.2 --output /workspace/core-a
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.1 --output /workspace/core-b
+  --commit COMMIT_SHA --kind core --version 0.5.2 --output /workspace/core-b
 diff -r /workspace/core-a /workspace/core-b
 
 vps-billing/deploy/scripts/package-release.sh \
@@ -55,7 +55,7 @@ diff -r /workspace/smtp-a /workspace/smtp-b
 
 1. Go race/vet、前端单元与组件/类型/格式/生产构建、独立 HTTP/config 及发布负向测试通过。真实 MySQL 测试不得跳过。
 2. MySQL 迁移 1–7、重复/已知中断恢复、checksum、并发幂等、权限、币种与历史快照回归通过；API 运行身份不能 DDL 或 GRANT。新增财务回归覆盖全新 CNY-only、旧 USD/默认项保留、0–6 位精确报价、精度锁、义务停用阻止、历史币种/套餐快照和审计回滚。
-3. 真实原生 systemd/Nginx HTTPS、API 重启、同 schema 目录切换、备份/空库恢复与业务检查有脱敏结果；浏览器保留沙箱并覆盖桌面/手机交互。
+3. 真实执行器初始化、systemd/Nginx HTTPS、API 重启、正式 0.5.1 到新源码候选升级、进程中断恢复、启动失败后的兼容回退、未知 schema 保持维护，以及备份/空库恢复均有脱敏结果；浏览器保留沙箱并覆盖桌面/手机交互。发布前候选不得伪造官方来源。
 4. 插件专项验证：未知文件不会执行，审批/哈希/路径/UID/协议拒绝边界正确；真实独立 SMTP 安装、版本切换、回退和崩溃恢复期间，既有 Core 程序哈希与存活进程不变，核心业务继续响应。测试只用回环合成 SMTP/TLS。
 5. Core、SMTP 各自双构建一致；原始 ELF 与资源分别校验，资源不含 ELF，组装后完整清单、权限、来源、版本和校验和通过。发布资产来自已验证提交，不能以工作区文件或历史候选冒充。
 6. npm/Go 扫描及系统依赖检查分别报告范围。扫描网络或工具失败即为未完成；模块级告警不能被“可达函数 0”掩盖。

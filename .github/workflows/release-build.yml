@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing reviewed raw runtime tag: v0.5.1 or smtp-v1.1.0; dispatch from main'
+        description: 'Existing reviewed raw runtime tag: v0.5.2 or smtp-v1.1.0; dispatch from main'
         required: true
         type: string
 
@@ -114,6 +114,7 @@ jobs:
             ${{ runner.temp }}/native-acceptance-evidence/preflight-empty.json
             ${{ runner.temp }}/native-acceptance-evidence/preflight-current.json
             ${{ runner.temp }}/native-acceptance-evidence/public-core-prepare.json
+            ${{ runner.temp }}/native-acceptance-evidence/core-native/*.json
             ${{ runner.temp }}/native-acceptance-evidence/host-doctor.json
             ${{ runner.temp }}/native-acceptance-evidence/backup-metadata.json
             ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json

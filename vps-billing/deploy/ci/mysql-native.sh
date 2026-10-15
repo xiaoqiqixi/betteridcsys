@@ -275,7 +275,7 @@ PY
   --lc-messages-dir="$messages_dir" --plugin-dir="$plugin_dir" \
   --tmpdir="$fixture_tmp/tmp" --socket="$socket_path" --pid-file="$fixture_tmp/mysql.pid" \
   --log-error="$fixture_tmp/mysql.log" --init-file="$fixture_tmp/bootstrap.sql" \
-  --bind-address=127.0.0.1 --port="$mysql_port" --mysqlx=0 --skip-name-resolve \
+  --skip-networking --bind-address=127.0.0.1 --port="$mysql_port" --mysqlx=0 --skip-name-resolve \
   --skip-log-bin --local-infile=0 --secure-file-priv=NULL --default-time-zone=+00:00 \
   --innodb-buffer-pool-size=128M >"$fixture_tmp/server.log" 2>&1 &
 mysql_pid=$!

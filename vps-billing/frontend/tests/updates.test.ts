@@ -107,7 +107,11 @@ const mountPage = async (
   fetcher: ReturnType<typeof vi.fn>,
   props = { preview: false, administrator: true },
 ) => {
-  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("fetch", (path: string, options: RequestInit) =>
+    path === "/api/v1/admin/updates/operation"
+      ? Promise.resolve(reply({ state: "unconfigured" }))
+      : fetcher(path, options),
+  );
   const wrapper = mount(UpdatesPage, { props });
   await flushPromises();
   return wrapper;
@@ -397,8 +401,11 @@ describe("administrator update handoff", () => {
       catalog_sha256: "b".repeat(64),
       acknowledge_manual_handoff: true,
     });
-    expect(wrapper.text()).toContain("等待主机运维");
-    expect(wrapper.text()).toContain("尚未开始安装");
+    expect(wrapper.text()).toContain("仅供主机核验");
+    expect(wrapper.text()).toContain("此网页操作未执行安装或升级");
+    expect(wrapper.text()).toContain(
+      "由管理员在主机上明确确认并启动受限执行工具",
+    );
     expect(wrapper.find("form").exists()).toBe(false);
     expect(
       wrapper.get('[data-action="select"]').attributes("disabled"),
@@ -581,6 +588,8 @@ describe("administrator update handoff", () => {
           if (endpoint === "/currencies") return reply(defaultCurrencyRegistry);
           if (endpoint === "/site-settings") return reply(defaultSiteSettings);
           if (endpoint === "/admin/updates") return reply(snapshot());
+          if (endpoint === "/admin/updates/operation")
+            return reply({ state: "unconfigured" });
           if (endpoint.startsWith("/admin/overview"))
             return reply({
               customers: 1,
@@ -615,6 +624,9 @@ describe("administrator update handoff", () => {
         role === "admin",
       );
       expect(requests.includes("/admin/updates")).toBe(role === "admin");
+      expect(requests.includes("/admin/updates/operation")).toBe(
+        role === "admin",
+      );
       expect(wrapper.find('nav a[href="/updates"]').exists()).toBe(
         role === "admin",
       );

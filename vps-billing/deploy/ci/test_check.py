@@ -34,6 +34,7 @@ class CheckScriptTest(unittest.TestCase):
         (project / "deploy/scripts/test-plugin-manager.py").write_text("pass\n")
         (project / "deploy/scripts/test-update-manager.py").write_text("pass\n")
         (project / "deploy/scripts/test-core-manager.py").write_text("pass\n")
+        (project / "deploy/scripts/test-core-operation.py").write_text("pass\n")
         (project / "deploy/scripts/test-backup-native.sh").write_text("#!/bin/sh\nexit 0\n")
         (project / "tests/config_smoke.py").write_text(
             "import os\nassert 'ASTER_MYSQL_TEST_DSN' not in os.environ\n"
