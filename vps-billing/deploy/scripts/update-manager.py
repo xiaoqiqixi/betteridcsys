@@ -288,7 +288,7 @@ class Official:
             raise Rejected("Official repository download failed.") from None
 
     def json(self, suffix):
-        require(isinstance(suffix, str) and re.fullmatch(r"/(?:git/ref/(?:tags/[A-Za-z0-9.-]+|heads/main)|git/tags/[a-f0-9]{40}|git/trees/[a-f0-9]{40}\?recursive=1|git/blobs/[a-f0-9]{40}|releases/tags/[A-Za-z0-9.-]+|actions/runs/[1-9][0-9]*|actions/workflows/release-build.yml|compare/[a-f0-9]{40}\.\.\.main)", suffix), "Unsupported official API action.")
+        require(isinstance(suffix, str) and re.fullmatch(r"/(?:git/ref/(?:tags/[A-Za-z0-9.-]+|heads/main)|git/tags/[a-f0-9]{40}|git/trees/[a-f0-9]{40}\?recursive=1|git/blobs/[a-f0-9]{40}|releases/(?:tags/[A-Za-z0-9.-]+|latest)|actions/runs/[1-9][0-9]*|actions/workflows/release-build.yml|compare/[a-f0-9]{40}\.\.\.main)", suffix), "Unsupported official API action.")
         return strict_json(self._get("https://api.github.com/repos/" + REPOSITORY + suffix, MAX_JSON))
 
     def repository(self):

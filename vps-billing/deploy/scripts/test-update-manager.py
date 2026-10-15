@@ -774,10 +774,13 @@ class HandoffTest(unittest.TestCase):
 
     def test_fixed_https_hosts_actions_and_no_environment_proxies(self):
         official = manager.Official("fixture_token")
+        with patch.object(official, "_get", return_value=b"{}") as fetch:
+            self.assertEqual(official.json("/releases/latest"), {})
+            fetch.assert_called_once_with("https://api.github.com/repos/" + manager.REPOSITORY + "/releases/latest", manager.MAX_JSON)
         for url, authenticated in (("http://api.github.com/repos/test", True), ("https://evil.test/asset", False), ("https://release-assets.githubusercontent.com:444/asset", False), ("https://release-assets.githubusercontent.com:invalid/asset", False), ("https://user@release-assets.githubusercontent.com/asset", False), ("https://release-assets.githubusercontent.com/asset#fragment", False), ("https://objects.githubusercontent.com/asset", False)):
             with self.subTest(url=url), self.assertRaises(manager.Rejected):
                 official._get(url, 100, asset=True, authenticated=authenticated)
-        for action in ("/contributors", "/releases", "/git/ref/tags/smtp-v1.0.1?url=https://evil.test", "/../../other"):
+        for action in ("/contributors", "/releases", "/releases/latest?url=https://evil.test", "/releases/latest/extra", "/git/ref/tags/smtp-v1.0.1?url=https://evil.test", "/../../other"):
             with self.assertRaises(manager.Rejected):
                 official.json(action)
         self.assertFalse(any(isinstance(handler, urllib.request.ProxyHandler) and handler.proxies for handler in official.opener.handlers))
