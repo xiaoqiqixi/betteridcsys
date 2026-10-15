@@ -73,7 +73,7 @@ func TestMySQLPreflightRejectsPaymentSchemaChanges(t *testing.T) {
 		"changed_request_collation":   "ALTER TABLE payment_attempts MODIFY request_key VARCHAR(128) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL",
 		"missing_amount_check":        "ALTER TABLE payment_attempts DROP CHECK payment_attempts_positive_minor",
 		"missing_attempt_foreign_key": "ALTER TABLE payment_settlements DROP FOREIGN KEY payment_settlements_attempt",
-		"deletion_cascade":            "ALTER TABLE payment_settlements DROP FOREIGN KEY payment_settlements_attempt, ADD CONSTRAINT payment_settlements_attempt FOREIGN KEY(attempt_id) REFERENCES payment_attempts(id) ON DELETE CASCADE",
+		"deletion_cascade":            "ALTER TABLE payment_settlements DROP FOREIGN KEY payment_settlements_attempt, ADD CONSTRAINT payment_settlements_attempt_cascade FOREIGN KEY(attempt_id) REFERENCES payment_attempts(id) ON DELETE CASCADE",
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, ctx := migrationTestDatabase(t)
