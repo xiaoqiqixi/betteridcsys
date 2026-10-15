@@ -227,7 +227,7 @@ sudo -n install -o root -g root -m 600 "$scratch/public-read-token" "$config/pub
 for tool in core-manager.py update-manager.py; do
   sudo -n install -o root -g root -m 755 "$project/deploy/scripts/$tool" "$opt/tools/$tool"
 done
-public_version=0.5.1
+public_version=0.5.2
 public_target="$opt/core-upgrade/releases/$public_version"
 sudo -n python3 -I "$opt/tools/core-manager.py" doctor --release-directory "$public_target" --socket "$mysql_socket" --listen-address 127.0.0.1:18080 > "$evidence/host-doctor.json"
 [[ ! -e $public_target && ! -L $public_target ]] || fail 'Read-only host doctor changed the target.'

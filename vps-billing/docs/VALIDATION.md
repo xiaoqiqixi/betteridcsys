@@ -4,7 +4,7 @@
 
 ## Core 0.5.2：原生安装与升级执行
 
-实现冻结源码 **`f1d1e01e707bfb7b2576c77a3bbb1c897632bdfb`**（A12）的[完整源码 CI 38699726947](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947) 已于 2026-10-15 UTC 成功，三个 job 均完成通过。新增激活后未知 schema 的停写、人工修复及目标重新激活场景已经真实隔离执行；不会把较早 A11 的通过记录冒作该修复的证据。源码验收完成，正式标签构建和 Release 尚待完成，不据主干 CI 声称已发布。
+[Core v0.5.2](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.2) 已于 **2026-10-15 08:09:12 UTC** 正常公开，Release ID **413559379**，非草稿、非预发布，latest 指向 `v0.5.2`。标签及发行源码均为 **`9ed610a283020f50e2cfc529f8b5145b4a9c8fc3`**（下称 R）；[完整源码 CI 38701016075](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38701016075)、[标签构建 38702170922](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38702170922) 与[发布 38703547581](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38703547581) 均完成成功，相关全部 job/步骤通过。发布只生成正常发行资产，没有执行部署。新增激活后未知 schema 的停写、人工修复及目标重新激活场景由 R 的主干 CI 和标签构建分别真实隔离验证；各次结果绑定自己的源码和运行。
 
 ### 实施范围
 
@@ -16,11 +16,11 @@
 
 全新安装仅初始化 CNY；既有 USD 独立价格和历史快照保留，没有汇率或自动换汇。0.5.1 与 0.5.2 均为七项 SQL、14 张基础表，SQL/checksum 未改；版本升级是 7→7，另设独立旧 schema 6→7、13→14 表夹具。
 
-### A12 的完整隔离证据：通过
+### 发行源码 R 的完整隔离证据：通过
 
-A12 的[主检查 116304709500](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947/job/116304709500)、[Go 扫描 116304709883](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947/job/116304709883) 和[官方元数据 116304709763](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947/job/116304709763) 均为 `completed/success`。以下只使用 A12 的实际日志和脱敏事实；截图文件元数据不等于查看过图片。
+R 的[主检查 116308927521](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38701016075/job/116308927521)、[Go 扫描 116308927294](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38701016075/job/116308927294) 和[官方元数据 116308926954](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38701016075/job/116308926954) 均为 `completed/success`。以下只使用 R 的实际日志和脱敏事实；截图文件元数据不等于查看过图片。
 
-| 检查 | A12 实际结果 |
+| 检查 | R 的实际结果 |
 |---|---|
 | Go / MySQL | race 643 个 PASS、0 FAIL、0 SKIP，含 168 个顶层测试及子测试；真实隔离 MySQL、vet、静态 Linux amd64 构建与依赖边界检查通过 |
 | 前端 | 13 文件、358 项全部通过；类型、生产构建及格式检查通过 |
@@ -37,7 +37,7 @@ A12 的[主检查 116304709500](https://github.com/xiaoqiqixi/betteridcsys/actio
 | 原有业务及插件 | API 重启保留六项订单；独立 SMTP 插件 9 项、0 失败/跳过，11 阶段 Core 摘要一致且 PID 不变；合成 TLS 回环仅接收两封、未外投，DATA 后受控崩溃不自动重发；测试 1.1.1 不是正式插件发行 |
 | 浏览器与清理 | sandbox Chrome `155.0.8059.39` 的固定源码回环 demo 功能脚本及清理成功，未报告数值功能测试计数；16 份截图元数据字段完整、唯一且格式有效，未下载或查看图片，未进行人工视觉验收。原生验收内层 `test_completed=true`，外层 `test_exit_code=0/exit_code=0`，两层自有资源清理均成功 |
 
-A12 raw、磁盘及存活 API SHA-256 为 `6f68210b80f96eccd058d52b9c2b7a356ce4cf01a25c2d1de3f2dc2de888fb81`。此处运行事实绑定 A12；静态页面检查仅核对 `index.html` 摘要，不证明完整前端资源或视觉效果。保存的解码主检查日志 SHA-256 为 `797785e10d2bde1cb6cd8e536e4b058e18545e69e7f3fe793947a4ae695a8f63`。
+R raw、磁盘及存活 API SHA-256 为 `6f68210b80f96eccd058d52b9c2b7a356ce4cf01a25c2d1de3f2dc2de888fb81`，与正式公开 API 摘要一致。此处运行事实绑定 R；静态页面检查仅核对 `index.html` 摘要，不证明完整前端资源或视觉效果。保存的解码主检查日志 SHA-256 为 `349a2c21f29f4065f284914fdad1faa649d0d7de16802e8fd8ec13a60212a2cb`。源码 CI 和标签构建中的公开 prepare 均实际选中当时已公开的 Core 0.5.1，原生验收的新程序则为 R 现场构建的 0.5.2 候选；来源核验、候选安装验收与正式发行资产分别记录。
 
 ### 迭代记录与修复依据
 
@@ -56,15 +56,39 @@ A–A10 的实际验收终态均为失败；A11 后来成功不改写它们。A9
 | A10 [`f08a0c6`](https://github.com/xiaoqiqixi/betteridcsys/commit/f08a0c6001dff106b36b64899146f893536657f3) / [38687662294 attempt 2](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38687662294/job/116266567767) | 只增诊断，实际定位到恢复前 `backup_checksums/SHA256SUMS` 的保护拒绝；四个备份成员均 root 所有、单链接普通文件、0666，三层私密目录均 0700。未执行导入及后续升级/故障/浏览器；当次未读取 ACL，不能追认其实际 ACL |
 | A11 [`0a59b69`](https://github.com/xiaoqiqixi/betteridcsys/commit/0a59b69283f9e9f2ad0f70e23c1ec83222bfe2fe) / [38689586746](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38689586746) | 描述符绑定地清除/复核本次新建私密目录的默认 ACL，完成成员必须 0600；真实旧版备份脚本字节不变，不修改既有备份、全局 ACL 或 SQL。真实 OS 冒烟复现旧 0666/新 0600，完整验收成功；仍不覆盖其后发现的激活后就绪恢复缺口 |
 | A12 [`f1d1e01`](https://github.com/xiaoqiqixi/betteridcsys/commit/f1d1e01e707bfb7b2576c77a3bbb1c897632bdfb) / [38699726947](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947) | A11 后的离线对照确认：已完成激活随后因未知 schema 停机，修复后续跑会跳过激活、回退旧程序。A12 只在实际停机后持久记录待重新激活，并严格重验维护/服务/schema；80 项离线执行器回归及独立真实激活后故障、未修复拒绝、人工修复和同 ID 幂等恢复通过。迁移和首位管理员步骤不重放 |
+| R [`9ed610a`](https://github.com/xiaoqiqixi/betteridcsys/commit/9ed610a283020f50e2cfc529f8b5145b4a9c8fc3) / [38701016075](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38701016075) | 最终发行源码的完整 CI 再次独立通过 Go 643/0/0、前端 358/13、Python 494 及全部原生/浏览器场景，包含激活后未知 schema 的停写、未修复续跑拒绝及人工修复后目标重新激活；后续标签构建与发布的实际结果见下节 |
 | A9 / A10 初始化重跑 | [A9 attempt 1，116262448835](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38686503846/job/116262448835) 与 [A10 attempt 1，116266115275](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38687662294/job/116266115275) 均在 Set up job 下载固定 SHA 的 `actions/setup-go` 归档失败；项目未执行、fixture 未创建。只重跑失败 job，源码、workflow 和 pin 未变；attempt 2 的实际项目失败分别如上，不把初始化网络故障算作项目代码失败 |
 
-A–A4、A7–A10 已执行主场景的失败运行均保留 `test_completed=false`、内外层自有资源移除成功及外层测试/总退出码 1；退出码 1 表示验收失败，不改写为清理失败。A5/A6 仅有早期冒烟：自有 unit 文件已删除、服务从未启动，不套用尚未启动的主场景清理指标。A11 和 A12 各自完整执行浏览器脚本，不借其结果补齐旧失败运行。
+A–A4、A7–A10 已执行主场景的失败运行均保留 `test_completed=false`、内外层自有资源移除成功及外层测试/总退出码 1；退出码 1 表示验收失败，不改写为清理失败。A5/A6 仅有早期冒烟：自有 unit 文件已删除、服务从未启动，不套用尚未启动的主场景清理指标。A11、A12 和最终发行源码 R 各自完整执行浏览器脚本，不借其结果补齐旧失败运行。
 
-### 本地验证与发行进度
+### 本地重复构建与正式发行
 
-A12 提交前，本地完整编排 234 项和执行器 80 项实际通过；35 项验收护栏属于编排套件，不能重复相加。另以 A11 精确已提交源码和修复后源码做离线对照：独立修复夹具 schema 后，旧代码续跑为 `rolled_back`，新代码为 `succeeded`；迁移均一次、未重建管理员。该对照使用 Python 主机/数据库替身，不能冒充实际 systemd/MySQL；上方 A12 托管证据另行完成了真实场景。
+A12 提交前，本地完整编排 234 项和执行器 80 项实际通过；35 项验收护栏属于编排套件，不能重复相加。另以 A11 精确已提交源码和修复后源码做离线对照：独立修复夹具 schema 后，旧代码续跑为 `rolled_back`，新代码为 `succeeded`；迁移均一次、未重建管理员。该对照使用 Python 主机/数据库替身；上方 R 的托管证据另行完成了真实场景。
 
-正式标签构建、最终精确发行源码的本地重复构建、公开六资产及历史库存核验尚未完成，后续按实际结果补录。初始候选的本地构建不能替代最终发行源码，未封装本地输出不冒作带真实 Actions PROVENANCE 的正式资产。既有七个 Release / 37 资产、SMTP 1.1.0 和全部历史标签须保留；不移动已发布标签或覆盖资产。
+R 的两次独立本地构建五项未封装输出（API、插件宿主、资源归档、BUILD 与本地 SHA256SUMS）逐字节一致；177 个资源文件的源码复制与 R 匹配，含七项 SQL，资源内 ELF 为 0，没有伪造正式 `PROVENANCE.json`。两个 raw ELF 的本地摘要与下表正式资产一致；以下三项为本地实际值，与正式封装值分别记录：
+
+| 本地未封装输出 | 大小（字节） | 实际 SHA-256 |
+|---|---:|---|
+| `aster-core-0.5.2-linux-amd64-resources.tar.gz` | 378257 | `864b678fcb6ba8e9109a2182e2f824f8153f259a59c106a1bdb6b28c736a6b1f` |
+| `BUILD.json` | 7068 | `35e6c51f9d106cad0af0a6984eef743e1698827cd8878b71990e0c2658375854` |
+| `SHA256SUMS` | 391 | `c35751b6c1c6cee120f749a503399ec9925dd46540b8bfefa5f0e9477b840f3a` |
+
+实际[标签构建 job 116312726901](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38702170922/job/116312726901) 在 R 上重新完整通过 Go 643/0/0（168 顶层）、前端 358/13、Python 494、原生安装/升级/恢复/中断/回退及两类未知 schema 人工恢复场景、插件 9/0/0 和零退出清理；sandbox Chrome `154.0.8037.97` 功能脚本及 16 份截图元数据检查通过，未查看图片。两次干净 Linux amd64 构建、两次真实来源封装及封装前后递归字节比较均通过，来源绑定该实际构建 run。上述为独立重复门禁，不将重复通过数量累加到主干 CI。
+
+本地记录 npm `11.9.0`，托管构建为 npm `11.17.0`；本地资源为 378257 字节 / `864b678fcb6ba8e9109a2182e2f824f8153f259a59c106a1bdb6b28c736a6b1f`，正式资源为 378082 字节 / `fd9e4e68b71452f19e289d78c07408304f7c9213c81d6414d5acc91e7a82acd4`，BUILD 也不同。因此只声明各环境内部重复构建一致，以及两个 raw ELF 与正式值一致，不声明跨环境资源或 BUILD 完全相同。
+
+[发布 job 116317260626](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38703547581/job/116317260626) 重新验证上游构建、策略、全部字节及真实来源后成功公开 Release 413559379。以下为实际正常公开 Release 六资产的 ID、大小与 GitHub API SHA-256；安装核验以这些正式值及对应真实来源为准：
+
+| 正式资产 | 资产 ID | 大小（字节） | 公开 SHA-256 |
+|---|---:|---:|---|
+| `aster-api-0.5.2-linux-amd64` | 643169604 | 8941728 | `6f68210b80f96eccd058d52b9c2b7a356ce4cf01a25c2d1de3f2dc2de888fb81` |
+| `aster-plugin-host-0.5.2-linux-amd64` | 643169878 | 4853920 | `ee131a8b0fba629062a583716e9dfa28028e602c74ab20955df6f5ee3b1ed59d` |
+| `aster-core-0.5.2-linux-amd64-resources.tar.gz` | 643169760 | 378082 | `fd9e4e68b71452f19e289d78c07408304f7c9213c81d6414d5acc91e7a82acd4` |
+| `BUILD.json` | 643169311 | 7068 | `7e5be266a6dd6aa37fd1a8773e5a3ffe37370a7cf32e3698235ac4d20f03b0cf` |
+| `PROVENANCE.json` | 643169411 | 3853 | `38df192a2154c56a50b11e481133a827bd72dd4b340c49cf99bc10a187235743` |
+| `SHA256SUMS` | 643169509 | 467 | `32bfed3092495015ba15976fb84501ae9dbd4a0aa3d11990f53f8373b9c1b05e` |
+
+Release API 实际为 `draft=false`、`prerelease=false`、`immutable=false`，latest 为 `v0.5.2`；不声称 GitHub 平台已经启用不可变锁定。本次没有移动或强制更新旧标签、覆盖旧资产或部署用户主机。最终 Release 库存为八个条目 / 43 资产；发布前七个 Release / 37 资产及七个旧标签均保持不变，含 Core 0.5.1 和 SMTP 1.1.0；两个历史 0.3.0 RC 仍保留草稿及预发布状态。只新增 Core 0.5.2 六资产，没有另附源码包；LICENSE SHA-256 仍为 `c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4`。
 
 ### 验证边界
 
