@@ -30,6 +30,79 @@ SPEC.loader.exec_module(HTTP)
 
 
 class NativeReleaseModeTests(unittest.TestCase):
+    def test_surviving_public_preparation_is_reused_as_the_pinned_upgrade_baseline(self):
+        source = SCRIPT.read_text()
+        assignments = re.findall(r'^(?:public|baseline)_(?:version|target)=.*$', source, re.M)
+        self.assertEqual(len(assignments), 4)
+        # Evaluate only the actual version/path assignments, with no host action.
+        command = 'set -euo pipefail\nopt=/opt/aster-ci-123-1-456\n' + '\n'.join(assignments)
+        command += '\nprintf "%s\\n" "$public_version" "$public_target" "$baseline_version" "$baseline_target"\n'
+        result = subprocess.run(['bash', '-c', command], check=True, capture_output=True, text=True, timeout=5)
+        public_version, public_target, baseline_version, baseline_target = result.stdout.splitlines()
+        self.assertEqual(public_version, CORE.PUBLISHED_VERSION)
+        self.assertEqual(baseline_version, CORE.PUBLISHED_VERSION)
+        self.assertEqual(public_target, baseline_target)
+        self.assertEqual(baseline_target, '/opt/aster-ci-123-1-456/core-upgrade/releases/0.5.2')
+        self.assertIn('ASTER_CORE_BASELINE_RELEASE="$baseline_target"', source)
+        self.assertNotIn('ASTER_CORE_BASELINE_RELEASE="$public_target"', source)
+        self.assertIn('$ASTER_CORE_FIXTURE_OPT/core-upgrade/releases/0.5.2', CORE_SCRIPT.read_text())
+        self.assertEqual(source.count('core-manager.py" prepare --version'), 1)
+        self.assertIn('emit_json_fact PUBLISHED_CORE_BASELINE_PREPARE_JSON public-core-prepare.json', source)
+
+    def test_baseline_requires_the_surviving_published_release_and_exact_six_asset_names(self):
+        # Identity guard fixtures only: these are never official metadata or
+        # native acceptance evidence, and no program is executed here.
+        with tempfile.TemporaryDirectory(prefix='aster-baseline-identity-') as directory:
+            root = Path(directory)
+            (root / 'manifests').mkdir()
+            (root / 'bin').mkdir()
+            binaries = {'bin/aster-api': b'guard-only-api', 'bin/aster-plugin-host': b'guard-only-host'}
+            for name, raw in binaries.items():
+                (root / name).write_bytes(raw)
+            build = {'component_versions': {'core': '0.5.2'}, 'source_commit': CORE.PUBLISHED_SOURCE,
+                'binary_sha256': {name: CORE.sha256(raw) for name, raw in binaries.items()}}
+            receipt = {'version': '0.5.2', 'source_sha': CORE.PUBLISHED_SOURCE, 'release_id': 413559379,
+                'run_id': 38702170922, 'run_attempt': 1,
+                'assets': [{'name': name} for name in sorted(CORE.PUBLISHED_ASSETS)]}
+
+            def verify(selected_build=build, selected_receipt=receipt):
+                (root / 'manifests/BUILD.json').write_text(json.dumps(selected_build))
+                (root / 'manifests/PREPARED.json').write_text(json.dumps(selected_receipt))
+                return CORE.verify_published_baseline(root)
+
+            proof = verify()
+            self.assertEqual(proof['version'], '0.5.2')
+            self.assertEqual(proof['tag'], 'v0.5.2')
+            self.assertEqual(proof['source_commit'], '9ed610a283020f50e2cfc529f8b5145b4a9c8fc3')
+            self.assertEqual(proof['release_id'], 413559379)
+            self.assertEqual(proof['build_run_id'], 38702170922)
+            for changed in ({'version': '0.5.1'}, {'source_sha': 'a' * 40},
+                    {'release_id': 413373046}, {'run_id': 38672929446}, {'run_attempt': 2},
+                    {'assets': receipt['assets'][:-1]},
+                    {'assets': receipt['assets'][:-1] + [{'name': 'unreviewed-asset'}]},
+                    {'assets': receipt['assets'][:-1] + [receipt['assets'][0]]}):
+                with self.subTest(changed=changed):
+                    with self.assertRaises(CORE.AcceptanceFailure):
+                        verify(selected_receipt={**receipt, **changed})
+            for changed in ({'component_versions': {'core': '0.5.1'}}, {'source_commit': 'a' * 40}):
+                with self.subTest(changed=changed):
+                    with self.assertRaises(CORE.AcceptanceFailure):
+                        verify(selected_build={**build, **changed})
+            (root / 'bin/aster-api').write_bytes(b'changed')
+            with self.assertRaisesRegex(CORE.AcceptanceFailure, 'executable differs'):
+                verify()
+
+    def test_source_candidate_rejects_a_version_that_is_not_newer_than_the_surviving_baseline(self):
+        with tempfile.TemporaryDirectory(prefix='aster-candidate-version-') as directory:
+            root = Path(directory)
+            pipeline = SimpleNamespace(strict_json=json.loads)
+            for version in ('0.5.1', '0.5.2'):
+                (root / 'BUILD.json').write_text(json.dumps({'component_versions': {'core': version}}))
+                with self.subTest(version=version), patch.object(CORE, 'module', return_value=pipeline), \
+                        patch.object(CORE, 'command', return_value=('a' * 40 + '\n').encode()):
+                    with self.assertRaisesRegex(CORE.AcceptanceFailure, 'newer than the published baseline'):
+                        CORE.verify_source_candidate(root, root, root)
+
     def test_private_extract_modes_are_readable_with_only_approved_executables(self):
         executable = {
             'bin/aster-api', 'bin/aster-plugin-host', 'deploy/scripts/backup-native.sh',

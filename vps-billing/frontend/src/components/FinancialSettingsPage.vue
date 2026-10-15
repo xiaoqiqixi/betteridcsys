@@ -135,17 +135,22 @@ function previewPrices(): PlanPriceList {
     "CNY",
   );
 }
-function errorText(error: Failure) {
+function errorText(error: Failure, fieldIssues: Record<string, boolean>) {
   return {
     "": "",
     load: tr(
       "无法读取财务配置，请确认管理员会话后重试。",
       "Could not load financial settings. Check your administrator session and retry.",
     ),
-    invalid: tr(
-      "请检查标注字段。金额须大于零，不能超过币种精度或安全金额上限。",
-      "Check the highlighted fields. Prices must be positive and within the currency precision and supported amount limit.",
-    ),
+    invalid: Object.keys(fieldIssues).length
+      ? tr(
+          "请检查标注字段。金额须大于零，不能超过币种精度或安全金额上限。",
+          "Check the highlighted fields. Prices must be positive and within the currency precision and supported amount limit.",
+        )
+      : tr(
+          "服务器未接受这份财务配置。草稿仍保留；请核对配置，必要时复制草稿后重新读取。",
+          "The server did not accept this financial configuration. Your draft is retained. Review the configuration; if needed, copy your draft before reloading.",
+        ),
     conflict: tr(
       "配置已被其他管理员修改。草稿仍保留；请先复制需要的内容，再重新读取。",
       "Another administrator changed this configuration. Your draft is retained; copy any changes you need, then reload.",
@@ -220,6 +225,19 @@ function disableReason(item: CurrencyDefinition) {
       "Pending orders, unpaid invoices or ongoing services prevent disabling this currency.",
     );
   return "";
+}
+function currencyContext(item: CurrencyDefinition, index: number) {
+  return item.code || `${tr("新币种", "New currency")} ${index + 1}`;
+}
+function currencyFieldLabel(field: (typeof currencyFields)[number]) {
+  return field === "name"
+    ? tr("显示名称", "Display name")
+    : field === "prefix"
+      ? tr("金额前缀", "Amount prefix")
+      : tr("金额后缀", "Amount suffix");
+}
+function priceId(planId: string, part: string) {
+  return `price-${selectedCurrency.value}-${encodeURIComponent(planId)}-${part}`;
 }
 function fieldName(index: number, field: string) {
   return `currency-${index}-${field}`;
@@ -585,7 +603,7 @@ onBeforeUnmount(() => {
       role="alert"
       data-testid="currency-error"
     >
-      <p>{{ errorText(registryError) }}</p>
+      <p>{{ errorText(registryError, registryIssues) }}</p>
       <p v-if="registryBlocker" data-testid="currency-blocker-counts">
         {{ registryBlocker.currency }} ·
         {{ tr("待付款订单", "Pending orders") }}
@@ -665,10 +683,14 @@ onBeforeUnmount(() => {
               v-for="(item, index) in registryDraft.currencies"
               :key="index"
               class="currency-card"
+              role="group"
+              :aria-labelledby="`currency-group-${index}`"
               :data-currency="item.code"
             >
               <div class="currency-title">
-                <strong>{{ item.code || tr("新币种", "New currency") }}</strong
+                <strong :id="`currency-group-${index}`">{{
+                  currencyContext(item, index)
+                }}</strong
                 ><span
                   v-if="item.code === registryDraft.default_currency"
                   class="financial-badge"
@@ -678,6 +700,7 @@ onBeforeUnmount(() => {
                   type="button"
                   class="financial-link"
                   :disabled="registryBlocked"
+                  :aria-label="`${currencyContext(item, index)} · ${tr('移除未保存项', 'Remove unsaved entry')}`"
                   @click="removeNew(index)"
                 >
                   {{ tr("移除未保存项", "Remove unsaved entry") }}
@@ -689,6 +712,7 @@ onBeforeUnmount(() => {
                   }}<input
                     v-model="item.code"
                     :name="fieldName(index, 'code')"
+                    :aria-label="`${currencyContext(item, index)} · ${tr('币种代码', 'Currency code')}`"
                     :disabled="index < (registry?.currencies.length ?? 0)"
                     :aria-invalid="
                       registryIssues[fieldName(index, 'code')] || undefined
@@ -703,15 +727,11 @@ onBeforeUnmount(() => {
                   }}</small></label
                 >
                 <label v-for="field in currencyFields" :key="field"
-                  >{{
-                    field === "name"
-                      ? tr("显示名称", "Display name")
-                      : field === "prefix"
-                        ? tr("金额前缀", "Amount prefix")
-                        : tr("金额后缀", "Amount suffix")
+                  >{{ currencyFieldLabel(field)
                   }}<input
                     v-model="item[field]"
                     :name="fieldName(index, field)"
+                    :aria-label="`${currencyContext(item, index)} · ${currencyFieldLabel(field)}`"
                     :aria-invalid="
                       registryIssues[fieldName(index, field)] || undefined
                     "
@@ -730,6 +750,7 @@ onBeforeUnmount(() => {
                   }}<select
                     v-model="item.decimal_places"
                     :name="fieldName(index, 'decimal_places')"
+                    :aria-label="`${currencyContext(item, index)} · ${tr('小数位数', 'Decimal places')}`"
                     :disabled="item.precision_locked"
                     :aria-invalid="
                       registryIssues[fieldName(index, 'decimal_places')] ||
@@ -751,6 +772,7 @@ onBeforeUnmount(() => {
                   }}<input
                     v-model.number="item.sort_order"
                     :name="fieldName(index, 'sort_order')"
+                    :aria-label="`${currencyContext(item, index)} · ${tr('排序', 'Sort order')}`"
                     type="number"
                     min="0"
                     max="10000"
@@ -772,6 +794,7 @@ onBeforeUnmount(() => {
                   v-model="item.enabled"
                   type="checkbox"
                   :name="fieldName(index, 'enabled')"
+                  :aria-label="`${currencyContext(item, index)} · ${tr('启用此币种', 'Enable this currency')}`"
                   :disabled="item.enabled && !!disableReason(item)"
                 />{{ tr("启用此币种", "Enable this currency") }}</label
               >
@@ -906,7 +929,7 @@ onBeforeUnmount(() => {
           role="alert"
           data-testid="price-error"
         >
-          <p>{{ errorText(priceError) }}</p>
+          <p>{{ errorText(priceError, priceIssues) }}</p>
           <button
             v-if="!priceDraft"
             class="btn secondary"
@@ -934,10 +957,16 @@ onBeforeUnmount(() => {
                 v-for="(item, index) in priceDraft.plans"
                 :key="item.plan_id"
                 class="price-card"
+                role="group"
+                :aria-labelledby="priceId(item.plan_id, 'heading')"
                 :data-plan="item.plan_id"
               >
                 <div class="price-title">
-                  <strong>{{ item.plan_name }}</strong
+                  <strong :id="priceId(item.plan_id, 'heading')"
+                    >{{ item.plan_name
+                    }}<span class="settings-sr-only">
+                      · {{ selectedCurrency }}</span
+                    ></strong
                   ><span>{{
                     !item.amount
                       ? tr("未设置价格", "Price not set")
@@ -960,6 +989,11 @@ onBeforeUnmount(() => {
                       autocomplete="off"
                       spellcheck="false"
                       :aria-invalid="priceIssues[item.plan_id] || undefined"
+                      :aria-describedby="
+                        priceIssues[item.plan_id]
+                          ? priceId(item.plan_id, 'error')
+                          : undefined
+                      "
                       :aria-label="`${item.plan_name} · ${selectedCurrency} · ${tr('月付金额', 'Monthly amount')}`"
                       :placeholder="
                         currentFormat.decimal_places
@@ -973,6 +1007,7 @@ onBeforeUnmount(() => {
                   </div>
                   <small
                     v-if="priceIssues[item.plan_id]"
+                    :id="priceId(item.plan_id, 'error')"
                     class="financial-field-error"
                     >{{
                       tr(
@@ -987,6 +1022,7 @@ onBeforeUnmount(() => {
                     ><input
                       v-model="item.available"
                       :name="`price-${index}-available`"
+                      :aria-label="`${item.plan_name} · ${selectedCurrency} · ${tr('此币种价格可售', 'Price enabled')}`"
                       type="checkbox"
                       :disabled="!item.amount"
                     />{{ tr("此币种价格可售", "Price enabled") }}</label
@@ -994,6 +1030,7 @@ onBeforeUnmount(() => {
                     ><input
                       v-model="item.plan_available"
                       :name="`price-${index}-plan-available`"
+                      :aria-label="`${item.plan_name} · ${tr('套餐总开关（所有币种）', 'Plan enabled globally (all currencies)')}`"
                       type="checkbox"
                       :disabled="!item.amount"
                     />{{
@@ -1058,14 +1095,14 @@ onBeforeUnmount(() => {
 }
 .financial-intro p,
 .financial-heading p {
-  color: var(--muted);
+  color: var(--text-secondary);
   line-height: 1.7;
   margin-top: 8px;
   max-width: 800px;
 }
 .financial-panel {
   padding: 24px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
   min-width: 0;
@@ -1079,8 +1116,8 @@ onBeforeUnmount(() => {
 }
 .financial-revision {
   white-space: nowrap;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 fieldset {
   padding: 0;
@@ -1091,40 +1128,40 @@ fieldset {
 label {
   display: grid;
   gap: 8px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   min-width: 0;
 }
 label small,
 .financial-help,
 .financial-usage {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 400;
   line-height: 1.7;
-  color: var(--muted);
+  color: var(--text-secondary);
 }
 select {
   width: 100%;
   min-width: 0;
   padding: 11px 12px;
   color: inherit;
-  background: #fff;
+  background: var(--surface);
   font: inherit;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 9px;
 }
 select:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 input:disabled,
 select:disabled {
-  background: #f7f8fa;
-  color: #646c78;
+  background: var(--page-background);
+  color: var(--text-secondary);
 }
 input[aria-invalid="true"],
 select[aria-invalid="true"] {
-  border-color: #b42318;
+  border-color: var(--status-danger);
 }
 .financial-default {
   max-width: 420px;
@@ -1151,17 +1188,17 @@ select[aria-invalid="true"] {
   margin-bottom: 18px;
 }
 .financial-badge {
-  font-size: 11px;
+  font-size: 12px;
   padding: 3px 7px;
   border-radius: 6px;
-  color: var(--blue);
+  color: var(--brand-ink);
   background: color-mix(in srgb, var(--blue) 7%, white);
 }
 .financial-link {
   margin-left: auto;
   padding: 4px;
-  color: var(--blue);
-  font-size: 12px;
+  color: var(--brand-ink);
+  font-size: 14px;
 }
 .currency-fields {
   display: grid;
@@ -1193,24 +1230,24 @@ select[aria-invalid="true"] {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #237348;
-  font-size: 13px;
+  color: var(--status-success);
+  font-size: 14px;
 }
 .financial-notice,
 .financial-error {
   border-radius: 9px;
   padding: 14px 16px;
   line-height: 1.7;
-  font-size: 13px;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 .financial-notice {
   background: color-mix(in srgb, var(--blue) 6%, white);
-  color: var(--blue);
+  color: var(--brand-ink);
   margin-bottom: 16px;
 }
 .financial-error {
-  color: #912018;
+  color: var(--status-danger);
   background: #fff4f2;
   border: 1px solid #ffd9d3;
 }
@@ -1218,7 +1255,7 @@ select[aria-invalid="true"] {
   margin-top: 10px;
 }
 .financial-field-error {
-  color: #b42318;
+  color: var(--status-danger);
 }
 .price-cards {
   margin-top: 18px;
@@ -1236,8 +1273,8 @@ select[aria-invalid="true"] {
   overflow-wrap: anywhere;
 }
 .price-title span {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: 14px;
+  color: var(--text-secondary);
 }
 .price-input {
   display: flex;

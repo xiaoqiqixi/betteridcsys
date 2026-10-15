@@ -31,6 +31,45 @@ afterEach(() => {
 });
 
 describe("administrator site settings", () => {
+  it.each(["zh-CN", "en"] as const)(
+    "describes a generic server validation rejection truthfully in %s and retains the draft",
+    async (language) => {
+      locale.value = language;
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(reply(settings()))
+        .mockResolvedValueOnce(failure("INVALID_SETTINGS"));
+      vi.stubGlobal("fetch", fetcher);
+      const wrapper = mount(SettingsPage, { props: { preview: false } });
+      await flushPromises();
+      await wrapper.get('[name="site_name"]').setValue("Retained draft");
+      await submit(wrapper);
+      const alert = wrapper.get('[role="alert"]').text();
+      expect(alert).toContain(
+        language === "zh-CN" ? "服务器未接受" : "The server did not accept",
+      );
+      expect(alert).not.toMatch(/标注|highlighted|private-backend-diagnostic/);
+      expect(wrapper.findAll('[aria-invalid="true"]')).toHaveLength(0);
+      expect(
+        wrapper.get<HTMLInputElement>('[name="site_name"]').element.value,
+      ).toBe("Retained draft");
+      expect(
+        wrapper.get('[type="submit"]').attributes("disabled"),
+      ).toBeUndefined();
+      const currency = wrapper.get<HTMLInputElement>(
+        '[name="default_currency"]',
+      );
+      expect(currency.element.readOnly).toBe(true);
+      expect(currency.element.disabled).toBe(false);
+      expect(currency.element.value).toBe("CNY");
+      expect(
+        wrapper.get(`#${currency.attributes("aria-describedby")}`).text(),
+      ).toContain(language === "zh-CN" ? "复制" : "copy");
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      wrapper.unmount();
+    },
+  );
+
   it("loads the persisted record, previews locally, and posts the whole revisioned model with CSRF", async () => {
     const fetcher = vi
       .fn()

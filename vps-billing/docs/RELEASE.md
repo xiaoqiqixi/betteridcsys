@@ -1,15 +1,15 @@
 # 版本、构建与发布
 
-Core 与运行时插件分别采用语义化版本、构建包和 Release。本次源码版本为 Core `0.5.2`、官方 SMTP `1.1.0`；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
+Core 与运行时插件分别采用语义化版本、构建包和 Release。当前正常发行为 Core `0.5.2`、官方 SMTP `1.1.0`；主干进入尚未发行的 Core `0.5.3` 界面与文档迭代；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
 
 本项目在 `main` 维护。正常发布采用公开、非草稿、非预发布的 Release；这是版本交付状态，不宣称支付、主控/被控、商业运营或安全认证已完成。发布流程不部署服务器、不操作真实付款、不发送外部邮件。root `LICENSE` 和第三方版权材料保留；根 README 可随产品变化更新。
 
 ## 交付物与独立版本
 
-| 项目 | 标签 | 原始 Linux amd64 程序 | 单独资源包 |
-|---|---|---|---|
-| Core | `v0.5.2` | `aster-api-0.5.2-linux-amd64`、`aster-plugin-host-0.5.2-linux-amd64` | `aster-core-0.5.2-linux-amd64-resources.tar.gz` |
-| SMTP | `smtp-v1.1.0` | `aster-smtp-1.1.0-linux-amd64` | `aster-smtp-1.1.0-linux-amd64-resources.tar.gz` |
+| 项目 | 标签          | 原始 Linux amd64 程序                                                | 单独资源包                                      |
+| ---- | ------------- | -------------------------------------------------------------------- | ----------------------------------------------- |
+| Core | `v0.5.2`      | `aster-api-0.5.2-linux-amd64`、`aster-plugin-host-0.5.2-linux-amd64` | `aster-core-0.5.2-linux-amd64-resources.tar.gz` |
+| SMTP | `smtp-v1.1.0` | `aster-smtp-1.1.0-linux-amd64`                                       | `aster-smtp-1.1.0-linux-amd64-resources.tar.gz` |
 
 每个 Release 另含 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`：Core 共 6 个手工发布资产，SMTP 共 5 个。程序为未压缩的静态 ELF 可执行文件；下载后须按固定目标名安装和赋予执行权限。资源包不含 ELF，不能把它当作已经带程序的旧运行包。
 
@@ -17,7 +17,7 @@ Core 资源根目录为 `aster-core-0.5.2-linux-amd64-resources/`，包含 `web/
 
 SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。管理工具同时核验资源与原始程序，再组装为不可覆盖的六文件版本目录；安装不批准、不启动。两种 Release 分别记录来源，不能用 Core 校验和证明 SMTP 程序。
 
-新程序 Release **不手动上传源码 tar/zip**。源码从 Git 对应标签取得；GitHub 自带的源码下载由平台生成。已公开 Core `0.4.0` / SMTP `1.0.0` 的旧四资产归档与更早候选保持原始字节和哈希；旧读取路径保留，不覆盖、重命名或重新构建历史文件。SMTP 发布不替代 Core 的 latest 标记。
+新程序 Release **不手动上传源码 tar/zip**。源码从 Git 对应标签取得；GitHub 自带的源码下载由平台生成。旧四资产归档的受限读取兼容仍保留；正式文件不覆盖、重命名或重新构建。旧 Release 与草稿只按单独明确授权清理，保留当前 Core、SMTP 及全部 Git 标签和源码历史，下载可用性以实际 Release 清单为准。SMTP 发布不替代 Core 的 latest 标记。
 
 新 `BUILD.json` 为 schema 3，分发类型 `raw-binaries-v1`，记录逻辑程序路径对应的原始文件名/SHA-256、资源包名，以及种类、版本、源码、时间、目标、工具链和关键输入。资源哈希由外层来源记录和校验清单绑定，BUILD 不自包含资源哈希。`PROVENANCE.json` 绑定仓库、标签、源码、Actions run/attempt、受信发布控制文件及各资产的大小/哈希。`SHA256SUMS` 校验同 Release 除自身外的原始程序、资源包、BUILD 和来源文件。校验和及未签名的来源记录证明一致性，不能替代下载来源认证、签名、完整 SBOM 或法律审查。
 
@@ -55,7 +55,7 @@ diff -r /workspace/smtp-a /workspace/smtp-b
 
 1. Go race/vet、前端单元与组件/类型/格式/生产构建、独立 HTTP/config 及发布负向测试通过。真实 MySQL 测试不得跳过。
 2. MySQL 迁移 1–7、重复/已知中断恢复、checksum、并发幂等、权限、币种与历史快照回归通过；API 运行身份不能 DDL 或 GRANT。新增财务回归覆盖全新 CNY-only、旧 USD/默认项保留、0–6 位精确报价、精度锁、义务停用阻止、历史币种/套餐快照和审计回滚。
-3. 真实执行器初始化、systemd/Nginx HTTPS、API 重启、正式 0.5.1 到新源码候选升级、进程中断恢复、启动失败后的兼容回退、未知 schema 保持维护，以及备份/空库恢复均有脱敏结果；浏览器保留沙箱并覆盖桌面/手机交互。发布前候选不得伪造官方来源。
+3. 真实执行器初始化、systemd/Nginx HTTPS、API 重启、正式 0.5.2 到新源码候选升级、进程中断恢复、启动失败后的兼容回退、未知 schema 保持维护，以及备份/空库恢复均有脱敏结果；浏览器保留沙箱并覆盖桌面/手机交互。发布前候选不得伪造官方来源。
 4. 插件专项验证：未知文件不会执行，审批/哈希/路径/UID/协议拒绝边界正确；真实独立 SMTP 安装、版本切换、回退和崩溃恢复期间，既有 Core 程序哈希与存活进程不变，核心业务继续响应。测试只用回环合成 SMTP/TLS。
 5. Core、SMTP 各自双构建一致；原始 ELF 与资源分别校验，资源不含 ELF，组装后完整清单、权限、来源、版本和校验和通过。发布资产来自已验证提交，不能以工作区文件或历史候选冒充。
 6. npm/Go 扫描及系统依赖检查分别报告范围。扫描网络或工具失败即为未完成；模块级告警不能被“可达函数 0”掩盖。

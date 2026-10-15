@@ -18,6 +18,14 @@ const manifest = (): IntegrationSummary[] =>
   structuredClone(previewIntegrations);
 const reply = (data: unknown) => ({ ok: true, json: async () => ({ data }) });
 beforeEach(() => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
   localStorage.clear();
   restorePreferences();
   HTMLDialogElement.prototype.showModal = function () {

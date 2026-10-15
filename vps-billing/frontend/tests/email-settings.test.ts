@@ -53,6 +53,7 @@ const wrappers: VueWrapper[] = [];
 function panel(preview = false) {
   const wrapper = mount(EmailSettingsPanel, {
     props: { preview, refreshToken: 0 },
+    attachTo: document.body,
   });
   wrappers.push(wrapper);
   return wrapper;
@@ -71,6 +72,14 @@ function reloadButton(wrapper: VueWrapper) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
   localStorage.clear();
   sessionStorage.clear();
   restorePreferences();
@@ -291,6 +300,313 @@ describe("SMTP settings privacy and input contract", () => {
     await flushPromises();
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).toContain("账号和密码必须成对配置或同时清除");
+  });
+});
+
+describe("SMTP field feedback", () => {
+  it.each(["zh-CN", "en"] as const)(
+    "focuses and associates a UTF-8 sender-name overflow in %s, then accepts the exact boundary",
+    async (language) => {
+      setLocale(language);
+      const boundary = "中".repeat(40);
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(response(configured()))
+        .mockResolvedValueOnce(
+          response(configured({ revision: 2, from_name: boundary })),
+        );
+      vi.stubGlobal("fetch", fetcher);
+      const wrapper = panel();
+      await flushPromises();
+      const name = wrapper.get('[name="from_name"]');
+      await name.setValue("中".repeat(41));
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(name.attributes("aria-invalid")).toBe("true");
+      expect(name.attributes("aria-describedby")).toBe("smtp-from-name-error");
+      expect(
+        document.getElementById("smtp-from-name-error")?.textContent,
+      ).toContain("120");
+      expect(document.activeElement).toBe(name.element);
+      expect(wrapper.get('[role="alert"]').text()).toContain(
+        language === "zh-CN" ? "标注的字段" : "highlighted fields",
+      );
+      expect(
+        wrapper.get('[name="from_address"]').attributes("aria-invalid"),
+      ).toBe("false");
+      expect(
+        wrapper.get('[name="from_address"]').attributes("aria-describedby"),
+      ).toBeUndefined();
+      await name.setValue(boundary);
+      expect(name.attributes("aria-invalid")).toBe("false");
+      expect(name.attributes("aria-describedby")).toBeUndefined();
+      expect(document.getElementById("smtp-from-name-error")).toBeNull();
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({
+        enabled: true,
+        host: "smtp.example.invalid",
+        port: 587,
+        tls_mode: "starttls",
+        from_address: "billing@example.invalid",
+        from_name: boundary,
+        revision: 1,
+      });
+    },
+  );
+
+  it.each([
+    ["host", "smtp.example.invalid\u007f", "smtp-host-error"],
+    ["port", "65536", "smtp-port-error"],
+    ["username", "中".repeat(85), "smtp-username-error"],
+    ["password", "中".repeat(342), "smtp-password-error"],
+    ["from_address", "not-an-address", "smtp-from-address-error"],
+  ])(
+    "identifies invalid %s without posting or exposing its value",
+    async (field, value, errorId) => {
+      const fetcher = vi.fn().mockResolvedValue(response(configured()));
+      vi.stubGlobal("fetch", fetcher);
+      const wrapper = panel();
+      await flushPromises();
+      const input = wrapper.get(`[name="${field}"]`);
+      await input.setValue(value);
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(input.attributes("aria-invalid")).toBe("true");
+      expect(input.attributes("aria-describedby")).toBe(errorId);
+      expect(document.getElementById(errorId!)?.textContent).toBeTruthy();
+      expect(document.getElementById(errorId!)?.textContent).not.toContain(
+        value,
+      );
+      expect(document.activeElement).toBe(input.element);
+      expect(wrapper.findAll('[aria-invalid="true"]')).toHaveLength(1);
+    },
+  );
+
+  it("focuses the first invalid field in form order when several fields fail", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(configured()));
+    vi.stubGlobal("fetch", fetcher);
+    const wrapper = panel();
+    await flushPromises();
+    await wrapper.get('[name="host"]').setValue("bad\u007fhost");
+    await wrapper.get('[name="from_name"]').setValue("中".repeat(41));
+    await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+    await flushPromises();
+    expect(wrapper.findAll('[aria-invalid="true"]')).toHaveLength(2);
+    expect(document.activeElement).toBe(wrapper.get('[name="host"]').element);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["host", "other.example.invalid"],
+    ["port", "465"],
+    ["tls_mode", "implicit_tls"],
+  ])(
+    "requires and focuses both replacement credentials when %s changes",
+    async (field, value) => {
+      const changed = {
+        ...configured(),
+        [field!]: field === "port" ? Number(value) : value,
+      };
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(response(configured()))
+        .mockResolvedValueOnce(response({ ...changed, revision: 2 }));
+      vi.stubGlobal("fetch", fetcher);
+      const wrapper = panel();
+      await flushPromises();
+      await wrapper.get(`[name="${field}"]`).setValue(value);
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(
+        credentialInput(wrapper, "username").element,
+      );
+      expect(
+        credentialInput(wrapper, "username").attributes("aria-describedby"),
+      ).toBe("smtp-username-error");
+      await credentialInput(wrapper, "username").setValue(
+        "replacement-account",
+      );
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(
+        credentialInput(wrapper, "password").element,
+      );
+      await credentialInput(wrapper, "password").setValue(
+        "replacement-password",
+      );
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toMatchObject({
+        revision: 1,
+        [field!]: field === "port" ? Number(value) : value,
+        username: "replacement-account",
+        password: "replacement-password",
+      });
+      expect(credentialInput(wrapper, "username").element.value).toBe("");
+      expect(credentialInput(wrapper, "password").element.value).toBe("");
+    },
+  );
+
+  it("focuses the missing credential for a pair and actionable controls for clearing", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      response(
+        configured({
+          enabled: false,
+          username_configured: false,
+          password_configured: false,
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const wrapper = panel();
+    await flushPromises();
+    await credentialInput(wrapper, "username").setValue(
+      "private-draft-account",
+    );
+    await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+    await flushPromises();
+    expect(document.activeElement).toBe(
+      credentialInput(wrapper, "password").element,
+    );
+    expect(wrapper.get("#smtp-password-error").text()).not.toContain(
+      "private-draft-account",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "focuses an enabled corrective control when clearing saved credentials (target changed: %s)",
+    async (changeTarget) => {
+      const fetcher = vi.fn().mockResolvedValue(response(configured()));
+      vi.stubGlobal("fetch", fetcher);
+      const wrapper = panel();
+      await flushPromises();
+      if (changeTarget)
+        await wrapper.get('[name="host"]').setValue("other.example.invalid");
+      await wrapper.get('[name="clear_password"]').setValue(true);
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(credentialInput(wrapper, "password").element.disabled).toBe(true);
+      expect(
+        (document.activeElement as HTMLInputElement).matches(":disabled"),
+      ).toBe(false);
+      expect(document.activeElement?.getAttribute("name")).toBe(
+        changeTarget ? "username" : "clear_password",
+      );
+      await wrapper.get('[name="clear_username"]').setValue(true);
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      expect(document.activeElement).toBe(
+        wrapper.get('[name="enabled"]').element,
+      );
+      expect(
+        wrapper.get('[name="enabled"]').attributes("aria-describedby"),
+      ).toBe("smtp-enabled-error");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("saves an endpoint change only after disabling and explicitly clearing both credentials", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(response(configured()))
+      .mockResolvedValueOnce(
+        response(
+          configured({
+            revision: 2,
+            enabled: false,
+            host: "other.example.invalid",
+            username_configured: false,
+            password_configured: false,
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const wrapper = panel();
+    await flushPromises();
+    await wrapper.get('[name="host"]').setValue("other.example.invalid");
+    await wrapper.get('[name="clear_username"]').setValue(true);
+    await wrapper.get('[name="clear_password"]').setValue(true);
+    await wrapper.get('[name="enabled"]').setValue(false);
+    await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+    await flushPromises();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({
+      enabled: false,
+      host: "other.example.invalid",
+      port: 587,
+      tls_mode: "starttls",
+      from_address: "billing@example.invalid",
+      from_name: "Example sender",
+      revision: 1,
+      clear_username: true,
+      clear_password: true,
+    });
+    expect(fetcher.mock.calls.every(([path]) => !path.endsWith("/test"))).toBe(
+      true,
+    );
+  });
+
+  it.each(["zh-CN", "en"] as const)(
+    "keeps generic server rejection safe and unmarked in %s",
+    async (language) => {
+      setLocale(language);
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(response(configured()))
+        .mockResolvedValueOnce(failure("INVALID_EMAIL_SETTINGS"));
+      vi.stubGlobal("fetch", fetcher);
+      const wrapper = panel();
+      await flushPromises();
+      await wrapper.get('[name="from_name"]').setValue("Retained draft");
+      await credentialInput(wrapper, "password").setValue(
+        "private-draft-password",
+      );
+      await wrapper.get('[data-testid="smtp-form"]').trigger("submit");
+      await flushPromises();
+      const alert = wrapper.get('[role="alert"]').text();
+      expect(alert).toContain(
+        language === "zh-CN" ? "服务器未接受" : "The server did not accept",
+      );
+      expect(alert).not.toMatch(/标注|highlighted|sensitive|private-draft/);
+      expect(wrapper.findAll('[aria-invalid="true"]')).toHaveLength(0);
+      expect(
+        wrapper.get<HTMLInputElement>('[name="from_name"]').element.value,
+      ).toBe("Retained draft");
+      expect(credentialInput(wrapper, "password").element.value).toBe("");
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("associates an invalid test recipient and focuses it without sending", async () => {
+    const fetcher = vi.fn().mockResolvedValue(response(configured()));
+    vi.stubGlobal("fetch", fetcher);
+    const wrapper = panel();
+    await flushPromises();
+    const recipient = wrapper.get('[name="recipient"]');
+    await recipient.setValue("invalid-recipient");
+    await wrapper.get('[data-testid="smtp-test-form"]').trigger("submit");
+    await flushPromises();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(recipient.element);
+    expect(recipient.attributes("aria-invalid")).toBe("true");
+    expect(recipient.attributes("aria-describedby")).toBe(
+      "smtp-recipient-error",
+    );
+    expect(wrapper.get("#smtp-recipient-error").text()).toContain(
+      "有效的收件邮箱",
+    );
+    await recipient.setValue("recipient@example.invalid");
+    expect(recipient.attributes("aria-invalid")).toBe("false");
+    expect(recipient.attributes("aria-describedby")).toBeUndefined();
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
 

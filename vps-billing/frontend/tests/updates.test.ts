@@ -123,6 +123,14 @@ const choose = async (wrapper: ReturnType<typeof mount>) => {
   await wrapper.get('[name="acknowledge_manual_handoff"]').setValue(true);
 };
 beforeEach(() => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
   locale.value = "zh-CN";
   setCsrf("update-csrf");
 });

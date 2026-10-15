@@ -8,7 +8,7 @@ Core 0.5.2 的主机执行器在管理员核对私密规格、审查计划并确
 
 ## Core 0.5.2：财务数据与兼容边界
 
-迁移 1–6 保持原始内容及 checksum；Core 0.5.0 引入的迁移 007 在 0.5.1/0.5.2 保持一致，当前为 14 张基础表。`currency_settings` 保存币种登记和价格 revision，订单/账单/服务保存币种格式快照，新订单另有套餐快照。旧 CNY/USD 按旧版已知精度回填；缺失的历史套餐规格不从当前套餐补造。
+Core 0.5.2 延续 0.5.0/0.5.1 的币种登记、独立报价和财务快照规则。升级后应核对币种配置与价格版本，以及订单、账单、服务各自保存的币种格式；新订单另有套餐快照。更早版本的 CNY/USD 记录按原版已知精度保留，历史缺失的套餐规格不会从当前套餐补造。数据库结构和已应用更新的校验和须与各自发行版本匹配，不能用目标版本清单冒充升级前状态。
 
 全新安装只有启用且默认的 CNY，示例报价不可售；升级保留旧 USD 报价、业务历史与合法默认值。不自动换汇或转换历史金额。已使用代码和精度锁定，停用须无未完成付款或服务义务，见 [财务模型](FINANCIAL_MODEL.md)。
 
@@ -38,10 +38,10 @@ sudo python3 /var/lib/aster-bootstrap/0.5.2/core-manager.py prepare --version 0.
 
 将升级规格保存为 root 私密普通文件，例如 `/root/aster-upgrade/upgrade.json`。通用字段与 [安装规格](INSTALL.md#3-迁移与管理员)一致，`action` 改为 `upgrade`；不带 `dba_client_config` 或任何 `bootstrap_*` 字段，改为：
 
-| 字段 | 含义 |
-|---|---|
-| `migrator_dsn_file` | root 私密迁移 DSN，精确选择原数据库/socket，位于运行配置根之外 |
-| `backup_client_config` | 本机专用备份账号的私密 `[client]` 文件 |
+| 字段                                | 含义                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| `migrator_dsn_file`                 | root 私密迁移 DSN，精确选择原数据库/socket，位于运行配置根之外            |
+| `backup_client_config`              | 本机专用备份账号的私密 `[client]` 文件                                    |
 | `acknowledge_backup_restore_limits` | 必须明确设为 `true`：确认文件备份校验不等于隔离恢复，恢复准备由管理员负责 |
 
 完整规格仍包含新 operation ID、候选目录、三个互不嵌套的根目录、原 runtime user/unit、origin/listener、`edge_listen_address`、MySQL/Nginx 真实程序路径及 Nginx 摘要、TLS 和 `edge_mode`。共享 Nginx 另提供原完整配置路径/摘要；维护门禁须预先纳入并审查，见 [BAOTA.md](BAOTA.md)。可选 `status_file` 只能是实例/配置/私密状态根之外的单独脱敏导出路径，并须与既有 `HOST_OPERATION_STATUS_FILE` 完全相同；需要新设引用时先独立审查配置和服务重启。升级不带仅适用于新安装的 `enable_at_boot` 字段。
@@ -90,4 +90,4 @@ sudo python3 /var/lib/aster-bootstrap/0.5.2/core-operation.py resume \
 
 **确需恢复数据库**：停写并保存失败现场和当前数据副本，确认恢复点之后所有写入及可能损失，由负责人员批准。按 [备份恢复](BACKUP_RECOVERY.md)在隔离的新空库恢复并验证，再于维护窗口更换受限 DSN、启动匹配程序并验收。禁止向运行库直接导入、`DROP DATABASE` 或删除数据目录作为快捷回退。
 
-恢复流量前检查真实 HTTPS 入口、管理员登录、两种语言、各启用币种独立报价、历史账单金额/格式、幂等与权限、支付失败关闭。记录实际提交、schema/checksum、插件、备份时点和观察结果。历史 CI 的 A → B → A 使用同源码/同 schema，只证明当时的目录切换和数据保留；不推导跨版本迁移、数据库降级、公共 CA 续期或整机恢复已通过。
+恢复流量前检查真实 HTTPS 入口、管理员登录、两种语言、各启用币种独立报价、历史账单金额/格式、幂等与权限。本文官方发行升级流程保持默认支付关闭，结账应安全拒绝未配置的渠道；自定义渠道及其构建、回调和结算验收按[支付插件接入指南](PAYMENT_PLUGINS.md)单独审查。记录实际提交、schema/checksum、插件、备份时点和观察结果。历史 CI 的 A → B → A 使用同源码/同 schema，只证明当时的目录切换和数据保留；不推导跨版本迁移、数据库降级、公共 CA 续期或整机恢复已通过。

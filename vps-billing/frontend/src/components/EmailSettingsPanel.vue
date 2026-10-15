@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { LockKeyhole, Mail, RefreshCw, Save, Send } from "@lucide/vue";
 import { api, ApiError } from "../lib/api";
 import { tr } from "../lib/i18n";
@@ -47,6 +47,32 @@ type Delivery =
   | "rate";
 const error = ref<Failure>("");
 const delivery = ref<Delivery>("");
+type EmailField =
+  | "enabled"
+  | "host"
+  | "port"
+  | "username"
+  | "password"
+  | "clear_username"
+  | "clear_password"
+  | "from_address"
+  | "from_name";
+type EmailIssue = {
+  field: EmailField;
+  reason:
+    | "host"
+    | "port"
+    | "username"
+    | "password"
+    | "from_address"
+    | "from_name"
+    | "required"
+    | "pair"
+    | "endpoint"
+    | "disable";
+};
+const issues = ref<EmailIssue[]>([]);
+const page = ref<HTMLElement>();
 let generation = 0;
 const busy = computed(() => loading.value || saving.value || sending.value);
 const dirty = computed(
@@ -94,10 +120,15 @@ const errorText = computed(
         "无法读取 SMTP 设置，请确认管理员会话后重试。",
         "Could not load SMTP settings. Check your administrator session and retry.",
       ),
-      invalid: tr(
-        "请检查服务器、端口、发件地址及字段长度。保存未完成。",
-        "Check the server, port, sender address and field lengths. Settings were not saved.",
-      ),
+      invalid: issues.value.length
+        ? tr(
+            "请检查标注的字段后再保存。保存未完成。",
+            "Check the highlighted fields before saving. Settings were not saved.",
+          )
+        : tr(
+            "服务器未接受这份 SMTP 配置。非敏感草稿仍保留，请核对后再保存；如需更换凭据，请重新输入账号和密码。",
+            "The server did not accept this SMTP configuration. Your non-secret draft is retained. Review it before saving again; enter the account and password again if needed.",
+          ),
       credentials: tr(
         "账号和密码必须成对配置或同时清除。启用 SMTP 还需要服务器和发件地址；清除凭据前请先关闭启用开关。",
         "Configure or clear both account and password together. Enabling SMTP also requires a server and sender address; turn it off before clearing credentials.",
@@ -172,6 +203,7 @@ async function load() {
   form.value = emailDraft(defaultEmailSettings);
   resetActions();
   error.value = "";
+  issues.value = [];
   delivery.value = "";
   saved.value = false;
   blocked.value = false;
@@ -190,23 +222,82 @@ async function load() {
     if (current === generation) loading.value = false;
   }
 }
-function validate(): Failure {
+function fieldError(field: EmailField) {
+  const issue = issues.value.find((item) => item.field === field);
+  if (!issue) return "";
+  return {
+    host: tr(
+      "服务器地址最多 253 个 UTF-8 字节，且不能包含控制字符。",
+      "The server address must be within 253 UTF-8 bytes and contain no control characters.",
+    ),
+    port: tr(
+      "请输入 1–65535 的整数端口。",
+      "Enter an integer port from 1 to 65535.",
+    ),
+    username: tr(
+      "账号最多 254 个 UTF-8 字节，且不能包含控制字符。",
+      "The account must be within 254 UTF-8 bytes and contain no control characters.",
+    ),
+    password: tr(
+      "密码最多 1024 个 UTF-8 字节。",
+      "The password must be within 1024 UTF-8 bytes.",
+    ),
+    from_address: tr(
+      "请填写有效的发件邮箱，不要包含联系人姓名。",
+      "Enter a valid sender email address without a display name.",
+    ),
+    from_name: tr(
+      "发件人名称最多 120 个 UTF-8 字节，且不能包含控制字符。中文通常占用多个字节。",
+      "The sender name must be within 120 UTF-8 bytes and contain no control characters. Non-ASCII characters may use more bytes.",
+    ),
+    required: tr(
+      "启用 SMTP 时，此项不能为空。",
+      "This field is required when SMTP is enabled.",
+    ),
+    pair: tr(
+      "账号和密码必须成对配置或同时清除。请补齐缺少的一项，或关闭 SMTP 后同时清除两项。",
+      "Configure or clear both credentials together. Supply the missing credential, or disable SMTP and clear both.",
+    ),
+    endpoint: tr(
+      "连接目标已变更，请重新填写两项凭据；也可关闭 SMTP 并勾选清除两项凭据。",
+      "The connection target changed. Enter both credentials again, or disable SMTP and select both credential-clearing options.",
+    ),
+    disable: tr(
+      "清除两项凭据前，请先关闭 SMTP。",
+      "Turn off SMTP before clearing both credentials.",
+    ),
+  }[issue.reason];
+}
+function credentialField(name: "username" | "password"): EmailField {
+  return (name === "username" ? clearUsername.value : clearPassword.value) ||
+    !baseline.value?.key_configured
+    ? `clear_${name}`
+    : name;
+}
+function validate(): { failure: Failure; issues: EmailIssue[] } {
   const bytes = (value: string) => new TextEncoder().encode(value).length;
+  const controls = (value: string) => /[\u0000-\u001f\u007f]/.test(value);
+  const invalid: EmailIssue[] = [];
+  if (bytes(form.value.host) > 253 || controls(form.value.host))
+    invalid.push({ field: "host", reason: "host" });
   if (
     !Number.isInteger(form.value.port) ||
     form.value.port < 1 ||
-    form.value.port > 65535 ||
-    bytes(form.value.host) > 253 ||
-    bytes(form.value.from_name) > 120 ||
-    bytes(username.value) > 254 ||
-    bytes(password.value) > 1024 ||
-    /[\u0000-\u001f\u007f]/.test(
-      form.value.host + form.value.from_name + username.value,
-    ) ||
-    (form.value.from_address !== "" &&
-      !validEmailAddress(form.value.from_address))
+    form.value.port > 65535
   )
-    return "invalid";
+    invalid.push({ field: "port", reason: "port" });
+  if (bytes(username.value) > 254 || controls(username.value))
+    invalid.push({ field: "username", reason: "username" });
+  if (bytes(password.value) > 1024)
+    invalid.push({ field: "password", reason: "password" });
+  if (
+    form.value.from_address !== "" &&
+    !validEmailAddress(form.value.from_address)
+  )
+    invalid.push({ field: "from_address", reason: "from_address" });
+  if (bytes(form.value.from_name) > 120 || controls(form.value.from_name))
+    invalid.push({ field: "from_name", reason: "from_name" });
+  if (invalid.length) return { failure: "invalid", issues: invalid };
   if (
     credentialsNeedReplacement.value &&
     !(
@@ -216,24 +307,63 @@ function validate(): Failure {
         !clearPassword.value) ||
       (!form.value.enabled && clearUsername.value && clearPassword.value)
     )
-  )
-    return "endpoint";
+  ) {
+    const fields: EmailField[] = [];
+    if (
+      form.value.enabled &&
+      (!baseline.value?.key_configured ||
+        (clearUsername.value && clearPassword.value))
+    )
+      fields.push("enabled");
+    if (!username.value || clearUsername.value)
+      fields.push(credentialField("username"));
+    if (!password.value || clearPassword.value)
+      fields.push(credentialField("password"));
+    return {
+      failure: "endpoint",
+      issues: fields.map((field) => ({ field, reason: "endpoint" })),
+    };
+  }
   const hasUsername =
     !!username.value ||
     (!!baseline.value?.username_configured && !clearUsername.value);
   const hasPassword =
     !!password.value ||
     (!!baseline.value?.password_configured && !clearPassword.value);
-  if (hasUsername !== hasPassword) return "credentials";
-  if (
-    form.value.enabled &&
-    (!form.value.host ||
-      !validEmailAddress(form.value.from_address) ||
-      !hasUsername ||
-      !hasPassword)
-  )
-    return "credentials";
-  return "";
+  if (hasUsername !== hasPassword)
+    return {
+      failure: "credentials",
+      issues: [
+        {
+          field: credentialField(hasUsername ? "password" : "username"),
+          reason: "pair",
+        },
+      ],
+    };
+  const required: EmailIssue[] = [];
+  if (form.value.enabled) {
+    if (
+      clearUsername.value &&
+      clearPassword.value &&
+      !hasUsername &&
+      !hasPassword
+    )
+      required.push({ field: "enabled", reason: "disable" });
+    if (!form.value.host) required.push({ field: "host", reason: "required" });
+    if (!validEmailAddress(form.value.from_address))
+      required.push({ field: "from_address", reason: "from_address" });
+    if (!hasUsername)
+      required.push({ field: credentialField("username"), reason: "pair" });
+    if (!hasPassword)
+      required.push({ field: credentialField("password"), reason: "pair" });
+  }
+  return { failure: required.length ? "credentials" : "", issues: required };
+}
+async function focusInvalid() {
+  await nextTick();
+  page.value
+    ?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')
+    ?.focus();
 }
 function codeOf(failure: unknown) {
   return failure instanceof ApiError ? failure.code.toUpperCase() : "";
@@ -270,8 +400,13 @@ async function save() {
     return;
   saved.value = false;
   delivery.value = "";
-  error.value = validate();
-  if (error.value) return;
+  const validation = validate();
+  issues.value = validation.issues;
+  error.value = validation.failure;
+  if (error.value) {
+    await focusInvalid();
+    return;
+  }
   const current = generation;
   const body = {
     ...form.value,
@@ -312,6 +447,8 @@ async function sendTest() {
   delivery.value = "";
   if (!validEmailAddress(recipient.value)) {
     delivery.value = "recipient";
+    await nextTick();
+    page.value?.querySelector<HTMLElement>('[name="recipient"]')?.focus();
     return;
   }
   const current = generation;
@@ -367,6 +504,19 @@ async function sendTest() {
     if (current === generation) sending.value = false;
   }
 }
+watch(
+  [form, username, password, clearUsername, clearPassword],
+  () => {
+    if (!issues.value.length) return;
+    issues.value = [];
+    if (["invalid", "credentials", "endpoint"].includes(error.value))
+      error.value = "";
+  },
+  { deep: true, flush: "sync" },
+);
+watch(recipient, () => {
+  if (delivery.value === "recipient") delivery.value = "";
+});
 watch(clearUsername, (value) => {
   if (value) username.value = "";
 });
@@ -400,6 +550,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section
+    ref="page"
     class="panel smtp-settings"
     aria-labelledby="smtp-heading"
     :aria-busy="busy"
@@ -497,13 +648,26 @@ onBeforeUnmount(() => {
       </p>
       <form data-testid="smtp-form" @submit.prevent="save">
         <fieldset class="smtp-fields" :disabled="preview || busy || blocked">
+          <legend class="settings-sr-only">
+            {{ tr("SMTP 配置", "SMTP configuration") }}
+          </legend>
           <label class="smtp-toggle"
             ><input
               v-model="form.enabled"
               name="enabled"
+              :aria-invalid="!!fieldError('enabled')"
+              :aria-describedby="
+                fieldError('enabled') ? 'smtp-enabled-error' : undefined
+              "
               type="checkbox"
               :disabled="!baseline.key_configured && !form.enabled"
             /><span>{{ tr("启用 SMTP", "Enable SMTP") }}</span></label
+          >
+          <small
+            v-if="fieldError('enabled')"
+            id="smtp-enabled-error"
+            class="settings-field-error"
+            >{{ fieldError("enabled") }}</small
           >
           <div class="settings-two-columns">
             <div class="settings-field">
@@ -514,6 +678,10 @@ onBeforeUnmount(() => {
                 id="smtp-host"
                 v-model="form.host"
                 name="host"
+                :aria-invalid="!!fieldError('host')"
+                :aria-describedby="
+                  fieldError('host') ? 'smtp-host-error' : undefined
+                "
                 type="text"
                 maxlength="253"
                 autocomplete="off"
@@ -521,6 +689,12 @@ onBeforeUnmount(() => {
                 placeholder="smtp.example.com"
                 :required="form.enabled"
               />
+              <small
+                v-if="fieldError('host')"
+                id="smtp-host-error"
+                class="settings-field-error"
+                >{{ fieldError("host") }}</small
+              >
             </div>
             <div class="settings-field">
               <label for="smtp-port">{{ tr("端口", "Port") }}</label
@@ -528,12 +702,22 @@ onBeforeUnmount(() => {
                 id="smtp-port"
                 v-model.number="form.port"
                 name="port"
+                :aria-invalid="!!fieldError('port')"
+                :aria-describedby="
+                  fieldError('port') ? 'smtp-port-error' : undefined
+                "
                 type="number"
                 min="1"
                 max="65535"
                 step="1"
                 required
               />
+              <small
+                v-if="fieldError('port')"
+                id="smtp-port-error"
+                class="settings-field-error"
+                >{{ fieldError("port") }}</small
+              >
             </div>
           </div>
           <div class="settings-field">
@@ -581,6 +765,10 @@ onBeforeUnmount(() => {
                 id="smtp-username"
                 v-model="username"
                 name="username"
+                :aria-invalid="!!fieldError('username')"
+                :aria-describedby="
+                  fieldError('username') ? 'smtp-username-error' : undefined
+                "
                 type="password"
                 maxlength="254"
                 autocomplete="new-password"
@@ -594,10 +782,21 @@ onBeforeUnmount(() => {
                       )
                     : tr('输入 SMTP 账号', 'Enter SMTP account')
                 "
-              /><label class="smtp-clear"
+              /><small
+                v-if="fieldError('username')"
+                id="smtp-username-error"
+                class="settings-field-error"
+                >{{ fieldError("username") }}</small
+              ><label class="smtp-clear"
                 ><input
                   v-model="clearUsername"
                   name="clear_username"
+                  :aria-invalid="!!fieldError('clear_username')"
+                  :aria-describedby="
+                    fieldError('clear_username')
+                      ? 'smtp-clear-username-error'
+                      : undefined
+                  "
                   type="checkbox"
                 />{{
                   tr(
@@ -605,6 +804,11 @@ onBeforeUnmount(() => {
                     "Clear the saved account when saving",
                   )
                 }}</label
+              ><small
+                v-if="fieldError('clear_username')"
+                id="smtp-clear-username-error"
+                class="settings-field-error"
+                >{{ fieldError("clear_username") }}</small
               >
             </div>
             <div class="settings-field">
@@ -621,6 +825,10 @@ onBeforeUnmount(() => {
                 id="smtp-password"
                 v-model="password"
                 name="password"
+                :aria-invalid="!!fieldError('password')"
+                :aria-describedby="
+                  fieldError('password') ? 'smtp-password-error' : undefined
+                "
                 type="password"
                 maxlength="1024"
                 autocomplete="new-password"
@@ -633,10 +841,21 @@ onBeforeUnmount(() => {
                       )
                     : tr('输入 SMTP 密码', 'Enter SMTP password')
                 "
-              /><label class="smtp-clear"
+              /><small
+                v-if="fieldError('password')"
+                id="smtp-password-error"
+                class="settings-field-error"
+                >{{ fieldError("password") }}</small
+              ><label class="smtp-clear"
                 ><input
                   v-model="clearPassword"
                   name="clear_password"
+                  :aria-invalid="!!fieldError('clear_password')"
+                  :aria-describedby="
+                    fieldError('clear_password')
+                      ? 'smtp-clear-password-error'
+                      : undefined
+                  "
                   type="checkbox"
                 />{{
                   tr(
@@ -644,6 +863,11 @@ onBeforeUnmount(() => {
                     "Clear the saved password when saving",
                   )
                 }}</label
+              ><small
+                v-if="fieldError('clear_password')"
+                id="smtp-clear-password-error"
+                class="settings-field-error"
+                >{{ fieldError("clear_password") }}</small
               >
             </div>
           </div>
@@ -664,11 +888,23 @@ onBeforeUnmount(() => {
                 id="smtp-from-address"
                 v-model="form.from_address"
                 name="from_address"
+                :aria-invalid="!!fieldError('from_address')"
+                :aria-describedby="
+                  fieldError('from_address')
+                    ? 'smtp-from-address-error'
+                    : undefined
+                "
                 type="email"
                 maxlength="254"
                 autocomplete="off"
                 :required="form.enabled"
               />
+              <small
+                v-if="fieldError('from_address')"
+                id="smtp-from-address-error"
+                class="settings-field-error"
+                >{{ fieldError("from_address") }}</small
+              >
             </div>
             <div class="settings-field">
               <label for="smtp-from-name"
@@ -678,10 +914,20 @@ onBeforeUnmount(() => {
                 id="smtp-from-name"
                 v-model="form.from_name"
                 name="from_name"
+                :aria-invalid="!!fieldError('from_name')"
+                :aria-describedby="
+                  fieldError('from_name') ? 'smtp-from-name-error' : undefined
+                "
                 type="text"
                 maxlength="120"
                 autocomplete="off"
               />
+              <small
+                v-if="fieldError('from_name')"
+                id="smtp-from-name-error"
+                class="settings-field-error"
+                >{{ fieldError("from_name") }}</small
+              >
             </div>
           </div>
         </fieldset>
@@ -730,12 +976,23 @@ onBeforeUnmount(() => {
               id="smtp-recipient"
               v-model="recipient"
               name="recipient"
+              :aria-invalid="delivery === 'recipient'"
+              :aria-describedby="
+                delivery === 'recipient' ? 'smtp-recipient-error' : undefined
+              "
               type="email"
               maxlength="254"
               autocomplete="off"
               :disabled="preview || busy"
               required
             />
+            <small
+              v-if="delivery === 'recipient'"
+              id="smtp-recipient-error"
+              class="settings-field-error"
+              role="alert"
+              >{{ deliveryText }}</small
+            >
           </div>
           <button class="button secondary" type="submit" :disabled="!canTest">
             <Send :size="16" />{{
@@ -746,7 +1003,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <p
-          v-if="delivery"
+          v-if="delivery && delivery !== 'recipient'"
           :class="
             delivery === 'accepted' ? 'settings-success' : 'settings-notice'
           "

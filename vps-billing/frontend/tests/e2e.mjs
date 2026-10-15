@@ -69,7 +69,7 @@ page.on("pageerror", (error) => errors.push(error.message));
 const shot = async (name) => {
   await mkdir(output, { recursive: true });
   await page.evaluate(() => window.scrollTo(0, 0));
-  if (page.viewportSize().width < 768) {
+  if (page.viewportSize().width <= 720) {
     await expect
       .poll(() =>
         page
@@ -662,6 +662,10 @@ try {
     .getByRole("button", { name: `查看账单 ${invoice.number}`, exact: true })
     .click();
   await expect(page.locator(".invoice-issuer")).toContainText("星屿云");
+  await expect(page.locator(".invoice-document")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
   await page
     .getByRole("button", { name: "检查支付可用性", exact: true })
     .click();
@@ -677,9 +681,73 @@ try {
     page.getByText("没有匹配的账单", { exact: false }).first(),
   ).toBeVisible();
   await page.getByLabel("搜索记录", { exact: true }).fill("");
+  const navigation = page.locator("#primary-navigation");
+  const navigationTrigger = page.locator(".mobile-menu");
+  const navigationClose = navigation.locator(".sidebar-close");
+  const currentInvoiceLink = navigation.locator('nav a[aria-current="page"]');
+  await page.setViewportSize({ width: 720, height: 844 });
+  await expect(navigation).toHaveAttribute("inert");
+  await expect(navigation).toHaveAttribute("aria-hidden", "true");
+  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
+  await expect(navigationTrigger).toHaveAttribute(
+    "aria-controls",
+    "primary-navigation",
+  );
+  await navigationTrigger.focus();
+  await page.keyboard.press("Shift+Tab");
+  expect(
+    await page.evaluate(() => !!document.activeElement?.closest(".sidebar")),
+  ).toBe(false);
+  await page.keyboard.press("Tab");
+  await expect(navigationTrigger).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "true");
+  await expect(navigation).toHaveAttribute("role", "dialog");
+  await expect(navigation).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator(".main-shell")).toHaveAttribute("inert");
+  await expect(currentInvoiceLink).toBeFocused();
+  await navigationClose.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    navigation.getByRole("button", { name: "退出登录", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(navigationClose).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(navigationTrigger).toBeFocused();
+  await expect(navigation).toHaveAttribute("inert");
+
+  await page.keyboard.press("Enter");
+  await navigationClose.focus();
+  await page.keyboard.press("Enter");
+  await expect(navigationTrigger).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(currentInvoiceLink).toBeFocused();
+  await page.setViewportSize({ width: 721, height: 844 });
+  await expect(navigation).not.toHaveAttribute("inert");
+  await expect(navigation).not.toHaveAttribute("aria-hidden");
+  await expect(navigation).not.toHaveAttribute("role");
+  await expect(page.locator(".main-shell")).not.toHaveAttribute("inert");
+  await expect(page.locator(".sidebar-scrim")).toHaveCount(0);
+  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
+  await expect(navigationTrigger).not.toBeVisible();
+  await expect(currentInvoiceLink).toBeFocused();
+  const languageControl = page.getByLabel("语言", { exact: true });
+  await languageControl.focus();
+  await page.setViewportSize({ width: 720, height: 844 });
+  await expect(languageControl).toBeFocused();
+  await navigationTrigger.focus();
+  await page.keyboard.press("Enter");
+  await navigation.getByRole("link", { name: "工作台", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
+  await expect(navigation).toHaveAttribute("inert");
+  await expect(page.locator("#main")).toBeFocused();
+  await expect(
+    page.getByRole("button", { name: "选购套餐", exact: true }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "打开导航", exact: true }).click();
-  await page.getByRole("link", { name: "工作台", exact: true }).click();
+  await expect(page.locator("#main")).toBeFocused();
   await expect
     .poll(() =>
       page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
@@ -939,7 +1007,7 @@ try {
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("运营概况");
-  await page.getByRole("link", { name: "全部订单", exact: true }).click();
+  await page.getByRole("link", { name: "订单管理", exact: true }).click();
   await expect(
     page.locator(`tr[data-order-id="${order.id}"] .badge`),
   ).toHaveText("已取消");

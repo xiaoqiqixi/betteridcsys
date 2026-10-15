@@ -1,8 +1,10 @@
-# 独立插件安装、替换与使用
+# 插件扩展与独立 SMTP 安装
 
-Core `0.5.0` 支持一个运行时 SMTP 插槽。官方 `email.smtp` 插件版本为 `1.1.0`，使用 `aster.smtp/1`，支持 Core `>=0.4.0,<0.6.0`。它是独立程序与独立 Release，可在已编译的 Core 上安装、更新和回退；Core 没有内置 SMTP 传输回退。不提供通用执行接口、网页插件上传或自动下载。
+Core `0.5.2` 将渠道协议与核心财务逻辑分开：运营者与开发者可通过类型化的编译期支付接口维护第三方渠道适配器，接口、注册步骤、回调验签责任及可编译示例见 [支付插件接入](PAYMENT_PLUGINS.md)。当前发行入口选择 `payment.disabled`；接入其他支付渠道需要受审查的源码注册、启动校验与结算工程，不能仅通过上传文件或修改环境变量启用。
 
-支付适配器仍为禁用实现，支付、主控、被控、SMS 和对象存储尚无运行时插件。SMTP 只支持管理员配置与单封固定测试邮件，没有业务通知、邮箱验证、找回密码或发送队列。插件框架不会自动补齐这些业务。
+当前可以独立安装、更新和回退的运行时插槽是 SMTP。官方 `email.smtp` 插件版本为 `1.1.0`，使用 `aster.smtp/1`，支持 Core `>=0.4.0,<0.6.0`。它是独立程序与独立 Release，可在已编译的 Core 上替换；Core 没有内置 SMTP 传输回退。不提供通用执行接口、网页插件上传或自动下载，支付、主控、被控、SMS 和对象存储没有运行时安装协议。
+
+以下安装流程针对 Core `0.5.2` 与 SMTP `1.1.0`。SMTP 支持管理员配置与单封固定测试邮件；业务通知、邮箱验证、找回密码和发送队列需要各自的业务实现。
 
 ## 程序、审批与服务
 
@@ -41,11 +43,11 @@ API unit 中的 `SupplementaryGroups=aster-plugins` 需要该组已经存在；�
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.2 \
   verify /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
   --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.2 \
   install /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
   --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 ```
@@ -76,9 +78,9 @@ sudo systemctl restart aster-api
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 status
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.2 status
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.2 \
   select --id email.smtp --version 1.1.0 \
   --worker-uid "$(id -u aster-smtp)" --client-uid "$(id -u aster)" \
   --socket /run/aster-smtp/plugin.sock --target SMTP_HOST:SMTP_PORT --revision 0
@@ -88,7 +90,7 @@ sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.2 \
   enable --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 sudo systemctl status aster-smtp --no-pager
@@ -106,12 +108,12 @@ sudo systemctl status aster-smtp --no-pager
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.2 \
   rollback --version OLD_PLUGIN_VERSION --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 ```
 
-旧 SMTP 1.0.0 仅支持 Core `<0.5.0`，不能继续用于 Core 0.5.0。SMTP 1.1.0 兼容 Core 0.4.x 与 0.5.x，可作为升级桥接版本；但已发布的 Core 0.4.0 管理工具不支持新拆分输入，桥接前须独立核验并使用新版管理工具，不能假定旧工具自动得到新能力。旧公开资产保持不变。
+旧 SMTP 1.0.0 仅支持 Core `<0.5.0`，不能用于 Core 0.5.x。SMTP 1.1.0 兼容 Core 0.4.x 与 0.5.x，可作为升级桥接版本；但已发布的 Core 0.4.0 管理工具不支持新拆分输入，桥接前须独立核验并使用新版管理工具，不能假定旧工具自动得到新能力。正式文件不原地覆盖；Git 标签和源码历史保留，旧 Release 的下载可用性以实际保留清单为准。
 
 Core 和 SMTP 版本不一一对应；独立补丁版可以在 manifest 声明的范围内替换。超出 `core_max_exclusive` 必须停止调用，先审查新 Core/协议/插件兼容关系。不得放宽校验、改 manifest 后自称原包或用 symlink 选择插件版本。
 
@@ -123,7 +125,7 @@ Core 和 SMTP 版本不一一对应；独立补丁版可以在 manifest 声明�
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.0 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.2 \
   disable --revision CURRENT_REVISION
 sudo systemctl stop aster-smtp
 ```
@@ -134,17 +136,17 @@ systemd 对插件崩溃间隔五秒恢复，60 秒内最多三次启动，达到
 
 ## 官方 SMTP 配置与测试
 
-准备 [独立加密密钥](INSTALL.md#可选smtp-加密密钥)，迁移 006 完成后，管理员在扩展中心保存 SMTP 设置。配置可在安装插件前保存，保存不会连接服务器。要发送，必须同时满足：兼容插件已安装/批准/运行、主机端口在策略中、密钥与加密凭据匹配、有效配置、后台启用、管理员会话/来源/CSRF/revision 校验。
+完成核准的 Core 安装并核对管理员 SMTP 设置 API 可正常读取，再按安装手册准备 [独立加密密钥](INSTALL.md#可选smtp-加密密钥)，由管理员在扩展中心保存 SMTP 设置。配置可在安装插件前保存，保存不会连接服务器。要发送，必须同时满足：兼容插件已安装/批准/运行、主机端口在策略中、密钥与加密凭据匹配、有效配置、后台启用、管理员会话/来源/CSRF/revision 校验。
 
-| 字段 | 约定 |
-|---|---|
-| `revision` | 后台设置版本，冲突 409；与主机策略 revision 分开 |
-| `enabled` | 默认 false；保存启用不等于插件/目的地已批准 |
-| `host` / `port` | DNS/IP 主机、1–65535；不填 URL，须与策略的确切主机/端口一致 |
-| `tls_mode` | `starttls` 或 `implicit_tls`；都强制验证 TLS |
-| `from_address` / `from_name` | 单个 ASCII 裸邮箱与纯文本名，禁止头部注入 |
-| `username` / `password` | 只写；留空/省略表示保留，不回显 |
-| `clear_username` / `clear_password` | 同时清除且关闭，不能同时提交新值 |
+| 字段                                | 约定                                                        |
+| ----------------------------------- | ----------------------------------------------------------- |
+| `revision`                          | 后台设置版本，冲突 409；与主机策略 revision 分开            |
+| `enabled`                           | 默认 false；保存启用不等于插件/目的地已批准                 |
+| `host` / `port`                     | DNS/IP 主机、1–65535；不填 URL，须与策略的确切主机/端口一致 |
+| `tls_mode`                          | `starttls` 或 `implicit_tls`；都强制验证 TLS                |
+| `from_address` / `from_name`        | 单个 ASCII 裸邮箱与纯文本名，禁止头部注入                   |
+| `username` / `password`             | 只写；留空/省略表示保留，不回显                             |
+| `clear_username` / `clear_password` | 同时清除且关闭，不能同时提交新值                            |
 
 更换主机、端口或 TLS 模式必须完整替换两项凭据，或同时清除并关闭。不可解密的旧密文只能完整替换/清除；新随机密钥不能恢复旧密文。数据库使用 AES-256-GCM 保存凭据，密钥只由 Core 读取；插件仅接收本次解密配置，不接收密钥、数据库 DSN 或会话秘密。恢复与轮换见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md#smtp-密钥备份恢复与轮换)。
 
@@ -154,10 +156,12 @@ systemd 对插件崩溃间隔五秒恢复，60 秒内最多三次启动，达到
 
 Core 不自动重试 RPC。SMTP 传输仅对 MAIL 前已明确的暂时失败最多重连一次；MAIL 开始后不自动重发。`accepted` 表示 SMTP 服务器接受，非收件箱证明；`SMTP_DELIVERY_UNCERTAIN`、断网或响应丢失时先核对记录，禁止盲目重发。审计仅记录请求与结果分类，不记录凭据、收件地址、正文或上游原始回复。真实服务商、SPF/DKIM/DMARC 与投递不由回环 TLS 测试证明。
 
-## 保留的支付适配器边界
+## 支付渠道扩展
 
-保留 `PAYMENT_PROVIDER=payment.disabled`、`EMAIL_PROVIDER=email.disabled`；后者是旧注册表选择，不是 SMTP 总开关，也不能改成 `email.smtp`。旧 `INTEGRATIONS_CONFIG_FILE` 只供已审查的编译期适配器配置，不安装运行时插件；未知 ID/字段、重复键、null、非字符串或超过 64 KiB 都拒绝，秘密使用受限引用，不直接填秘密值。
+支付渠道由运营者选择商户和服务商，由开发者实现 `integrations.PaymentProvider`，核心继续负责账单快照、金额／币种／精度和业务身份校验。当前接口提供 `CreateCheckout`、`VerifyCallback` 与纯比对函数 `ValidateSettlement`；[支付插件接入](PAYMENT_PLUGINS.md) 分别说明已实现的检查和结算服务需要补齐的事务责任。
 
-Checkout 核验会话、CSRF、Host、账单所有权与待付正金额后，只传核心保存的金额/币种与业务 ID；当前返回 503 `PAYMENT_NOT_CONFIGURED`，不改变支付状态。当前未实现结算、对账和退款，order.created outbox 也没有消费者。本阶段仅进行财务核心审计，不接入支付渠道或资源开通。
+当前发行配置保留 `PAYMENT_PROVIDER=payment.disabled`、`EMAIL_PROVIDER=email.disabled`；后者是编译期注册表选择，不是 SMTP 总开关，也不能改成 `email.smtp`。`INTEGRATIONS_CONFIG_FILE` 描述编译期适配器配置，不安装运行时插件。当前服务器只允许两个禁用 ID 的空配置；定制支付需要同时审查定义注册与启动配置校验。通用配置读取器拒绝超过 64 KiB、重复键、null 或非字符串，注册表继续拒绝未知 ID／字段，秘密字段使用引用而不填明文值。
 
-币种登记不代表支付槽支持该币种。编译期支付适配器声明 `supported_currencies` 和逐代码的 `currency_decimal_places` 映射，必须为每个代码明确 0–6 位精度，不能省略或多声明。Checkout 和已验证付款结果携带相同精度；核心按账单快照检查代码、精度、金额及业务身份，不进行换算。旧适配器作者须补齐此声明。这个类型化财务合同不等于已有支付渠道或运行时支付插件。
+现有客户 `POST /api/v1/invoices/{id}/checkout` 校验会话、CSRF、Host、账单所有权、待付正金额及登记币种精度，再把核心保存的身份、金额和币种传给适配器。禁用适配器返回 503 `PAYMENT_NOT_CONFIGURED`。结账会话不会把账单改为已付；`VerifyCallback` 目前没有 HTTP 路由，持久化去重、原子结算、对账、退款及开通消费者需要独立实现，不能从接口名称推导为已有服务。
+
+币种登记与渠道支持分别管理。支付定义须逐代码声明 `supported_currencies` 和 `currency_decimal_places`，精度为 0–6；Core 检查账单快照与声明精确一致，不进行换算。签名通过的规范化结果仍需与独立取得的核心账单／商户期望比对，并在结算事务中按事件和渠道交易两组键处理幂等；纯校验函数本身不提供去重或入账。完整合同与安全本地示例见 [PAYMENT_PLUGINS.md](PAYMENT_PLUGINS.md)。

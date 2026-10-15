@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ArrowUpRight,
@@ -126,6 +133,18 @@ const error = ref(""),
   modalError = ref(""),
   query = ref(""),
   menuOpen = ref(false);
+const navigationMedia = window.matchMedia("(max-width: 720px)");
+const mobileNavigation = ref(navigationMedia.matches);
+const navigationSidebar = ref<HTMLElement>(),
+  navigationTrigger = ref<HTMLButtonElement>(),
+  mainContent = ref<HTMLElement>();
+const navigationHidden = computed(
+  () => mobileNavigation.value && !menuOpen.value,
+);
+const navigationModal = computed(
+  () => mobileNavigation.value && menuOpen.value,
+);
+let navigationFocusGeneration = 0;
 const email = ref(""),
   password = ref(""),
   loginError = ref("");
@@ -146,6 +165,7 @@ const selectedPlan = ref<Plan>(),
   hostname = ref(""),
   agreed = ref(false),
   orderKey = ref("");
+const invoiceRefreshing = ref(false);
 const orderCatalogChanged = ref(false);
 const selectedCancellation = ref<Order>(),
   cancellationReason = ref(""),
@@ -214,7 +234,7 @@ const nav = computed(() =>
         { id: "customers", label: tr("客户管理", "Customers"), icon: Users },
         {
           id: "orders",
-          label: tr("全部订单", "All orders"),
+          label: tr("订单管理", "Orders"),
           icon: ShoppingBag,
         },
         {
@@ -277,6 +297,31 @@ const filteredServices = computed(() => services.value.filter(matches)),
   filteredInvoices = computed(() => invoices.value.filter(matches)),
   filteredCustomers = computed(() => customers.value.filter(matches)),
   filteredAudit = computed(() => audit.value.filter(matches));
+const listScope = computed(() => {
+  const counts: Record<string, () => [number, number]> = {
+    services: () => [services.value.length, filteredServices.value.length],
+    orders: () => [orders.value.length, filteredOrders.value.length],
+    invoices: () => [invoices.value.length, filteredInvoices.value.length],
+    customers: () => [customers.value.length, filteredCustomers.value.length],
+    audit: () => [audit.value.length, filteredAudit.value.length],
+  };
+  const current = counts[page.value]?.();
+  return current
+    ? {
+        loaded: current[0],
+        visible: current[1],
+        mayBeTruncated: current[0] >= 1000,
+      }
+    : undefined;
+});
+const listCountLabel = computed(() =>
+  listScope.value
+    ? tr(
+        `已载入 ${listScope.value.loaded} 条 · 当前显示 ${listScope.value.visible} 条`,
+        `${listScope.value.loaded} loaded · ${listScope.value.visible} visible`,
+      )
+    : "",
+);
 const unpaid = computed(() =>
   invoices.value.filter((i) =>
     ["unpaid", "open", "overdue", "pending"].includes(i.status),
@@ -305,10 +350,71 @@ const maxCost = computed(() =>
 const invoiceOrder = computed(() =>
   orders.value.find((o) => o.id === selectedInvoice.value?.order_id),
 );
-function go(path: string) {
-  router.push("/" + path);
+function focusNavigation() {
+  (
+    navigationSidebar.value?.querySelector<HTMLElement>(
+      'nav a[aria-current="page"]',
+    ) || navigationSidebar.value?.querySelector<HTMLElement>("nav a")
+  )?.focus();
+}
+async function openNavigation() {
+  if (!mobileNavigation.value) return;
+  const generation = ++navigationFocusGeneration;
+  menuOpen.value = true;
+  await nextTick();
+  if (generation === navigationFocusGeneration && navigationModal.value)
+    focusNavigation();
+}
+async function closeNavigation() {
+  const generation = ++navigationFocusGeneration;
+  menuOpen.value = false;
+  await nextTick();
+  if (generation === navigationFocusGeneration && mobileNavigation.value)
+    navigationTrigger.value?.focus();
+}
+function handleNavigationKeydown(event: KeyboardEvent) {
+  if (!navigationModal.value) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    void closeNavigation();
+  } else if (event.key === "Tab") {
+    const controls = Array.from(
+      navigationSidebar.value?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || [],
+    ).filter((element) => getComputedStyle(element).display !== "none");
+    const first = controls[0],
+      last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  }
+}
+async function syncNavigationBreakpoint(event: MediaQueryListEvent) {
+  const focused = document.activeElement;
+  const hidesFocusedControl = event.matches
+    ? !!focused && !!navigationSidebar.value?.contains(focused)
+    : focused instanceof HTMLElement &&
+      focused.matches(".mobile-menu, .sidebar-close, .sidebar-scrim");
+  const generation = ++navigationFocusGeneration;
+  mobileNavigation.value = event.matches;
+  menuOpen.value = false;
+  await nextTick();
+  if (generation !== navigationFocusGeneration || !hidesFocusedControl) return;
+  if (event.matches) navigationTrigger.value?.focus();
+  else focusNavigation();
+}
+async function go(path: string) {
+  const generation = ++navigationFocusGeneration;
   menuOpen.value = false;
   query.value = "";
+  await router.push("/" + path);
+  await nextTick();
+  if (generation === navigationFocusGeneration) mainContent.value?.focus();
 }
 function explain(e: unknown) {
   return e instanceof ApiError
@@ -855,7 +961,9 @@ async function openInvoice(invoice: Invoice) {
   checkoutSession.value = undefined;
   selectedInvoice.value = invoice;
   modalError.value = "";
+  invoiceRefreshing.value = !preview.value;
   await nextTick();
+  if (generation !== invoiceGeneration) return;
   invoiceDialog.value?.showModal();
   if (!preview.value) {
     try {
@@ -866,6 +974,8 @@ async function openInvoice(invoice: Invoice) {
       if (generation === invoiceGeneration) selectedInvoice.value = detail;
     } catch (e) {
       if (generation === invoiceGeneration) modalError.value = explain(e);
+    } finally {
+      if (generation === invoiceGeneration) invoiceRefreshing.value = false;
     }
   }
 }
@@ -905,6 +1015,7 @@ async function checkout() {
 let invoiceGeneration = 0;
 function closeInvoice() {
   invoiceGeneration++;
+  invoiceRefreshing.value = false;
   invoiceDialog.value?.close();
   selectedInvoice.value = undefined;
   checkoutSession.value = undefined;
@@ -961,14 +1072,22 @@ function downloadInvoices() {
   a.click();
   URL.revokeObjectURL(url);
 }
-watch(cancellationAccount, () => closeCancellation(), { flush: "sync" });
+watch(
+  cancellationAccount,
+  () => {
+    closeCancellation();
+    closeInvoice();
+    navigationFocusGeneration++;
+    menuOpen.value = false;
+  },
+  { flush: "sync" },
+);
 watch(
   () => session.value.user?.id,
   (next, previous) => {
     if (next === previous) return;
     loadGeneration++;
     reportCurrency.value = "";
-    closeInvoice();
     orderDialog.value?.close();
     selectedPlan.value = undefined;
     hostname.value = "";
@@ -1021,10 +1140,25 @@ watch(
 watch(locale, () => {
   if (!booting.value && session.value.user) void load();
 });
-watch(page, () => {
+watch(page, async () => {
   query.value = "";
+  if (navigationModal.value) {
+    const generation = ++navigationFocusGeneration;
+    menuOpen.value = false;
+    await nextTick();
+    if (generation === navigationFocusGeneration) mainContent.value?.focus();
+  }
 });
-onMounted(init);
+onMounted(() => {
+  navigationMedia.addEventListener("change", syncNavigationBreakpoint);
+  void init();
+});
+onBeforeUnmount(() => {
+  navigationMedia.removeEventListener("change", syncNavigationBreakpoint);
+  navigationFocusGeneration++;
+  invoiceGeneration++;
+  invoiceRefreshing.value = false;
+});
 </script>
 
 <template>
@@ -1218,14 +1352,35 @@ onMounted(init);
       </section>
     </div>
   </div>
-  <div v-else class="app-shell" :class="{ 'sidebar-open': menuOpen }">
+  <div
+    v-else
+    class="app-shell"
+    :class="{ 'sidebar-open': menuOpen }"
+    @keydown="handleNavigationKeydown"
+  >
     <button
-      v-if="menuOpen"
+      v-if="navigationModal"
       class="sidebar-scrim"
       :aria-label="tr('关闭导航', 'Close navigation')"
-      @click="menuOpen = false"
+      @click="closeNavigation"
     />
-    <aside class="sidebar" :aria-label="tr('主导航', 'Main navigation')">
+    <aside
+      id="primary-navigation"
+      ref="navigationSidebar"
+      class="sidebar"
+      :aria-label="tr('主导航', 'Main navigation')"
+      :role="navigationModal ? 'dialog' : undefined"
+      :aria-modal="navigationModal ? true : undefined"
+      :aria-hidden="navigationHidden ? true : undefined"
+      :inert="navigationHidden ? true : undefined"
+    >
+      <button
+        class="sidebar-close icon-button"
+        :aria-label="tr('关闭导航', 'Close navigation')"
+        @click="closeNavigation"
+      >
+        <X :size="21" />
+      </button>
       <a class="brand" href="/overview" @click.prevent="go('overview')"
         ><div class="brand-mark">
           <component :is="brandIcon" :size="25" aria-hidden="true" />
@@ -1314,13 +1469,16 @@ onMounted(init);
         </div>
       </div>
     </aside>
-    <div class="main-shell">
+    <div class="main-shell" :inert="navigationModal ? true : undefined">
       <header class="topbar">
         <div class="breadcrumbs">
           <button
+            ref="navigationTrigger"
             class="mobile-menu icon-button"
             :aria-label="tr('打开导航', 'Open navigation')"
-            @click="menuOpen = true"
+            :aria-expanded="navigationModal"
+            aria-controls="primary-navigation"
+            @click="openNavigation"
           >
             <Menu :size="21" /></button
           ><span>{{
@@ -1405,7 +1563,7 @@ onMounted(init);
           {{ tr("返回登录", "Back to sign in") }} <ArrowRight :size="13" />
         </button>
       </div>
-      <main id="main" tabindex="-1">
+      <main id="main" ref="mainContent" tabindex="-1">
         <div v-if="orderCatalogChanged" class="alert info" role="status">
           <AlertCircle :size="18" /><span>{{
             tr(
@@ -1546,14 +1704,16 @@ onMounted(init);
             @click="go('plans')"
           >
             <Plus :size="17" />
-            {{ tr("创建云服务器", "Create cloud server") }}</button
+            {{ tr("选购套餐", "Choose a plan") }}</button
           ><button
             v-if="page === 'invoices'"
             class="button secondary"
+            aria-describedby="invoice-export-scope"
             @click="downloadInvoices"
             :disabled="!filteredInvoices.length"
           >
-            <Download :size="16" /> {{ tr("导出账单", "Export invoices") }}
+            <Download :size="16" />
+            {{ tr("导出当前列表", "Export current list") }}
           </button>
         </div>
         <div
@@ -1659,7 +1819,7 @@ onMounted(init);
                 {{
                   unpaid.length
                     ? tr("查看待付账单", "View unpaid invoices")
-                    : tr("查看全部账单", "View all invoices")
+                    : tr("查看账单列表", "View invoices")
                 }}<ArrowRight :size="14" />
               </button>
             </article>
@@ -1724,7 +1884,7 @@ onMounted(init);
                   class="text-button"
                   @click="go(isAdmin ? 'orders' : 'services')"
                 >
-                  {{ tr("查看全部", "View all") }} <ArrowRight :size="14" />
+                  {{ tr("查看列表", "View list") }} <ArrowRight :size="14" />
                 </button>
               </div>
               <template v-if="!isAdmin"
@@ -1980,7 +2140,7 @@ onMounted(init);
                 class="text-button"
                 @click="go(isAdmin ? 'audit' : 'orders')"
               >
-                {{ tr("查看全部", "View all") }} <ArrowRight :size="14" />
+                {{ tr("查看列表", "View list") }} <ArrowRight :size="14" />
               </button>
             </div>
             <div class="table-wrap">
@@ -2061,8 +2221,13 @@ onMounted(init);
         <template v-else-if="page === 'services'"
           ><div class="list-toolbar">
             <span
-              >{{ services.length }}
-              {{ tr("台云服务器", " cloud servers") }} </span
+              >{{ tr("已载入服务", "Loaded services")
+              }}<small
+                class="count-tag"
+                data-testid="list-count"
+                role="status"
+                >{{ listCountLabel }}</small
+              ></span
             ><label class="search-field"
               ><Search :size="16" /><input
                 v-model="query"
@@ -2070,7 +2235,30 @@ onMounted(init);
                   tr('搜索服务、区域或 IP', 'Search service, region or IP')
                 "
                 :aria-label="tr('搜索服务', 'Search services')"
+                aria-describedby="record-list-scope"
             /></label>
+          </div>
+          <div class="list-scope-note settings-help" id="record-list-scope">
+            <p>
+              {{
+                tr(
+                  "正式环境每次最多载入 1,000 条记录；搜索仅限已载入内容。",
+                  "Production lists load up to 1,000 records at a time. Search covers loaded records only.",
+                )
+              }}
+            </p>
+            <p
+              v-if="listScope?.mayBeTruncated"
+              role="status"
+              data-testid="list-limit-warning"
+            >
+              {{
+                tr(
+                  "已载入记录达到 1,000 条，可能还有记录未载入。",
+                  "At least 1,000 records are loaded; additional records may not be loaded.",
+                )
+              }}
+            </p>
           </div>
           <div class="service-cards">
             <article
@@ -2207,21 +2395,18 @@ onMounted(init);
               <span
                 >{{
                   page === "orders"
-                    ? tr("全部订单", "All orders")
+                    ? tr("已载入订单", "Loaded orders")
                     : page === "invoices"
-                      ? tr("全部账单", "All invoices")
+                      ? tr("已载入账单", "Loaded invoices")
                       : page === "customers"
-                        ? tr("客户账户", "Customer accounts")
-                        : tr("操作记录", "Activity records")
-                }}<small class="count-tag">{{
-                  page === "orders"
-                    ? orders.length
-                    : page === "invoices"
-                      ? invoices.length
-                      : page === "customers"
-                        ? customers.length
-                        : audit.length
-                }}</small></span
+                        ? tr("已载入客户", "Loaded customers")
+                        : tr("已载入操作记录", "Loaded activity records")
+                }}<small
+                  class="count-tag"
+                  data-testid="list-count"
+                  role="status"
+                  >{{ listCountLabel }}</small
+                ></span
               ><label class="search-field"
                 ><Search :size="16" /><input
                   v-model="query"
@@ -2234,7 +2419,38 @@ onMounted(init);
                         )
                   "
                   :aria-label="tr('搜索记录', 'Search records')"
+                  aria-describedby="record-list-scope"
               /></label>
+            </div>
+            <div class="list-scope-note settings-help" id="record-list-scope">
+              <p>
+                {{
+                  tr(
+                    "正式环境每次最多载入 1,000 条记录；搜索仅限已载入内容。",
+                    "Production lists load up to 1,000 records at a time. Search covers loaded records only.",
+                  )
+                }}
+              </p>
+              <p
+                v-if="listScope?.mayBeTruncated"
+                role="status"
+                data-testid="list-limit-warning"
+              >
+                {{
+                  tr(
+                    "已载入记录达到 1,000 条，可能还有记录未载入。",
+                    "At least 1,000 records are loaded; additional records may not be loaded.",
+                  )
+                }}
+              </p>
+              <p v-if="page === 'invoices'" id="invoice-export-scope">
+                {{
+                  tr(
+                    "仅导出已载入且符合当前搜索条件的账单，不含未载入记录。",
+                    "Exports only loaded invoices matching the current search, excluding records that have not been loaded.",
+                  )
+                }}
+              </p>
             </div>
             <div class="table-wrap">
               <table v-if="page === 'orders'">
@@ -2445,8 +2661,11 @@ onMounted(init);
             <div class="table-footer">
               {{
                 query
-                  ? tr("已按关键词筛选", "Filtered by keyword")
-                  : tr("显示当前可访问的记录", "Showing accessible records")
+                  ? tr(
+                      "已在载入记录中按关键词筛选",
+                      "Loaded records filtered by keyword",
+                    )
+                  : tr("仅显示已载入记录", "Showing loaded records only")
               }}<span>{{
                 page === "audit"
                   ? tr(
@@ -2952,8 +3171,17 @@ onMounted(init);
         <X :size="21" />
       </button>
     </div>
-    <template v-if="selectedInvoice"
-      ><div class="invoice-document">
+    <template v-if="selectedInvoice">
+      <div
+        v-if="invoiceRefreshing"
+        class="alert info invoice-refresh-status"
+        role="status"
+      >
+        <LoaderCircle :size="18" class="spin" aria-hidden="true" /><span>{{
+          tr("正在更新账单详情…", "Updating invoice details…")
+        }}</span>
+      </div>
+      <div class="invoice-document" :aria-busy="invoiceRefreshing">
         <div class="invoice-doc-top">
           <div class="brand-mark">
             <ReceiptText :size="25" aria-hidden="true" />

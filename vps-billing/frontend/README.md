@@ -1,6 +1,6 @@
 # 星屿云财务控制台
 
-Vue 3、TypeScript 与 Vite。客户侧提供套餐报价、订单确认、订单/账单与服务记录；管理员维护站点品牌、币种及独立价格、SMTP 设置、插件状态和版本交接。界面没有真实支付、资源开通、退款或完整账户恢复能力。
+Vue 3、TypeScript 与 Vite。客户侧提供套餐报价、订单确认、订单/账单与服务记录；管理员维护站点品牌、币种及独立价格、SMTP 设置、插件状态和版本交接。支付渠道由运营者与开发者按 [支付插件接入说明](../docs/PAYMENT_PLUGINS.md)扩展，默认适配器保持关闭；界面按实际结账结果展示，不伪造已付或资源开通。中文排版、主题 token、键盘、字段错误与视觉验收规则见 [界面维护规范](../docs/UI_GUIDELINES.md)。
 
 ## 运行与构建
 
@@ -21,7 +21,7 @@ npm run build
 npm audit --audit-level=high
 ```
 
-`dist/` 由同源 HTTPS Nginx 提供，API 代理不能 fallback 为 HTML。Core 0.5.0 发行资源包已包含编译网页；服务器无需运行 Vite、Go 或 Node.js。前后端及插件宿主必须来自同一 Core Release，见 [安装说明](../docs/INSTALL.md)。
+`dist/` 由同源 HTTPS Nginx 提供，API 代理不能 fallback 为 HTML。Core 0.5.0 起的发行资源包包含编译网页；服务器无需运行 Vite、Go 或 Node.js。前后端及插件宿主必须来自同一 Core Release，见 [安装说明](../docs/INSTALL.md)。v0.5.2 发布后的 UI 源码迭代尚未包含在其固定发行资产中。
 
 ## 财务与权限
 

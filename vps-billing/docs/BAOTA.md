@@ -60,7 +60,7 @@ sudo python3 /var/lib/aster-bootstrap/0.5.2/core-manager.py prepare \
 
 复用已核实的 MySQL 8.4 实例和实际 Unix socket，不安装第二套数据库。全新安装要求本应用数据库及三个同名前缀账号不存在，由执行器在确认后创建独立 runtime/migrator/backup 身份；运行账号仅本库 DML。不要预先通过面板创建一个全权限用户再冒充全新安装，也不要更改共享实例 root 密码或开放远程访问。已有库/账号/配置转入 [升级](UPGRADE.md)，不能删除后重新安装。
 
-按 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)准备 root 私密 DBA client 文件、管理员密码文件和已核验 TLS 文件。秘密不进入 argv、shell history、面板网站上传目录或普通日志。规格设置实际 `origin`、回环 `listen_address`、数据库/socket、root 保护的真实 MySQL/Nginx 程序路径；本机 socket 明确使用 `MYSQL_ALLOW_INSECURE=true`，不扩展到明文 TCP。支付和 SMTP 默认关闭。
+按 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)准备 root 私密 DBA client 文件、管理员密码文件和已核验 TLS 文件。秘密不进入 argv、shell history、面板网站上传目录或普通日志。规格设置实际 `origin`、回环 `listen_address`、数据库/socket、root 保护的真实 MySQL/Nginx 程序路径；本机 socket 明确使用 `MYSQL_ALLOW_INSECURE=true`，不扩展到明文 TCP。本文官方发行流程使用默认关闭的支付配置，SMTP 也默认关闭。第三方渠道按[支付插件接入指南](PAYMENT_PLUGINS.md)完成适配、构建与验收，不通过面板上传或只改环境变量安装。
 
 API 仅由专用 systemd unit 管理，不添加面板进程守护、定时重启或第二份启动命令。执行器确认后生成受支持的 unit/配置、迁移并引导管理员；不接管任意自定义 unit/drop-in。已有 0.5.1 实例须通过回执、unit、配置/权限、schema 和插件门禁才可接纳。
 
@@ -166,7 +166,7 @@ curl --fail --show-error --head https://billing.example.com/
 
 仅在真实 HTTPS 就绪、证书与网页资源通过、首位管理员登录成功后，交付实际 `APP_ORIGIN` 对应的 `https://billing.example.com/` 入口。`prepared`、只读检查和一次 service start 均不构成完成上线。
 
-核对浏览器证书可信、静态资源和 SPA 刷新、登录/注销、Cookie/CSRF、客户隔离、管理员设置及 运营者已配置币种的独立价格和历史格式快照。更改展示域名不会修改 `APP_ORIGIN`。API 和数据库不公开监听，支付保持禁用；未使用 SMTP 时不配置其加密密钥。SMTP 配置不依赖面板邮件插件，不安装或修改面板邮局服务；测试仅连接已获准且证书有效的 SMTP 目标。具体项目见 [验收范围](ACCEPTANCE.md)。
+核对浏览器证书可信、静态资源和 SPA 刷新、登录/注销、Cookie/CSRF、客户隔离、管理员设置及运营者已配置币种的独立价格和历史格式快照。更改展示域名不会修改 `APP_ORIGIN`。API 和数据库不公开监听。本文官方发行流程保留默认关闭的支付配置，核对未配置渠道的结账请求被安全拒绝；自定义支付部署按[接入指南](PAYMENT_PLUGINS.md)另行审查。未使用 SMTP 时不配置其加密密钥。SMTP 配置不依赖面板邮件插件，不安装或修改面板邮局服务；测试仅连接已获准且证书有效的 SMTP 目标。具体项目见 [验收范围](ACCEPTANCE.md)。
 
 后台版本入口查询官方 Release 并创建审计交接，见 [UPDATES.md](UPDATES.md)。它不调用面板 root、文件管理或进程守护接口。网页可读取独立 root 导出的脱敏实际回执，不能读取私密 journal、触发 sudo 或将交接当作安装成功。
 

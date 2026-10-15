@@ -26,6 +26,37 @@ import * as fixtures from "../src/lib/preview";
 let checkoutResponse: unknown;
 let activeUser: null | typeof fixtures.previewUser = null;
 let requests: { path: string; method: string; options: RequestInit }[] = [];
+function mockNavigationMedia(initial = false) {
+  let matches = initial;
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const media = {
+    get matches() {
+      return matches;
+    },
+    media: "(max-width: 720px)",
+    addEventListener: vi.fn(
+      (_: string, listener: (event: MediaQueryListEvent) => void) =>
+        listeners.add(listener),
+    ),
+    removeEventListener: vi.fn(
+      (_: string, listener: (event: MediaQueryListEvent) => void) =>
+        listeners.delete(listener),
+    ),
+  };
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => media),
+  );
+  return {
+    media,
+    change(next: boolean) {
+      matches = next;
+      listeners.forEach((listener) =>
+        listener({ matches: next } as MediaQueryListEvent),
+      );
+    },
+  };
+}
 async function mountApp() {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -45,6 +76,7 @@ beforeEach(() => {
   activeUser = null;
   checkoutResponse = undefined;
   requests = [];
+  mockNavigationMedia();
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute("open", "");
   };
@@ -109,6 +141,400 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("billing workspace flows", () => {
+  it.each(
+    ["services", "orders", "invoices", "customers", "audit"].flatMap((page) =>
+      ["zh-CN", "en"].map((language) => ({ page, language })),
+    ),
+  )(
+    "shows loaded and filtered scope for $page in $language without searching the server",
+    async ({ page, language }) => {
+      activeUser = {
+        ...fixtures.previewUser,
+        role: page === "customers" ? "admin" : "customer",
+      };
+      const originalFetch = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) => {
+          if (path.includes("/admin/overview?"))
+            return {
+              ok: true,
+              json: async () => ({
+                data: {
+                  customers: 12000,
+                  total_services: 0,
+                  unpaid_invoices: 0,
+                  unpaid_total_minor: 0,
+                  revenue_minor: 0,
+                  currency: "CNY",
+                },
+              }),
+            };
+          const data = path.endsWith("/admin/customers")
+            ? [
+                fixtures.previewUser,
+                {
+                  ...fixtures.previewUser,
+                  id: "other-customer",
+                  name: "Other customer",
+                },
+              ]
+            : path.endsWith("/admin/orders")
+              ? fixtures.orders
+              : path.endsWith("/admin/invoices")
+                ? fixtures.invoices
+                : undefined;
+          return data
+            ? { ok: true, json: async () => ({ data }) }
+            : originalFetch(path, options);
+        }),
+      );
+      const { wrapper, router } = await mountApp();
+      await wrapper.get('select[aria-label="语言"]').setValue(language);
+      await flushPromises();
+      await router.push("/" + page);
+      await flushPromises();
+      const loaded =
+        page === "customers"
+          ? 2
+          : page === "services"
+            ? fixtures.services.length
+            : page === "orders"
+              ? fixtures.orders.length
+              : page === "invoices"
+                ? fixtures.invoices.length
+                : fixtures.audit.length;
+      const count = wrapper.get('[data-testid="list-count"]');
+      expect(count.text()).toBe(
+        language === "zh-CN"
+          ? `已载入 ${loaded} 条 · 当前显示 ${loaded} 条`
+          : `${loaded} loaded · ${loaded} visible`,
+      );
+      const search = wrapper.get(".list-toolbar input");
+      expect(search.attributes("aria-describedby")).toBe("record-list-scope");
+      expect(wrapper.get("#record-list-scope").text()).toContain(
+        language === "zh-CN"
+          ? "搜索仅限已载入内容"
+          : "Search covers loaded records only",
+      );
+      expect(wrapper.find('[data-testid="list-limit-warning"]').exists()).toBe(
+        false,
+      );
+      const requestCount = vi.mocked(fetch).mock.calls.length;
+      await search.setValue("no-such-record-scope");
+      expect(count.text()).toBe(
+        language === "zh-CN"
+          ? `已载入 ${loaded} 条 · 当前显示 0 条`
+          : `${loaded} loaded · 0 visible`,
+      );
+      expect(vi.mocked(fetch).mock.calls).toHaveLength(requestCount);
+      wrapper.unmount();
+    },
+  );
+  it.each(["zh-CN", "en"])(
+    "warns at the loading limit while retaining the filter and authoritative invoice summary in %s",
+    async (language) => {
+      activeUser = { ...fixtures.previewUser };
+      const makeInvoices = (count: number) =>
+        Array.from({ length: count }, (_, index) => ({
+          ...fixtures.invoices[0]!,
+          id: `scope-${index}`,
+          number: index === 0 ? "VISIBLE-MARKER" : `OTHER-${index}`,
+        }));
+      let listedInvoices = makeInvoices(2);
+      const originalFetch = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) => {
+          if (path.endsWith("/invoices"))
+            return { ok: true, json: async () => ({ data: listedInvoices }) };
+          if (path.includes("/overview?"))
+            return {
+              ok: true,
+              json: async () => ({
+                data: {
+                  active_services: 3,
+                  pending_invoices: 7,
+                  unpaid_total_minor: 7654321,
+                  monthly_total_minor: 0,
+                  currency: "CNY",
+                  recent_orders: fixtures.orders,
+                },
+              }),
+            };
+          return originalFetch(path, options);
+        }),
+      );
+      const { wrapper, router } = await mountApp();
+      await wrapper.get('select[aria-label="语言"]').setValue(language);
+      await flushPromises();
+      await router.push("/invoices");
+      await flushPromises();
+      const summary = wrapper.get(".invoice-summary").text();
+      expect(summary).toContain("76,543.21");
+      expect(
+        wrapper.get(".invoice-summary > div:nth-child(2) b").text(),
+      ).toMatch(/^7/);
+      const search = wrapper.get<HTMLInputElement>(".list-toolbar input");
+      await search.setValue("VISIBLE-MARKER");
+      for (const loaded of [999, 1000]) {
+        listedInvoices = makeInvoices(loaded);
+        await wrapper
+          .get(
+            'button[aria-label="' +
+              (language === "zh-CN" ? "刷新数据" : "Refresh data") +
+              '"]',
+          )
+          .trigger("click");
+        await flushPromises();
+        expect(search.element.value).toBe("VISIBLE-MARKER");
+        expect(wrapper.get('[data-testid="list-count"]').text()).toBe(
+          language === "zh-CN"
+            ? `已载入 ${loaded} 条 · 当前显示 1 条`
+            : `${loaded} loaded · 1 visible`,
+        );
+        expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+        expect(
+          wrapper.find('[data-testid="list-limit-warning"]').exists(),
+        ).toBe(loaded >= 1000);
+        expect(wrapper.get(".invoice-summary").text()).toBe(summary);
+      }
+      expect(
+        wrapper.get('[data-testid="list-limit-warning"]').text(),
+      ).toContain(
+        language === "zh-CN"
+          ? "可能还有记录未载入"
+          : "additional records may not be loaded",
+      );
+      await search.setValue("no-such-record-scope");
+      expect(wrapper.get('[data-testid="list-count"]').text()).toBe(
+        language === "zh-CN"
+          ? "已载入 1000 条 · 当前显示 0 条"
+          : "1000 loaded · 0 visible",
+      );
+      expect(wrapper.find('[data-testid="list-limit-warning"]').exists()).toBe(
+        true,
+      );
+      expect(wrapper.get(".invoice-summary").text()).toBe(summary);
+      wrapper.unmount();
+    },
+  );
+  it("exports only the loaded matching invoices with their recorded currency and safe CSV escaping", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const originalFetch = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) =>
+        path.endsWith("/invoices")
+          ? {
+              ok: true,
+              json: async () => ({
+                data: [
+                  {
+                    ...fixtures.invoices[0],
+                    number: '=HYPERLINK("test")',
+                    currency: "KWD",
+                    amount_minor: 1234,
+                    currency_format: {
+                      code: "KWD",
+                      name: "Recorded dinar",
+                      prefix: "old ",
+                      suffix: "",
+                      decimal_places: 3,
+                    },
+                  },
+                  { ...fixtures.invoices[1], number: "EXCLUDED-INVOICE" },
+                ],
+              }),
+            }
+          : originalFetch(path, options),
+      ),
+    );
+    let exported!: Blob;
+    const originalURL = URL;
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends originalURL {
+        static createObjectURL(blob: Blob) {
+          exported = blob;
+          return "blob:scope-test";
+        }
+        static revokeObjectURL = revoke;
+      },
+    );
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    const { wrapper, router } = await mountApp();
+    await router.push("/invoices");
+    await flushPromises();
+    const search = wrapper.get<HTMLInputElement>(".list-toolbar input");
+    await search.setValue("HYPERLINK");
+    const button = wrapper.get(
+      '.page-heading button[aria-describedby="invoice-export-scope"]',
+    );
+    expect(button.text()).toBe("导出当前列表");
+    expect(wrapper.get("#invoice-export-scope").text()).toContain(
+      "仅导出已载入且符合当前搜索条件的账单",
+    );
+    await button.trigger("click");
+    const csv = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(exported);
+    });
+    expect(csv.split("\r\n")).toHaveLength(2);
+    expect(csv).toContain('"\'HYPERLINK(""test"")"');
+    expect(csv).toContain('"KWD"');
+    expect(csv).toContain('"1234"');
+    expect(csv).toContain("old 1.234");
+    expect(csv).not.toContain("EXCLUDED-INVOICE");
+    expect(search.element.value).toBe("HYPERLINK");
+    expect(click).toHaveBeenCalledOnce();
+    expect(click.mock.instances[0]!.download).toBe("invoices.csv");
+    expect(revoke).toHaveBeenCalledWith("blob:scope-test");
+    await wrapper.get('select[aria-label="语言"]').setValue("en");
+    await flushPromises();
+    expect(button.text()).toBe("Export current list");
+    expect(wrapper.get("#invoice-export-scope").text()).toContain(
+      "Exports only loaded invoices matching the current search",
+    );
+    wrapper.unmount();
+    click.mockRestore();
+  });
+  it("excludes the closed mobile navigation and restores visible focus after close or route selection", async () => {
+    activeUser = { ...fixtures.previewUser };
+    mockNavigationMedia(true);
+    const { wrapper, router } = await mountApp();
+    const sidebar = wrapper.get(".sidebar");
+    const trigger = wrapper.get<HTMLButtonElement>(".mobile-menu");
+    const main = wrapper.get<HTMLElement>("#main");
+    expect(sidebar.attributes("inert")).toBeDefined();
+    expect(sidebar.attributes("aria-hidden")).toBe("true");
+    expect(trigger.attributes("aria-expanded")).toBe("false");
+    expect(trigger.attributes("aria-controls")).toBe(sidebar.attributes("id"));
+
+    trigger.element.focus();
+    await trigger.trigger("click");
+    expect(sidebar.attributes("inert")).toBeUndefined();
+    expect(sidebar.attributes("aria-hidden")).toBeUndefined();
+    expect(sidebar.attributes("role")).toBe("dialog");
+    expect(sidebar.attributes("aria-modal")).toBe("true");
+    expect(wrapper.get(".main-shell").attributes("inert")).toBeDefined();
+    expect(trigger.attributes("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(
+      sidebar.get('nav a[href="/overview"]').element,
+    );
+
+    const close = sidebar.get<HTMLButtonElement>(".sidebar-close");
+    const signOut = sidebar.get<HTMLButtonElement>(
+      'button[aria-label="退出登录"]',
+    );
+    close.element.focus();
+    await close.trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(signOut.element);
+    await signOut.trigger("keydown", { key: "Tab" });
+    expect(document.activeElement).toBe(close.element);
+
+    await sidebar.trigger("keydown", { key: "Escape" });
+    expect(sidebar.attributes("inert")).toBeDefined();
+    expect(document.activeElement).toBe(trigger.element);
+    await trigger.trigger("click");
+    await sidebar.get(".sidebar-close").trigger("click");
+    expect(document.activeElement).toBe(trigger.element);
+    await trigger.trigger("click");
+    await wrapper.get(".sidebar-scrim").trigger("click");
+    expect(document.activeElement).toBe(trigger.element);
+
+    await trigger.trigger("click");
+    await sidebar.get('nav a[href="/orders"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe("/orders");
+    expect(sidebar.attributes("inert")).toBeDefined();
+    expect(document.activeElement).toBe(main.element);
+    await trigger.trigger("click");
+    await sidebar.get('nav a[href="/orders"]').trigger("click");
+    await flushPromises();
+    expect(document.activeElement).toBe(main.element);
+
+    const refresh = wrapper.get<HTMLButtonElement>(
+      'button[aria-label="刷新数据"]',
+    );
+    refresh.element.focus();
+    await refresh.trigger("click");
+    await flushPromises();
+    expect(document.activeElement).toBe(refresh.element);
+    await trigger.trigger("click");
+    await router.push("/services");
+    await flushPromises();
+    expect(sidebar.attributes("inert")).toBeDefined();
+    expect(document.activeElement).toBe(main.element);
+    wrapper.unmount();
+  });
+  it("moves only focus that a breakpoint change would hide and removes its media listener on unmount", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const media = mockNavigationMedia();
+    const { wrapper } = await mountApp();
+    expect(vi.mocked(matchMedia)).toHaveBeenCalledWith("(max-width: 720px)");
+    const sidebar = wrapper.get(".sidebar");
+    const trigger = wrapper.get<HTMLButtonElement>(".mobile-menu");
+    const overviewLink = sidebar.get<HTMLAnchorElement>(
+      'nav a[href="/overview"]',
+    );
+    expect(sidebar.attributes("inert")).toBeUndefined();
+    expect(sidebar.attributes("role")).toBeUndefined();
+    overviewLink.element.focus();
+    media.change(true);
+    await flushPromises();
+    expect(sidebar.attributes("inert")).toBeDefined();
+    expect(document.activeElement).toBe(trigger.element);
+
+    media.change(false);
+    await flushPromises();
+    expect(sidebar.attributes("inert")).toBeUndefined();
+    expect(document.activeElement).toBe(overviewLink.element);
+    const language = wrapper.get<HTMLSelectElement>(
+      'select[aria-label="语言"]',
+    );
+    language.element.focus();
+    media.change(true);
+    await flushPromises();
+    expect(document.activeElement).toBe(language.element);
+    await trigger.trigger("click");
+    expect(document.activeElement).toBe(overviewLink.element);
+    media.change(false);
+    await flushPromises();
+    expect(wrapper.find(".sidebar-scrim").exists()).toBe(false);
+    expect(wrapper.get(".main-shell").attributes("inert")).toBeUndefined();
+    expect(document.activeElement).toBe(overviewLink.element);
+    expect(sidebar.attributes("aria-modal")).toBeUndefined();
+    wrapper.unmount();
+    expect(media.media.removeEventListener).toHaveBeenCalledWith(
+      "change",
+      media.media.addEventListener.mock.calls[0]![1],
+    );
+  });
+  it.each(["zh-CN", "en"])(
+    "labels the customer CTA as plan selection in %s and opens the catalog",
+    async (language) => {
+      activeUser = { ...fixtures.previewUser };
+      const { wrapper, router } = await mountApp();
+      await wrapper.get('select[aria-label="语言"]').setValue(language);
+      await flushPromises();
+      const label = language === "zh-CN" ? "选购套餐" : "Choose a plan";
+      expect(wrapper.get(".page-heading .button.primary").text()).toContain(
+        label,
+      );
+      await wrapper.get(".page-heading .button.primary").trigger("click");
+      await flushPromises();
+      expect(router.currentRoute.value.path).toBe("/plans");
+      expect(wrapper.find(".purchase-catalog").exists()).toBe(true);
+      expect(requests.some((request) => request.method === "POST")).toBe(false);
+      wrapper.unmount();
+    },
+  );
   it("initializes a new CNY-only installation before fetching prices and keeps old USD history literal", async () => {
     activeUser = { ...fixtures.previewUser };
     localStorage.setItem("aster.currency", "USD");
@@ -920,7 +1346,54 @@ describe("billing workspace flows", () => {
     expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
     wrapper.unmount();
   });
-  it("ignores invoice details that finish after the dialog was closed", async () => {
+  it.each(["zh-CN", "en"])(
+    "keeps cached invoice details visible with localized refresh feedback and stable focus in %s",
+    async (language) => {
+      activeUser = { ...fixtures.previewUser };
+      const { wrapper, router } = await mountApp();
+      await wrapper.get('select[aria-label="语言"]').setValue(language);
+      await flushPromises();
+      await router.push("/invoices");
+      await flushPromises();
+      let resolveDetail!: (value: unknown) => void;
+      vi.mocked(fetch).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveDetail = resolve as typeof resolveDetail;
+          }),
+      );
+      await wrapper.findAll(".table-action")[0]!.trigger("click");
+      await flushPromises();
+      const document = wrapper.get(".invoice-document");
+      const close = wrapper.get<HTMLButtonElement>(
+        ".invoice-modal .modal-heading button",
+      );
+      close.element.focus();
+      expect(document.attributes("aria-busy")).toBe("true");
+      expect(document.text()).toContain(fixtures.invoices[0]!.number);
+      expect(wrapper.get(".invoice-refresh-status").attributes("role")).toBe(
+        "status",
+      );
+      expect(wrapper.get(".invoice-refresh-status").text()).toBe(
+        language === "zh-CN"
+          ? "正在更新账单详情…"
+          : "Updating invoice details…",
+      );
+      resolveDetail({
+        ok: true,
+        json: async () => ({
+          data: { ...fixtures.invoices[0], number: "UPDATED-INVOICE" },
+        }),
+      });
+      await flushPromises();
+      expect(document.attributes("aria-busy")).toBe("false");
+      expect(document.text()).toContain("UPDATED-INVOICE");
+      expect(wrapper.find(".invoice-refresh-status").exists()).toBe(false);
+      expect(window.document.activeElement).toBe(close.element);
+      wrapper.unmount();
+    },
+  );
+  it("clears invoice refresh feedback after failure while retaining the cached financial record", async () => {
     activeUser = { ...fixtures.previewUser };
     const { wrapper, router } = await mountApp();
     await router.push("/invoices");
@@ -934,9 +1407,105 @@ describe("billing workspace flows", () => {
     );
     await wrapper.findAll(".table-action")[0]!.trigger("click");
     await flushPromises();
+    expect(wrapper.get(".invoice-document").attributes("aria-busy")).toBe(
+      "true",
+    );
+    resolveDetail({
+      ok: false,
+      json: async () => ({
+        error: { code: "UNAVAILABLE", message: "Detail unavailable" },
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.get(".invoice-document").attributes("aria-busy")).toBe(
+      "false",
+    );
+    expect(wrapper.get(".invoice-document").text()).toContain(
+      fixtures.invoices[0]!.number,
+    );
+    expect(wrapper.get(".invoice-modal [role=alert]").text()).toContain(
+      "Detail unavailable",
+    );
+    expect(wrapper.find(".invoice-refresh-status").exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it("clears invoice refresh feedback and invalidates pending details when authentication ends", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const { wrapper, router } = await mountApp();
+    await router.push("/invoices");
+    await flushPromises();
+    let resolveDetail!: (value: unknown) => void;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDetail = resolve as typeof resolveDetail;
+        }),
+    );
+    await wrapper.findAll(".table-action")[0]!.trigger("click");
+    await flushPromises();
+    expect(wrapper.get(".invoice-document").attributes("aria-busy")).toBe(
+      "true",
+    );
+    const originalFetch = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) =>
+        path.endsWith("/currencies")
+          ? {
+              ok: false,
+              json: async () => ({
+                error: { code: "AUTH_REQUIRED", message: "Sign in again" },
+              }),
+            }
+          : originalFetch(path, options),
+      ),
+    );
+    await wrapper.get('button[aria-label="刷新数据"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".app-shell").exists()).toBe(false);
+    expect(wrapper.find(".invoice-refresh-status").exists()).toBe(false);
+    expect(wrapper.find(".invoice-document").exists()).toBe(false);
+    resolveDetail({
+      ok: true,
+      json: async () => ({
+        data: { ...fixtures.invoices[0], number: "OTHER-SESSION-INVOICE" },
+      }),
+    });
+    await flushPromises();
+    expect(wrapper.find(".invoice-document").exists()).toBe(false);
+    expect(wrapper.get(".invoice-modal").text()).not.toContain(
+      "OTHER-SESSION-INVOICE",
+    );
+    wrapper.unmount();
+  });
+  it("ignores old invoice details without clearing a newer selection's refresh feedback", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const { wrapper, router } = await mountApp();
+    await router.push("/invoices");
+    await flushPromises();
+    let resolveDetail!: (value: unknown) => void;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDetail = resolve as typeof resolveDetail;
+        }),
+    );
+    await wrapper.findAll(".table-action")[0]!.trigger("click");
+    await flushPromises();
+    expect(wrapper.get(".invoice-document").attributes("aria-busy")).toBe(
+      "true",
+    );
     await wrapper
       .find('.invoice-modal button[aria-label="关闭"]')
       .trigger("click");
+    expect(wrapper.find(".invoice-refresh-status").exists()).toBe(false);
+    let resolveNextDetail!: (value: unknown) => void;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveNextDetail = resolve as typeof resolveNextDetail;
+        }),
+    );
     await wrapper.findAll(".table-action")[1]!.trigger("click");
     await flushPromises();
     resolveDetail({
@@ -949,6 +1518,19 @@ describe("billing workspace flows", () => {
     expect(wrapper.find(".invoice-modal").text()).not.toContain(
       "STALE-INVOICE",
     );
+    expect(wrapper.get(".invoice-document").attributes("aria-busy")).toBe(
+      "true",
+    );
+    expect(wrapper.find(".invoice-refresh-status").exists()).toBe(true);
+    resolveNextDetail({
+      ok: true,
+      json: async () => ({ data: fixtures.invoices[1] }),
+    });
+    await flushPromises();
+    expect(wrapper.get(".invoice-document").attributes("aria-busy")).toBe(
+      "false",
+    );
+    expect(wrapper.find(".invoice-refresh-status").exists()).toBe(false);
     wrapper.unmount();
   });
   it.each([

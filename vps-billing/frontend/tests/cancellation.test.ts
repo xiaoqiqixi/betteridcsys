@@ -60,6 +60,14 @@ async function workspace(admin = false, english = false) {
   return { wrapper, router, dialog, open, prepare, submit };
 }
 beforeEach(() => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
   localStorage.clear();
   restorePreferences();
   user = { ...fixtures.previewUser };

@@ -72,10 +72,15 @@ const errorText = computed(
         "设置已被其他管理员修改。你的草稿仍保留在本页；请先复制需要保留的内容，再重新读取。",
         "Another administrator changed these settings. Your draft is still here; copy any changes you need before reloading.",
       ),
-      invalid: tr(
-        "请检查标注的字段后再保存。",
-        "Check the highlighted fields before saving.",
-      ),
+      invalid: issues.value.length
+        ? tr(
+            "请检查标注的字段后再保存。",
+            "Check the highlighted fields before saving.",
+          )
+        : tr(
+            "服务器未接受这份设置。草稿仍保留；请核对配置，必要时复制草稿后重新读取。",
+            "The server did not accept these settings. Your draft is retained. Review the configuration; if needed, copy your draft before reloading.",
+          ),
       session: tr(
         "管理员会话或操作验证已失效，请重新登录后读取设置。",
         "Your administrator session or request verification has expired. Sign in again, then reload settings.",
@@ -411,9 +416,17 @@ onBeforeUnmount(() => {
               <input
                 id="settings-currency"
                 name="default_currency"
+                class="settings-readonly-value"
+                aria-describedby="settings-currency-help"
                 :value="form.default_currency"
                 readonly
               />
+              <small id="settings-currency-help" class="settings-help">{{
+                tr(
+                  "只读，可选择并复制。请在财务设置中修改默认币种。",
+                  "Read only; select and copy this value. Change the default currency in financial settings.",
+                )
+              }}</small>
               <a class="text-button" href="/finance">{{
                 tr(
                   "前往财务设置管理币种",

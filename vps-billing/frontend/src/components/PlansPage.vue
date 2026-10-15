@@ -412,7 +412,7 @@ function review() {
   height: 24px;
   flex-shrink: 0;
   border-radius: 7px;
-  color: var(--blue);
+  color: var(--brand-ink);
   background: var(--theme-soft);
   font-size: 12px;
   font-weight: 600;
@@ -446,7 +446,7 @@ function review() {
 }
 .region-options button[aria-pressed="true"] {
   background: var(--theme-soft);
-  color: var(--blue);
+  color: var(--brand-ink);
   border-color: var(--blue);
 }
 .purchase-plan-heading {
@@ -565,7 +565,7 @@ function review() {
   font-size: 12px;
 }
 .plan-select[aria-pressed="true"] {
-  color: var(--blue);
+  color: var(--brand-ink);
   background: var(--theme-soft);
   border-color: var(--blue);
 }

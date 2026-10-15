@@ -23,7 +23,7 @@ for name in ASTER_CORE_FIXTURE_OPT ASTER_CORE_CANDIDATE_ASSETS ASTER_CORE_CANDID
   [[ -n ${!name:-} && ${!name} == /* ]] || fail "Missing owned native fixture contract: $name"
 done
 [[ $ASTER_CORE_FIXTURE_OPT =~ ^/opt/aster-ci-[0-9]+-[0-9]+-[0-9]+$ ]] || fail 'Unexpected owned native fixture root.'
-[[ $ASTER_CORE_CANDIDATE_RELEASE == "$ASTER_CORE_FIXTURE_OPT/releases/a" && $ASTER_CORE_BASELINE_RELEASE == "$ASTER_CORE_FIXTURE_OPT/core-upgrade/releases/0.5.1" ]] || fail 'Release paths must belong to the parent native fixture.'
+[[ $ASTER_CORE_CANDIDATE_RELEASE == "$ASTER_CORE_FIXTURE_OPT/releases/a" && $ASTER_CORE_BASELINE_RELEASE == "$ASTER_CORE_FIXTURE_OPT/core-upgrade/releases/0.5.2" ]] || fail 'Release paths must belong to the parent native fixture.'
 [[ -S $ASTER_NATIVE_MYSQL_SOCKET && -f $ASTER_NATIVE_MYSQL_ADMIN_CNF && ! -L $ASTER_NATIVE_MYSQL_ADMIN_CNF ]] || fail 'Native MySQL fixture unavailable.'
 [[ $(realpath -e "$ASTER_NATIVE_MYSQL_SOCKET") == "$ASTER_NATIVE_MYSQL_FIXTURE_ROOT/"* ]] || fail 'MySQL socket is outside the owned fixture.'
 [[ $(stat -c %a "$ASTER_NATIVE_MYSQL_ADMIN_CNF") == 600 && $(stat -c %u "$ASTER_NATIVE_MYSQL_ADMIN_CNF") == "$EUID" ]] || fail 'MySQL fixture client file must be private and runner-owned.'

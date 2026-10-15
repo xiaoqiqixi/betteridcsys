@@ -114,6 +114,112 @@ afterEach(() => {
 });
 
 describe("financial administration", () => {
+  it.each(["zh-CN", "en"] as const)(
+    "names every repeated currency and plan control in %s",
+    async (language) => {
+      locale.value = language;
+      const fetcher = fetchInitial(
+        registry({ currencies: [cny(), usd()] }),
+      ).mockResolvedValueOnce(reply(prices(usd())));
+      vi.stubGlobal("fetch", fetcher);
+      const w = open();
+      await flushPromises();
+      for (const [index, code] of ["CNY", "USD"].entries()) {
+        const group = w.get(`[data-currency="${code}"]`);
+        expect(group.attributes("role")).toBe("group");
+        expect(
+          document.getElementById(group.attributes("aria-labelledby")!)
+            ?.textContent,
+        ).toBe(code);
+        for (const field of [
+          "code",
+          "name",
+          "prefix",
+          "suffix",
+          "decimal_places",
+          "sort_order",
+          "enabled",
+        ])
+          expect(
+            w
+              .get(`[name="currency-${index}-${field}"]`)
+              .attributes("aria-label"),
+          ).toContain(`${code} · `);
+      }
+      for (const code of ["CNY", "USD"]) {
+        if (code === "USD") {
+          await w.get('[name="pricing_currency"]').setValue(code);
+          await flushPromises();
+        }
+        for (const [index, name] of ["Aster Basic", "Aster Large"].entries()) {
+          const group = w.findAll(".price-card")[index]!;
+          expect(group.attributes("role")).toBe("group");
+          const heading = document.getElementById(
+            group.attributes("aria-labelledby")!,
+          )?.textContent;
+          expect(heading).toContain(name);
+          expect(heading).toContain(code);
+          for (const field of ["amount", "available"])
+            expect(
+              w
+                .get(`[name="price-${index}-${field}"]`)
+                .attributes("aria-label"),
+            ).toContain(`${name} · ${code} · `);
+          expect(
+            w
+              .get(`[name="price-${index}-plan-available"]`)
+              .attributes("aria-label"),
+          ).toBe(
+            `${name} · ${language === "zh-CN" ? "套餐总开关（所有币种）" : "Plan enabled globally (all currencies)"}`,
+          );
+        }
+      }
+      expect(fetcher).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("links each invalid price only to its plan and currency, preserving IDs after corrections", async () => {
+    const fetcher = fetchInitial(
+      registry({ currencies: [cny(), usd()] }),
+    ).mockResolvedValueOnce(reply(prices(usd())));
+    vi.stubGlobal("fetch", fetcher);
+    const w = open();
+    await flushPromises();
+    const basic = w.get('[name="price-0-amount"]');
+    const large = w.get('[name="price-1-amount"]');
+    await basic.setValue("1.234");
+    await large.setValue("2e3");
+    await submit(w, "price");
+    const basicError = basic.attributes("aria-describedby")!;
+    const largeError = large.attributes("aria-describedby")!;
+    expect(basicError).toBe("price-CNY-basic-error");
+    expect(largeError).toBe("price-CNY-large-error");
+    expect(basicError).not.toBe(largeError);
+    expect(
+      document.getElementById(basicError)?.closest('[data-plan="basic"]'),
+    ).toBeTruthy();
+    expect(
+      document.getElementById(largeError)?.closest('[data-plan="large"]'),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(basic.element);
+    await basic.setValue("39.00");
+    await submit(w, "price");
+    expect(basic.attributes("aria-describedby")).toBeUndefined();
+    expect(large.attributes("aria-describedby")).toBe(largeError);
+    expect(document.activeElement).toBe(large.element);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await large.setValue("");
+    await w.get('[name="pricing_currency"]').setValue("USD");
+    await flushPromises();
+    await w.get('[name="price-0-amount"]').setValue("1.234");
+    await submit(w, "price");
+    expect(
+      w.get('[name="price-0-amount"]').attributes("aria-describedby"),
+    ).toBe("price-USD-basic-error");
+    expect(document.getElementById(basicError)).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
   it("loads persisted CNY-only data and protects existing codes, precision and the default", async () => {
     const fetcher = fetchInitial();
     vi.stubGlobal("fetch", fetcher);
@@ -522,6 +628,93 @@ describe("financial administration", () => {
     await flushPromises();
     expect(w.get(".price-input").text()).toContain("USD");
   });
+
+  it.each(
+    (["zh-CN", "en"] as const).flatMap((language) => [
+      {
+        language,
+        form: "currency",
+        code: "INVALID_CURRENCY_CONFIG",
+        field: "currency-0-name",
+        draft: "Retained currency draft",
+        invalid: "",
+        revision: 4,
+      },
+      {
+        language,
+        form: "price",
+        code: "INVALID_PLAN_PRICES",
+        field: "price-0-amount",
+        draft: "42.00",
+        invalid: "1.001",
+        revision: 8,
+      },
+    ]),
+  )(
+    "keeps $form server rejection truthful in $language and preserves draft/revision through local correction",
+    async ({ language, form, code, field, draft, invalid, revision }) => {
+      locale.value = language;
+      const fetcher = fetchInitial()
+        .mockResolvedValueOnce(failure(code))
+        .mockResolvedValueOnce(failure(code));
+      vi.stubGlobal("fetch", fetcher);
+      const w = open();
+      await flushPromises();
+      const input = w.get<HTMLInputElement>(`[name="${field}"]`);
+      await input.setValue(draft);
+      await submit(w, form);
+      const message = w.get(`[data-testid="${form}-error"]`).text();
+      expect(message).toContain(
+        language === "zh-CN" ? "服务器未接受" : "The server did not accept",
+      );
+      expect(message).toContain(
+        language === "zh-CN" ? "草稿仍保留" : "Your draft is retained",
+      );
+      expect(message).not.toMatch(
+        /标注|highlighted|private-financial-diagnostic/,
+      );
+      expect(w.findAll('[aria-invalid="true"]')).toHaveLength(0);
+      expect(input.element.value).toBe(draft);
+      expect(
+        w.get(`[data-testid="${form}-form"] .financial-revision`).text(),
+      ).toContain(String(revision));
+      expect(
+        w
+          .get(`[data-testid="${form}-form"] button[type="submit"]`)
+          .attributes("disabled"),
+      ).toBeUndefined();
+      const firstRequest = JSON.parse(fetcher.mock.calls[2]![1].body);
+      expect(firstRequest.revision).toBe(revision);
+      expect(
+        w.emitted(form === "currency" ? "saved" : "pricesSaved"),
+      ).toBeUndefined();
+
+      await input.setValue(invalid);
+      await submit(w, form);
+      expect(w.get(`[data-testid="${form}-error"]`).text()).toContain(
+        language === "zh-CN" ? "标注字段" : "highlighted fields",
+      );
+      expect(input.attributes("aria-invalid")).toBe("true");
+      expect(document.activeElement).toBe(input.element);
+      if (form === "price") {
+        expect(input.attributes("aria-describedby")).toBe(
+          "price-CNY-basic-error",
+        );
+        expect(document.getElementById("price-CNY-basic-error")).not.toBeNull();
+      }
+      expect(fetcher).toHaveBeenCalledTimes(3);
+
+      await input.setValue(draft);
+      await submit(w, form);
+      expect(fetcher).toHaveBeenCalledTimes(4);
+      expect(JSON.parse(fetcher.mock.calls[3]![1].body)).toEqual(firstRequest);
+      expect(w.findAll('[aria-invalid="true"]')).toHaveLength(0);
+      expect(input.element.value).toBe(draft);
+      expect(w.get(`[data-testid="${form}-error"]`).text()).not.toMatch(
+        /标注|highlighted|private-financial-diagnostic/,
+      );
+    },
+  );
 
   it.each([
     ["currency", "CURRENCY_CONFLICT", "其他管理员"],

@@ -244,6 +244,12 @@ assert report['active_release_changed'] is False and report['service_action'] ==
 PYPREPARED
 emit_json_fact PUBLIC_CORE_PREPARE_JSON public-core-prepare.json
 [[ ! -e $opt/current && ! -L $opt/current ]] || fail 'Preparation unexpectedly activated a release.'
+# The surviving normal release is also the real upgrade baseline. Reuse this
+# independently verified preparation; preparing its existing directory again
+# must remain forbidden by the production preparer.
+baseline_version=$public_version
+baseline_target=$public_target
+emit_json_fact PUBLISHED_CORE_BASELINE_PREPARE_JSON public-core-prepare.json
 sudo -n ln -s "$opt/releases/a" "$opt/current"
 sudo -n install -d -o root -g "$api_user" -m 750 "$config/secrets"
 sudo -n install -d -o root -g root -m 755 "$opt/plugins"
@@ -487,9 +493,9 @@ sudo -n install -o root -g "$api_user" -m 640 "$scratch/restore_runtime.service.
 sudo -n systemctl start "$api_unit"
 wait_ready
 python3 "$project/deploy/ci/accept-native-http.py" --project "$project" --port "$tls_port" --http-port "$http_port" --ca "$scratch/ca.pem" --accounts "$scratch/accounts.json" --expect-smtp-settings --report "$evidence/restored-https-tests.json"
-step 'Actual Core install, published v0.5.1 upgrade, fault recovery and idempotent retry'
+step "Actual Core install, published v$baseline_version upgrade, fault recovery and idempotent retry"
 ASTER_CORE_FIXTURE_OPT="$opt" ASTER_CORE_CANDIDATE_ASSETS="$scratch/core-distribution" \
-ASTER_CORE_CANDIDATE_RELEASE="$opt/releases/a" ASTER_CORE_BASELINE_RELEASE="$public_target" \
+ASTER_CORE_CANDIDATE_RELEASE="$opt/releases/a" ASTER_CORE_BASELINE_RELEASE="$baseline_target" \
 ASTER_CORE_GITHUB_TOKEN_FILE="$config/public-read-token" \
 bash "$project/deploy/ci/core-native.sh" --allow-isolated-runner "$source_root" "$evidence/core-native"
 python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" "$migration_count" <<'PY'

@@ -1,6 +1,6 @@
 # Aster Billing API（星屿云）
 
-Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。Core 0.5.1 提供可配置运营身份、简体中文/English、登记币种独立报价与订单/账单。全新安装仅 CNY，升级保留旧 USD；官方 SMTP 默认关闭，仅支持管理员保存配置和测试邮件；支付、退款、财务账本、自动邮件通知和 VPS 开通仍未接入。完整 API 约定见 [CONTRACT.md](../docs/CONTRACT.md)，实际验证见 [VALIDATION.md](../docs/VALIDATION.md)。
+Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。当前正式 Core 为 0.5.2，主干 0.5.3 尚未发行；支持可配置运营身份、简体中文/English、登记币种独立报价与订单/账单。全新安装仅 CNY，升级保留旧 USD。支付渠道由开发者按 [支付适配器合同](../docs/PAYMENT_PLUGINS.md)集成；官方默认关闭支付，SMTP 为单独安装的运行时插件。完整 API 约定见 [CONTRACT.md](../docs/CONTRACT.md)，实际验证见 [VALIDATION.md](../docs/VALIDATION.md)。
 
 ## 本机演示
 
@@ -17,38 +17,40 @@ APP_MODE=demo APP_ORIGIN=http://localhost:5173 ./bin/aster-api
 
 默认监听 127.0.0.1:8080。前端同源代理 /api，禁止开放 demo 或 Vite 到公网。只在显式 APP_MODE=demo 可用的公开测试账号：
 
-| 用途 | 邮箱 | 密码 |
-|---|---|---|
-| 客户 | demo@aster.local | DemoCustomer!2026 |
-| 管理员 | admin@aster.local | DemoAdmin!2026 |
-| 另一客户（所有权测试） | other@aster.local | DemoOther!2026 |
+| 用途                   | 邮箱              | 密码              |
+| ---------------------- | ----------------- | ----------------- |
+| 客户                   | demo@aster.local  | DemoCustomer!2026 |
+| 管理员                 | admin@aster.local | DemoAdmin!2026    |
+| 另一客户（所有权测试） | other@aster.local | DemoOther!2026    |
 
 demo 无初始服务或假已付账单；创建订单只生成待付款记录，重启丢失内存数据。HTTP demo cookie 保持 HttpOnly/SameSite=Strict，但没有 Secure。默认生产模式不创建这些账号，不能通过切到 demo 绕过配置错误。
 
 ## 配置
 
-| 环境变量 | 作用 |
-|---|---|
-| APP_MODE | production（默认）或显式 demo |
-| LISTEN_ADDR | 默认 127.0.0.1:8080；原生 systemd 模板使用 127.0.0.1:18080 |
-| APP_ORIGIN | 精确 HTTPS 来源，无路径/尾斜杠，如 https://billing.example.com |
-| SESSION_SECRET / SESSION_SECRET_FILE | 独立随机秘密，至少 32 字节；优先受限文件 |
-| MYSQL_DSN / MYSQL_DSN_FILE | Go MySQL DSN；生产优先验证证书的 tls=true |
-| MYSQL_ALLOW_INSECURE | 默认 false；原生同机 Unix socket 须显式 true，并核验 socket 权限、账号与目标；不得据此启用明文 TCP |
-| TRUSTED_PROXY_CIDRS | 直接可信代理精确 CIDR；空值不信任转发地址 |
-| BOOTSTRAP_EMAIL / NAME / ROLE | CLI 创建用户；role 默认 customer，管理员需显式 admin |
-| BOOTSTRAP_PASSWORD / BOOTSTRAP_PASSWORD_FILE | 唯一 16–72 字节强口令，不用 demo/示例值 |
-| PAYMENT_PROVIDER / EMAIL_PROVIDER | 保留 payment.disabled / email.disabled；后者不是受管理 SMTP 总开关 |
-| SMTP_ENCRYPTION_KEY_FILE | 可选32字节原始私密文件；未设置不能发送，无效则拒绝启动；不支持内联秘密值 |
-| PLUGIN_DIRECTORY / PLUGIN_POLICY_FILE | 受保护版本目录与 root 明确审批策略；被动发现不执行程序 |
-| UPDATE_RELEASE_TOKEN_FILE | 可选受保护只读 GitHub 凭据文件，不从网页输入；未知来源不可用时不绕过 |
-| INTEGRATIONS_CONFIG_FILE | 可选受限本地 JSON；当前禁用适配器无需配置 |
+| 环境变量                                     | 作用                                                                                               |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| APP_MODE                                     | production（默认）或显式 demo                                                                      |
+| LISTEN_ADDR                                  | 默认 127.0.0.1:8080；原生 systemd 模板使用 127.0.0.1:18080                                         |
+| APP_ORIGIN                                   | 精确 HTTPS 来源，无路径/尾斜杠，如 https://billing.example.com                                     |
+| SESSION_SECRET / SESSION_SECRET_FILE         | 独立随机秘密，至少 32 字节；优先受限文件                                                           |
+| MYSQL_DSN / MYSQL_DSN_FILE                   | Go MySQL DSN；生产优先验证证书的 tls=true                                                          |
+| MYSQL_ALLOW_INSECURE                         | 默认 false；原生同机 Unix socket 须显式 true，并核验 socket 权限、账号与目标；不得据此启用明文 TCP |
+| TRUSTED_PROXY_CIDRS                          | 直接可信代理精确 CIDR；空值不信任转发地址                                                          |
+| BOOTSTRAP_EMAIL / NAME / ROLE                | CLI 创建用户；role 默认 customer，管理员需显式 admin                                               |
+| BOOTSTRAP_PASSWORD / BOOTSTRAP_PASSWORD_FILE | 唯一 16–72 字节强口令，不用 demo/示例值                                                            |
+| PAYMENT_PROVIDER / EMAIL_PROVIDER            | 保留 payment.disabled / email.disabled；后者不是受管理 SMTP 总开关                                 |
+| SMTP_ENCRYPTION_KEY_FILE                     | 可选32字节原始私密文件；未设置不能发送，无效则拒绝启动；不支持内联秘密值                           |
+| PLUGIN_DIRECTORY / PLUGIN_POLICY_FILE        | 受保护版本目录与 root 明确审批策略；被动发现不执行程序                                             |
+| UPDATE_RELEASE_TOKEN_FILE                    | 可选受保护只读 GitHub 凭据文件，不从网页输入；未知来源不可用时不绕过                               |
+| INTEGRATIONS_CONFIG_FILE                     | 可选受限本地 JSON；当前禁用适配器无需配置                                                          |
 
 FILE 形式优先。生产拒绝弱/示例会话秘密、无 DSN、非 HTTPS 来源、无效代理 CIDR/未知模式。强制 TLS 时拒绝 skip-verify、preferred 和明文回退。不要在源码、命令行、聊天或日志中存密码/DSN。
 
 生产 cookie 是 __Host-aster_session，Secure、HttpOnly、SameSite=Strict、Path=/。API 端口不公开，可信反向代理覆盖 X-Real-IP，客户端原始转发头不可信。仅从配置的直接 peer CIDR 接受该头，IPv4/IPv6 地址归一化用于限速；不信任 X-Forwarded-For。不能使用 0.0.0.0/0 或任意私网作为代理信任。
 
 ## 数据库、迁移与身份
+
+开发和排错记录中的 `007` 是第七份数据库变更文件的序号，`14 张基础表` 是该版本完整数据库的表数量；两者不是同一计数，也不是要求运营者从七张表手动改成十四张。安装和升级按版本运行工具并核对预检结果，具体步骤见 [安装](../docs/INSTALL.md)和 [升级](../docs/UPGRADE.md)。
 
 迁移 1–6 保持原文，迁移 007 新增币种登记、全局价格 revision、订单/账单/服务的币种格式快照与订单套餐快照，当前共 14 张基础表。旧 CNY/USD 仅按旧版固定两位格式回填，历史缺失套餐规格不补造。迁移经 advisory lock 串行执行，校验完整版本、checksum 和结构；就绪拒绝未知新 schema。MySQL DDL 不能整体事务回滚，执行前停写并验证备份恢复，不删除表/快照或手改迁移记录降级。详见 [升级说明](../docs/UPGRADE.md)。
 
@@ -81,7 +83,7 @@ GET /site-settings 公开展示子集；管理员 GET/POST /admin/site-settings 
 
 管理员 GET /admin/invoices/{id} 提供直接只读详情；客户 GET /invoices/{id} 仍按所有权查询，避免用最多 1,000 条列表筛选漏掉旧账单。
 
-POST /invoices/{id}/checkout 核对所有权和待付状态后调用类型化注册表。当前支付只装禁用适配器，返回 503 PAYMENT_NOT_CONFIGURED，不改变订单/账单/服务。没有支付 webhook、真实验签落账、退款、续费、余额更新或 outbox 消费者。order.created 不是开通授权。详见 [PLUGINS.md](../docs/PLUGINS.md)。
+POST /invoices/{id}/checkout 核对所有权和待付状态后调用类型化注册表。官方入口注册禁用适配器，返回 503 PAYMENT_NOT_CONFIGURED，不改变订单/账单/服务。第三方适配器通过受信代码注册并随 Core 构建；现有 VerifyCallback Go 方法尚无 HTTP 路由或持久化结算流程，接入须同时完成验签、去重和原子入账。order.created 不是开通授权，退款、续费或 outbox 消费不能从结账接口推导为已有能力。接口、责任与可编译示例见 [PAYMENT_PLUGINS.md](../docs/PAYMENT_PLUGINS.md)。
 
 ## 官方 SMTP
 

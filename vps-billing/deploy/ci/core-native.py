@@ -35,6 +35,15 @@ class AcceptanceFailure(RuntimeError):
     pass
 
 
+PUBLISHED_VERSION = "0.5.2"
+PUBLISHED_SOURCE = "9ed610a283020f50e2cfc529f8b5145b4a9c8fc3"
+PUBLISHED_RELEASE_ID = 413559379
+PUBLISHED_BUILD_RUN_ID = 38702170922
+PUBLISHED_ASSETS = frozenset({
+    "aster-api-0.5.2-linux-amd64", "aster-plugin-host-0.5.2-linux-amd64",
+    "aster-core-0.5.2-linux-amd64-resources.tar.gz", "BUILD.json", "PROVENANCE.json", "SHA256SUMS",
+})
+
 STAGE = "initializing"
 NATIVE_TRACES = {}
 SAFE_REJECTIONS = {
@@ -473,7 +482,8 @@ def verify_source_candidate(source, assets, installed):
     require(re.fullmatch(r"[a-f0-9]{40}", commit), "Invalid selected Git commit")
     build = pipeline.strict_json((assets / "BUILD.json").read_bytes())
     version = build["component_versions"]["core"]
-    require(tuple(map(int, version.split("."))) > (0, 5, 1), "Candidate must be newer than the published baseline")
+    require(tuple(map(int, version.split("."))) > tuple(map(int, PUBLISHED_VERSION.split("."))),
+            "Candidate must be newer than the published baseline")
     names = pipeline.package_files(version, "core", "raw-binaries-v1")
     require(set(item.name for item in assets.iterdir()) == set(names), "Source-built assets must have exact local package inventory")
     files = {name: (assets / name).read_bytes() for name in names}
@@ -516,16 +526,19 @@ def verify_published_baseline(directory):
     directory = Path(directory)
     receipt = json.loads((directory / "manifests/PREPARED.json").read_text())
     build = json.loads((directory / "manifests/BUILD.json").read_text())
-    require(build["component_versions"]["core"] == "0.5.1", "Baseline is not actual published Core v0.5.1")
-    require(build["source_commit"] == "91cc3c18e50b51f01ca0003e3d18de3ade69f25d", "Published baseline source changed")
-    require(receipt.get("version") == "0.5.1" and receipt.get("source_sha") == build["source_commit"], "Published baseline receipt identity mismatch")
-    require(receipt.get("release_id") == 413373046 and receipt.get("run_id") == 38672929446 and len(receipt.get("assets", [])) == 6,
+    require(build["component_versions"]["core"] == PUBLISHED_VERSION, "Baseline is not actual published Core v" + PUBLISHED_VERSION)
+    require(build["source_commit"] == PUBLISHED_SOURCE, "Published baseline source changed")
+    require(receipt.get("version") == PUBLISHED_VERSION and receipt.get("source_sha") == build["source_commit"], "Published baseline receipt identity mismatch")
+    assets = receipt.get("assets", [])
+    require(receipt.get("release_id") == PUBLISHED_RELEASE_ID and receipt.get("run_id") == PUBLISHED_BUILD_RUN_ID and
+            receipt.get("run_attempt") == 1 and len(assets) == 6 and
+            {item.get("name") for item in assets} == PUBLISHED_ASSETS,
             "Published baseline release/build identity changed")
     for name, digest in build["binary_sha256"].items():
         require(sha256((directory / name).read_bytes()) == digest, "Published baseline executable differs from verified BUILD")
-    return {"version": "0.5.1", "source_commit": build["source_commit"],
+    return {"version": PUBLISHED_VERSION, "source_commit": build["source_commit"],
             "directory": str(directory), "trust": "actual-official-published-release-prepared-independently",
-            "tag": "v0.5.1", "release_id": receipt["release_id"], "build_run_id": receipt["run_id"],
+            "tag": "v" + PUBLISHED_VERSION, "release_id": receipt["release_id"], "build_run_id": receipt["run_id"],
             "assets": receipt["assets"],
             "binary_sha256": build["binary_sha256"], "prepared_receipt_sha256": sha256((directory / "manifests/PREPARED.json").read_bytes()),
             "official_provenance_fabricated": False}
@@ -671,7 +684,7 @@ class Fixture:
             path.chmod(0o755 if path.is_dir() or str(path.relative_to(candidate_path)) in {"bin/aster-api", "bin/aster-plugin-host"} or str(path.relative_to(candidate_path)).startswith("deploy/scripts/") else 0o644)
         overrides[str(candidate_path)] = candidate
         self.candidate = str(candidate_path)
-        self.baseline = str(self.root / "releases/0.5.1")
+        self.baseline = str(self.root / "releases" / PUBLISHED_VERSION)
         with contextlib.ExitStack() as stack:
             sockets = [stack.enter_context(socket.socket()) for _ in range(2)]
             for connection in sockets:
@@ -858,7 +871,7 @@ class Fixture:
         require(restored_report["exit_code"] == 0 and restored_report["database"]["database"] == target and
                 restored_report["database"]["status"] == "current" and restored_report["database"]["admin_count"] == 1,
                 "Actual published old program did not validate the restored database")
-        return {"backup_source_core_version": "0.5.1", "source_database": self.spec["database"], "restore_database": target,
+        return {"backup_source_core_version": PUBLISHED_VERSION, "source_database": self.spec["database"], "restore_database": target,
                 "empty_target_verified": True, "full_table_data_sha256": source_hash, "restored_table_data_sha256": restored_hash,
                 "actual_published_old_program_preflight_on_restored_database": "current",
                 "same_mysql_instance_separate_empty_database": True, "independent_server_restore": False}
@@ -949,7 +962,7 @@ def legacy_native(executor, spec, candidate, trace):
 def legacy_schema_migration(resources, executor, fresh, baseline):
     """Real unchanged SQL 1..6 fixture, then actual candidate 6 -> 7 migration.
 
-    This is a separate schema compatibility exercise. Published Core v0.5.1
+    This is a separate schema compatibility exercise. Published Core v0.5.2
     itself already requires schema 7; the version upgrade is honestly 7 -> 7.
     """
     resources.legacy_migration_trace = {"calls": []}
@@ -1008,7 +1021,7 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
     require(fresh.full_data_hash(database) == digest_before, "Repeated migration changed actual database data")
     return {"schema_before": 6, "schema_after": 7, "tables_before": 13, "tables_after": 14,
             "actual_candidate_binary_migrate": True, "unchanged_selected_sql_prefix": True,
-            "published_0_5_1_preflight_after_migration": "current", "historical_usd_prices_preserved": True,
+            "published_baseline_version": PUBLISHED_VERSION, "published_baseline_preflight_after_migration": "current", "historical_usd_prices_preserved": True,
             "repeat_migration_data_unchanged": True, "scope": "separate-legacy-schema-fixture-not-version-upgrade"}
 
 
@@ -1053,7 +1066,7 @@ def late_schema_recovery(args, resources, executor, candidate, baseline, overrid
     stage("late-schema-official-baseline-install")
     late = Fixture(resources, executor, "late", candidate, baseline, overrides)
     token = executor.updater.load_protected_token(str(args.github_token_file), executor.updater._Trust())
-    prepared = executor.manager.prepare("0.5.1", late.baseline, api=executor.updater.Official(token))
+    prepared = executor.manager.prepare(PUBLISHED_VERSION, late.baseline, api=executor.updater.Official(token))
     require(prepared["status"] == "prepared", "Late-schema actual official baseline preparation failed")
     verify_published_baseline(late.baseline)
     late.spec["release_directory"] = late.baseline
@@ -1178,7 +1191,7 @@ def run_scenarios(args, candidate, baseline):
         require(upgrade.baseline == baseline["directory"], "Published baseline must have its actual prepare target")
         upgrade.spec["release_directory"] = upgrade.baseline
         old_install = upgrade.cli_install()
-        require(old_install["status"] == "succeeded", "Actual published Core v0.5.1 install failed")
+        require(old_install["status"] == "succeeded", "Actual published Core v" + PUBLISHED_VERSION + " install failed")
         old_live = upgrade.confirm_current(upgrade.baseline)
         upgrade.verify_enabled()
         upgrade.login()
@@ -1273,7 +1286,8 @@ def run_scenarios(args, candidate, baseline):
         fact(args.evidence, "interrupt-resume", {"process_killed_after_real_service_stop": True,
              "before_database_migration": interrupted["database_migration"], "original_operation_id_reused": True,
              "resume_reached_migration_and_candidate_start": True, "fault": "actual-bound-api-port"})
-        fact(args.evidence, "compatible-rollback", dict(rollback, **old_recovered, old_program_was_actual_published_0_5_1=True,
+        fact(args.evidence, "compatible-rollback", dict(rollback, **old_recovered, old_program_was_actual_published_baseline=True,
+             published_baseline_version=PUBLISHED_VERSION,
              migration_command_completed=True, schema_before=7, schema_after=7, new_schema_migration_added=False,
              automatic_database_restore=False, maintenance_until_explicit_validation=True))
         # Explicit fixture recovery after the independent old-program checks.
@@ -1283,20 +1297,20 @@ def run_scenarios(args, candidate, baseline):
         upgrade.login()
         upgrade.upgrade()
         upgraded = upgrade.execute()
-        require(upgraded["status"] == "succeeded", "Published Core v0.5.1 to candidate upgrade failed")
+        require(upgraded["status"] == "succeeded", "Published Core v" + PUBLISHED_VERSION + " to candidate upgrade failed")
         live = upgrade.confirm_current(upgrade.candidate)
         upgrade.login()
         require(upgrade.execute(resume=True) == upgraded and upgrade.confirm_current(upgrade.candidate)["api_pid"] == live["api_pid"], "Successful upgrade retry repeated activation")
         receipt = upgrade.verify_status_api(upgraded)
         fact(args.evidence, "published-upgrade", dict(upgraded, **live, **receipt, previous_live_api_sha256=old_live["live_api_sha256"],
-             actual_published_previous_version="0.5.1", candidate_trust=candidate["trust"], https_login=True,
+             actual_published_previous_version=PUBLISHED_VERSION, candidate_trust=candidate["trust"], https_login=True,
              previous_install_used_unmodified_root_cli=True,
              terminal_resume_idempotent=True, no_fabricated_official_metadata=True))
 
         stage("unknown-schema-hold-and-manual-recovery")
         unknown = Fixture(resources, executor, "unknown", candidate, baseline, overrides)
         token = executor.updater.load_protected_token(str(args.github_token_file), executor.updater._Trust())
-        actual = executor.manager.prepare("0.5.1", unknown.baseline, api=executor.updater.Official(token))
+        actual = executor.manager.prepare(PUBLISHED_VERSION, unknown.baseline, api=executor.updater.Official(token))
         require(actual["status"] == "prepared", "Second actual official baseline preparation failed")
         verify_published_baseline(unknown.baseline)
         unknown.spec["release_directory"] = unknown.baseline
@@ -1347,7 +1361,7 @@ def run_scenarios(args, candidate, baseline):
              manual_fixture_repair="required-cpu-column-restored-to-int", automatic_database_restore=False))
         fact(args.evidence, "late-schema-recovered", late_schema_recovery(args, resources, executor, candidate, baseline, overrides))
         fact(args.evidence, "core-native", {"status": "passed", "candidate_source_commit": candidate["source_commit"],
-             "candidate_version": candidate["version"], "published_baseline": "0.5.1", "actual_native_executor": True,
+             "candidate_version": candidate["version"], "published_baseline": PUBLISHED_VERSION, "actual_native_executor": True,
              "fresh_install": True, "published_to_candidate_upgrade": True, "interrupt_resume": True,
              "compatible_program_rollback": True, "unknown_schema_manual_recovery": True,
              "manual_recovery_receipt_and_terminal_resume_verified": True,
