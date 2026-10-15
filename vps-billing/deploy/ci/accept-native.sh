@@ -7,6 +7,25 @@ set -euo pipefail
 umask 077
 fail() { printf 'FAIL native acceptance: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n== Native acceptance: %s ==\n' "$*"; }
+normalize_fixture_release() {
+  # This owned fixture contains only the selected source-built public kit.
+  # Extraction/copy under umask 077 must not make root-owned public metadata
+  # unreadable by the ordinary backup operator. Secrets live elsewhere.
+  local release=$1 program
+  sudo -n find "$release" -type d -exec chmod 755 '{}' +
+  sudo -n find "$release" -type f -exec chmod 644 '{}' +
+  for program in bin/aster-api bin/aster-plugin-host deploy/scripts/backup-native.sh deploy/scripts/plugin-manager.py deploy/scripts/update-manager.py deploy/scripts/core-manager.py; do
+    sudo -n chmod 755 "$release/$program"
+  done
+}
+emit_json_fact() {
+  python3 - "$1" "$evidence/$2" <<'PYFACT'
+import json
+from pathlib import Path
+import sys
+print(sys.argv[1] + '=' + json.dumps(json.loads(Path(sys.argv[2]).read_text()), sort_keys=True))
+PYFACT
+}
 [[ $# == 3 && $1 == --allow-isolated-runner ]] || fail 'Explicit isolated-runner opt-in, source root and new evidence directory required.'
 [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted ]] || fail 'Only disposable GitHub-hosted Actions runners are accepted.'
 [[ ${GITHUB_REPOSITORY:-} == xiaoqiqixi/betteridcsys ]] || fail 'Unexpected repository; no privileged actions permitted.'
@@ -173,8 +192,11 @@ done
 sudo -n install -d -m 755 "$opt/releases/a/bin" "$opt/releases/a/web" "$opt/releases/b/bin" "$opt/releases/b/web" "$opt/tools"
 for version in a b; do
   sudo -n cp -R "$assembled/." "$opt/releases/$version/"
-  sudo -n find "$opt/releases/$version/web" -type d -exec chmod 755 '{}' +
-  sudo -n find "$opt/releases/$version/web" -type f -exec chmod 644 '{}' +
+  normalize_fixture_release "$opt/releases/$version"
+  [[ -r "$opt/releases/$version/manifests/BUILD.json" ]] || fail 'The ordinary backup operator cannot read the installed public BUILD.'
+  for migration in "$opt/releases/$version/migrations/"*.sql; do
+    [[ -r $migration ]] || fail 'The ordinary backup operator cannot read an installed public migration.'
+  done
   printf '%s\n' "$version" > "$scratch/release-id"
   sudo -n install -m 644 "$scratch/release-id" "$opt/releases/$version/web/release-id.txt"
 done
@@ -207,6 +229,7 @@ PYPUBLIC
 public_target="$opt/public-prepared-$public_version"
 sudo -n python3 -I "$opt/tools/core-manager.py" doctor --release-directory "$public_target" --socket "$mysql_socket" --listen-address 127.0.0.1:18080 > "$evidence/host-doctor.json"
 [[ ! -e $public_target && ! -L $public_target ]] || fail 'Read-only host doctor changed the target.'
+emit_json_fact HOST_DOCTOR_JSON host-doctor.json
 sudo -n python3 -I "$opt/tools/core-manager.py" prepare --version "$public_version" --release-directory "$public_target" --github-token-file "$config/public-read-token" > "$evidence/public-core-prepare.json"
 python3 - "$evidence/public-core-prepare.json" "$public_version" <<'PYPREPARED'
 import json
@@ -217,6 +240,7 @@ assert report['status'] == 'prepared' and report['version'] == sys.argv[2]
 assert report['source_and_integrity_verified'] is True and report['program_executed'] is False
 assert report['active_release_changed'] is False and report['service_action'] == report['database_action'] == 'none'
 PYPREPARED
+emit_json_fact PUBLIC_CORE_PREPARE_JSON public-core-prepare.json
 [[ ! -e $opt/current && ! -L $opt/current ]] || fail 'Preparation unexpectedly activated a release.'
 sudo -n ln -s "$opt/releases/a" "$opt/current"
 sudo -n install -d -o root -g "$api_user" -m 750 "$config/secrets"
@@ -293,6 +317,7 @@ assert database['read_only'] is True and database['status'] == 'empty'
 assert database['empty_target'] is True and database['schema_version'] == 0
 assert database['table_visibility_verified'] is True and database['empty_target_scope'] == 'base_tables'
 PYEMPTY
+emit_json_fact PREFLIGHT_EMPTY_JSON preflight-empty.json
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate > "$scratch/migrate.log" 2>&1
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate >> "$scratch/migrate.log" 2>&1
 migration_count=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM schema_migrations')
@@ -315,6 +340,7 @@ assert database['schema_version'] == 7 and len(database['migration_checksums']) 
 assert database['admin_count'] == 1 and database['pending_migrations'] == []
 assert database['table_visibility_verified'] is True
 PYCURRENT
+emit_json_fact PREFLIGHT_CURRENT_JSON preflight-current.json
 "${mysql_cmd[@]}" "$db" --execute="UPDATE plans SET available=TRUE; UPDATE plan_prices SET available=TRUE; CREATE TABLE permission_probe(id INT) ENGINE=InnoDB;" > "$scratch/seed.log" 2>&1
 runtime_mysql=("$mysql_root/bin/mysql" "--defaults-file=$scratch/runtime.cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --batch --skip-column-names "$db")
 runtime_db_user=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_user"])' "$scratch/accounts.json")
@@ -448,6 +474,7 @@ mapfile -t archives < <(find "$scratch/backups" -type f -name database.sql.gz)
 backup_dir=$(dirname -- "${archives[0]}")
 (cd "$backup_dir" && sha256sum --check --status SHA256SUMS && gzip -t database.sql.gz)
 cp "$backup_dir/BACKUP.json" "$evidence/backup-metadata.json"
+emit_json_fact BACKUP_METADATA_JSON backup-metadata.json
 backup_finished=$(monotonic_ns)
 [[ $("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()') == 0 ]] || fail 'Restore target is not empty.'
 restore_started=$(monotonic_ns)
@@ -495,12 +522,4 @@ summary = {
 Path(out,'native-acceptance.json').write_text(json.dumps(summary,ensure_ascii=False,sort_keys=True,indent=2)+'\n')
 print('NATIVE_ACCEPTANCE_JSON=' + json.dumps(summary, ensure_ascii=False, sort_keys=True))
 PY
-python3 - "$evidence" <<'PYFACTS'
-import json
-from pathlib import Path
-import sys
-root = Path(sys.argv[1])
-for marker, name in [('PREFLIGHT_EMPTY_JSON', 'preflight-empty.json'), ('PREFLIGHT_CURRENT_JSON', 'preflight-current.json'), ('HOST_DOCTOR_JSON', 'host-doctor.json'), ('PUBLIC_CORE_PREPARE_JSON', 'public-core-prepare.json'), ('BACKUP_METADATA_JSON', 'backup-metadata.json')]:
-    print(marker + '=' + json.dumps(json.loads((root / name).read_text()), sort_keys=True))
-PYFACTS
 step 'Passed; cleaning only owned test services, accounts, databases and paths'

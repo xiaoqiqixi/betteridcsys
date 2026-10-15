@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import ssl
 import subprocess
 import tempfile
@@ -17,6 +18,35 @@ HTTP_SCRIPT = Path(__file__).with_name("accept-native-http.py")
 SPEC = importlib.util.spec_from_file_location("native_acceptance_http", HTTP_SCRIPT)
 HTTP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HTTP)
+
+
+class NativeReleaseModeTests(unittest.TestCase):
+    def test_private_extract_modes_are_readable_with_only_approved_executables(self):
+        executable = {
+            'bin/aster-api', 'bin/aster-plugin-host', 'deploy/scripts/backup-native.sh',
+            'deploy/scripts/plugin-manager.py', 'deploy/scripts/update-manager.py',
+            'deploy/scripts/core-manager.py',
+        }
+        files = executable | {'manifests/BUILD.json', 'migrations/001_schema.sql', 'web/index.html', 'licenses/NOTICE'}
+        with tempfile.TemporaryDirectory(prefix='aster public release ') as temp:
+            root = Path(temp)
+            for name in files:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                target.write_text('Public fixture; no credentials.\n')
+                target.chmod(0o600)
+            for directory in [root, *(p for p in root.rglob('*') if p.is_dir())]:
+                directory.chmod(0o700)
+            function = re.search(r'^normalize_fixture_release\(\) \{\n.*?^\}', SCRIPT.read_text(), re.M | re.S)
+            self.assertIsNotNone(function)
+            # Execute the actual normalization using real find/chmod on owned
+            # files. The test's sudo function removes privilege only here.
+            command = 'set -euo pipefail\nsudo() { [[ $1 == -n ]]; shift; "$@"; }\n' + function.group() + '\nnormalize_fixture_release "$1"\n'
+            subprocess.run(['bash', '-c', command, 'mode-test', str(root)], check=True, capture_output=True, text=True, timeout=10)
+            for directory in [root, *(p for p in root.rglob('*') if p.is_dir())]:
+                self.assertEqual(directory.stat().st_mode & 0o7777, 0o755)
+            for name in files:
+                self.assertEqual((root / name).stat().st_mode & 0o7777, 0o755 if name in executable else 0o644)
 
 
 class NativeHTTPSTransportTests(unittest.TestCase):

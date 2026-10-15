@@ -10,6 +10,8 @@
 
 源码 `54ec61a11ee104dbfcb8e8c2e4fb7fddec9123d3` 的 [CI 38669842637](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669842637) 完成 516 个 Go PASS、0 失败/跳过、305 项前端和 329 项 Python 检查，但原生公开准备测试在下载前被过窄的 GitHub 凭据格式限制阻断；自有资源清理成功，后续原生与浏览器结论仍未形成。现按 GitHub 官方变更说明改为有界不透明 Bearer 值，保留文件保护、固定目的地和重定向去凭据规则；不读取、记录或解析真实临时令牌。修正后的完整结果须由新提交重新证明。
 
+源码 `e7ad7a5dde202f2fa96fc5150ee194c4a5714675` 的 [CI 38671113923](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38671113923) 通过 559 个 Go PASS、0 失败/跳过、305 项前端、333 项 Python 回归、22 项原生 HTTPS 和 9 项独立插件检查，运行中 API 摘要与该提交 raw 程序一致。原生备份因验收夹具将提取后的公共资源以 root 私有权限复制，阻断普通备份身份读取 BUILD/SQL 而失败，恢复与浏览器未执行；自有资源已清理。现按安装契约修正夹具完整公共目录权限，保留生产备份检查；每阶段脱敏事实及时记入日志，后续失败不抹掉已完成阶段的证据。最终完整验收仍待新提交。
+
 ## 历史 Core 0.5.0 / SMTP 1.1.0 的验证与来源
 
 已验证源码：`6be81aaed4868adb3c60b30accbfd87d0bb899c5`，执行日期为 2026-10-14 UTC。[完整 CI 38655661440](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440) 的[应用、原生与浏览器检查](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687273)、[独立 Go 扫描](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687106)及[官方发布元数据读取](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687294)均成功。以下结果绑定该源码，不沿用历史版本或未提交修改的结论。
