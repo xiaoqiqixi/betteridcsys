@@ -8,7 +8,7 @@ Core 0.5.2 提供由主机管理员明确启动的原生安装/升级执行器�
 
 目标为 **Ubuntu Server 24.04 LTS / amd64**，已有 Python 3、Bash/GNU 工具、systemd、Nginx，以及可通过本机 Unix socket 使用的 Oracle MySQL **8.4 LTS** 和兼容的 `mysql`/`mysqldump`。运行 API 不需要 Go 或 Node.js。管理员先审查容量、现有服务、端口和目录，提供真实 HTTPS 域名及受信任证书。系统软件与 MySQL 实例本身须按 [Ubuntu Nginx 指引](https://ubuntu.com/server/docs/how-to/web-services/install-nginx/)及 [MySQL 官方 APT 指引](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/)独立安装、核验；不要在旧库主机上执行新装数据库步骤。
 
-systemd 须包含 root 管理的 `/usr/bin/busctl` 及 JSON 输出支持。执行器只读查询系统 D-Bus，核对实际 unit 与四个执行钩子的类型和空数组；缺失、非空或异常响应均停止操作，不开启交互授权或激活额外服务。只读计划记录该工具摘要，续跑时重新核对，不能通过忽略查询失败放行服务。
+systemd 须包含 root 管理的 `/usr/bin/busctl` 及 JSON 输出支持。执行器只读查询系统 D-Bus，核对实际 unit 与六个执行钩子（`ExecCondition`、`ExecStartPre`、`ExecStartPost`、`ExecStop`、`ExecStopPost`、`ExecReload`）的类型和空数组；缺失、非空或异常响应均停止操作，不开启交互授权或激活额外服务。只读计划记录该工具摘要，续跑时重新核对，不能通过忽略查询失败放行服务。
 
 通过受控的数据库管理会话确认实际 `VERSION()`、`@@socket`、`@@datadir` 与 `@@skip_networking`。全新安装要求受支持的 MySQL 8.4 且 TCP 已关闭，使用专用新数据库名；数据库以及同名前缀的三个应用账号必须尚不存在。不要修改共享实例的 root 密码、删除旧库或放宽远程访问来通过检查。
 

@@ -595,7 +595,7 @@ class ExecutorTests(unittest.TestCase):
         systemctl_calls = [call for call in run.call_args_list if call.args[0][0] == "/usr/bin/systemctl"]
         self.assertEqual(len(systemctl_calls), 2)
         self.assertTrue(all("--all" in call.args[0] for call in systemctl_calls))
-        self.assertEqual(len([call for call in run.call_args_list if call.args[0][0] == operation.SYSTEM_BUSCTL]), 5)
+        self.assertEqual(len([call for call in run.call_args_list if call.args[0][0] == operation.SYSTEM_BUSCTL]), 7)
         invalid = (("DropInPaths", "/etc/override.conf"), ("User", "root"),
                    ("EnvironmentFiles", "/unrelated/api.env"))
         for key, value in invalid:
@@ -612,7 +612,8 @@ class ExecutorTests(unittest.TestCase):
 
     def test_typed_service_hooks_follow_v255_get_unit_and_property_json_contract(self):
         native = operation.Native(self.spec, self.trust)
-        hooks = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
+        hooks = ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload")
+        self.assertEqual(operation.SERVICE_HOOKS, hooks)
         with patch.object(native, "run", side_effect=lambda argv, **kwargs: self.typed_bus_response(argv)) as run:
             self.assertEqual(native.verify_empty_service_hooks(), {hook: True for hook in hooks})
         base = ["/usr/bin/busctl", "--system", "--json=short", "--no-pager", "--auto-start=no",
@@ -620,7 +621,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0], base + [
             "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
             "org.freedesktop.systemd1.Manager", "GetUnit", "s", self.spec["api_unit"]])
-        self.assertEqual(len(run.call_args_list), 5)
+        self.assertEqual(len(run.call_args_list), 7)
         for call, hook in zip(run.call_args_list[1:], hooks):
             self.assertEqual(call.args[0], base + [
                 "get-property", "org.freedesktop.systemd1",
@@ -650,7 +651,7 @@ class ExecutorTests(unittest.TestCase):
 
     def test_typed_service_hooks_reject_each_nonempty_missing_mixed_or_malformed_property(self):
         native = operation.Native(self.spec, self.trust)
-        hooks = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
+        hooks = ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload")
         command = ["/usr/bin/false", ["/usr/bin/false"], False, 0, 0, 0, 0, 0, 0, 0]
         invalid = [
             {"type": "a(sasbttttuii)", "data": [command]},
@@ -676,7 +677,7 @@ class ExecutorTests(unittest.TestCase):
 
     def test_typed_service_hooks_require_successful_get_unit_and_every_property_command(self):
         native = operation.Native(self.spec, self.trust)
-        for missing in ("GetUnit", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
+        for missing in ("GetUnit", "ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload"):
             def response(argv, **kwargs):
                 if (missing == "GetUnit" and "call" in argv) or argv[-1] == missing:
                     raise updater.Rejected("A fixed native operation failed; raw diagnostics were suppressed.")

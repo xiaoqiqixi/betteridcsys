@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unprivileged guard/loopback transport checks, not native deployment evidence."""
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import ast
 import importlib.util
 import json
 import os
@@ -189,6 +190,26 @@ class CoreExecutorAcceptanceGuardTests(NativeAcceptanceGuardTests):
 
 
 class NativePreparationSmokeGuardTests(unittest.TestCase):
+    def test_actual_smoke_response_projection_is_bounded_and_never_echoes_payload(self):
+        source = PREPARE_SCRIPT.read_text().split("<<'PYHOOKSMOKE'\n", 1)[1].split("\nPYHOOKSMOKE", 1)[0]
+        function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == "safe_reply_shape")
+        namespace = {"json": json}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "actual_smoke_projection", "exec"), namespace)
+        project = namespace["safe_reply_shape"]
+        hook = project(b'{"type":"a(sasbttttuii)","data":[]}', "ExecStartPre", "aster-test.service")
+        self.assertTrue(hook["keys_exact"])
+        self.assertEqual(hook["list_length"], 0)
+        nested = project(b'{"type":"a(sasbttttuii)","data":[[]]}', "ExecStartPre", "aster-test.service")
+        self.assertEqual(nested["nested_single_list_length"], 0)
+        private = json.dumps({"type": "private-provider-value", "data": ["/private/object/path"], "private-key": "private-password"}).encode()
+        result = project(private, "get-unit", "aster-test.service")
+        self.assertFalse(result["object_path_matches"])
+        self.assertFalse(result["keys_exact"])
+        self.assertEqual(result["type"], "other_or_absent")
+        self.assertNotIn("private", json.dumps(result))
+        self.assertEqual(project(b"private-stderr", "get-unit", "aster-test.service"), {"json_valid": False})
+        self.assertTrue(project(b"x" * 8193, "get-unit", "aster-test.service")["exceeded_json_bound"])
+
     def test_actual_inline_smoke_rejects_unowned_context_before_import_or_privilege(self):
         source = PREPARE_SCRIPT.read_text().split("<<'PYHOOKSMOKE'\n", 1)[1].split("\nPYHOOKSMOKE", 1)[0]
         with tempfile.TemporaryDirectory(prefix="aster-hook-smoke-guard-") as directory:
@@ -253,7 +274,7 @@ class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
             def validate_service(self, release):
                 raise RuntimeError("private-command-DSN-password")
             def verify_empty_service_hooks(self):
-                return {name: True for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")}
+                return {name: True for name in ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload")}
         executor = SimpleNamespace(Native=Native, edge_unit=lambda spec: "aster-fixture-edge.service")
         spec = {"operation_id": "d" * 32, "api_unit": "aster-fixture.service"}
         CORE.NATIVE_TRACES.pop(spec["operation_id"], None)

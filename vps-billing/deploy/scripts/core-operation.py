@@ -86,7 +86,7 @@ UPGRADE_KEYS = {"migrator_dsn_file", "backup_client_config", "acknowledge_backup
 TERMINAL = {"succeeded", "rolled_back"}
 UNIT_DIRECTORY = "/etc/systemd/system"
 SYSTEM_BUSCTL = "/usr/bin/busctl"
-SERVICE_HOOKS = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
+SERVICE_HOOKS = ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload")
 
 
 def require(ok, text):
@@ -482,7 +482,7 @@ class Native:
         return True
 
     def verify_empty_service_hooks(self):
-        """Read the four typed D-Bus arrays; CLI omission never proves empty.
+        """Read all six typed service hook arrays; CLI omission never proves empty.
 
         The v255 systemd D-Bus XML defines a(sasbttttuii). busctl get-property
         unwraps a variant, giving data:[]; a method reply wraps its arguments,

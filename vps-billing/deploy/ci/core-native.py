@@ -154,7 +154,7 @@ def diagnostic_native(executor):
             trace["typed_service_hooks"] = {"source": "systemd-dbus-json", "verified": False}
             value = self.traced("typed-service-hooks", parent.verify_empty_service_hooks)
             trace["typed_service_hooks"] = {"source": "systemd-dbus-json", "verified":
-                isinstance(value, dict) and set(value) == {"ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"} and
+                isinstance(value, dict) and set(value) == {"ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload"} and
                 all(flag is True for flag in value.values())}
             return value
 

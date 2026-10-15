@@ -2,7 +2,7 @@
 
 Core 0.5.2 的主机执行器在管理员核对私密规格、审查计划并确认精确 SHA-256 后，执行受支持单实例的停写、备份、schema 检查/迁移、Core 与网页切换、服务启动和 HTTPS 检查。网页不取得主机执行权。目标为 Ubuntu 24.04 / amd64、systemd、Nginx 与本机 MySQL 8.4；系统组件、DNS/证书及恢复方案仍由管理员准备。没有滚动升级、向下迁移或自动数据库恢复。历史候选与正式附件不重写，实际测试范围见 [VALIDATION.md](VALIDATION.md)。
 
-服务校验需要 systemd 的 `/usr/bin/busctl` JSON 支持，按 [安装前提](INSTALL.md#前置确认)核对实际工具和系统总线。执行器验证四个钩子的结构化空数组；命令行未显示某个属性不能作为“没有额外执行命令”的证明。
+服务校验需要 systemd 的 `/usr/bin/busctl` JSON 支持，按 [安装前提](INSTALL.md#前置确认)核对实际工具和系统总线。执行器验证六个钩子的结构化空数组；命令行未显示某个属性不能作为“没有额外执行命令”的证明。
 
 升级前保留旧版本、源码提交、配置、秘密引用、插件策略/manifest、UID、完整数据库恢复点及备份时点。先按 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)完成隔离恢复和业务检查；文件摘要/gzip/metadata 通过不证明数据库内容或业务可恢复。
 

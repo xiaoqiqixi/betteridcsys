@@ -93,11 +93,62 @@ spec = importlib.util.spec_from_file_location('native_prepare_hook_smoke', sourc
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+diagnostics = {'calls': [], 'last_call': 'not-started', 'rejection': 'none'}
+def safe_reply_shape(raw, call, unit):
+    report = {'json_valid': False}
+    if len(raw) > 8192:
+        report['exceeded_json_bound'] = True
+        return report
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return report
+    report['json_valid'] = True
+    report['object'] = isinstance(value, dict)
+    if not isinstance(value, dict):
+        return report
+    report['type_key_present'] = 'type' in value
+    report['data_key_present'] = 'data' in value
+    report['keys_exact'] = set(value) == {'type', 'data'}
+    kind = value.get('type')
+    report['type_is_string'] = isinstance(kind, str)
+    report['type'] = kind if kind in ('o', 'a(sasbttttuii)', 'v') else 'other_or_absent'
+    data = value.get('data')
+    report['data_kind'] = 'list' if isinstance(data, list) else 'string' if isinstance(data, str) else 'object' if isinstance(data, dict) else 'other_or_absent'
+    if isinstance(data, list):
+        report['list_length'] = min(len(data), 10000)
+        if len(data) == 1 and isinstance(data[0], list):
+            report['nested_single_list_length'] = min(len(data[0]), 10000)
+    if call == 'get-unit':
+        encoded = ''.join(c if c.isascii() and c.isalnum() else '_' + format(ord(c), '02x') for c in unit)
+        report['object_path_matches'] = data == ['/org/freedesktop/systemd1/unit/' + encoded]
+    return report
+
+class ObservedNative(module.Native):
+    def run(self, argv, env=None, data=None, timeout=90, allow_failure=False, identity=None):
+        call = 'get-unit' if 'GetUnit' in argv else argv[-1] if argv[-1] in module.SERVICE_HOOKS else 'other-fixed-native-call'
+        diagnostics['last_call'] = call
+        result = super().run(argv, env=env, data=data, timeout=timeout, allow_failure=True, identity=identity)
+        diagnostics['calls'] = (diagnostics['calls'] + [{
+            'call': call, 'exit_code': result.returncode if -255 <= result.returncode <= 255 else None,
+            'shape': safe_reply_shape(result.stdout, call, self.spec['api_unit'])}])[-16:]
+        module.require(allow_failure or result.returncode == 0, 'A fixed native operation failed; raw diagnostics were suppressed.')
+        return result
+
+try:
+    info = Path('/usr/bin/busctl').lstat()
+    diagnostics['busctl_metadata'] = {'uid': info.st_uid, 'gid': info.st_gid,
+        'mode': oct(stat.S_IMODE(info.st_mode)), 'nlink': info.st_nlink,
+        'regular_file': stat.S_ISREG(info.st_mode)}
+except OSError:
+    diagnostics['busctl_metadata_unavailable'] = True
 units = [Path('/run/systemd/system') / ('aster-property-ci-' + identity + suffix + '.service')
          for suffix in ('-empty', '-hook')]
 require(all(not os.path.lexists(path) for path in units), 'refuse_existing_smoke_units')
 created = []
 passed = False
+empty_verified = 0
+rejected = False
 cleanup_ok = False
 phase = 'install-owned-units'
 try:
@@ -125,25 +176,34 @@ try:
                     'smoke_fixture_not_inactive')
         for target in units:
             inactive(target)
-        expected = {'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecReload'}
+        expected = set(module.SERVICE_HOOKS)
         phase = 'verify-empty-typed-hooks'
-        observed = module.Native({'api_unit': units[0].name}).verify_empty_service_hooks()
+        observed = ObservedNative({'api_unit': units[0].name}).verify_empty_service_hooks()
         require(isinstance(observed, dict) and set(observed) == expected and all(value is True for value in observed.values()),
                 'actual_empty_typed_hook_properties_not_verified')
-        rejected = False
+        empty_verified = len(expected)
         phase = 'reject-nonempty-typed-hook'
         try:
-            module.Native({'api_unit': units[1].name}).verify_empty_service_hooks()
-        except module.Rejected:
-            rejected = True
+            ObservedNative({'api_unit': units[1].name}).verify_empty_service_hooks()
+        except module.Rejected as failure:
+            last = diagnostics['calls'][-1] if diagnostics['calls'] else {}
+            shape = last.get('shape', {})
+            rejected = (str(failure) == 'Typed systemd service hooks are missing, nonempty or malformed.' and
+                        last.get('call') == 'ExecStartPre' and last.get('exit_code') == 0 and
+                        shape.get('type') == 'a(sasbttttuii)' and shape.get('data_kind') == 'list' and
+                        shape.get('list_length', 0) > 0)
         require(rejected, 'actual_nonempty_typed_hook_was_accepted')
         for target in units:
             inactive(target)
         passed = True
         phase = 'complete'
-except Exception:
+except Exception as failure:
     # Only the bounded phase/result below is public, never exception bodies.
-    pass
+    diagnostics['rejection'] = {
+        'A fixed native operation failed; raw diagnostics were suppressed.': 'fixed_native_command_failed',
+        'Typed systemd unit object does not match the reviewed service.': 'unit_object_shape_or_identity_mismatch',
+        'Typed systemd service hooks are missing, nonempty or malformed.': 'hook_array_missing_nonempty_or_malformed',
+    }.get(str(failure), 'other_fixed_or_suppressed_failure')
 finally:
     # Only the two newly installed fixed-text paths are eligible for removal.
     cleanup_failures = 0
@@ -166,9 +226,9 @@ finally:
     cleanup_ok = cleanup_failures == 0 and all(not os.path.lexists(target) for target, _ in created)
     print('NATIVE_SERVICE_HOOK_SMOKE_JSON=' + json.dumps({
         'passed': passed and cleanup_ok, 'phase': phase,
-        'typed_empty_hook_properties_verified': 4 if passed else 0,
-        'nonempty_hook_rejected': passed, 'fixture_services_started': False,
-        'owned_unit_files_removed': cleanup_ok}, sort_keys=True), flush=True)
+        'typed_empty_hook_properties_verified': empty_verified,
+        'nonempty_hook_rejected': rejected, 'fixture_services_started': False,
+        'owned_unit_files_removed': cleanup_ok, 'diagnostics': diagnostics}, sort_keys=True), flush=True)
     require(cleanup_ok, 'owned_smoke_fixture_cleanup_failed')
 require(passed, 'actual_service_hook_smoke_failed')
 PYHOOKSMOKE
