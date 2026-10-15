@@ -282,7 +282,7 @@ func loadLocalConfiguration(listen string, demo bool) (cfg localConfiguration, e
 	// avoids constructing any integration adapter during read-only inspection.
 	for name, expected := range map[string]string{"PAYMENT_PROVIDER": "payment.disabled", "EMAIL_PROVIDER": "email.disabled"} {
 		if value := os.Getenv(name); value != "" && value != expected {
-			return cfg, errors.New("invalid integration provider selection")
+			return cfg, errors.New("invalid integration configuration; check installed provider IDs and required settings")
 		}
 	}
 	for id, config := range cfg.integrations {

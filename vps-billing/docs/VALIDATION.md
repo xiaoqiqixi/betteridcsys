@@ -6,6 +6,8 @@
 
 本轮新增主机自动组装、只读预检、机器备份元数据及受限未付订单取消。实施范围见 [REFERENCE_SCOPE.md](REFERENCE_SCOPE.md)。首轮源码 `93f6d994f4b4fd9e8623ae2d81a655e005cecf05` 的 [CI 38668093106](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38668093106) 在 Go 数据库回归失败，没有放行发布：取消异常状态测试被先前损坏夹具的全量列表读取干扰，迁移前缀 3 的结构判定也未通过。后续修复必须以新提交完整运行证明，不把旧失败改为通过。实际构建另发现 GNU 长文件名与受限解包器的兼容问题，当前新增安全兼容与 ustar 分发修复。当前不填未来通过或发布状态，完成后以实际运行和资产核验补齐。历史 0.5.0 和更早结果保持下方原记录，不能代替本轮验收。
 
+修正源码 `8a0ee4d34f76dd6495b595a8f7d7c38d2a040d98` 的 [CI 38669136092](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669136092) 通过了真实 MySQL 回归及 305 项前端测试，但随后两项未知插件配置验收因提前校验改变错误信息而失败，原生与浏览器验收未执行到。现恢复统一的 integration configuration 诊断，保留数据库操作前的拒绝检查；本地九项配置验收和 server 单元检查通过，仍须新提交完整 CI 放行。
+
 ## 历史 Core 0.5.0 / SMTP 1.1.0 的验证与来源
 
 已验证源码：`6be81aaed4868adb3c60b30accbfd87d0bb899c5`，执行日期为 2026-10-14 UTC。[完整 CI 38655661440](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440) 的[应用、原生与浏览器检查](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687273)、[独立 Go 扫描](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687106)及[官方发布元数据读取](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687294)均成功。以下结果绑定该源码，不沿用历史版本或未提交修改的结论。
