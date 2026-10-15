@@ -1002,13 +1002,26 @@ async function checkout() {
       checkoutSession.value = verified;
   } catch (e) {
     if (generation !== invoiceGeneration) return;
-    modalError.value =
-      e instanceof ApiError && e.code === "PAYMENT_NOT_CONFIGURED"
-        ? tr(
-            "支付渠道当前不可用。请核对原渠道结果并刷新账单，勿重复支付。",
-            "The payment provider is currently unavailable. Check the original provider and refresh the invoice to confirm the result. Avoid duplicate payments.",
-          )
-        : explain(e);
+    if (e instanceof ApiError && e.code === "PAYMENT_NOT_CONFIGURED") {
+      modalError.value = tr(
+        "支付渠道当前不可用。请核对原渠道结果并刷新账单，勿重复支付。",
+        "The payment provider is currently unavailable. Check the original provider and refresh the invoice to confirm the result. Avoid duplicate payments.",
+      );
+    } else if (
+      !(e instanceof ApiError) ||
+      [
+        "INVALID_RESPONSE",
+        "REQUEST_FAILED",
+        "PAYMENT_PROVIDER_ERROR",
+        "PAYMENT_PENDING",
+        "PAYMENT_STORAGE_UNAVAILABLE",
+      ].includes(e.code)
+    ) {
+      modalError.value = tr(
+        "支付入口请求结果尚未确认。请核对原渠道结果并刷新账单，勿重复支付。",
+        "The checkout request result is unconfirmed. Check the original provider and refresh the invoice to confirm the result. Avoid duplicate payments.",
+      );
+    } else modalError.value = explain(e);
   } finally {
     saving.value = false;
   }

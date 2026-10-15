@@ -1,6 +1,10 @@
 import { chromium, expect } from "@playwright/test";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  probeFinancialBoundaries,
+  probeLoginBoundaries,
+} from "./responsive-boundaries.mjs";
 
 const base = process.env.TEST_BASE_URL || "http://localhost:5173";
 if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname))
@@ -86,6 +90,16 @@ const shot = async (name) => {
       )
       .toBeLessThanOrEqual(1);
   }
+  await page.screenshot({
+    path: path.join(output, `${name}.png`),
+    fullPage: true,
+    animations: "disabled",
+  });
+};
+// Separate diagnostic screenshots never bypass or change shot()'s existing
+// navigation assertions. The wrapper validates and labels probe JSON separately.
+const boundaryShot = async (name) => {
+  await mkdir(output, { recursive: true });
   await page.screenshot({
     path: path.join(output, `${name}.png`),
     fullPage: true,
@@ -464,6 +478,17 @@ try {
     page.getByLabel("币种", { exact: true }).locator("option"),
   ).toHaveAttribute("value", "CNY");
   await shot("login-desktop");
+  await probeLoginBoundaries(page, async (fixture, locale) => {
+    const shot = boundaryShot;
+    if (fixture === "ascii" && locale === "zh-CN")
+      await shot("boundary-login-ascii-zh");
+    if (fixture === "ascii" && locale === "en")
+      await shot("boundary-login-ascii-en");
+    if (fixture === "cjk" && locale === "zh-CN")
+      await shot("boundary-login-cjk-zh");
+    if (fixture === "cjk" && locale === "en")
+      await shot("boundary-login-cjk-en");
+  });
   await page.getByLabel("语言", { exact: true }).selectOption("en");
   await expect(
     page.getByRole("heading", { name: "Welcome back", exact: true }),
@@ -484,6 +509,21 @@ try {
   await page.getByRole("link", { name: "财务设置", exact: true }).click();
   await financialReady();
   await expect(currencyForm.locator(".currency-card")).toHaveCount(1);
+  await probeFinancialBoundaries(page, async (fixture, locale) => {
+    const shot = boundaryShot;
+    if (fixture === "ascii" && locale === "zh-CN")
+      await shot("boundary-financial-ascii-zh");
+    if (fixture === "ascii" && locale === "en")
+      await shot("boundary-financial-ascii-en");
+    if (fixture === "cjk" && locale === "zh-CN")
+      await shot("boundary-financial-cjk-zh");
+    if (fixture === "cjk" && locale === "en")
+      await shot("boundary-financial-cjk-en");
+    if (fixture === "breadcrumb" && locale === "zh-CN")
+      await shot("boundary-breadcrumb-zh");
+    if (fixture === "breadcrumb" && locale === "en")
+      await shot("boundary-breadcrumb-en");
+  });
 
   await expect(page.locator(".page-heading > div > p").last()).toHaveText(
     "管理币种、金额格式和套餐独立价格。",

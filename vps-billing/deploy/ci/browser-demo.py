@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -32,6 +33,141 @@ class Failure(Exception):
 
 class Interrupted(Failure):
     pass
+
+
+BOUNDARY_PREFIX = b"BOUNDARY_PROBE_JSON "
+BOUNDARY_WIDTHS = (320, 375, 720, 721, 768, 1440)
+BOUNDARY_TARGETS = {
+    "login": ("login-brand", "login-small-brand", "login-eyebrow", "login-footnote"),
+    "financial": ("sidebar-brand", "workspace-company", "footer-company", "price-prefix",
+                  "price-input", "price-suffix", "price-code"),
+    "breadcrumb": ("breadcrumb-root", "breadcrumb-current"),
+}
+
+
+def boundary_check_ids(surface):
+    result = ["document-no-horizontal-overflow"]
+    for name in BOUNDARY_TARGETS[surface]:
+        result.extend((name + "-visible", name + "-within-container"))
+        if name.startswith("breadcrumb-"):
+            result.append(name + "-single-line")
+        if name in ("price-prefix", "price-suffix", "price-code"):
+            result.append(name + "-fully-readable")
+        if name == "price-input":
+            result.extend(("price-input-usable-width", "price-input-full-value-width"))
+    return result
+
+
+def boundary_number(value, minimum=0):
+    return (type(value) in (int, float) and math.isfinite(value)
+            and minimum <= value <= 1_000_000)
+
+
+def boundary_rect(value):
+    return (type(value) is dict and set(value) == {"x", "y", "width", "height"}
+            and all(boundary_number(value[key], -1_000_000 if key in ("x", "y") else 0)
+                    for key in value))
+
+
+def validate_boundary_case(value):
+    """Allow only synthetic identifiers and bounded numeric layout facts."""
+    fields = {"schema", "mode", "surface", "fixture", "locale", "viewport", "document",
+              "passed", "checks", "measurements"}
+    if type(value) is not dict or set(value) != fields:
+        return False
+    surface = value["surface"]
+    if (value["schema"] != "aster-responsive-boundaries-v1" or value["mode"] != "diagnostic"
+            or type(surface) is not str or surface not in BOUNDARY_TARGETS
+            or value["fixture"] not in (("default",) if surface == "breadcrumb" else ("ascii", "cjk"))
+            or value["locale"] not in ("zh-CN", "en") or type(value["passed"]) is not bool):
+        return False
+    viewport, document = value["viewport"], value["document"]
+    if (type(viewport) is not dict or set(viewport) != {"width", "height"}
+            or type(viewport["width"]) is not int or viewport["width"] not in BOUNDARY_WIDTHS
+            or type(viewport["height"]) is not int or viewport["height"] != 900
+            or (surface == "breadcrumb" and viewport["width"] != 721)
+            or type(document) is not dict or set(document) != {"viewport_width", "scroll_width"}
+            or type(document["viewport_width"]) is not int
+            or document["viewport_width"] != viewport["width"]
+            or type(document["scroll_width"]) is not int
+            or not boundary_number(document["scroll_width"], viewport["width"])):
+        return False
+    checks, measurements = value["checks"], value["measurements"]
+    expected_checks = boundary_check_ids(surface)
+    if (type(checks) is not list or len(checks) != len(expected_checks)
+            or any(type(item) is not dict or set(item) != {"id", "passed"}
+                   or item["id"] != name or type(item["passed"]) is not bool
+                   for item, name in zip(checks, expected_checks))
+            or value["passed"] != all(item["passed"] for item in checks)
+            or type(measurements) is not list
+            or len(measurements) != len(BOUNDARY_TARGETS[surface])):
+        return False
+    metric_fields = {"id", "visible", "rect", "container_rect", "text_rect", "line_count",
+                     "client_width", "scroll_width", "content_width", "text_width",
+                     "visible_width", "overflow_left", "overflow_right"}
+    numeric_fields = {"client_width", "scroll_width", "content_width", "text_width",
+                      "visible_width", "overflow_left", "overflow_right"}
+    for item, name in zip(measurements, BOUNDARY_TARGETS[surface]):
+        if (type(item) is not dict or set(item) != metric_fields or item["id"] != name
+                or type(item["visible"]) is not bool or not boundary_rect(item["rect"])
+                or not boundary_rect(item["container_rect"])
+                or (item["text_rect"] is not None and not boundary_rect(item["text_rect"]))
+                or type(item["line_count"]) is not int or not 0 <= item["line_count"] <= 512
+                or any(not boundary_number(item[key]) for key in numeric_fields)):
+            return False
+    return True
+
+
+def read_boundary_probes(log, required=False):
+    """Never forward raw process logs; retain a complete, exact synthetic matrix."""
+    cases, identities = [], set()
+    total, diagnostic_bytes = 0, 0
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError("nonfinite JSON number")
+
+    with log.open("rb") as stream:
+        while line := stream.readline(32 * 1024 + 1):
+            total += len(line)
+            if len(line) > 32 * 1024 or total > 4 * 1024 * 1024:
+                raise Failure("Browser diagnostic log exceeded its bounded size")
+            if not line.startswith(b"BOUNDARY_PROBE_JSON"):
+                continue
+            diagnostic_bytes += len(line)
+            if not line.startswith(BOUNDARY_PREFIX) or diagnostic_bytes > 512 * 1024 or len(cases) >= 50:
+                raise Failure("Malformed or oversized boundary diagnostic evidence")
+            try:
+                value = json.loads(line[len(BOUNDARY_PREFIX):].decode("utf-8"),
+                                   object_pairs_hook=unique_object, parse_constant=invalid_constant)
+                valid = validate_boundary_case(value)
+            except (ValueError, TypeError, OverflowError, RecursionError):
+                valid = False
+            if not valid:
+                raise Failure("Boundary diagnostic evidence did not match the exact synthetic schema")
+            identity = (value["surface"], value["fixture"], value["locale"], value["viewport"]["width"])
+            if identity in identities:
+                raise Failure("Duplicate boundary diagnostic case")
+            identities.add(identity)
+            cases.append(value)
+    if not cases and not required:
+        return None
+    expected = {(surface, fixture, locale, width)
+                for surface in ("login", "financial") for fixture in ("ascii", "cjk")
+                for locale in ("zh-CN", "en") for width in BOUNDARY_WIDTHS}
+    expected.update(("breadcrumb", "default", locale, 721) for locale in ("zh-CN", "en"))
+    if identities != expected:
+        raise Failure("Boundary diagnostic matrix is incomplete")
+    return {"mode": "diagnostic", "passed": all(item["passed"] for item in cases),
+            "case_count": len(cases), "failed_cases": sum(not item["passed"] for item in cases),
+            "cases": cases}
 
 
 def clean_environment(source, scratch):
@@ -429,6 +565,14 @@ def run(repo, chromium, output):
         result = processes.wait(browser, 240, required=(api, preview))
         if result != 0:
             raise Failure(browser_diagnostic(browser_log))
+        probes_required = 'from "./responsive-boundaries.mjs"' in (frontend / "tests/e2e.mjs").read_text(encoding="utf-8")
+        probes = read_boundary_probes(browser_log, required=probes_required)
+        if probes is not None:
+            # A diagnostic failure is retained as such; it never replaces or
+            # relaxes the existing functional assertions and screenshot checks.
+            summary["boundary_probe"] = probes
+            for item in probes["cases"]:
+                print("BOUNDARY_PROBE_JSON " + json.dumps(item, sort_keys=True, separators=(",", ":")))
         if not listener_owned(api, api_port) or not listener_owned(preview, ui_port):
             raise Failure("An owned loopback listener disappeared during browser acceptance")
         summary["stage"] = "source-after"

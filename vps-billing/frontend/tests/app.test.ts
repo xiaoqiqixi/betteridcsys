@@ -1644,6 +1644,82 @@ describe("billing workspace flows", () => {
   );
 
   it.each(["zh-CN", "en"] as const)(
+    "keeps a real checkout request timeout uncertain without an automatic retry in %s",
+    async (language) => {
+      setLocale(language);
+      activeUser = { ...fixtures.previewUser };
+      const originalFetch = globalThis.fetch;
+      let timeoutSignal: AbortSignal | undefined;
+      let observeAbort!: () => void;
+      const aborted = new Promise<void>((resolve) => {
+        observeAbort = resolve;
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((path: string, options: RequestInit) => {
+          const endpoint = path.replace("/api/v1", "");
+          if (endpoint.endsWith("/checkout") && options.method === "POST") {
+            requests.push({ path: endpoint, method: "POST", options });
+            timeoutSignal = options.signal as AbortSignal;
+            return new Promise<Response>((_resolve, reject) => {
+              timeoutSignal!.addEventListener(
+                "abort",
+                () => {
+                  reject(timeoutSignal!.reason);
+                  observeAbort();
+                },
+                { once: true },
+              );
+            });
+          }
+          return originalFetch(path, options);
+        }),
+      );
+      const { wrapper, router } = await mountApp();
+      try {
+        await router.push("/invoices");
+        await flushPromises();
+        await wrapper.findAll(".table-action")[0]!.trigger("click");
+        await flushPromises();
+        const prepare = wrapper
+          .findAll("button")
+          .find(
+            (button) =>
+              button.text() ===
+              (language === "en" ? "Prepare checkout" : "获取支付入口"),
+          )!;
+        await prepare.trigger("click");
+        await flushPromises();
+        expect(timeoutSignal).toBeDefined();
+        expect(timeoutSignal!.aborted).toBe(false);
+        expect(prepare.attributes("disabled")).toBeDefined();
+        await aborted;
+        await flushPromises();
+        expect(timeoutSignal!.reason.name).toBe("TimeoutError");
+        expect(wrapper.find(".checkout-handoff a").exists()).toBe(false);
+        const message = wrapper.find(".invoice-modal [role=alert]").text();
+        expect(message).toContain(
+          language === "en"
+            ? "Check the original provider and refresh the invoice"
+            : "请核对原渠道结果并刷新账单",
+        );
+        expect(message).toContain(
+          language === "en" ? "Avoid duplicate payments." : "勿重复支付。",
+        );
+        expect(message).not.toMatch(
+          /未发生扣款|未完成付款|稍后重试|No charge was made|No payment was completed|try again/i,
+        );
+        expect(
+          requests.filter((request) => request.method === "POST"),
+        ).toHaveLength(1);
+      } finally {
+        wrapper.unmount();
+      }
+    },
+    25_000,
+  );
+
+  it.each(["zh-CN", "en"] as const)(
     "asks to reconcile an expired checkout without promising payment status in %s",
     async (language) => {
       setLocale(language);

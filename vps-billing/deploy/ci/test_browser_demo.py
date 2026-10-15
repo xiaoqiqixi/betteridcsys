@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guard and lifecycle tests using fake Go/Node tools; never launches a browser."""
 import importlib.util
+import copy
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,36 @@ SPEC = importlib.util.spec_from_file_location("browser_demo", SCRIPT)
 browser_demo = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(browser_demo)
 PNG = b"\x89PNG\r\n\x1a\nsynthetic-fixture"
+
+
+def boundary_cases():
+    cases = []
+    for surface, names in browser_demo.BOUNDARY_TARGETS.items():
+        for fixture in (("default",) if surface == "breadcrumb" else ("ascii", "cjk")):
+            for locale in ("zh-CN", "en"):
+                for width in ((721,) if surface == "breadcrumb" else browser_demo.BOUNDARY_WIDTHS):
+                    box = {"x": 0, "y": 0, "width": 100, "height": 20}
+                    cases.append({
+                        "schema": "aster-responsive-boundaries-v1", "mode": "diagnostic",
+                        "surface": surface, "fixture": fixture, "locale": locale,
+                        "viewport": {"width": width, "height": 900},
+                        "document": {"viewport_width": width, "scroll_width": width},
+                        "passed": True,
+                        "checks": [{"id": name, "passed": True}
+                                   for name in browser_demo.boundary_check_ids(surface)],
+                        "measurements": [{"id": name, "visible": True, "rect": dict(box),
+                                          "container_rect": dict(box), "text_rect": dict(box),
+                                          "line_count": 1, "client_width": 100, "scroll_width": 100,
+                                          "content_width": 90, "text_width": 50,
+                                          "visible_width": 100, "overflow_left": 0, "overflow_right": 0}
+                                         for name in names],
+                    })
+    return cases
+
+
+def boundary_lines(cases):
+    return "".join("BOUNDARY_PROBE_JSON " + json.dumps(case, separators=(",", ":")) + "\n"
+                   for case in cases)
 
 
 def executable(path, source):
@@ -145,6 +176,8 @@ class BrowserDemoTest(unittest.TestCase):
             time.sleep(0.1)
             output=Path(os.environ['E2E_OUTPUT_DIR']);output.mkdir()
             (output/'fixture.png').write_bytes({PNG!r})
+            diagnostic=Path({str(self.root / 'boundary-output.log')!r})
+            if diagnostic.exists():print(diagnostic.read_text(),end='')
         '''))
         self.env = dict(os.environ, PATH=str(self.tools) + os.pathsep + os.environ["PATH"], TMPDIR=str(self.temporary))
         for name in ("MYSQL_DSN", "ASTER_MYSQL_TEST_DSN", "SMTP_ENCRYPTION_KEY_FILE", "GITHUB_TOKEN", "GH_TOKEN",
@@ -369,6 +402,127 @@ class BrowserDemoTest(unittest.TestCase):
             self.assertTrue(supervisor.live())
             poll.return_value.poll.return_value=[(17,browser_demo.select.POLLIN)]
             self.assertFalse(supervisor.live())
+
+    def test_validated_diagnostic_failure_is_separate_from_functional_result_and_private_logs(self):
+        cases = boundary_cases()
+        cases[0]["document"]["scroll_width"] += 40
+        cases[0]["checks"][0]["passed"] = False
+        cases[0]["passed"] = False
+        (self.root / "boundary-output.log").write_text("private arbitrary response must stay private\n" + boundary_lines(cases))
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(summary["passed"])
+        self.assertFalse(summary["boundary_probe"]["passed"])
+        self.assertEqual(summary["boundary_probe"]["case_count"], 50)
+        self.assertEqual(summary["boundary_probe"]["failed_cases"], 1)
+        lines = [line for line in result.stdout.splitlines() if line.startswith("BOUNDARY_PROBE_JSON ")]
+        self.assertEqual(len(lines), 50)
+        self.assertEqual([json.loads(line.split(" ", 1)[1]) for line in lines], cases)
+        self.assertNotIn("private arbitrary response", result.stdout + result.stderr + json.dumps(summary))
+
+    def test_required_probe_matrix_cannot_disappear_without_failing_acceptance(self):
+        test = self.repo / "vps-billing/frontend/tests/e2e.mjs"
+        test.write_text(test.read_text() + '\nimport {probeLoginBoundaries} from "./responsive-boundaries.mjs";\n')
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(summary["passed"])
+        self.assertIn("matrix is incomplete", summary["reason"])
+        self.assertNotIn("boundary_probe", summary)
+
+    def test_invalid_probe_never_forwards_payload_or_original_process_logs(self):
+        (self.root / "boundary-output.log").write_text(
+            'private raw response\nBOUNDARY_PROBE_JSON {"secret":"must-remain-private"}\n')
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("exact synthetic schema", summary["reason"])
+        self.assertNotIn("must-remain-private", result.stdout + result.stderr + json.dumps(summary))
+        self.assertNotIn("private raw response", result.stdout + result.stderr + json.dumps(summary))
+
+
+class BoundaryEvidenceTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="aster-boundary-parser-test-")
+        self.addCleanup(self.directory.cleanup)
+        self.log = Path(self.directory.name) / "browser.log"
+
+    def parse(self, cases=None, raw=None, required=True):
+        self.log.write_text(boundary_lines(boundary_cases() if cases is None else cases)
+                            if raw is None else raw)
+        return browser_demo.read_boundary_probes(self.log, required=required)
+
+    def test_complete_numeric_matrix_is_retained(self):
+        result = self.parse()
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["case_count"], 50)
+        self.assertEqual(result["failed_cases"], 0)
+        self.assertEqual(result["cases"], boundary_cases())
+
+    def test_optional_absence_only_for_existing_nonprobe_source(self):
+        self.assertIsNone(self.parse(raw="private non-diagnostic log\n", required=False))
+        with self.assertRaisesRegex(browser_demo.Failure, "matrix is incomplete"):
+            self.parse(raw="private non-diagnostic log\n")
+
+    def test_duplicate_and_missing_cases_fail(self):
+        cases = boundary_cases()
+        cases[1] = copy.deepcopy(cases[0])
+        with self.assertRaisesRegex(browser_demo.Failure, "Duplicate"):
+            self.parse(cases)
+        with self.assertRaisesRegex(browser_demo.Failure, "incomplete"):
+            self.parse(boundary_cases()[:-1])
+
+    def test_malformed_json_prefix_duplicate_keys_and_nonfinite_numbers_fail(self):
+        samples = ["BOUNDARY_PROBE_JSON{}\n", "BOUNDARY_PROBE_JSON {\n",
+                   'BOUNDARY_PROBE_JSON {"schema":1,"schema":2}\n',
+                   'BOUNDARY_PROBE_JSON {"rect":NaN}\n',
+                   'BOUNDARY_PROBE_JSON {"rect":Infinity}\n']
+        for raw in samples:
+            with self.subTest(raw=raw), self.assertRaises(browser_demo.Failure):
+                self.parse(raw=raw)
+
+    def test_schema_rejects_text_urls_extra_fields_and_arbitrary_identifiers(self):
+        for field, value in (("url", "https://private.invalid"), ("text", "private text"),
+                             ("fixture", "arbitrary"), ("locale", "other"),
+                             ("surface", "other"), ("mode", "assert")):
+            cases = boundary_cases()
+            cases[0][field] = value
+            with self.subTest(field=field), self.assertRaises(browser_demo.Failure):
+                self.parse(cases)
+
+    def test_rect_number_lines_and_boolean_bounds_are_strict(self):
+        mutations = [
+            lambda row: row["measurements"][0]["rect"].update(x=1_000_001),
+            lambda row: row["measurements"][0]["rect"].update(width=-1),
+            lambda row: row["measurements"][0].update(line_count=513),
+            lambda row: row["measurements"][0].update(visible="true"),
+            lambda row: row["measurements"][0].update(content_width=True),
+            lambda row: row["measurements"][0].update(text_width="private"),
+            lambda row: row["checks"][0].update(passed=1),
+            lambda row: row["viewport"].update(width=True),
+            lambda row: row["document"].update(viewport_width=321),
+            lambda row: row.update(passed=False),
+        ]
+        for index, mutate in enumerate(mutations):
+            cases = boundary_cases()
+            mutate(cases[0])
+            with self.subTest(index=index), self.assertRaises(browser_demo.Failure):
+                self.parse(cases)
+
+    def test_duplicate_measurement_or_check_identifiers_fail(self):
+        for field in ("measurements", "checks"):
+            cases = boundary_cases()
+            cases[0][field][1] = copy.deepcopy(cases[0][field][0])
+            with self.subTest(field=field), self.assertRaises(browser_demo.Failure):
+                self.parse(cases)
+
+    def test_single_line_total_log_and_diagnostic_byte_limits_fail(self):
+        samples = ["BOUNDARY_PROBE_JSON " + " " * (32 * 1024),
+                   ("x" * (16 * 1024) + "\n") * 257]
+        # Legal JSON whitespace cannot bypass the aggregate diagnostic bound.
+        samples.append("".join(line + " " * 12_000 + "\n"
+                               for line in boundary_lines(boundary_cases()).splitlines()))
+        for index, raw in enumerate(samples):
+            with self.subTest(index=index), self.assertRaises(browser_demo.Failure):
+                self.parse(raw=raw)
 
 
 if __name__ == '__main__':

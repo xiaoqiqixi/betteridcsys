@@ -4,6 +4,7 @@ import (
 	"aster/billing/pkg/pluginapi"
 	"aster/billing/pkg/pluginapi/paymentv1"
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -114,7 +115,7 @@ func (m *Manager) paymentStart(cfg paymentv1.Config) (*Approval, func(), error) 
 		return nil, nil, paymentv1.ErrUnavailable
 	}
 	m.paymentMu.Lock()
-	key := a.Selection.ManifestSHA256 + "|" + a.Selection.Socket + "|" + a.Selection.MerchantID
+	key := paymentSelectionKey(a.Selection)
 	if key != m.paymentApprovalKey {
 		m.paymentApprovalKey = key
 		m.paymentFailures = 0
@@ -129,9 +130,25 @@ func (m *Manager) paymentStart(cfg paymentv1.Config) (*Approval, func(), error) 
 	}
 	return a, func() { a.Close(); release() }, nil
 }
-func (m *Manager) paymentResult(ok bool) {
+
+// Every result belongs to the complete selection admitted for that call. A
+// policy replacement must not inherit failures or successes from an old worker.
+func paymentSelectionKey(selection pluginapi.Selection) string {
+	raw, _ := json.Marshal(selection)
+	return string(raw)
+}
+
+func (m *Manager) paymentResult(key string, caller context.Context, ok bool) {
+	// An explicit caller cancellation does not establish worker health. Keep
+	// deadline failures: the RPC and handshake limits remain fault boundaries.
+	if errors.Is(caller.Err(), context.Canceled) {
+		return
+	}
 	m.paymentMu.Lock()
 	defer m.paymentMu.Unlock()
+	if key != m.paymentApprovalKey {
+		return
+	}
 	if ok {
 		m.paymentFailures = 0
 		m.paymentBlockedUntil = time.Time{}
@@ -146,7 +163,7 @@ func (m *Manager) paymentResult(ok bool) {
 // CreatePayment makes one bounded request. It never automatically retries an
 // uncertain checkout creation; the persistent attempt ID belongs to core.
 func (m *Manager) CreatePayment(ctx context.Context, cfg paymentv1.Config, in paymentv1.Intent) (paymentv1.Checkout, error) {
-	if ctx == nil {
+	if ctx == nil || ctx.Err() != nil {
 		return paymentv1.Checkout{}, paymentv1.ErrUnavailable
 	}
 	a, done, e := m.paymentStart(cfg)
@@ -154,14 +171,18 @@ func (m *Manager) CreatePayment(ctx context.Context, cfg paymentv1.Config, in pa
 		return paymentv1.Checkout{}, e
 	}
 	defer done()
+	if ctx.Err() != nil {
+		return paymentv1.Checkout{}, paymentv1.ErrUnavailable
+	}
 	if paymentv1.ValidateIntent(in, *a.Manifest.Payment) != nil {
 		return paymentv1.Checkout{}, paymentv1.ErrInvalid
 	}
+	caller, key := ctx, paymentSelectionKey(a.Selection)
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	c, _, e := handshake(ctx, a, m.rules)
 	if e != nil {
-		m.paymentResult(false)
+		m.paymentResult(key, caller, false)
 		return paymentv1.Checkout{}, paymentv1.ErrUnavailable
 	}
 	defer c.close()
@@ -170,18 +191,18 @@ func (m *Manager) CreatePayment(ctx context.Context, cfg paymentv1.Config, in pa
 	request := pluginapi.PaymentCreateRequest{Protocol: pluginapi.PaymentProtocol, Version: a.Manifest.Version, RequestID: c.nonce, TimeoutMS: time.Until(end).Milliseconds(), Config: cfg, Intent: in}
 	var out pluginapi.PaymentCreateResponse
 	if request.TimeoutMS < 1 || exchange(ctx, c.client, "/v1/payment/checkout", request, &out) != nil || out.Protocol != pluginapi.PaymentProtocol || out.RequestID != c.nonce {
-		m.paymentResult(false)
+		m.paymentResult(key, caller, false)
 		return paymentv1.Checkout{}, paymentv1.ErrUnavailable
 	}
 	if out.Status == "failed" && out.Checkout == nil && out.Code == "rejected" {
-		m.paymentResult(true)
+		m.paymentResult(key, caller, true)
 		return paymentv1.Checkout{}, paymentv1.ErrRejected
 	}
 	if out.Status != "accepted" || out.Code != "" || out.Checkout == nil || paymentv1.ValidateCheckout(*out.Checkout, a.Manifest.ID, *a.Manifest.Payment, time.Now()) != nil {
-		m.paymentResult(false)
+		m.paymentResult(key, caller, false)
 		return paymentv1.Checkout{}, paymentv1.ErrUnavailable
 	}
-	m.paymentResult(true)
+	m.paymentResult(key, caller, true)
 	return *out.Checkout, nil
 }
 
@@ -191,16 +212,23 @@ func (m *Manager) VerifyPaymentCallback(ctx context.Context, cfg paymentv1.Confi
 	if ctx == nil || paymentv1.ValidateCallback(in) != nil {
 		return paymentv1.VerifiedEvent{}, paymentv1.ErrInvalid
 	}
+	if ctx.Err() != nil {
+		return paymentv1.VerifiedEvent{}, paymentv1.ErrUnavailable
+	}
 	a, done, e := m.paymentStart(cfg)
 	if e != nil {
 		return paymentv1.VerifiedEvent{}, e
 	}
 	defer done()
+	if ctx.Err() != nil {
+		return paymentv1.VerifiedEvent{}, paymentv1.ErrUnavailable
+	}
+	caller, key := ctx, paymentSelectionKey(a.Selection)
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	c, _, e := handshake(ctx, a, m.rules)
 	if e != nil {
-		m.paymentResult(false)
+		m.paymentResult(key, caller, false)
 		return paymentv1.VerifiedEvent{}, paymentv1.ErrUnavailable
 	}
 	defer c.close()
@@ -209,17 +237,17 @@ func (m *Manager) VerifyPaymentCallback(ctx context.Context, cfg paymentv1.Confi
 	request := pluginapi.PaymentVerifyRequest{Protocol: pluginapi.PaymentProtocol, Version: a.Manifest.Version, RequestID: c.nonce, TimeoutMS: time.Until(end).Milliseconds(), Config: cfg, Callback: in}
 	var out pluginapi.PaymentVerifyResponse
 	if request.TimeoutMS < 1 || exchange(ctx, c.client, "/v1/payment/verify", request, &out) != nil || out.Protocol != pluginapi.PaymentProtocol || out.RequestID != c.nonce {
-		m.paymentResult(false)
+		m.paymentResult(key, caller, false)
 		return paymentv1.VerifiedEvent{}, paymentv1.ErrUnavailable
 	}
 	if out.Status == "failed" && out.Event == nil && out.Code == "rejected" {
-		m.paymentResult(true)
+		m.paymentResult(key, caller, true)
 		return paymentv1.VerifiedEvent{}, paymentv1.ErrRejected
 	}
 	if out.Status != "verified" || out.Code != "" || out.Event == nil || paymentv1.ValidateEvent(*out.Event, a.Manifest.ID, cfg.MerchantID, *a.Manifest.Payment, time.Now()) != nil {
-		m.paymentResult(false)
+		m.paymentResult(key, caller, false)
 		return paymentv1.VerifiedEvent{}, paymentv1.ErrUnavailable
 	}
-	m.paymentResult(true)
+	m.paymentResult(key, caller, true)
 	return *out.Event, nil
 }
