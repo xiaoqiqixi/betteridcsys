@@ -1,6 +1,6 @@
 # Aster Billing API（星屿云）
 
-Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。Core 0.5.0 提供可配置运营身份、简体中文/English、登记币种独立报价与订单/账单。全新安装仅 CNY，升级保留旧 USD；官方 SMTP 默认关闭，仅支持管理员保存配置和测试邮件；支付、退款、财务账本、自动邮件通知和 VPS 开通仍未接入。完整 API 约定见 [CONTRACT.md](../docs/CONTRACT.md)，实际验证见 [VALIDATION.md](../docs/VALIDATION.md)。
+Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。Core 0.5.1 提供可配置运营身份、简体中文/English、登记币种独立报价与订单/账单。全新安装仅 CNY，升级保留旧 USD；官方 SMTP 默认关闭，仅支持管理员保存配置和测试邮件；支付、退款、财务账本、自动邮件通知和 VPS 开通仍未接入。完整 API 约定见 [CONTRACT.md](../docs/CONTRACT.md)，实际验证见 [VALIDATION.md](../docs/VALIDATION.md)。
 
 ## 本机演示
 
@@ -105,3 +105,9 @@ go test -race -v ./internal/billing -run TestMySQL
 ```
 
 测试结果的“跳过”不等于通过。HTTP/config 独立回归在 ../tests，完整发布/恢复门槛见 [RELEASE.md](../docs/RELEASE.md)。列表仍上限 1,000 且无分页/完整导出；审计非不可篡改账本；登录限速为进程内；没有后台会话清理、异地备份/PITR 或部署监控。上述边界不会因本轮测试通过而自动消失。
+
+## 安装前只读检查
+
+在准备好的完整版本目录中，使用与实际服务对应的受保护配置执行 `aster-api -preflight`（或同义的 `-schema-status`）。它输出脱敏 JSON：本地配置结果及 MySQL 8.4、所选数据库、连接类型、已应用迁移/checksum、待迁移项和管理员计数。状态区分 `empty`、`pending_migrations`、`current`、`incompatible`，不会调用迁移、建用户或绑定服务监听。空表检查不代表账号授权、隐藏对象或服务就绪的完整证明；操作前仍须核对目标和维护窗口。
+
+迁移、创建首个管理员及服务启动保持独立明确步骤；本地配置检查在数据库变更前执行。Unix socket 的无 TLS 例外须显式开启，不能用 `MYSQL_ALLOW_INSECURE=true` 连接明文 TCP。完整步骤见 [INSTALL.md](../docs/INSTALL.md)，主机准备与读取事实见资源内 `deploy/scripts/core-manager.py`。

@@ -85,6 +85,13 @@ import {
 } from "./lib/i18n";
 import IntegrationsPage from "./components/IntegrationsPage.vue";
 import * as fixture from "./lib/preview";
+import {
+  readCancellationReason,
+  readCancellationResult,
+  cancellationError,
+  cancellationIsUncertain,
+  type CancellationResult,
+} from "./lib/cancellation";
 const route = useRoute(),
   router = useRouter();
 const session = ref<Session>({ user: null, csrf_token: "", demo_mode: false }),
@@ -131,6 +138,7 @@ const plans = ref<Plan[]>([]),
 const overview = ref<Overview>(),
   adminOverview = ref<AdminOverview>();
 const orderDialog = ref<HTMLDialogElement>(),
+  cancellationDialog = ref<HTMLDialogElement>(),
   invoiceDialog = ref<HTMLDialogElement>(),
   helpDialog = ref<HTMLDialogElement>();
 const selectedPlan = ref<Plan>(),
@@ -139,6 +147,38 @@ const selectedPlan = ref<Plan>(),
   agreed = ref(false),
   orderKey = ref("");
 const orderCatalogChanged = ref(false);
+const selectedCancellation = ref<Order>(),
+  cancellationReason = ref(""),
+  cancellationAgreed = ref(false),
+  cancellationMessage = ref(""),
+  cancellationBlocked = ref(false);
+interface CancellationAttempt {
+  order: Order;
+  invoice?: Invoice;
+  reason: string;
+  admin: boolean;
+  uncertain: boolean;
+}
+const cancellationAttempts = ref<Record<string, CancellationAttempt>>({});
+const cancellationAccount = computed(() =>
+  session.value.user
+    ? `${session.value.user.id}:${session.value.user.role}`
+    : "",
+);
+const pendingCancellation = computed(
+  () => cancellationAttempts.value[cancellationAccount.value],
+);
+const cancellationReasonBytes = computed(
+  () => new TextEncoder().encode(cancellationReason.value.trim()).length,
+);
+const cancellationReasonValid = computed(() => {
+  try {
+    readCancellationReason(cancellationReason.value);
+    return true;
+  } catch {
+    return false;
+  }
+});
 const checkoutSession = ref<CheckoutSession>();
 const checkoutHost = computed(() =>
   checkoutSession.value
@@ -332,12 +372,14 @@ async function logout() {
     if (!preview.value) await api("/auth/logout", "POST", {});
     loadGeneration++;
     orderDialog.value?.close();
+    closeCancellation();
     closeInvoice();
     helpDialog.value?.close();
     selectedInvoice.value = undefined;
     checkoutSession.value = undefined;
     selectedPlan.value = undefined;
     pendingOrders.value = {};
+    cancellationAttempts.value = {};
     notice.value = "";
     preview.value = false;
     session.value.user = null;
@@ -474,6 +516,7 @@ async function load() {
       invoices.value = e;
       audit.value = f;
     }
+    reconcileCancellation();
   } catch (e) {
     if (generation !== loadGeneration) return;
     error.value = explain(e);
@@ -485,6 +528,148 @@ async function load() {
   } finally {
     if (generation === loadGeneration) loading.value = false;
   }
+}
+function closeCancellation() {
+  cancellationDialog.value?.close();
+  selectedCancellation.value = undefined;
+  cancellationReason.value = "";
+  cancellationAgreed.value = false;
+  cancellationMessage.value = "";
+  cancellationBlocked.value = false;
+}
+async function openCancellation(order: Order) {
+  if (preview.value || saving.value || loading.value) return;
+  const attempt = pendingCancellation.value;
+  if (!attempt && order.status !== "pending_payment") return;
+  closeInvoice();
+  selectedCancellation.value = structuredClone(
+    JSON.parse(JSON.stringify(attempt?.order || order)),
+  );
+  cancellationReason.value = attempt?.reason || "";
+  cancellationAgreed.value = !!attempt;
+  cancellationMessage.value = "";
+  cancellationBlocked.value = false;
+  await nextTick();
+  if (selectedCancellation.value) cancellationDialog.value?.showModal();
+}
+function completeCancellation(result: CancellationResult, account: string) {
+  delete cancellationAttempts.value[account];
+  if (account !== cancellationAccount.value) return;
+  orders.value = orders.value.map((order) =>
+    order.id === result.order.id ? result.order : order,
+  );
+  invoices.value = invoices.value.map((invoice) =>
+    invoice.id === result.invoice.id ? result.invoice : invoice,
+  );
+  closeCancellation();
+  notice.value = tr(
+    `订单 ${result.order.number} 已取消，关联账单已作废。`,
+    `Order ${result.order.number} was cancelled and its invoice was voided.`,
+  );
+}
+function reconcileCancellation() {
+  const attempt = pendingCancellation.value;
+  if (!attempt?.uncertain) return;
+  const order = orders.value.find((item) => item.id === attempt.order.id);
+  const invoice = invoices.value.find(
+    (item) => item.order_id === attempt.order.id,
+  );
+  if (order?.status !== "cancelled" || invoice?.status !== "void") return;
+  try {
+    completeCancellation(
+      readCancellationResult(
+        { order, invoice },
+        attempt.order,
+        attempt.invoice,
+      ),
+      cancellationAccount.value,
+    );
+  } catch {
+    // Incomplete or conflicting history cannot settle an ambiguous request.
+  }
+}
+async function cancelOrder() {
+  if (
+    preview.value ||
+    saving.value ||
+    loading.value ||
+    !session.value.user ||
+    !selectedCancellation.value ||
+    !cancellationAgreed.value ||
+    !cancellationReasonValid.value ||
+    cancellationBlocked.value
+  )
+    return;
+  const account = cancellationAccount.value;
+  let attempt = cancellationAttempts.value[account];
+  if (!attempt) {
+    if (selectedCancellation.value.status !== "pending_payment") return;
+    attempt = {
+      order: selectedCancellation.value,
+      invoice: invoices.value.find(
+        (item) => item.order_id === selectedCancellation.value?.id,
+      ),
+      reason: readCancellationReason(cancellationReason.value),
+      admin: isAdmin.value,
+      uncertain: false,
+    };
+    cancellationAttempts.value[account] = attempt;
+    attempt = cancellationAttempts.value[account]!;
+  }
+  saving.value = true;
+  cancellationMessage.value = "";
+  try {
+    if (attempt.uncertain) {
+      const refreshed = await api<Session>("/session");
+      session.value = refreshed;
+      setCsrf(refreshed.csrf_token);
+      if (account !== cancellationAccount.value) {
+        error.value = tr(
+          "账户会话已变化，原取消请求未重发。请使用原账户登录后核对。",
+          "The account session changed. The cancellation was not resent. Sign in to the original account to check it.",
+        );
+        return;
+      }
+    }
+    const response = await api<unknown>(
+      (attempt.admin ? "/admin/orders/" : "/orders/") +
+        encodeURIComponent(attempt.order.id) +
+        "/cancel",
+      "POST",
+      { reason: attempt.reason },
+    );
+    const result = readCancellationResult(
+      response,
+      attempt.order,
+      attempt.invoice,
+    );
+    completeCancellation(result, account);
+    if (account === cancellationAccount.value) await load();
+  } catch (e) {
+    if (attempt.uncertain || cancellationIsUncertain(e))
+      attempt.uncertain = true;
+    else delete cancellationAttempts.value[account];
+    if (account !== cancellationAccount.value) return;
+    cancellationMessage.value = cancellationError(e);
+    if (!attempt.uncertain && e instanceof ApiError) {
+      cancellationBlocked.value = [
+        "NOT_FOUND",
+        "CANCELLATION_STATE_CONFLICT",
+        "CANCELLATION_UNAVAILABLE",
+        "AUTH_REQUIRED",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+      ].includes(e.code);
+    }
+  } finally {
+    saving.value = false;
+  }
+}
+async function checkCancellationHistory() {
+  if (saving.value || loading.value) return;
+  closeCancellation();
+  go("orders");
+  await load();
 }
 interface PendingOrder {
   key: string;
@@ -776,6 +961,7 @@ function downloadInvoices() {
   a.click();
   URL.revokeObjectURL(url);
 }
+watch(cancellationAccount, () => closeCancellation(), { flush: "sync" });
 watch(
   () => session.value.user?.id,
   (next, previous) => {
@@ -1256,6 +1442,22 @@ onMounted(init);
           }}</span>
           <button @click="openOrder(pendingOrder.plan)">
             {{ tr("核对原订单", "Resolve original order") }}
+          </button>
+        </div>
+        <div
+          v-if="pendingCancellation?.uncertain && !saving"
+          class="alert info"
+          role="status"
+          data-testid="cancellation-unconfirmed"
+        >
+          <AlertCircle :size="18" /><span>{{
+            tr(
+              "取消结果尚未确认，请核对订单记录。不会自动重发请求。",
+              "The cancellation result is unconfirmed. Check order history. The request will not be resent automatically.",
+            )
+          }}</span>
+          <button @click="openCancellation(pendingCancellation.order)">
+            {{ tr("核对或重试取消", "Review or retry cancellation") }}
           </button>
         </div>
         <div class="page-heading">
@@ -2043,10 +2245,15 @@ onMounted(init);
                     <th>{{ tr("创建日期（UTC）", "Created on (UTC)") }}</th>
                     <th>{{ tr("订单金额", "Order amount") }}</th>
                     <th>{{ tr("状态", "Status") }}</th>
+                    <th>{{ tr("操作", "Actions") }}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="order in filteredOrders" :key="order.id">
+                  <tr
+                    v-for="order in filteredOrders"
+                    :key="order.id"
+                    :data-order-id="order.id"
+                  >
                     <td class="mono strong">{{ order.number }}</td>
                     <td>
                       <strong>{{
@@ -2085,9 +2292,19 @@ onMounted(init);
                         statusLabel(order.status)
                       }}</span>
                     </td>
+                    <td>
+                      <button
+                        v-if="order.status === 'pending_payment' && !preview"
+                        class="table-action order-cancel-action"
+                        :disabled="saving || loading"
+                        @click="openCancellation(order)"
+                      >
+                        {{ tr("取消订单", "Cancel order") }}
+                      </button>
+                    </td>
                   </tr>
                   <tr v-if="!filteredOrders.length">
-                    <td colspan="5" class="table-empty">
+                    <td colspan="6" class="table-empty">
                       {{
                         query
                           ? tr("没有匹配的订单", "No matching orders")
@@ -2567,6 +2784,151 @@ onMounted(init);
                 ? tr("核对并重试原订单", "Retry original order")
                 : tr("创建待付款订单", "Create unpaid order")
         }}<ArrowRight v-if="!saving" :size="17" />
+      </button>
+    </form>
+  </dialog>
+  <dialog
+    ref="cancellationDialog"
+    class="modal cancellation-modal"
+    aria-labelledby="cancellation-title"
+    data-testid="cancellation-dialog"
+    @cancel="saving ? $event.preventDefault() : closeCancellation()"
+  >
+    <form @submit.prevent="cancelOrder">
+      <div class="modal-heading">
+        <div>
+          <p class="eyebrow">{{ tr("订单处理", "ORDER ACTION") }}</p>
+          <h2 id="cancellation-title">{{ tr("取消订单", "Cancel order") }}</h2>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          :aria-label="tr('关闭', 'Close')"
+          :disabled="saving"
+          @click="closeCancellation"
+        >
+          <X :size="21" />
+        </button>
+      </div>
+      <dl v-if="selectedCancellation" class="order-summary">
+        <div>
+          <dt>{{ tr("订单编号", "Order number") }}</dt>
+          <dd class="mono">{{ selectedCancellation.number }}</dd>
+        </div>
+        <div>
+          <dt>{{ tr("服务方案", "Plan") }}</dt>
+          <dd>
+            {{
+              selectedCancellation.plan_snapshot?.name ||
+              selectedCancellation.plan_name
+            }}
+          </dd>
+        </div>
+        <div>
+          <dt>{{ tr("订单金额", "Order amount") }}</dt>
+          <dd>
+            {{
+              money(
+                selectedCancellation.total_minor,
+                selectedCancellation.currency,
+                selectedCancellation.currency_format,
+              )
+            }}
+          </dd>
+        </div>
+      </dl>
+      <div class="alert info">
+        <AlertCircle :size="18" /><span>{{
+          tr(
+            "确认后将取消此待付款订单，并作废关联的未付账单。历史记录和金额会保留。",
+            "Confirming cancels this unpaid order and voids its unpaid invoice. Historical records and amounts are retained.",
+          )
+        }}</span>
+      </div>
+      <label for="cancellation-reason">{{
+        tr("取消原因", "Cancellation reason")
+      }}</label>
+      <textarea
+        id="cancellation-reason"
+        v-model="cancellationReason"
+        name="cancellation_reason"
+        required
+        maxlength="500"
+        rows="3"
+        :disabled="saving || !!pendingCancellation?.uncertain"
+        :aria-invalid="!!cancellationReason && !cancellationReasonValid"
+        aria-describedby="cancellation-reason-help"
+      ></textarea>
+      <p
+        id="cancellation-reason-help"
+        class="field-help"
+        :class="{ 'cancellation-invalid': cancellationReasonBytes > 500 }"
+      >
+        {{
+          tr(
+            "单行纯文本，不含尖括号，去除首尾空白后 1–500 个 UTF-8 字节。",
+            "Single-line plain text without angle brackets; 1–500 UTF-8 bytes after trimming whitespace.",
+          )
+        }}
+        <span>{{ cancellationReasonBytes }}/500</span>
+      </p>
+      <label class="checkbox-label">
+        <input
+          v-model="cancellationAgreed"
+          type="checkbox"
+          name="confirm_cancellation"
+          required
+          :disabled="saving || !!pendingCancellation?.uncertain"
+        />
+        <span>{{
+          tr(
+            "我确认取消此订单并作废关联未付账单。",
+            "I confirm cancelling this order and voiding its unpaid invoice.",
+          )
+        }}</span>
+      </label>
+      <div
+        v-if="pendingCancellation?.uncertain"
+        class="alert info"
+        role="status"
+      >
+        <AlertCircle :size="18" /><span>{{
+          tr(
+            "取消结果尚未确认。请查看最新订单记录；也可明确重试同一订单和原原因。",
+            "The cancellation result is unconfirmed. Check current order history, or explicitly retry the same order and original reason.",
+          )
+        }}</span>
+      </div>
+      <div v-if="cancellationMessage" class="alert error" role="alert">
+        <AlertCircle :size="18" /><span>{{ cancellationMessage }}</span>
+      </div>
+      <button
+        class="button primary full"
+        type="submit"
+        :disabled="
+          preview ||
+          saving ||
+          loading ||
+          !cancellationAgreed ||
+          !cancellationReasonValid ||
+          cancellationBlocked
+        "
+      >
+        <LoaderCircle v-if="saving" class="spin" :size="17" />{{
+          saving
+            ? tr("正在取消…", "Cancelling…")
+            : pendingCancellation?.uncertain
+              ? tr("重试原取消请求", "Retry original cancellation")
+              : tr("确认取消订单", "Confirm cancellation")
+        }}
+      </button>
+      <button
+        type="button"
+        class="button secondary full"
+        :disabled="saving || loading"
+        @click="checkCancellationHistory"
+      >
+        {{ tr("查看最新订单记录", "Check current order history") }}
       </button>
     </form>
   </dialog>

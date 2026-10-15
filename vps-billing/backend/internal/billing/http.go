@@ -295,6 +295,15 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.createOrder(w, r, u)
 		return
 	}
+	if cancellationID, matched := cancellationPath(p, admin); matched {
+		if !admin {
+			// The customer path always retains ownership filtering, even for an
+			// administrator using their own customer-facing console.
+			u.Role = "customer"
+		}
+		a.cancelOrderHTTP(w, r, u, cancellationID)
+		return
+	}
 	if p == "/admin/currencies" {
 		a.currenciesHTTP(w, r, u, true)
 		return

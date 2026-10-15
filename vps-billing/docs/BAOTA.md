@@ -19,29 +19,30 @@ MySQL 必须确认为 8.4 LTS；软件列表可选版本不等于现有实例已
 
 为本应用分配独立域名，例如 `billing.example.com`。下面所有域名、VERSION、路径和账号都是需要替换的值；保留原有站点、证书、数据库和管理入口。
 
-## 2. 构建与上传前端、后端
+## 2. 准备同版本程序与网页
 
-优先使用同一 Release 的 Core Linux amd64 包、`BUILD.json`、`PROVENANCE.json` 和 `SHA256SUMS`，按 [安装手册](INSTALL.md) 核验来源及校验和。Core 包已经包含 `bin/aster-api`、`bin/aster-plugin-host` 和完整 `web/`，服务器无需安装 Go/Node.js。
+Core 0.5.1 的正常 Release 提供六资产：原始 API、插件宿主、资源归档及 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`。资源包含编译好的网页和主机工具，服务器无需 Go/Node.js。按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对官方来源、资产摘要、构建提交/run，并将已核验且审查过的新版 `core-manager.py` 与同目录 `update-manager.py` 引导到 root 保护目录。旧 Core 0.5.0 的更新工具不认识 0.5.1 新策略清单，不能直接代替此次引导。
 
-需要自行构建时，在独立构建环境检出同一已审查提交，使用该版本 `BUILD.json` 指定的工具链；当前验证工具链为 Go 1.27.2、Node.js 24.19.0。正式归档使用 [发布脚本](RELEASE.md)，前端单独检查步骤为：
+使用普通受控上传途径时，把六资产放在网站目录以外，再由管理员核对为 root 所有、不可共享写入、无链接的独立输入目录；不要让面板 Web 身份执行 root 工具。以下 socket 是宿主机实际路径，须替换：
 
 ```sh
-cd vps-billing/frontend
-npm ci
-npm test
-npm run typecheck
-npm run build
+sudo python3 /var/lib/aster-bootstrap/0.5.1/core-manager.py doctor \
+  --release-directory /opt/aster/releases/0.5.1 \
+  --socket /actual/mysql.sock --listen-address 127.0.0.1:18080
+sudo python3 /var/lib/aster-bootstrap/0.5.1/core-manager.py prepare \
+  --version 0.5.1 --assets-directory /var/lib/aster-install/core-0.5.1
 ```
 
-输出位于 `frontend/dist/`。部署时将其中的 **全部内容** 放入新版本的 `web/`，包括 `index.html` 与 `assets/`；不要上传 `src/`、`node_modules/`、锁文件、`.env` 或构建日志到网站根目录。前端调用同源 `/api/`，无需写入服务器密码或把后端地址编译进网页。`npm run dev` 和 `npm run preview` 都不是生产服务。
+省略 `--assets-directory` 时工具自行从固定官方来源下载六资产；两种方式都独立校验当前官方 Release、源码/构建来源和完整文件树，再自动组装为新的完整版本目录，不需要手工复制 API、插件宿主或前端。`doctor` 只读主机事实；面板工具不在标准 PATH 时可能提示缺失，须独立核对其真实路径。它不运行 Nginx/MySQL、不连接数据库、不验证面板兼容性。
 
-通过受控 SFTP 或面板文件管理将完整包上传到网站目录以外的暂存目录，校验后按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档) 安装为：
+准备完成后的路径为：
 
 ```text
 /opt/aster/releases/VERSION/bin/aster-api
 /opt/aster/releases/VERSION/bin/aster-plugin-host
 /opt/aster/releases/VERSION/web/index.html
 /opt/aster/releases/VERSION/web/assets/
+/opt/aster/releases/VERSION/manifests/PREPARED.json
 /opt/aster/current -> /opt/aster/releases/VERSION
 /opt/aster/plugins/email.smtp/PLUGIN_VERSION/
 /etc/aster/api.env
@@ -49,7 +50,9 @@ npm run build
 /etc/aster/secrets/
 ```
 
-Core 0.5.0 需将原始 API、插件宿主与同版资源按 [安装手册](INSTALL.md#1-核对来源与归档)组装后上传；资源归档不含 ELF，单个可执行文件不是完整站点。网页仍只取已编译 `web/`，不要把资源根目录作为站点根。
+`status=prepared` 仅表示新目录已准备；本地 `manifests/PREPARED.json` 是运维回执，不是官方资源资产。工具不创建账号/秘密、配置面板、建库、迁移、初始化管理员、切 `current` 或启动服务。后续由获准管理员按安装手册继续身份、配置、数据库和服务步骤；出现已有版本、校验失败或发布后持久化不确定时保留 `CORE_PREPARE.jsonl` 与回执，先查现状再处理。
+
+需要自行构建时，另在独立构建环境按 [发布脚本](RELEASE.md)从同一已审查提交生成完整发行输入。自定义内容不得冒充未修改的官方资产；`prepare` 只接受固定官方 Release，不提供任意包或下载 URL。网页仍只取已编译 `web/`，不要把资源根目录作为站点根。
 
 版本目录、文件和链接由 root 管理；API 与 Nginx 仅读取。网站根目录只使用 `/opt/aster/current/web`。不要把完整源码、压缩包、数据库备份或 `/etc/aster` 放入可下载目录，也不要把版本目录递归改成面板 Web 用户所有。新前端与后端按同一提交一同发布；自定义前端构建不得继续使用官方包原有校验和声称内容未变。
 
@@ -71,7 +74,9 @@ SMTP 模板隐藏标准 `/run/mysqld` 和 `/var/lib/mysql`，宝塔实际 socket
 BindReadOnlyPaths=/actual/mysql.sock:/run/aster-mysql.sock
 ```
 
-此时运行 DSN 使用 `unix(/run/aster-mysql.sock)`；在宿主机直接运行的迁移 CLI、备份和恢复仍使用原 socket。映射不会授予数据库文件访问权。MySQL 重启可能替换 socket inode，必须随后重启 API 并检查就绪，不能据映射文件存在推定连接正常。若实际 systemd 不支持所需加固指令，先解决兼容性，不删除整段保护配置。
+此时服务运行 DSN 使用 `unix(/run/aster-mysql.sock)`；在宿主机直接运行的只读 `-preflight` / `-schema-status`、迁移、管理员引导、备份和恢复仍使用原 socket。需要时为相同数据库身份单独准备宿主机 DSN 文件引用，不将服务 namespace 内的路径误用于宿主机 CLI，也不扩大数据库权限。映射不会授予数据库文件访问权。MySQL 重启可能替换 socket inode，必须随后重启 API 并检查就绪，不能据映射文件存在推定连接正常。若实际 systemd 不支持所需加固指令，先解决兼容性，不删除整段保护配置。
+
+启动前按 [安装手册](INSTALL.md#3-迁移与管理员)执行只读数据库检查：`empty` 仅表示已存在专用库的基础表清单为空，其他对象须 DBA 核对；已识别旧前缀 `pending_migrations` 转升级流程；`current` 才表示当前 schema/结构通过，管理员数仍须核对。三种状态均可能退出 0，不能据此声称站点完成。检查核对直接 SELECT 元数据可见性并拒绝活动角色等不明授权，不证明运行身份仅有 DML、隐藏非表对象、插件运行或面板 TLS；运行身份和迁移/备份身份继续独立审查。
 
 ```sh
 sudo systemd-analyze verify /etc/systemd/system/aster-api.service
@@ -171,6 +176,8 @@ curl --fail --show-error https://billing.example.com/readyz
 curl --fail --show-error --head https://billing.example.com/
 ```
 
+仅在真实 HTTPS 就绪、证书与网页资源通过、首位管理员登录成功后，交付实际 `APP_ORIGIN` 对应的 `https://billing.example.com/` 入口。`prepared`、只读检查和一次 service start 均不构成完成上线。
+
 核对浏览器证书可信、静态资源和 SPA 刷新、登录/注销、Cookie/CSRF、客户隔离、管理员设置及 运营者已配置币种的独立价格和历史格式快照。更改展示域名不会修改 `APP_ORIGIN`。API 和数据库不公开监听，支付保持禁用；未使用 SMTP 时不配置其加密密钥。SMTP 配置不依赖面板邮件插件，不安装或修改面板邮局服务；测试仅连接已获准且证书有效的 SMTP 目标。具体项目见 [验收范围](ACCEPTANCE.md)。
 
 后台版本入口可检查官方 Release 并创建审计交接，见 [UPDATES.md](UPDATES.md)。它不调用面板 root、文件管理或进程守护接口，也不替换面板 Nginx/MySQL；主机工具完成核验与暂存后，仍由运维按下面流程应用，不能把后台“待运维处理”当作面板更新已经完成。
@@ -178,7 +185,7 @@ curl --fail --show-error --head https://billing.example.com/
 更新按 [升级与回滚](UPGRADE.md) 执行，顺序为：
 
 1. 核对 Release 提交、校验和、数据库迁移及 API/前端兼容性；保留旧版本目录、面板站点配置和秘密引用。
-2. 上传到新的版本目录；在恢复副本验证迁移和业务，完成最终备份。不要在线覆盖 `current/web` 或运行中的 API 文件。
+2. 用已核验的新版 `core-manager.py prepare --version 0.5.1`（或实际候选明确版本）准备新的完整目录；在恢复副本验证迁移和业务，完成最终备份。备份使用实际 socket 和已核验当前版本路径的 `--release-directory`，保留脚本生成的 `BACKUP.json`，不手写 schema JSON。不要在线覆盖 `current/web` 或运行中的 API 文件。
 3. 在维护窗口停写并停止 `aster-api`；使用**新版本明确路径**和迁移身份执行 `-migrate`，核对完整 schema 历史。
 4. 原子切换 `current`，启动 API，检查 HTTPS 就绪及业务，再恢复流量。Nginx 配置未改变且没有持有旧文件的缓存策略时通常无需重载；核对本实例的 `open_file_cache` 等设置。配置有改变时，先使用正确实例执行配置检查。
 5. 验证网页资源来自新版本，要求已有会话刷新页面；保存变更和恢复点记录，不长期混用旧前端与新 API。

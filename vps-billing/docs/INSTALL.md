@@ -43,11 +43,11 @@ APT 安装 MySQL 会初始化并启动其系统服务；这与 CI 仅提取官�
 
 ## 1. 核对来源与归档
 
-Core 0.5.0 使用原始程序与资源分发。取得同一 Release 的全部六个资产：
+Core 0.5.1 使用原始程序与资源分发。由主机管理员从固定官方仓库的正常 [Release](https://github.com/xiaoqiqixi/betteridcsys/releases) 选择 `v0.5.1`，取得同一 Release 的全部六个资产：
 
-- `aster-api-0.5.0-linux-amd64`
-- `aster-plugin-host-0.5.0-linux-amd64`
-- `aster-core-0.5.0-linux-amd64-resources.tar.gz`
+- `aster-api-0.5.1-linux-amd64`
+- `aster-plugin-host-0.5.1-linux-amd64`
+- `aster-core-0.5.1-linux-amd64-resources.tar.gz`
 - `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`
 
 核对来源记录的 run、提交、版本和全部资产摘要。源码从 Git 标签取得，SMTP 从其独立 Release 获取。当前没有独立发行签名；校验和只证明与清单一致，不能替代可信下载来源。旧 Core 0.4.0 一体归档按原版本流程处理，不把下面的新文件名套到旧资产。
@@ -55,25 +55,51 @@ Core 0.5.0 使用原始程序与资源分发。取得同一 Release 的全部六
 ```sh
 cd /path/to/downloads
 sha256sum -c SHA256SUMS
-file aster-api-0.5.0-linux-amd64 aster-plugin-host-0.5.0-linux-amd64
-tar -tzf aster-core-0.5.0-linux-amd64-resources.tar.gz
+file aster-api-0.5.1-linux-amd64 aster-plugin-host-0.5.1-linux-amd64
+tar -tvzf aster-core-0.5.1-linux-amd64-resources.tar.gz
 ```
 
-确认 BUILD schema 3、分发类型 `raw-binaries-v1`、目标 `linux/amd64` 和已审查源码；两个程序是静态 amd64 ELF。资源包只有 `aster-core-0.5.0-linux-amd64-resources/` 一个根目录，无绝对路径、`..`、链接或额外 ELF。先以普通用户在空目录解压并组装，**不要运行尚未核验的程序**：
+确认 BUILD schema 3、分发类型 `raw-binaries-v1`、目标 `linux/amd64` 和已审查源码；两个程序是静态 amd64 ELF。资源包只有 `aster-core-0.5.1-linux-amd64-resources/` 一个根目录，无绝对路径、`..`、链接或额外 ELF。先以普通用户在空目录解压，用于审查主机工具；以下引导片段在同一 Bash 会话继续，**不要运行尚未核验的程序或脚本**：
 
 ```sh
 set -euo pipefail
-aster_version=0.5.0
+aster_version=0.5.1
 aster_stage=$(mktemp -d)
 tar -xzf "aster-core-$aster_version-linux-amd64-resources.tar.gz" \
   --directory "$aster_stage" --no-same-owner --no-same-permissions
-aster_input="$aster_stage/aster-core-$aster_version-linux-amd64-resources"
-install -d -m 0755 "$aster_input/bin"
-install -m 0755 "aster-api-$aster_version-linux-amd64" "$aster_input/bin/aster-api"
-install -m 0755 "aster-plugin-host-$aster_version-linux-amd64" "$aster_input/bin/aster-plugin-host"
+aster_bootstrap_input="$aster_stage/aster-core-$aster_version-linux-amd64-resources"
 ```
 
-资源含编译网页、迁移 SQL、部署工具、文档和许可证。SQL 文件便于审核，正式迁移仍由所选二进制的 `-migrate` 执行，不能直接逐个手工导入。资源和两个程序必须同一 Release；后续使用实际 `aster_input` 路径，不能混用旧网页或插件宿主。
+将资源内 `deploy/scripts/core-manager.py` 和它导入的同目录 `update-manager.py` 与该 Release 已审查提交中的对应文件核对并审查。首次引导依赖官方 TLS 下载来源、资产摘要、来源记录与脚本审查，没有独立发行签名。确认后将这两个文件放入新的 root 受控目录；下列目录已存在时先检查，不覆盖旧工具：
+
+```sh
+set -euo pipefail
+[[ ! -e /var/lib/aster-bootstrap/0.5.1 && ! -L /var/lib/aster-bootstrap/0.5.1 ]]
+sudo install -d -o root -g root -m 0755 /var/lib/aster-bootstrap/0.5.1
+sudo install -o root -g root -m 0644 \
+  "$aster_bootstrap_input/deploy/scripts/core-manager.py" \
+  "$aster_bootstrap_input/deploy/scripts/update-manager.py" \
+  /var/lib/aster-bootstrap/0.5.1/
+```
+
+目录及所有祖先须由 root 控制、不可组/其他用户写入且无链接；不能以网页目录或普通上传用户仍可改写的目录引导 root 工具。不要使用下载后直接交给 shell 的命令。已发布 Core 0.5.0 的更新工具只认识旧的完整构建策略清单，会拒绝 0.5.1 新清单；它不会自行更新，首次使用须按本节引导新版工具。
+
+先读取主机事实，再准备明确版本。将 socket 换成已核实的宿主机实际路径：
+
+```sh
+sudo python3 /var/lib/aster-bootstrap/0.5.1/core-manager.py doctor \
+  --release-directory /opt/aster/releases/0.5.1 \
+  --socket /run/mysqld/mysqld.sock --listen-address 127.0.0.1:18080
+sudo python3 /var/lib/aster-bootstrap/0.5.1/core-manager.py prepare --version 0.5.1
+```
+
+`doctor` 只读报告 OS/架构、常用工具是否存在、PID 1、输出路径、磁盘、声明的 socket 和端口监听事实，不执行程序、不连接数据库或占用端口。`warning` 需按现场处理；它不验证 MySQL 内容/权限、服务配置、证书或应用就绪。
+
+`prepare` 独立从固定官方来源核对正常 Release、标签/提交、六资产 SHA-256、BUILD/PROVENANCE、成功构建 run、完整源码映射、归档路径/权限与静态 ELF，再自动组装 API、插件宿主和同版网页/资源到 `/opt/aster/releases/0.5.1`。`--release-directory` 可指定另一个规范绝对新目录；工具只创建受保护的输出父目录，用锁、fsync 和原子不覆盖发布完整目录，不执行任何包内程序。
+
+已经受控上传六个资产时，可追加 `--assets-directory /var/lib/aster-install/core-0.5.1`。输入目录须恰含六资产，全部为 root 受控、不可共享写入、无软/硬链接的普通文件；目录和祖先也须受保护。该选项只省去资产下载，仍独立查询官方来源，不是离线信任绕过。确需私有仓库只读访问时，可追加 `--github-token-file /root/aster-github-read-token`，文件须 root 所有、0600、无链接；凭据由获准秘密管理途径提供，不放进参数值、环境变量、日志或网页。
+
+成功输出 `status=prepared`、`active_release_changed=false`，仅表示新目录准备完成。资源含网页、迁移 SQL、部署工具、文档和许可证；正式迁移仍由所选二进制 `-migrate` 执行，不能直接逐个导入 SQL。工具不创建系统/数据库身份、秘密或管理员，不写配置、切 `current`、启服务、迁移或验收 HTTPS。下面各步骤仍须按顺序完成。
 
 ```text
 /opt/aster/releases/VERSION/
@@ -84,6 +110,7 @@ install -m 0755 "aster-plugin-host-$aster_version-linux-amd64" "$aster_input/bin
   migrations/
   deploy/
   manifests/BUILD.json
+  manifests/PREPARED.json          # 本地主机准备回执，不是官方资源资产
   manifests/go-dependencies.json
   manifests/npm-installed-dependencies.json
   licenses/
@@ -97,31 +124,23 @@ install -m 0755 "aster-plugin-host-$aster_version-linux-amd64" "$aster_input/bin
 
 `/opt/aster/releases/VERSION` 及 `current` 链接由 root 管理，API 只有读/执行权限；不要将它们归给 `aster`。API 无需可写应用状态目录，持久数据存入 MySQL，服务日志进入 journal。Nginx 的网页根目录只指向 `current/web`，不要暴露整个发布目录、配置、源码或依赖清单。
 
-全新安装时，在已验证且以普通用户解压的目录上执行以下模板。`VERSION` 和输入路径须替换；已有 `aster` 身份、`current` 链接或同名发布目录时停止，转入 [升级流程](UPGRADE.md)，不要覆盖：
+`manifests/PREPARED.json` 明确标记为本地回执，记录版本/提交、原资产清单、已验证文件摘要与 operation_id，不把新增回执声称为官方归档内容。输出父目录的 `CORE_PREPARE.jsonl` 和 `.core-manager.lock` 为 0600。失败时按 operation_id 核对记录；已有目标拒绝覆盖。若报告发布后持久化/日志检查失败，目标可能已存在，保留现场与回执，不删除目录后盲目重跑。`prepared` 与当前运行版本是两个事实。
+
+全新安装时，在准备成功的目录上继续建立运行身份与首次链接。已有 `aster` 身份或 `current` 链接时停止，转入 [升级流程](UPGRADE.md)，不要覆盖：
 
 ```sh
 set -euo pipefail
-aster_version=0.5.0
-aster_input=/path/to/assembled/aster-core-0.5.0-linux-amd64-resources
+aster_version=0.5.1
 [[ $aster_version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
-[[ -f $aster_input/bin/aster-api && -d $aster_input/web ]]
+[[ -f /opt/aster/releases/$aster_version/manifests/PREPARED.json ]]
+[[ -x /opt/aster/releases/$aster_version/bin/aster-api && -d /opt/aster/releases/$aster_version/web ]]
 if getent passwd aster >/dev/null || getent group aster >/dev/null || getent group aster-plugins >/dev/null; then
   echo 'aster identity already exists; inspect the installation before continuing.' >&2
   exit 1
 fi
 [[ ! -e /opt/aster/current && ! -L /opt/aster/current ]]
-[[ ! -e /opt/aster/releases/$aster_version ]]
 sudo groupadd --system aster-plugins
 sudo useradd --system --user-group --groups aster-plugins --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin aster
-sudo install -d -o root -g root -m 0755 /opt/aster/releases
-sudo install -d -o root -g root -m 0755 "/opt/aster/releases/$aster_version"
-sudo cp -R "$aster_input/." "/opt/aster/releases/$aster_version/"
-sudo chown -R root:root "/opt/aster/releases/$aster_version"
-sudo find "/opt/aster/releases/$aster_version" -type d -exec chmod 0755 '{}' +
-sudo find "/opt/aster/releases/$aster_version" -type f -exec chmod 0644 '{}' +
-sudo chmod 0755 "/opt/aster/releases/$aster_version/bin/aster-api" "/opt/aster/releases/$aster_version/bin/aster-plugin-host" "/opt/aster/releases/$aster_version/deploy/scripts/backup-native.sh"
-sudo chmod 0755 "/opt/aster/releases/$aster_version/deploy/scripts/plugin-manager.py" \
-  "/opt/aster/releases/$aster_version/deploy/scripts/update-manager.py"
 sudo ln -s "/opt/aster/releases/$aster_version" /opt/aster/current
 sudo install -d -o root -g root -m 0755 /etc/aster /opt/aster/plugins
 sudo install -d -o root -g aster -m 0750 /etc/aster/secrets
@@ -148,7 +167,9 @@ GRANT SHOW_ROUTINE ON *.* TO 'aster_backup'@'localhost';
 
 首选本机 Unix socket；先确认实际 socket 路径、目录权限和服务隔离规则，确保 `aster` 能连接该 socket，但无权读取数据库数据文件。DSN 结构示意为 `DB_USER:SECRET@unix(/run/mysqld/mysqld.sock)/aster?parseTime=true`；路径和占位符必须替换，真实值只写入受限文件。不要把这一示意串直接当作可用凭据。
 
-**当前后端即使使用 Unix socket 也会检查 MySQL TLS 配置，因此本机 socket 必须显式设置 `MYSQL_ALLOW_INSECURE=true`。** 这是在已审查本机 socket/文件权限下的窄范围例外，不能作为 TCP 明文连接的通用开关；所有迁移、引导与 API 运行命令均需一致。不能仅填写 `tls=true` 来假装 socket 已做 TLS 验证。
+Core 0.5.1 拒绝 DSN 中任意数据库服务器变量及 charset/collation 覆盖，避免驱动建立连接时隐式执行初始化 SET。使用上述 `parseTime`、连接/TLS 等结构选项，不把 `sql_mode`、会话变量或其他 SQL 设置塞进 DSN；数据库字符集由 DBA 创建和审核。
+
+**本机 Unix socket 模式须显式设置 `MYSQL_ALLOW_INSECURE=true`。** Core 0.5.1 将该例外限制为规范绝对路径的 Unix socket，拒绝借此启用明文 TCP；仍须审查实际 socket/目录权限。所有检查、迁移、引导与 API 运行命令均需一致。不能仅填写 `tls=true` 来假装 socket 已做 TLS 验证。
 
 若之后改成 TCP/跨主机数据库，应单独审查拓扑，将 `MYSQL_ALLOW_INSECURE=false`，使用 `tls=true`、证书匹配主机名和可信 CA，禁止 `skip-verify`、`preferred`、`allowFallbackToPlaintext=true`。远程数据库方案需单独验证；也不通过关闭 SELinux/AppArmor 或放宽到任意来源来解决权限错误。
 
@@ -210,7 +231,24 @@ Core 不内置 SMTP 传输。按 [插件安装与启停](PLUGINS.md)取得 SMTP 
 
 ## 3. 迁移与管理员
 
-初次迁移前确认目标为空的专用库；已有数据必须先执行 [升级与回滚](UPGRADE.md)。使用新版本的明确路径和干净环境启动 CLI，避免继承未审查配置。以下例子对应本机 Unix socket，且仅由能读取相应受限文件的授权操作身份执行：
+先使用新版本的明确路径和干净环境执行只读检查。`-preflight` 与 `-schema-status` 是两个互斥的同义入口，不能与 `-migrate`、`-create-user` 或 `-version` 合用。配置值须与已审核的服务配置一致，包括实际使用的代理、集成和可选秘密引用；不要把 `api.env` 当 shell 脚本 source。下例对应本机 Unix socket，仅由能读取相应受限文件的授权操作身份执行：
+
+```sh
+env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
+  LISTEN_ADDR=127.0.0.1:18080 TRUSTED_PROXY_CIDRS=127.0.0.1/32 \
+  SESSION_SECRET_FILE=/etc/aster/secrets/session_secret \
+  MYSQL_DSN_FILE=/path/private/mysql_migration_dsn \
+  MYSQL_ALLOW_INSECURE=true \
+  /opt/aster/releases/0.5.1/bin/aster-api -preflight
+```
+
+只读 JSON 检查规范 HTTPS origin、会话秘密、回环监听语法、代理/禁用集成及实际设置的 SMTP 密钥和更新凭据文件，再用有界 SELECT 检查 MySQL 8.4、非系统 utf8mb4 专用库、完整迁移前缀/checksum 与所需物理结构。它不建表、不迁移、不创建用户、不启动 HTTP、插件或查询 Release；失败返回脱敏 JSON 和非零退出码。
+
+`database.status=empty` 表示已存在目标库的完整基础表清单为空，可继续审查首次迁移；`pending_migrations` 表示已识别的旧迁移前缀/结构，列出待执行版本，已有安装应走 [升级流程](UPGRADE.md)；`current` 表示当前所需 schema/结构通过。三者都可退出 0，不能仅看退出码判为安装完成。`current` 的 `admin_count=0` 仍需初始化首位管理员。
+
+检查会用只读 `SHOW GRANTS` 核对直接库级/全局 SELECT 可见性，要求无活动角色并拒绝部分撤销等无法明确判断的授权；不会输出账号或原始 grants。`table_visibility_verified=true` 和 `empty_target_scope=base_tables` 仍不证明隐藏的非表对象为空、运行身份仅有 DML、迁移/备份身份权限分离、完整业务数据、停写状态、插件运行、端口空闲、服务配置、公共 TLS 或备份/恢复。DBA 仍须独立核对所有对象和本库运行/迁移/备份权限。
+
+初次迁移前确认结果确为 `empty` 的专用库，并由 DBA 确认没有其他既有对象或写入；已有数据必须先执行 [升级与回滚](UPGRADE.md)。以下命令会写入数据库：
 
 ```sh
 # 下面路径须由迁移操作身份可读；不要输出文件内容。
@@ -218,10 +256,12 @@ env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
   SESSION_SECRET_FILE=/etc/aster/secrets/session_secret \
   MYSQL_DSN_FILE=/path/private/mysql_migration_dsn \
   MYSQL_ALLOW_INSECURE=true \
-  /opt/aster/releases/VERSION/bin/aster-api -migrate
+  /opt/aster/releases/0.5.1/bin/aster-api -migrate
 ```
 
-CLI 要求完整的生产模式配置，连接必须确实是本机 Unix socket。核对迁移版本和 checksum；当前应用包含迁移 1–7，迁移 007 新增币种配置与历史快照，当前为 14 张基础表；以选定发布源码为准。迁移成功后，用运行身份 DSN 和独立初始化密码文件创建管理员；不要为引导账号而给运行身份 DDL 权限：
+CLI 要求完整的生产模式配置，连接必须确实是本机 Unix socket。核对迁移版本和 checksum；当前应用包含迁移 1–7，迁移 007 新增币种配置与历史快照，当前为 14 张基础表；以选定发布源码为准。迁移失败也可能已提交部分 DDL，按 [升级故障判断](UPGRADE.md#失败后的判断)保留现场，不自动恢复旧库。
+
+迁移成功后，把上面的 DSN 改为 `/etc/aster/secrets/mysql_runtime_dsn` 再运行 `-schema-status`，确认 `database.status=current`，核对管理员数。首次引导仅在已核实没有管理员且尚未成功创建的安装中执行；用运行身份 DSN 和独立初始化密码文件创建管理员，不为引导账号授予 DDL 权限：
 
 ```sh
 env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
@@ -230,10 +270,10 @@ env -i APP_MODE=production APP_ORIGIN=https://billing.example.com \
   MYSQL_ALLOW_INSECURE=true \
   BOOTSTRAP_EMAIL=operator@example.com BOOTSTRAP_NAME='运营管理员' \
   BOOTSTRAP_ROLE=admin BOOTSTRAP_PASSWORD_FILE=/path/private/bootstrap_password \
-  /opt/aster/releases/VERSION/bin/aster-api -create-user
+  /opt/aster/releases/0.5.1/bin/aster-api -create-user
 ```
 
-邮箱只是示例，需要替换；CLI 不发送邮件、不验证邮箱所有权。没有公共注册、找回密码、MFA 或完整账号生命周期管理。初始化完成后按秘密管理政策移走临时密码文件；不要声称普通文件删除可保证磁盘安全擦除。创建客户时明确使用 `BOOTSTRAP_ROLE=customer`，不得复用管理员密码。
+邮箱只是示例，需要替换；CLI 不发送邮件、不验证邮箱所有权。保留创建结果，再用运行身份执行只读检查核对管理员数；网络/终端结果不确定时先查现状，不能重置密码或重复添加另一个管理员来绕过。没有公共注册、找回密码、MFA 或完整账号生命周期管理。初始化完成后按秘密管理政策移走临时密码文件；不要声称普通文件删除可保证磁盘安全擦除。创建客户时明确使用 `BOOTSTRAP_ROLE=customer`，不得复用管理员密码。
 
 ## 4. 服务与 HTTPS
 
@@ -275,6 +315,8 @@ sudo systemctl reload nginx
 curl --fail --show-error https://billing.example.com/healthz
 curl --fail --show-error https://billing.example.com/readyz
 ```
+
+实际 HTTPS `/readyz` 通过、证书可信、网页/资源可访问且首位管理员登录成功后，才将最终入口 `https://billing.example.com/` 交付给使用者；域名须换成真实 `APP_ORIGIN`。准备工具输出、只读检查或 `systemctl start` 成功均不代替这一步。
 
 确认网页与 `/api/` 同源、Secure/HttpOnly/SameSite cookie 生效、API 不泄露 SQL/配置值。用管理员在“站点设置”中配置运营名称、支持方式、账单抬头、预设标志和主题；见 [站点与计价](SITE_SETTINGS.md)。全新安装仅启用 CNY，示例价格不可售。管理员须在“财务设置”审核币种与各币种独立价格，确认套餐/报价/币种三个开关后启售；客户只能选择已启用币种。升级保留旧 USD 报价和历史，不重置成新安装。缺价或停用应显示不可购买，不能用另一币种价格替代。完整规则见 [财务模型](FINANCIAL_MODEL.md)。
 

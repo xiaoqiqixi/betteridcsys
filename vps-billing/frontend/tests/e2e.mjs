@@ -104,6 +104,181 @@ const waitForPost = (endpoint) =>
       new URL(response.url()).pathname === `/api/v1${endpoint}` &&
       response.request().method() === "POST",
   );
+const cancellationRequests = [];
+page.on("request", (request) => {
+  if (
+    request.method() === "POST" &&
+    /^\/api\/v1\/(?:admin\/)?orders\/[^/]+\/cancel$/.test(
+      new URL(request.url()).pathname,
+    )
+  )
+    cancellationRequests.push(request);
+});
+async function cancellationState(admin = false) {
+  const prefix = admin ? "/admin" : "";
+  const [orders, invoices, overview, otherCurrency, services, audit] =
+    await Promise.all([
+      json(`${prefix}/orders`),
+      json(`${prefix}/invoices`),
+      json(`${prefix}/overview?currency=CNY`),
+      json(`${prefix}/overview?currency=JPY`),
+      json("/services"),
+      json("/audit"),
+    ]);
+  return { orders, invoices, overview, otherCurrency, services, audit };
+}
+async function cancelThroughUI(order, invoice, reason, admin = false) {
+  const before = await cancellationState(admin);
+  expect(before.orders.find((item) => item.id === order.id)).toEqual(order);
+  expect(before.invoices.find((item) => item.id === invoice.id)).toEqual(
+    invoice,
+  );
+  expect(order.status).toBe("pending_payment");
+  expect(invoice.status).toBe("unpaid");
+  const requestCount = cancellationRequests.length;
+  const row = page.locator(`tr[data-order-id="${order.id}"]`);
+  const cancelButton = row.getByRole("button", {
+    name: "取消订单",
+    exact: true,
+  });
+  const dialog = page.getByTestId("cancellation-dialog");
+  await cancelButton.click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(order.number);
+  expect(cancellationRequests).toHaveLength(requestCount);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(await cancellationState(admin)).toEqual(before);
+  expect(cancellationRequests).toHaveLength(requestCount);
+
+  await cancelButton.click();
+  const reasonField = dialog.locator('[name="cancellation_reason"]');
+  const confirmation = dialog.locator('[name="confirm_cancellation"]');
+  const submit = dialog.getByRole("button", {
+    name: "确认取消订单",
+    exact: true,
+  });
+  await expect(reasonField).toBeEmpty();
+  await expect(confirmation).not.toBeChecked();
+  await expect(submit).toBeDisabled();
+  await reasonField.fill(reason);
+  await expect(submit).toBeDisabled();
+  // Exercise the form guard as well as its disabled submit button.
+  await reasonField.evaluate((field) => field.form.requestSubmit());
+  await reasonField.fill("");
+  await confirmation.check();
+  await expect(submit).toBeDisabled();
+  await reasonField.evaluate((field) => field.form.requestSubmit());
+  await reasonField.fill("   ");
+  await expect(submit).toBeDisabled();
+  await reasonField.evaluate((field) => field.form.requestSubmit());
+  expect(await cancellationState(admin)).toEqual(before);
+  expect(cancellationRequests).toHaveLength(requestCount);
+  await reasonField.fill(`  ${reason}  `);
+  await expect(submit).toBeEnabled();
+  const endpoint = `${admin ? "/admin" : ""}/orders/${order.id}/cancel`;
+  const result = waitForPost(endpoint);
+  await submit.click();
+  const response = await result;
+  expect(response.status()).toBe(200);
+  expect(response.request().postDataJSON()).toEqual({ reason });
+  const pair = (await response.json()).data;
+  expect(pair).toEqual({
+    order: { ...order, status: "cancelled" },
+    invoice: { ...invoice, status: "void" },
+  });
+  await expect(dialog).not.toBeVisible();
+  await expect(
+    page.getByText(`订单 ${order.number} 已取消，关联账单已作废。`, {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(row.locator(".badge")).toHaveText("已取消");
+  await expect(cancelButton).toHaveCount(0);
+  expect(cancellationRequests).toHaveLength(requestCount + 1);
+  const after = await cancellationState(admin);
+  expect(after.orders).toEqual(
+    before.orders.map((item) => (item.id === order.id ? pair.order : item)),
+  );
+  expect(after.invoices).toEqual(
+    before.invoices.map((item) =>
+      item.id === invoice.id ? pair.invoice : item,
+    ),
+  );
+  const countField = admin ? "unpaid_invoices" : "pending_invoices";
+  expect(after.overview).toEqual({
+    ...before.overview,
+    [countField]: before.overview[countField] - 1,
+    unpaid_total_minor:
+      before.overview.unpaid_total_minor - invoice.amount_minor,
+    ...(!admin && {
+      recent_orders: before.overview.recent_orders.map((item) =>
+        item.id === order.id ? pair.order : item,
+      ),
+    }),
+  });
+  expect(after.otherCurrency).toEqual({
+    ...before.otherCurrency,
+    ...(!admin && {
+      recent_orders: before.otherCurrency.recent_orders.map((item) =>
+        item.id === order.id ? pair.order : item,
+      ),
+    }),
+  });
+  expect(after.services).toEqual(before.services);
+  const cancellationAudit = after.audit.filter(
+    (event) => event.action === "order.cancelled" && event.target === order.id,
+  );
+  expect(cancellationAudit).toHaveLength(1);
+  expect(cancellationAudit[0].detail).toContain(reason);
+  const session = await json("/session");
+  expect(cancellationAudit[0].actor_email).toBe(session.user.email);
+  expect(
+    after.audit.filter((event) => event.id !== cancellationAudit[0].id),
+  ).toEqual(before.audit);
+  // A repeated explicit request must return the original pair without another
+  // audit entry, another deduction or any snapshot changes.
+  const replay = await context.request.post(`${base}/api/v1${endpoint}`, {
+    data: { reason },
+    headers: { "X-CSRF-Token": session.csrf_token, Origin: base },
+  });
+  expect(replay.status()).toBe(200);
+  expect((await replay.json()).data).toEqual(pair);
+  expect(await cancellationState(admin)).toEqual(after);
+  await page
+    .getByRole("link", { name: admin ? /^账单管理/ : /^账单与付款/ })
+    .click();
+  const invoiceRow = page.getByRole("row").filter({ hasText: invoice.number });
+  await expect(invoiceRow.locator(".badge")).toHaveText("已作废");
+  await expect(
+    page.locator(".invoice-summary > div").nth(1).locator("b"),
+  ).toHaveText(new RegExp(`^${after.overview[countField]}\\s*笔$`));
+  await expect(page.locator(".invoice-summary > div").first()).toContainText(
+    amount({
+      price_minor: after.overview.unpaid_total_minor,
+      currency: after.overview.currency,
+      currency_format: after.overview.currency_format,
+    }),
+  );
+  await invoiceRow
+    .getByRole("button", { name: `查看账单 ${invoice.number}`, exact: true })
+    .click();
+  await expect(page.locator(".invoice-modal .badge")).toHaveText("已作废");
+  await expect(page.locator(".invoice-modal .invoice-issuer")).toContainText(
+    invoice.issuer.name,
+  );
+  await expect(
+    page.locator(".invoice-modal").getByRole("button", {
+      name: "检查支付可用性",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page
+    .locator(".invoice-modal")
+    .getByRole("button", { name: "关闭", exact: true })
+    .click();
+  return pair;
+}
 const writableCurrency = ({
   code,
   name,
@@ -679,11 +854,126 @@ try {
     )
     .toBe(true);
   await shot("settings-mobile");
+
+  // Preserve the screenshot fixtures before cancelling newly created orders.
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await page
+    .getByRole("button", { name: "体验客户工作台", exact: true })
+    .click();
+  await expect(page.locator("h1")).toContainText("你好");
+  await page.getByLabel("币种", { exact: true }).selectOption("CNY");
+  const servicesBeforeCancellation = await json("/services");
+  await page.getByRole("link", { name: "选购服务", exact: true }).click();
+  const cancellationPlan = (await json("/plans?currency=CNY")).find(
+    (plan) => plan.id === firstPlan.id,
+  );
+  await page.getByRole("button", { name: "全部区域", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: `选择套餐 ${cancellationPlan.name}`,
+      exact: true,
+    })
+    .click();
+  await expect(summary.locator(".purchase-total strong")).toHaveText(
+    amount(cancellationPlan),
+  );
+  await page.getByRole("button", { name: "确认配置", exact: true }).click();
+  await page
+    .getByLabel("服务器名称", { exact: true })
+    .fill("qa-browser-admin-cancel");
+  await page.locator("dialog[open]").getByRole("checkbox").check();
+  const adminTargetResult = waitForPost("/orders");
+  await page
+    .getByRole("button", { name: "创建待付款订单", exact: true })
+    .click();
+  const adminTargetResponse = await adminTargetResult;
+  expect(adminTargetResponse.status()).toBe(201);
+  const adminTarget = (await adminTargetResponse.json()).data;
+  await page.waitForURL("**/orders");
+  const adminTargetInvoice = (await json("/invoices")).find(
+    (item) => item.order_id === adminTarget.id,
+  );
+  const customerPair = await cancelThroughUI(
+    order,
+    invoice,
+    "浏览器客户验收取消未付款订单",
+  );
+  await page.getByRole("link", { name: "工作台", exact: true }).click();
+  const customerOverview = await json("/overview?currency=CNY");
+  await expect(
+    page
+      .locator(".stat-card")
+      .filter({ hasText: "待付款账单" })
+      .locator(".stat-value"),
+  ).toHaveText(new RegExp(`^${customerOverview.pending_invoices}\\s*笔$`));
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
+  await expect(page.locator("h1")).toHaveText("运营概况");
+  await page.getByRole("link", { name: "全部订单", exact: true }).click();
+  await expect(
+    page.locator(`tr[data-order-id="${order.id}"] .badge`),
+  ).toHaveText("已取消");
+  const adminPair = await cancelThroughUI(
+    adminTarget,
+    adminTargetInvoice,
+    "浏览器管理员验收取消未付款订单",
+    true,
+  );
+  await page.getByRole("link", { name: "运营总览", exact: true }).click();
+  const adminOverview = await json("/admin/overview?currency=CNY");
+  await expect(
+    page
+      .locator(".stat-card")
+      .filter({ hasText: "待付款账单" })
+      .locator(".stat-value"),
+  ).toHaveText(new RegExp(`^${adminOverview.unpaid_invoices}\\s*笔$`));
+  await page.getByRole("link", { name: "审计日志", exact: true }).click();
+  for (const cancelledOrder of [order, adminTarget]) {
+    const auditRow = page
+      .getByRole("row")
+      .filter({ hasText: cancelledOrder.id });
+    await expect(auditRow.filter({ hasText: "order.cancelled" })).toHaveCount(
+      1,
+    );
+  }
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await page
+    .getByRole("button", { name: "体验客户工作台", exact: true })
+    .click();
+  await expect(page.locator("h1")).toContainText("你好");
+  const customerHistory = await cancellationState();
+  expect(customerHistory.services).toEqual(servicesBeforeCancellation);
+  for (const pair of [customerPair, adminPair]) {
+    expect(
+      customerHistory.orders.find((item) => item.id === pair.order.id),
+    ).toEqual(pair.order);
+    expect(
+      customerHistory.invoices.find((item) => item.id === pair.invoice.id),
+    ).toEqual(pair.invoice);
+    expect(
+      customerHistory.audit.filter(
+        (event) =>
+          event.action === "order.cancelled" && event.target === pair.order.id,
+      ),
+    ).toHaveLength(1);
+  }
+  await page.getByRole("link", { name: "我的订单", exact: true }).click();
+  for (const pair of [customerPair, adminPair]) {
+    const historyRow = page.locator(`tr[data-order-id="${pair.order.id}"]`);
+    await expect(historyRow.locator(".badge")).toHaveText("已取消");
+    await expect(
+      historyRow.getByRole("button", { name: "取消订单", exact: true }),
+    ).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
+  await expect(page.locator("h1")).toHaveText("运营概况");
   await restoreSettings();
   expect(errors).toEqual([]);
   expect(blockedRequests).toEqual([]);
   console.log(
-    "PASS: real demo API, fresh CNY-only registry, JPY zero-decimal and KWD three-decimal currencies and independent prices saved through financial UI with exact revisioned payloads, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, actual core version and update status without automatic check or handoff, financial default JPY and read-only site currency, admin settings save/preview, new-visitor English/JPY defaults, immutable invoice issuer, original site/default settings restored while added demo currencies remain until disposable teardown; no browser runtime errors.",
+    "PASS: real demo API, fresh CNY-only registry, JPY zero-decimal and KWD three-decimal currencies and independent prices saved through financial UI with exact revisioned payloads, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, actual core version and update status without automatic check or handoff, financial default JPY and read-only site currency, admin settings save/preview, new-visitor English/JPY defaults, immutable invoice issuer, explicit customer/admin cancellation with required reason and confirmation, no mutation on opening/closing/incomplete confirmation, retained order/invoice snapshots with cancelled/void statuses, exact unpaid summary deductions and unchanged services/other-currency totals, one audit per cancellation and idempotent repeats, customer history retained across sessions, original site/default settings restored while added demo currencies remain until disposable teardown; no browser runtime errors.",
   );
 } finally {
   try {

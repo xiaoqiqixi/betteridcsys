@@ -8,19 +8,46 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-sql-driver/mysql"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-type MySQL struct{ DB *sql.DB }
+type MySQL struct {
+	DB                  *sql.DB
+	transport, database string
+}
 
-func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, error) {
+func mysqlConfiguration(dsn string, allowInsecure bool) (*mysql.Config, error) {
 	cfg, e := mysql.ParseDSN(dsn)
 	if e != nil {
 		return nil, errors.New("invalid MySQL configuration")
 	}
-	if !allowInsecure && (cfg.TLSConfig != "true" || cfg.AllowFallbackToPlaintext) {
-		return nil, errors.New("MySQL TLS is required; use tls=true or explicitly allow an isolated private database")
+	// The driver sends arbitrary Params as a raw SET statement during
+	// connection setup, before Ping or any read-only inspection. Charset also
+	// causes SET NAMES. Core has no need for DSN-supplied server/session SQL;
+	// reject it for every command so preflight cannot mutate a privileged DB.
+	// Clear identity/transport before inspecting normalized options: '?' and
+	// '/' are legal inside passwords/socket paths and must not change parsing.
+	probe := cfg.Clone()
+	probe.User, probe.Passwd, probe.Net, probe.Addr, probe.DBName = "", "", "tcp", "127.0.0.1:3306", ""
+	_, query, _ := strings.Cut(probe.FormatDSN(), "?")
+	options, queryErr := url.ParseQuery(query)
+	_, setsCharset := options["charset"]
+	if len(cfg.Params) != 0 || setsCharset || cfg.Collation != "" || queryErr != nil {
+		return nil, errors.New("MySQL DSN server variables, charset and collation overrides are not supported")
+	}
+	if allowInsecure {
+		if cfg.Net != "unix" || !filepath.IsAbs(cfg.Addr) || strings.ContainsAny(cfg.Addr, "\x00\r\n") {
+			return nil, errors.New("the insecure MySQL exception requires an absolute local Unix socket")
+		}
+	} else if cfg.TLSConfig != "true" || cfg.AllowFallbackToPlaintext {
+		return nil, errors.New("MySQL TLS is required; use tls=true or the explicit local Unix socket exception")
+	}
+	// Neither transport may silently downgrade certificate verification.
+	if cfg.AllowFallbackToPlaintext || cfg.TLSConfig == "skip-verify" || cfg.TLSConfig == "preferred" {
+		return nil, errors.New("MySQL TLS verification cannot be weakened")
 	}
 	cfg.ParseTime = true
 	cfg.Loc = time.UTC
@@ -28,6 +55,14 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	cfg.Timeout = 5 * time.Second
 	cfg.ReadTimeout = 10 * time.Second
 	cfg.WriteTimeout = 10 * time.Second
+	return cfg, nil
+}
+
+func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, error) {
+	cfg, e := mysqlConfiguration(dsn, allowInsecure)
+	if e != nil {
+		return nil, e
+	}
 	db, e := sql.Open("mysql", cfg.FormatDSN())
 	if e != nil {
 		return nil, e
@@ -39,7 +74,11 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 		db.Close()
 		return nil, errors.New("database connection failed")
 	}
-	return &MySQL{db}, nil
+	transport := "tls"
+	if cfg.Net == "unix" {
+		transport = "local-unix-socket"
+	}
+	return &MySQL{DB: db, transport: transport, database: cfg.DBName}, nil
 }
 
 var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry}

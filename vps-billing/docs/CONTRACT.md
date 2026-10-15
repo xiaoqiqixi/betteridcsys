@@ -1,6 +1,6 @@
 # 当前 API 与业务约定
 
-本文件对应 Core 0.5.0 的可配置财务币种、独立报价、历史快照与独立 SMTP 插槽。默认站点名“星屿云”、语言 `zh-CN`；全新安装只启用默认币种 `CNY`，升级保留旧币种及合法默认值。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、真实 VPS 开通与完整财务账本均未实现；官方 SMTP 默认关闭，仅提供管理员配置和测试邮件，未接入通知、邮箱验证或密码找回。
+本文件对应 Core 0.5.1 的可配置财务币种、独立报价、历史快照与独立 SMTP 插槽。默认站点名“星屿云”、语言 `zh-CN`；全新安装只启用默认币种 `CNY`，升级保留旧币种及合法默认值。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、真实 VPS 开通与完整财务账本均未实现；官方 SMTP 默认关闭，仅提供管理员配置和测试邮件，未接入通知、邮箱验证或密码找回。
 
 ## 共通规则
 
@@ -27,6 +27,8 @@
 | `GET /overview?currency=CNY` | 客户 | 该币种金额/计数与带各自币种的最近订单 |
 | `GET /services`, `/orders`, `/invoices`, `/audit` | 客户 | 仅本人资源；历史各保留原币种 |
 | `POST /orders` | 客户 + CSRF | `{plan_id,hostname,currency,quote?}`，必须有 `Idempotency-Key` |
+| `POST /orders/{id}/cancel` | 客户 + CSRF | `{reason}`，安全取消本人未付订单并同步作废配对账单 |
+| `POST /admin/orders/{id}/cancel` | 管理员 + CSRF | 相同原子操作，可处理任意有权且符合条件的订单 |
 | `GET /invoices/{id}` | 账单所有人 | 直接按账单 ID 和当前用户查找，不依赖列表上限 |
 | `POST /invoices/{id}/checkout` | 账单所有人 + CSRF | 未配置提供商返回 503 `PAYMENT_NOT_CONFIGURED`，不改变付款状态 |
 | `GET /admin/overview?currency=CNY` | 管理员 | 该币种金额/服务/账单数；客户数是全局 |
@@ -91,3 +93,9 @@
 交接请求严格限定 `{component,tag,source_sha,release_id,catalog_sha256,acknowledge_manual_handoff:true}`，不得传任意URL、命令、目录或token。请求最多4KiB，拒绝未知/重复/null/错误类型；未明确确认返回400 `UPDATE_ACK_REQUIRED`。服务端重查官方信息，确认选择指纹、本地版本/策略仍一致且候选可更新，再持久审计后以202返回交接封装；新后台统一返回 `{schema:2,status:"awaiting_host_operator",intent:{...}}`，intent 同为 schema 2，声明 `distribution_format`（`raw-binaries-v1` 或 `archive-v1`）及对应资产；主机工具兼容读取既有 schema 1 交接，但仅接受旧四资产归档。intent 包含请求/操作者ID、创建/到期时间、固定仓库身份、组件/版本/源码、构建与资产、当时Core/插件/策略信息，有效期30分钟。交接未签名，不是主机安装授权或安装成功。
 
 官方不可用返回503 `UPDATE_UNAVAILABLE`，已有检查返回409 `UPDATE_BUSY`，选择/现场变化返回409 `UPDATE_STALE`，不兼容/不是新版本返回409 `UPDATE_INCOMPATIBLE`。权限与CSRF/Origin/Host沿用通用规则；审计/网络失败或响应不确定不能假称交接成功或自动重复提交。主机工具独立核验与暂存，实际应用仍按 [UPDATES.md](UPDATES.md)及 [UPGRADE.md](UPGRADE.md)执行。
+
+## 未付款订单取消
+
+两个取消接口接收最多 4KiB 的严格 JSON `{reason:string}`，原因修剪后须为 1–500 字节纯文本。成功返回 `{data:{order,invoice}}`，分别为 `cancelled` 与 `void`；重复成功请求不重复记审计或 outbox。金额、币种格式、issuer/套餐快照、开具/创建/到期时间与原创建幂等映射均保留。只有 `payment.disabled` 可用；当前没有在途付款预约协议，接入付款时核心拒绝直接取消。
+
+非本人订单返回 404 `NOT_FOUND`；结构错误为 400 `INVALID_BODY`，语义错误为 400 `INVALID_CANCELLATION`，已处理、关联服务、配对不一致或无法验证的历史为 409 `CANCELLATION_STATE_CONFLICT`，付款已接入为 409 `CANCELLATION_UNAVAILABLE`。不会独立作废账单、删除、标记付款、退款或执行资源操作。不确定响应不能假称取消成功；先重新查询，必要时重复相同取消操作。

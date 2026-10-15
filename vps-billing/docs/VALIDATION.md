@@ -2,7 +2,11 @@
 
 各项结果绑定实际执行时的提交、日期和 GitHub run；后续源码或界面修改不沿用旧提交的通过结论。
 
-## Core 0.5.0 / SMTP 1.1.0 的验证与来源
+## Core 0.5.1：安装准备与未付取消
+
+本轮新增主机自动组装、只读预检、机器备份元数据及受限未付订单取消。实施范围见 [REFERENCE_SCOPE.md](REFERENCE_SCOPE.md)。当前记录为开发中范围，不填未来 CI、源码 SHA 或发布成功；完成后以实际运行和资产核验补齐。历史 0.5.0 和更早结果保持下方原记录，不能代替本轮验收。
+
+## 历史 Core 0.5.0 / SMTP 1.1.0 的验证与来源
 
 已验证源码：`6be81aaed4868adb3c60b30accbfd87d0bb899c5`，执行日期为 2026-10-14 UTC。[完整 CI 38655661440](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440) 的[应用、原生与浏览器检查](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687273)、[独立 Go 扫描](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687106)及[官方发布元数据读取](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38655661440/job/116164687294)均成功。以下结果绑定该源码，不沿用历史版本或未提交修改的结论。
 

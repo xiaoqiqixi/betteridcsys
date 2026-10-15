@@ -6,7 +6,7 @@ Vue 3 / TypeScript / Vite 控制台、Go API 与 MySQL InnoDB 持久化。支持
 
 ## 程序与独立插件
 
-Core `0.5.0` 与官方 SMTP `1.1.0` 分开构建、安装和正常发布。SMTP 插件实现 `aster.smtp/1`，兼容 Core `>=0.4.0,<0.6.0`，只支持管理员固定测试邮件，默认关闭。Core 没有内置 SMTP 传输；安装独立包并经 root 明确批准后，独立 systemd 身份通过 Unix socket 提供能力。
+Core `0.5.1` 与官方 SMTP `1.1.0` 分开构建、安装和正常发布。SMTP 插件实现 `aster.smtp/1`，兼容 Core `>=0.4.0,<0.6.0`，只支持管理员固定测试邮件，默认关闭。Core 没有内置 SMTP 传输；安装独立包并经 root 明确批准后，独立 systemd 身份通过 Unix socket 提供能力。
 
 Core 被动读取 manifest，不执行未知文件、启动服务或自动下载。安装/启停/版本切换见 [插件指南](docs/PLUGINS.md)，协议、身份与秘密边界见 [PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md)。插件替换无需重编 Core；实际不变哈希/PID 与故障恢复结果必须查对应 [验证记录](docs/VALIDATION.md)，不能从文档推导已验证。
 
@@ -64,6 +64,6 @@ API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5
 | `deploy/systemd/`、`deploy/scripts/` | 原生服务样例、备份、插件管理、更新交接暂存与精确提交打包 |
 | `deploy/ci/` | 只读检查、临时原生服务验收和受信发布程序 |
 
-在 `main` 维护，同提交源码、包、来源与检查记录对应。Core 正常 Release 提供两个原始 Linux amd64 程序、资源和三项元数据共六资产；SMTP 提供一个原始程序、资源和三项元数据共五资产，不手动上传源码包，历史 0.4.0 / 1.0.0 资产保持原样。旧网页/工具不支持新 raw 格式，首次升级人工核验；SMTP 1.0.0 不能运行于 Core 0.5.0，需先用已验证新工具桥接 1.1.0 或明确停用。见 [构建发布](docs/RELEASE.md) 与 [CI 流程](docs/CI_RELEASE_AUTOMATION.md)。
+在 `main` 维护，同提交源码、包、来源与检查记录对应。Core 正常 Release 提供两个原始 Linux amd64 程序、资源和三项元数据共六资产；SMTP 提供一个原始程序、资源和三项元数据共五资产，不手动上传源码包，历史 0.4.0 / 1.0.0 资产保持原样。旧网页/工具不支持新 raw 格式，首次升级人工核验；SMTP 1.0.0 不能运行于 Core 0.5.1，需先用已验证新工具桥接 1.1.0 或明确停用。见 [构建发布](docs/RELEASE.md) 与 [CI 流程](docs/CI_RELEASE_AUTOMATION.md)。
 
 原生/浏览器/插件检查使用一次性云端环境和合成数据，没有用户服务器、Mac、外部真实邮件或付款。宝塔组合、公共 CA 续期、容量、整机恢复、异地灾备及所有未实现业务必须分别验收；正式版本和 `APP_MODE=production` 均不是运营认证。具体测试数量、扫描范围与剩余告警只认 [VALIDATION.md](docs/VALIDATION.md) 的对应提交和 run。

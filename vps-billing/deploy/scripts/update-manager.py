@@ -29,7 +29,8 @@ import zlib
 REPOSITORY = "xiaoqiqixi/betteridcsys"
 REPOSITORY_ID = 1418618420
 WORKFLOW = ".github/workflows/release-build.yml"
-TRUSTED_PATHS = {WORKFLOW, "vps-billing/deploy/ci/release_pipeline.py", "vps-billing/deploy/ci/historical-artifacts.json", "vps-billing/deploy/ci/check.sh", "vps-billing/deploy/ci/prepare-native-runner.sh", "vps-billing/deploy/ci/prepare-browser.py", "vps-billing/deploy/ci/accept-native.sh", "vps-billing/deploy/ci/accept-native-http.py", "vps-billing/deploy/ci/plugin-native.sh", "vps-billing/deploy/ci/plugin-native.py", "vps-billing/deploy/ci/smtp-loopback-fixture.py", "vps-billing/deploy/ci/test_plugin_native.py", "vps-billing/deploy/ci/browser-demo.py", "vps-billing/deploy/ci/mysql-native.sh", "vps-billing/deploy/ci/mysql-distribution.json", "vps-billing/deploy/scripts/package-release.sh", "vps-billing/deploy/scripts/release-manifest.py", "vps-billing/deploy/scripts/plugin-manager.py", "vps-billing/deploy/scripts/update-manager.py", "vps-billing/deploy/scripts/test-update-manager.py", "vps-billing/deploy/systemd/aster-api.service", "vps-billing/deploy/systemd/aster-smtp.service"}
+LEGACY_TRUSTED_PATHS = {WORKFLOW, "vps-billing/deploy/ci/release_pipeline.py", "vps-billing/deploy/ci/historical-artifacts.json", "vps-billing/deploy/ci/check.sh", "vps-billing/deploy/ci/prepare-native-runner.sh", "vps-billing/deploy/ci/prepare-browser.py", "vps-billing/deploy/ci/accept-native.sh", "vps-billing/deploy/ci/accept-native-http.py", "vps-billing/deploy/ci/plugin-native.sh", "vps-billing/deploy/ci/plugin-native.py", "vps-billing/deploy/ci/smtp-loopback-fixture.py", "vps-billing/deploy/ci/test_plugin_native.py", "vps-billing/deploy/ci/browser-demo.py", "vps-billing/deploy/ci/mysql-native.sh", "vps-billing/deploy/ci/mysql-distribution.json", "vps-billing/deploy/scripts/package-release.sh", "vps-billing/deploy/scripts/release-manifest.py", "vps-billing/deploy/scripts/plugin-manager.py", "vps-billing/deploy/scripts/update-manager.py", "vps-billing/deploy/scripts/test-update-manager.py", "vps-billing/deploy/systemd/aster-api.service", "vps-billing/deploy/systemd/aster-smtp.service"}
+TRUSTED_PATHS = LEGACY_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-manager.py", "vps-billing/deploy/scripts/test-core-manager.py"}
 LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 MAX_JSON = 2 << 20
 MAX_ARCHIVE = 80 << 20
@@ -390,7 +391,11 @@ def blob_sha(raw):
 
 def verify_source(api, build, bundle, source, provenance):
     trusted_blobs = provenance["trusted_blobs"]
-    require(set(trusted_blobs) == TRUSTED_PATHS, "The build policy must contain the exact reviewed trust inventory.")
+    trusted_paths = set(trusted_blobs)
+    # Published releases through Core 0.5.0 predate the host preparation tool.
+    # Recognize that complete, fixed inventory only for those source versions;
+    # newer releases must carry the new complete policy, never a subset.
+    require(trusted_paths == TRUSTED_PATHS or stable(build["component_versions"]["core"]) <= (0, 5, 0) and trusted_paths == LEGACY_TRUSTED_PATHS, "The build policy must contain the exact reviewed trust inventory.")
     tree = api.json("/git/trees/" + source + "?recursive=1")
     require(isinstance(tree, dict) and tree.get("truncated") is False and isinstance(tree.get("tree"), list) and len(tree["tree"]) <= 20000, "Complete tagged source tree is required.")
     require(all(isinstance(path, str) and path.startswith((".github/", "vps-billing/")) and not any(part in {"", ".", ".."} for part in path.split("/")) for path in trusted_blobs), "Invalid trusted build policy paths.")
@@ -420,7 +425,7 @@ def verify_source(api, build, bundle, source, provenance):
         policy = {}
         for item in policy_tree["tree"]:
             require(isinstance(item, dict), "Invalid policy Git tree member.")
-            if item.get("path") in TRUSTED_PATHS:
+            if item.get("path") in trusted_paths:
                 require(item["path"] not in policy and item.get("type") == "blob" and item.get("mode") in {"100644", "100755"}, "Invalid policy Git source file.")
                 policy[item["path"]] = item.get("sha")
         require(policy == trusted_blobs, "Tagged, workflow and default build policy differ.")
@@ -442,7 +447,13 @@ def verify_source(api, build, bundle, source, provenance):
     require(core is not None and core[1].decode() == build["component_versions"]["core"] and inputs["vps-billing/backend/plugins/smtp/VERSION"].decode().strip() == build["component_versions"]["smtp"], "Release component version differs from source.")
 
 
-def verify_downloads(api, intent, files, current_core):
+def verify_downloads(api, intent, files, current_core, *, with_bundle=False):
+    """Verify all inputs before optionally returning the assembled file bytes.
+
+    The default metadata result remains the staging API. Only an explicit host
+    caller requests the verified in-memory bundle; this function writes nothing
+    and never executes any member.
+    """
     assets = asset_inventory(intent["assets"], intent["component"], intent["version"], intent.get("distribution_format", "archive-v1"))
     require(set(files) == set(assets) and all(len(files[name]) == item["size"] and digest(files[name]) == item["sha256"] for name, item in assets.items()), "Downloaded assets differ from GitHub SHA-256 metadata.")
     sums = checksums(files["SHA256SUMS"], set(files) - {"SHA256SUMS"})
@@ -493,8 +504,10 @@ def verify_downloads(api, intent, files, current_core):
         static_elf(bundle[path][0])
     if component == "core":
         required_deploy = {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py", "deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf"}
+        if stable(version) >= (0, 5, 1):
+            required_deploy.add("deploy/scripts/core-manager.py")
         allowed = required | set(copies) | {"manifests/BUILD.json", "manifests/go-dependencies.json", "manifests/npm-installed-dependencies.json", "manifests/aster-api-build.txt", "manifests/aster-plugin-host-build.txt"}
-        executable = required | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"}
+        executable = required | {path for path in required_deploy if path.startswith("deploy/scripts/")}
         exact_copies = {"LICENSE": "LICENSE", "REPOSITORY-README.md": "README.md", "PROJECT-README.md": "vps-billing/README.md", "manifests/go.mod": "vps-billing/backend/go.mod", "manifests/go.sum": "vps-billing/backend/go.sum", "manifests/package.json": "vps-billing/frontend/package.json", "manifests/package-lock.json": "vps-billing/frontend/package-lock.json"}
         exact_copies.update({path: "vps-billing/" + path for path in required_deploy})
         if raw_distribution:
@@ -518,7 +531,8 @@ def verify_downloads(api, intent, files, current_core):
             require(isinstance(notice, dict) and set(notice) == {"path", "sha256", "text"} and isinstance(notice["path"], str) and len(notice["path"]) <= 512 and all(re.fullmatch(r"[A-Za-z0-9@_.+-]+", part) and part not in {".", ".."} for part in notice["path"].split("/")) and isinstance(notice["text"], str) and 0 < len(notice["text"].encode()) <= MAX_JSON and isinstance(notice["sha256"], str) and HASH.fullmatch(notice["sha256"]) and digest(notice["text"].encode()) == notice["sha256"], "SMTP third-party notice integrity mismatch.")
     verify_source(api, build, bundle, intent["source_sha"], provenance)
     require(resolve_tag(api, intent["tag"]) == intent["source_sha"], "Release tag changed during verification.")
-    return {"source_sha": intent["source_sha"], "component": component, "version": version, "binary_sha256": binaries, "source_and_integrity_verified": True, "independent_publisher_signature": False}
+    verified = {"source_sha": intent["source_sha"], "component": component, "version": version, "binary_sha256": binaries, "source_and_integrity_verified": True, "independent_publisher_signature": False}
+    return (verified, bundle) if with_bundle else verified
 
 
 def backup_evidence(path, expected, metadata_path, current_core, trust=_Trust()):

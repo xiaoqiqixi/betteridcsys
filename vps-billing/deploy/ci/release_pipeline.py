@@ -48,6 +48,8 @@ TRUSTED_PATHS = (
     "vps-billing/deploy/scripts/plugin-manager.py",
     "vps-billing/deploy/scripts/update-manager.py",
     "vps-billing/deploy/scripts/test-update-manager.py",
+    "vps-billing/deploy/scripts/core-manager.py",
+    "vps-billing/deploy/scripts/test-core-manager.py",
     "vps-billing/deploy/systemd/aster-api.service",
     "vps-billing/deploy/systemd/aster-smtp.service",
 )
@@ -72,7 +74,7 @@ INPUT_PATHS = (
 CURRENT_INPUT_PATHS = INPUT_PATHS + ("vps-billing/backend/pkg/pluginapi/protocol.go", "vps-billing/backend/plugins/smtp/VERSION")
 ROOT_LICENSE_HASH = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 SMTP_FILES = {"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"}
-CORE_DEPLOY_FILES = {"deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"}
+CORE_DEPLOY_FILES = {"deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf", "deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py", "deploy/scripts/core-manager.py"}
 
 
 class GuardError(Exception):
@@ -760,7 +762,7 @@ def validate_runtime_package(files, source_sha, version, kind, provenance_data=N
         if raw_distribution:
             migrations = {path for path in bundle if path.startswith("migrations/")}
             require(migrations and all(re.fullmatch(r"migrations/[0-9]{3}_[a-z0-9_]+\.sql", path) and copies.get(path) == "vps-billing/backend/" + path for path in migrations), "Core SQL migration resources missing/unbound")
-        archive_permissions(raw, root, (set() if raw_distribution else required_binaries) | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py"})
+        archive_permissions(raw, root, (set() if raw_distribution else required_binaries) | {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py", "deploy/scripts/core-manager.py"})
     else:
         require(set(bundle) == SMTP_FILES and copies == {"LICENSE": "LICENSE", "README.md": "vps-billing/backend/plugins/smtp/README.md"}, "SMTP archive must contain exactly six fixed files")
         manifest = strict_json(bundle["manifest.json"], limit=8192)
@@ -1042,7 +1044,9 @@ def publish(api, policy, archive_bytes):
         source_docs = f"https://github.com/{REPOSITORY}/blob/{provenance['source_sha']}/vps-billing/docs/"
         if raw_distribution and kind == "core":
             fields["body"] += f"\n\n财务更新：新安装仅启用 CNY，运营者配置其他币种与独立报价；没有汇率或历史金额转换。已使用精度锁定，未完成财务义务阻止停用，历史金额与套餐快照保留；新界面确认报价在事务内校验，价格变化要求重新确认。迁移 007 / 14 表须停写并验证备份恢复，没有破坏性数据库降级。附件为两个裸程序、资源和三份元数据，共六项。[财务规则]({source_docs}FINANCIAL_MODEL.md) · [安装]({source_docs}INSTALL.md) · [升级恢复]({source_docs}UPGRADE.md)。"
-        elif raw_distribution:
+        if raw_distribution and kind == "core" and tuple(map(int, provenance["version"].split("."))) >= (0, 5, 1):
+            fields["body"] += f"\n\n安装与维护：主机 `core-manager.py prepare` 校验并自动组装完整版本目录，`doctor` 和 API `-preflight` / `-schema-status` 提供只读检查；备份自动输出 BACKUP.json。准备不激活服务或执行数据库操作，Web 仍不提权。付款禁用时可原子取消符合条件的未付订单并作废配对账单，金额和快照保留；没有收款、退款或资源操作。schema 仍为 007 / 14 表。旧 0.5.0 主机校验器首次进入新策略须按文档核验并引导新资源内工具。[参考与范围]({source_docs}REFERENCE_SCOPE.md)。"
+        elif raw_distribution and kind != "core":
             build = strict_json(files["BUILD.json"])
             compatibility = build["smtp_core_compatibility"]
             fields["body"] += f"\n\n附件为一个裸 SMTP 程序、资源和三份元数据，共五项；协议保持 `aster.smtp/1`，声明 Core `>={compatibility['min']},<{compatibility['max_exclusive']}`。资源与程序须分别核验；旧工具不会自动支持新拆分输入，首次升级使用已核验的新管理工具。安装不自动批准或启用，仅支持管理员固定测试邮件。[插件安装与回退]({source_docs}PLUGINS.md)。"

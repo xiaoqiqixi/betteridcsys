@@ -1385,6 +1385,27 @@ dd {
 .modal input:not([type="checkbox"]) {
   font-size: 14px;
 }
+.cancellation-modal textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 90px;
+  max-height: 240px;
+  padding: 12px;
+  border: 1px solid #dce3ed;
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+}
+.cancellation-modal .field-help span {
+  white-space: nowrap;
+}
+.cancellation-invalid {
+  color: #b83243;
+}
+.cancellation-modal .order-summary dd {
+  overflow-wrap: anywhere;
+}
 .order-plan {
   display: flex;
   align-items: center;

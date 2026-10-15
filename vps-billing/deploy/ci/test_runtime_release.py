@@ -32,7 +32,7 @@ def elf_bytes():
 
 
 def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False):
-    version = ('0.5.0' if kind == 'core' else '1.1.0') if raw else ('0.4.0' if kind == 'core' else '1.0.0')
+    version = ('0.5.1' if kind == 'core' else '1.1.0') if raw else ('0.4.0' if kind == 'core' else '1.0.0')
     tag = ('v' if kind == 'core' else 'smtp-v') + version
     root = ('aster' if kind == 'core' else 'aster-smtp') + '-' + version + '-linux-amd64'
     if raw: root = pipeline.resources_asset(version, kind)[:-7]
@@ -42,7 +42,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
                    'vps-billing/backend/pkg/pluginapi/protocol.go': b'package pluginapi\nconst CoreVersion = "0.4.0"\n',
                    'vps-billing/backend/plugins/smtp/VERSION': b'1.0.0\n'})
     if raw:
-        inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = b'package pluginapi\nconst CoreVersion = "0.5.0"\n'
+        inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = b'package pluginapi\nconst CoreVersion = "0.5.1"\n'
         inputs['vps-billing/backend/plugins/smtp/VERSION'] = b'1.1.0\n'
     copies = {'LICENSE': 'LICENSE'}
     binaries = {'bin/aster-api': elf_bytes(), 'bin/aster-plugin-host': elf_bytes()} if kind == 'core' else {'plugin': elf_bytes()}
@@ -83,7 +83,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
              'input_sha256': {path: pipeline.sha256(inputs[path]) for path in pipeline.CURRENT_INPUT_PATHS},
              'source_files': copies, 'binary_sha256': {path: pipeline.sha256(data) for path, data in binaries.items()}}
     if raw:
-        build.update(schema=3, distribution_format="raw-binaries-v1", component_versions={"core": "0.5.0", "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=pipeline.binary_assets(version, kind), resources_asset=pipeline.resources_asset(version, kind))
+        build.update(schema=3, distribution_format="raw-binaries-v1", component_versions={"core": "0.5.1", "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=pipeline.binary_assets(version, kind), resources_asset=pipeline.resources_asset(version, kind))
     build.update(build_override or {})
     build_raw = json_bytes(build)
     if kind == 'core':
@@ -98,7 +98,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
     with tarfile.open(fileobj=output, mode='w:gz', format=tarfile.GNU_FORMAT) as archive:
         for name, data in sorted(bundle.items()):
             item = tarfile.TarInfo(root + '/' + name)
-            item.mode = 0o755 if name in set(binaries) | {'deploy/scripts/plugin-manager.py', 'deploy/scripts/backup-native.sh', 'deploy/scripts/update-manager.py'} else 0o644
+            item.mode = 0o755 if name in set(binaries) | {'deploy/scripts/plugin-manager.py', 'deploy/scripts/backup-native.sh', 'deploy/scripts/update-manager.py', 'deploy/scripts/core-manager.py'} else 0o644
             item.size = len(data)
             archive.addfile(item, io.BytesIO(data))
     files = refresh_checksums({'BUILD.json': build_raw, root + '.tar.gz': output.getvalue(), **raw_assets})
@@ -208,6 +208,22 @@ class RuntimeReleaseTests(unittest.TestCase):
         _, version, files, _, _ = runtime_fixture(remove_members=("deploy/scripts/update-manager.py",))
         with self.assertRaises(pipeline.GuardError):
             pipeline.validate_package(files, SHA, version)
+
+    def test_raw_core_prepare_tool_is_required_and_source_bound(self):
+        path = "deploy/scripts/core-manager.py"
+        _, version, files, _, _ = runtime_fixture(raw=True, remove_members=(path,))
+        with self.assertRaises(pipeline.GuardError):
+            pipeline.validate_package(files, SHA, version)
+        api, env, event, files, _, _, version = normal_flow(raw=True)
+        policy = pipeline.prepare_publish(api, env, event)
+        build = pipeline.strict_json(files["BUILD.json"])
+        self.assertEqual(build["source_files"][path], "vps-billing/" + path)
+        self.assertIn("vps-billing/deploy/scripts/test-core-manager.py", pipeline.TRUSTED_PATHS)
+        tree = api.responses[("GET", PREFIX + f"/git/trees/{SHA}?recursive=1")]
+        next(item for item in tree["tree"] if item["path"] == "vps-billing/" + path)["sha"] = "f" * 40
+        with self.assertRaises(pipeline.GuardError):
+            pipeline.verify_provenance(files, policy, api)
+        self.assertFalse(api.mutations)
 
     def test_smtp_fixed_inventory_manifest_inner_hash_and_notice_text_are_enforced(self):
         for path, data in (('unknown.go', b'package fixture'), ('plugin', b'not ELF'), ('manifest.json', b'{}'), ('SHA256SUMS', b''), ('THIRD_PARTY_NOTICES.json', b'{"schema":1,"notices":[]}')):

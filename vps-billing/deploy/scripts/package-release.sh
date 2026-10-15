@@ -84,7 +84,7 @@ if [[ $kind == core ]]; then
   cp "$build/backend/migrations/"*.sql "$bundle/migrations/"
   cp -R "$build/deploy/systemd" "$bundle/deploy/systemd"
   cp "$build/deploy/nginx.native.conf" "$bundle/deploy/"
-  cp "$build/deploy/scripts/backup-native.sh" "$build/deploy/scripts/plugin-manager.py" "$build/deploy/scripts/update-manager.py" "$bundle/deploy/scripts/"
+  cp "$build/deploy/scripts/backup-native.sh" "$build/deploy/scripts/plugin-manager.py" "$build/deploy/scripts/update-manager.py" "$build/deploy/scripts/core-manager.py" "$bundle/deploy/scripts/"
   cp "$snapshot/README.md" "$bundle/REPOSITORY-README.md"
   cp "$build/README.md" "$bundle/PROJECT-README.md"
   cp "$build/backend/go.mod" "$build/backend/go.sum" "$bundle/manifests/"
@@ -95,7 +95,7 @@ find "$binary_root" -type f -exec chmod 755 {} +
 find "$bundle" -type d -exec chmod 755 {} +
 find "$bundle" -type f -exec chmod 644 {} +
 if [[ $kind == core ]]; then
-  chmod 755 "$bundle/deploy/scripts/backup-native.sh" "$bundle/deploy/scripts/plugin-manager.py" "$bundle/deploy/scripts/update-manager.py"
+  chmod 755 "$bundle/deploy/scripts/backup-native.sh" "$bundle/deploy/scripts/plugin-manager.py" "$bundle/deploy/scripts/update-manager.py" "$bundle/deploy/scripts/core-manager.py"
 fi
 mkdir -p "$(dirname "$output")"
 publish=$(mktemp -d "$(dirname "$output")/.aster-package.XXXXXXXX")

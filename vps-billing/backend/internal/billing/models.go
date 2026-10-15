@@ -149,6 +149,7 @@ type Store interface {
 	Audits(context.Context, string) ([]Audit, error)
 	CreateOrder(context.Context, User, string, string, string, string) (Order, bool, error)
 	CreateQuotedOrder(context.Context, User, string, string, string, string, *PriceQuote) (Order, bool, error)
+	CancelOrder(context.Context, User, string, string) (OrderCancellation, error)
 }
 
 func ID() string {

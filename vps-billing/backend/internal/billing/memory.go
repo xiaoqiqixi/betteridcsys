@@ -27,6 +27,7 @@ type Memory struct {
 	services       []Service
 	audits         []Audit
 	requests       map[string]memoRequest
+	orderEvents    []orderOutboxEvent
 }
 
 func NewMemory() *Memory {
@@ -198,7 +199,12 @@ func (m *Memory) CreateQuotedOrder(_ context.Context, u User, pid, host, key, cu
 		if r.Fingerprint != fp {
 			return Order{}, false, ErrConflict
 		}
-		return cloneOrder(r.Order), true, nil
+		for _, existing := range m.orders {
+			if existing.ID == r.Order.ID && existing.UserID == u.ID {
+				return cloneOrder(existing), true, nil
+			}
+		}
+		return Order{}, false, ErrNotFound
 	}
 	if currency == "" {
 		currency = m.settings.DefaultCurrency
@@ -232,6 +238,7 @@ func (m *Memory) CreateQuotedOrder(_ context.Context, u User, pid, host, key, cu
 	m.invoices = append(m.invoices, i)
 	m.audits = append(m.audits, a)
 	m.requests[k] = memoRequest{fp, o}
+	m.orderEvents = append(m.orderEvents, orderCreatedEvent(o, i))
 	return cloneOrder(o), false, nil
 }
 

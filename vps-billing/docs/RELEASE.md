@@ -1,6 +1,6 @@
 # 版本、构建与发布
 
-Core 与运行时插件分别采用语义化版本、构建包和 Release。本次源码版本为 Core `0.5.0`、官方 SMTP `1.1.0`；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
+Core 与运行时插件分别采用语义化版本、构建包和 Release。本次源码版本为 Core `0.5.1`、官方 SMTP `1.1.0`；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
 
 本项目在 `main` 维护。正常发布采用公开、非草稿、非预发布的 Release；这是版本交付状态，不宣称支付、主控/被控、商业运营或安全认证已完成。发布流程不部署服务器、不操作真实付款、不发送外部邮件。root `LICENSE` 和第三方版权材料保留；根 README 可随产品变化更新。
 
@@ -8,12 +8,12 @@ Core 与运行时插件分别采用语义化版本、构建包和 Release。本�
 
 | 项目 | 标签 | 原始 Linux amd64 程序 | 单独资源包 |
 |---|---|---|---|
-| Core | `v0.5.0` | `aster-api-0.5.0-linux-amd64`、`aster-plugin-host-0.5.0-linux-amd64` | `aster-core-0.5.0-linux-amd64-resources.tar.gz` |
+| Core | `v0.5.1` | `aster-api-0.5.1-linux-amd64`、`aster-plugin-host-0.5.1-linux-amd64` | `aster-core-0.5.1-linux-amd64-resources.tar.gz` |
 | SMTP | `smtp-v1.1.0` | `aster-smtp-1.1.0-linux-amd64` | `aster-smtp-1.1.0-linux-amd64-resources.tar.gz` |
 
 每个 Release 另含 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`：Core 共 6 个手工发布资产，SMTP 共 5 个。程序为未压缩的静态 ELF 可执行文件；下载后须按固定目标名安装和赋予执行权限。资源包不含 ELF，不能把它当作已经带程序的旧运行包。
 
-Core 资源根目录为 `aster-core-0.5.0-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。安装时把两个原始程序分别组装为 `bin/aster-api`、`bin/aster-plugin-host`；仍须配置 MySQL、秘密和 HTTPS。单个 API 程序不能替代网页、配置、数据库或插件宿主。
+Core 资源根目录为 `aster-core-0.5.1-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。资源内 `core-manager.py prepare` 核验同版本资产并自动组装 `bin/aster-api`、`bin/aster-plugin-host`；仍须配置 MySQL、秘密和 HTTPS。单个 API 程序不能替代网页、配置、数据库或插件宿主。
 
 SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。管理工具同时核验资源与原始程序，再组装为不可覆盖的六文件版本目录；安装不批准、不启动。两种 Release 分别记录来源，不能用 Core 校验和证明 SMTP 程序。
 
@@ -35,9 +35,9 @@ SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `mani
 
 ```sh
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.0 --output /workspace/core-a
+  --commit COMMIT_SHA --kind core --version 0.5.1 --output /workspace/core-a
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.0 --output /workspace/core-b
+  --commit COMMIT_SHA --kind core --version 0.5.1 --output /workspace/core-b
 diff -r /workspace/core-a /workspace/core-b
 
 vps-billing/deploy/scripts/package-release.sh \

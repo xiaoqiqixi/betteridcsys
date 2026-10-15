@@ -8,17 +8,19 @@
 
 `deploy/scripts/backup-native.sh` 用于本项目当前的 **InnoDB 基础表**：客户、会话、套餐与独立币种价格、订单、账单、站点、SMTP 与币种设置、独立价格 revision、金额/套餐快照、幂等请求、审计、outbox、迁移记录。它不是通用 MySQL 全实例备份工具，不备份系统账号、权限、其他库、服务器配置、日志或秘密。
 
-脚本在导出前读取 `information_schema`，发现视图、非 InnoDB 表、触发器、例程或事件就停止；随后明确跳过这些对象。这样不会默默把已检测到的自定义对象漏出备份范围。**元数据可见性取决于账号权限**：DBA 必须先核对备份账号的 grants，并将可见对象清单与经授权的完整 schema 清单比较。看不见的对象可能无法被此检查发现，查询返回 0 不能代替权限审查。自定义数据库对象需另行设计、验证完整备份方案后才能使用。
+脚本在导出前后只读查询真实 MySQL 8.4 的版本、厂商、server UUID、选中库、迁移记录及 `information_schema`。迁移必须是所选发行目录 SQL 的非空、连续、checksum 一致前缀，表和列清单须与该前缀匹配；未知版本、改动的 checksum、额外/缺失的表或列、部分执行的下一次迁移会停止备份。视图、非 InnoDB 表、触发器、例程或事件也会停止；导出明确跳过这些对象。**元数据可见性取决于账号权限**：DBA 必须先核对备份账号的 grants，并将可见对象清单与经授权的完整 schema 清单比较。看不见的对象可能无法被此检查发现，查询返回 0 不能代替权限审查。自定义数据库对象需另行设计、验证完整备份方案后才能使用。
+
+表/列清单与发行 SQL 的匹配不等于完整 DDL 定义验证。脚本另外记录列类型/默认值、约束、索引及外键的前后观测值，要求导出前后不变，但不据此证明所有定义均与发行源码一致，也不验证业务数据。可另用同版本 API 的 `-preflight` 核对必要物理定义；它仍不替代 DBA 审查和隔离恢复。
 
 备份账号独立于 API 与迁移身份。按实际 MySQL 版本审查本库的 SELECT、SHOW VIEW、TRIGGER、EVENT 及全局 SHOW_ROUTINE 元数据可见权限；这些权限用于完整识别对象，不把备份凭据交给 API，也不默认使用 root。若不接受所需元数据权限，就停止此流程并采用经 DBA 审查的替代备份方案。脚本不会创建账号或授予权限。
 
-导出使用 `--single-transaction --quick`。备份期间禁止迁移和其他 DDL；所有业务表必须是 InnoDB。它不保证跨库、外部系统或文件的一致性。相关选项与权限要求见 [MySQL 8.4 mysqldump 官方说明](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html)。
+导出使用 `--single-transaction --quick`。备份期间禁止迁移和其他 DDL；所有业务表必须是 InnoDB。前后观测相同不能防止两次查询之间发生再恢复原状的 DDL，也不构成迁移锁。它不保证跨库、外部系统或文件的一致性。相关选项与权限要求见 [MySQL 8.4 mysqldump 官方说明](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html)。
 
 Core/插件发布包、源码提交、配置版本、非秘密插件策略/manifest、TLS 证书和必要秘密另行受控备份，秘密单独加密保护，保证能恢复对应版本。不要把数据库备份、凭据或秘密引用清单上传到 Git、Release、网页根目录或普通日志。
 
 ## 准备私密凭据与目录
 
-需要 Bash、GNU coreutils、gzip、与服务器兼容的 MySQL 8.4 `mysql`/`mysqldump`。使用受控系统 PATH，不从当前目录或可被其他用户修改的目录加载命令。
+需要 Bash、GNU coreutils、Python 3、gzip、与服务器兼容的 MySQL 8.4 `mysql`/`mysqldump`。使用受控系统 PATH，不从当前目录或可被其他用户修改的目录加载命令。
 
 由管理员预先准备专用备份操作身份及两个目录，例如 `/etc/aster-backup/`、`/var/backups/aster/`；后者必须已经存在、归执行脚本的账号所有、权限为 0700。脚本不创建输出根目录，不调整现有目录权限，也不删除旧备份。目录及其祖先必须受可信管理员控制，不能让其他用户替换路径。
 
@@ -35,14 +37,17 @@ Core/插件发布包、源码提交、配置版本、非秘密插件策略/manif
 
 ## 创建与检查备份
 
-核对来源库名、socket 和备份账号后，由备份操作身份执行。另行核对 socket 及其父目录归获批准的 MySQL 服务身份管理，其他用户不能替换；脚本不会把 mysql 所有的正常 socket 路径误判为必须归备份账号所有，也不替代此目标核对。下列路径和 `aster` 是需要按已批准环境核实的示例，不会自动安装或启动任何服务：
+先按 [安装手册](INSTALL.md)独立核验当前安装的同版本程序与资源来源，并解析出具体发行目录。`--release-directory` 是必填参数，须指向已组装、管理员控制的完整 Core 目录，包含 `manifests/BUILD.json` 与 `migrations/`，不能填候选新版本或临时手写的 BUILD。脚本核对 Core 版本、源码提交、平台、分发格式、完整迁移映射及本地 SQL 摘要；当前 BUILD 并不为每个 SQL 提供独立摘要，路径映射和本地文件自身不能证明发行来源可信。不能为通过检查而编造提交、版本、迁移或 metadata。
+
+核对来源库名、socket 和备份账号后，由备份操作身份执行。另行核对 socket 及其父目录归获批准的 MySQL 服务身份管理，其他用户不能替换；脚本不会把 mysql 所有的正常 socket 路径误判为必须归备份账号所有，也不替代此目标核对。下列路径、`VERSION` 和 `aster` 是需要按已批准环境核实的示例，不会自动安装或启动任何服务：
 
 ```sh
-/path/to/release/deploy/scripts/backup-native.sh \
+/opt/aster/releases/VERSION/deploy/scripts/backup-native.sh \
   --client-config /etc/aster-backup/client.cnf \
   --socket /run/mysqld/mysqld.sock \
   --database aster \
-  --output-dir /var/backups/aster
+  --output-dir /var/backups/aster \
+  --release-directory /opt/aster/releases/VERSION
 ```
 
 库名只允许 1–64 个 ASCII 字母、数字和下划线，首字符为字母或下划线；系统库不允许导出。脚本只连接本机 socket，不能用于远端数据库。所有路径必须为绝对路径。
@@ -53,10 +58,13 @@ Core/插件发布包、源码提交、配置版本、非秘密插件策略/manif
 aster-aster-20261014T000000Z-RANDOM/
   database.sql.gz
   BACKUP.txt
+  BACKUP.json
   SHA256SUMS
 ```
 
-时间加随机后缀区分同秒并发执行。临时目录内完成导出、压缩检查和校验和检查后，整个目录在同一文件系统中原子发布；目标已存在则拒绝覆盖。正常错误或可捕获信号会清理本次临时目录，不触碰已有备份。断电、SIGKILL、磁盘或文件系统故障仍可能留下 `.partial` 目录；它们不是已完成备份，应保留现场后人工检查，不得据文件存在推定成功。原子可见性也不等于断电持久性保证。
+`BACKUP.json` 自动生成并采用更新工具接受的 schema 1，精确包含 `schema`、`source_commit`、`core_version`、`database`、`schema_version` 与 `migration_checksums` 六项。提交与 Core 版本来自已核验的当前发行 BUILD，库名与 schema 版本来自实际目标，checksums 为从 `"1"` 到实际当前版本的真实完整映射；较旧的合法前缀不会被写成候选版本。无需人工构造 JSON。metadata 不宣称 SQL 内容已验证或隔离恢复已通过。
+
+`SHA256SUMS` 精确覆盖 `database.sql.gz`、`BACKUP.txt` 与 `BACKUP.json`。时间加随机后缀区分同秒并发执行。临时目录内完成导出、前后 schema/发行输入一致性、压缩检查和校验和检查后，整个目录在同一文件系统中原子发布；目标已存在则拒绝覆盖。正常错误或可捕获信号会清理本次临时目录，不触碰已有备份。断电、SIGKILL、磁盘或文件系统故障仍可能留下 `.partial` 目录；它们不是已完成备份，应保留现场后人工检查，不得据文件存在推定成功。原子可见性也不等于断电持久性保证。
 
 所有备份目录为 0700，文件为 0600。SQL、配置或数据库诊断不会输出到控制台；成功时的 mysqldump 警告仅记录 `dump_warnings=yes`，原始 stderr 不发布。如果出现警告，应通过受控的私密诊断核实原因后再接受该恢复点。
 
@@ -68,7 +76,7 @@ sha256sum --check SHA256SUMS
 gzip -t database.sql.gz
 ```
 
-归档是**未加密的敏感数据**，包含会话状态和客户资料。按运营策略尽快加密、异地复制，并验证解密和密钥恢复方法。SHA-256 与 gzip 检查不证明来源可信，也不证明业务可恢复；同一主机或同一磁盘的副本不能承担主机故障时的恢复责任。不要在共享终端直接输出解压后的 SQL。
+归档是**未加密的敏感数据**，包含会话状态和客户资料。按运营策略尽快加密、异地复制，并验证解密和密钥恢复方法。SHA-256、gzip 与自动 metadata 检查不证明备份 SQL 内容、业务可恢复或已完成隔离恢复；同一主机或同一磁盘的副本不能承担主机故障时的恢复责任。不要在共享终端直接输出解压后的 SQL。用于 [更新交接](UPDATES.md)时，传入此目录的 `database.sql.gz`、对应真实 SHA-256 和 `BACKUP.json`；若工具要求 root 私密副本，保留原备份身份管理的恢复点，另复制经核对的文件，不递归改动原目录属主。
 
 ## 手工隔离恢复：先核实目标，再导入
 
@@ -150,4 +158,4 @@ gzip -dc database.sql.gz | \
 
 保留策略应根据业务写入频率、容量与恢复要求确定。删除前确认近期恢复点已实际演练且存在可解密的异地副本；不要让新的未验证备份替换唯一已知可恢复副本。记录恢复结束时间、实际耗时、数据检查结果、未通过项和后续行动，用演练结果确定目标 RPO/RTO。
 
-源码附带 `deploy/scripts/test-backup-native.sh`：使用 fakebin 内的模拟 mysql/mysqldump，并将系统根目录属主建模为标准 root（私密文件和下层目录权限使用真实临时文件系统检查），验证并发目录、原子不覆盖、私密权限、配置约束、元数据失败、dump/gzip/checksum 失败与可移动校验和。它不连接数据库、不创建真实账号、不启动服务。当前版本仅提供原生部署备份流程。
+源码附带 `deploy/scripts/test-backup-native.sh`：使用 fakebin 内的模拟 mysql/mysqldump，并将系统根目录属主建模为标准 root（私密文件和下层目录权限使用真实临时文件系统检查），验证并发目录、原子不覆盖、私密权限、配置约束、发行输入变更、schema 前缀/部分执行/导出期间变更、自动 JSON 与精确校验清单、dump/gzip/checksum 失败及可移动校验和。模拟查询拒绝非 SELECT；这些测试不连接数据库、不创建真实账号、不启动服务，也不证明真实 MySQL 或恢复验收通过。真实结果另见 [验证记录](VALIDATION.md)。当前版本仅提供原生部署备份流程。

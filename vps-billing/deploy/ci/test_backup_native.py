@@ -21,7 +21,7 @@ class BackupScannerTest(unittest.TestCase):
         self.temp.mkdir()
         self.grep = shutil.which("grep")
         self.assertIsNotNone(self.grep)
-        for name in ("bash", "env", "dirname", "mktemp", "rm", "mkdir", "cat", "chmod", "gzip", "mv", "sha256sum", "stat", "find", "wc", "cp", "ln", "realpath", "date", "grep"):
+        for name in ("bash", "env", "dirname", "mktemp", "rm", "mkdir", "cat", "chmod", "gzip", "mv", "sha256sum", "stat", "find", "wc", "cp", "ln", "realpath", "date", "grep", "cmp", "python3"):
             target = shutil.which(name)
             self.assertIsNotNone(target, name)
             (self.bin / name).symlink_to(target)

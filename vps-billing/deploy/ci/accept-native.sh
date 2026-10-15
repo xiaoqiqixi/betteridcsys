@@ -34,7 +34,7 @@ fixture_root=$ASTER_NATIVE_MYSQL_FIXTURE_ROOT
 [[ -S $mysql_socket && -f $admin_cnf && ! -L $admin_cnf ]] || fail 'MySQL fixture socket/private client file unavailable.'
 [[ $(realpath -e "$mysql_socket") == "$fixture_root/"* ]] || fail 'Socket does not belong to the declared disposable fixture.'
 [[ $(stat -c %a "$admin_cnf") == 600 && $(stat -c %u "$admin_cnf") == "$EUID" ]] || fail 'Fixture client file must be private and runner-owned.'
-for tool in go npm python3 openssl curl sudo systemctl systemd-analyze install useradd usermod userdel groupadd groupdel getent gzip sha256sum timeout; do
+for tool in git tar go npm python3 openssl curl sudo systemctl systemd-analyze install useradd usermod userdel groupadd groupdel getent gzip sha256sum timeout; do
   command -v "$tool" >/dev/null || fail "Required native tool unavailable: $tool"
 done
 sudo -n true || fail 'Passwordless sudo is required on this disposable runner.'
@@ -127,10 +127,31 @@ for user in "$api_user" "$web_user" "$smtp_user" "$socket_group"; do
 done
 for path in "$opt" "$config" "$logs" "$run" "/etc/systemd/system/$api_unit" "/etc/systemd/system/$web_unit" "/etc/systemd/system/$smtp_unit"; do [[ ! -e $path && ! -L $path ]] || fail 'Refusing to reuse an existing privileged path.'; done
 
-step 'Build versioned source into two same-schema release directories'
-(cd "$project/backend" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$scratch/aster-api" ./cmd/server)
-(cd "$project/backend" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$scratch/aster-plugin-host" ./cmd/plugin-host)
-(cd "$project/frontend" && npm ci --include=dev --no-audit --no-fund && npm run build)
+step 'Build actual raw release programs and resources from the selected source'
+core_version=$(python3 - "$project/backend/pkg/pluginapi/protocol.go" <<'PYVERSION'
+from pathlib import Path
+import re
+import sys
+matches = re.findall(r'CoreVersion\s*=\s*"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"', Path(sys.argv[1]).read_text())
+if len(matches) != 1:
+    raise SystemExit('Selected source must contain one stable Core version.')
+print(matches[0])
+PYVERSION
+)
+source_commit=$(git -C "$source_root" rev-parse --verify HEAD)
+bash "$project/deploy/scripts/package-release.sh" --commit "$source_commit" --kind core --version "$core_version" --output "$scratch/core-distribution" > "$scratch/core-package.log" 2>&1 || fail 'Selected-source raw release build failed.'
+# These are actual source-built raw assets, not an official published release or
+# an invented Actions provenance. The production prepare verifier is tested
+# independently against bounded official-metadata fixtures.
+(cd "$scratch/core-distribution" && sha256sum --check --status SHA256SUMS) || fail 'Source-built asset checksum mismatch.'
+mkdir -m 700 "$scratch/assembled"
+tar -xzf "$scratch/core-distribution/aster-core-$core_version-linux-amd64-resources.tar.gz" --directory "$scratch/assembled" --no-same-owner --no-same-permissions
+assembled="$scratch/assembled/aster-core-$core_version-linux-amd64-resources"
+mkdir -m 755 "$assembled/bin"
+install -m 755 "$scratch/core-distribution/aster-api-$core_version-linux-amd64" "$assembled/bin/aster-api"
+install -m 755 "$scratch/core-distribution/aster-plugin-host-$core_version-linux-amd64" "$assembled/bin/aster-plugin-host"
+cp "$assembled/bin/aster-api" "$scratch/aster-api"
+cp "$assembled/bin/aster-plugin-host" "$scratch/aster-plugin-host"
 for user in "$api_user" "$web_user" "$smtp_user"; do
   sudo -n useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$user"
   created_users+=("$user")
@@ -151,9 +172,7 @@ for path in "$opt" "$config" "$logs" "$run"; do
 done
 sudo -n install -d -m 755 "$opt/releases/a/bin" "$opt/releases/a/web" "$opt/releases/b/bin" "$opt/releases/b/web" "$opt/tools"
 for version in a b; do
-  sudo -n install -m 755 "$scratch/aster-api" "$opt/releases/$version/bin/aster-api"
-  sudo -n install -m 755 "$scratch/aster-plugin-host" "$opt/releases/$version/bin/aster-plugin-host"
-  sudo -n cp -R "$project/frontend/dist/." "$opt/releases/$version/web/"
+  sudo -n cp -R "$assembled/." "$opt/releases/$version/"
   sudo -n find "$opt/releases/$version/web" -type d -exec chmod 755 '{}' +
   sudo -n find "$opt/releases/$version/web" -type f -exec chmod 644 '{}' +
   printf '%s\n' "$version" > "$scratch/release-id"
@@ -222,6 +241,19 @@ PY
 read -r api_port http_port tls_port <<< "$ports"
 origin="https://localhost:$tls_port"
 cli_env=(env -i APP_MODE=production "APP_ORIGIN=$origin" "SESSION_SECRET_FILE=$scratch/session" MYSQL_ALLOW_INSECURE=true PAYMENT_PROVIDER=payment.disabled EMAIL_PROVIDER=email.disabled)
+"${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/runtime.dsn" "$opt/releases/a/bin/aster-api" -preflight > "$evidence/preflight-empty.json"
+[[ $("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()') == 0 ]] || fail 'Read-only empty preflight created database objects.'
+python3 - "$evidence/preflight-empty.json" <<'PYEMPTY'
+import json
+from pathlib import Path
+import sys
+report = json.loads(Path(sys.argv[1]).read_text())
+database = report['database']
+assert report['read_only'] is True and report['configuration_checked'] is True
+assert database['read_only'] is True and database['status'] == 'empty'
+assert database['empty_target'] is True and database['schema_version'] == 0
+assert database['table_visibility_verified'] is True and database['empty_target_scope'] == 'base_tables'
+PYEMPTY
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate > "$scratch/migrate.log" 2>&1
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate >> "$scratch/migrate.log" 2>&1
 migration_count=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM schema_migrations')
@@ -231,6 +263,19 @@ for role in admin customer second; do
   account_role=customer; [[ $role != admin ]] || account_role=admin
   "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/runtime.dsn" "BOOTSTRAP_EMAIL=$role@native-ci.invalid" "BOOTSTRAP_NAME=Native CI $role" "BOOTSTRAP_ROLE=$account_role" "BOOTSTRAP_PASSWORD_FILE=$scratch/$role" "$opt/releases/a/bin/aster-api" -create-user >> "$scratch/bootstrap.log" 2>&1
 done
+"${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/runtime.dsn" "$opt/releases/a/bin/aster-api" -schema-status > "$evidence/preflight-current.json"
+python3 - "$evidence/preflight-current.json" <<'PYCURRENT'
+import json
+from pathlib import Path
+import sys
+report = json.loads(Path(sys.argv[1]).read_text())
+database = report['database']
+assert report['read_only'] is True and report['configuration_checked'] is True
+assert database['read_only'] is True and database['status'] == 'current'
+assert database['schema_version'] == 7 and len(database['migration_checksums']) == 7
+assert database['admin_count'] == 1 and database['pending_migrations'] == []
+assert database['table_visibility_verified'] is True
+PYCURRENT
 "${mysql_cmd[@]}" "$db" --execute="UPDATE plans SET available=TRUE; UPDATE plan_prices SET available=TRUE; CREATE TABLE permission_probe(id INT) ENGINE=InnoDB;" > "$scratch/seed.log" 2>&1
 runtime_mysql=("$mysql_root/bin/mysql" "--defaults-file=$scratch/runtime.cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --batch --skip-column-names "$db")
 runtime_db_user=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_user"])' "$scratch/accounts.json")
@@ -358,7 +403,7 @@ sudo -n systemctl stop "$api_unit"
 mkdir -m 700 "$scratch/backups"
 monotonic_ns() { python3 -c 'import time; print(time.monotonic_ns())'; }
 backup_started=$(monotonic_ns)
-PATH="$mysql_root/bin:$PATH" bash "$project/deploy/scripts/backup-native.sh" --client-config "$scratch/backup.cnf" --socket "$mysql_socket" --database "$db" --output-dir "$scratch/backups" > "$scratch/backup.log"
+PATH="$mysql_root/bin:$PATH" bash "$project/deploy/scripts/backup-native.sh" --client-config "$scratch/backup.cnf" --socket "$mysql_socket" --database "$db" --output-dir "$scratch/backups" --release-directory "$opt/releases/a" > "$scratch/backup.log"
 mapfile -t archives < <(find "$scratch/backups" -type f -name database.sql.gz)
 [[ ${#archives[@]} == 1 ]] || fail 'Backup did not publish exactly one complete archive.'
 backup_dir=$(dirname -- "${archives[0]}")
