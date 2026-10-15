@@ -14,6 +14,11 @@ func (m *Manager) PaymentSelection() (pluginapi.Manifest, pluginapi.Selection, e
 	if m == nil {
 		return pluginapi.Manifest{}, pluginapi.Selection{}, ErrDisabled
 	}
+	release, e := m.acquirePaymentSlot()
+	if e != nil {
+		return pluginapi.Manifest{}, pluginapi.Selection{}, e
+	}
+	defer release()
 	a, e := loadApprovalKind(m.root, m.policy, "payment", m.rules)
 	if e != nil {
 		return pluginapi.Manifest{}, pluginapi.Selection{}, e
@@ -50,6 +55,11 @@ func (m *Manager) PaymentCheck(ctx context.Context) (pluginapi.Identity, error) 
 	if m == nil || ctx == nil {
 		return pluginapi.Identity{}, ErrDisabled
 	}
+	release, e := m.acquirePaymentSlot()
+	if e != nil {
+		return pluginapi.Identity{}, e
+	}
+	defer release()
 	a, e := loadApprovalKind(m.root, m.policy, "payment", m.rules)
 	if e != nil {
 		return pluginapi.Identity{}, e
@@ -65,23 +75,34 @@ func (m *Manager) PaymentCheck(ctx context.Context) (pluginapi.Identity, error) 
 	return id, nil
 }
 
-func (m *Manager) paymentStart(cfg paymentv1.Config) (*Approval, func(), error) {
-	if m == nil || paymentv1.ValidateConfig(cfg) != nil {
-		return nil, nil, paymentv1.ErrUnavailable
-	}
-	// Reserve capacity before hashing protected artifacts as well as opening RPC.
+// Approval reads and RPC share one bounded capacity pool. Each caller releases
+// its own slot before returning, so an HTTP selection never reserves a slot for
+// a later RPC. This bounds concurrent hashing; filesystem reads are not canceled
+// by the separate RPC deadline.
+func (m *Manager) acquirePaymentSlot() (func(), error) {
 	m.paymentMu.Lock()
 	if m.paymentSlots == nil {
 		m.paymentSlots = make(chan struct{}, 8)
 	}
+	slots := m.paymentSlots
 	select {
-	case m.paymentSlots <- struct{}{}:
+	case slots <- struct{}{}:
 	default:
 		m.paymentMu.Unlock()
-		return nil, nil, paymentv1.ErrUnavailable
+		return nil, ErrUnavailable
 	}
 	m.paymentMu.Unlock()
-	release := func() { <-m.paymentSlots }
+	return func() { <-slots }, nil
+}
+
+func (m *Manager) paymentStart(cfg paymentv1.Config) (*Approval, func(), error) {
+	if m == nil || paymentv1.ValidateConfig(cfg) != nil {
+		return nil, nil, paymentv1.ErrUnavailable
+	}
+	release, e := m.acquirePaymentSlot()
+	if e != nil {
+		return nil, nil, paymentv1.ErrUnavailable
+	}
 	a, e := loadApprovalKind(m.root, m.policy, "payment", m.rules)
 	if e != nil {
 		release()

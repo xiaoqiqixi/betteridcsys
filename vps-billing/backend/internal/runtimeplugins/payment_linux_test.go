@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -365,6 +366,74 @@ func TestPaymentBoundedConcurrency(t *testing.T) {
 	start := time.Now()
 	if _, e := f.manager.CreatePayment(context.Background(), f.paymentConfig(), paymentIntent()); e == nil || time.Since(start) > time.Second {
 		t.Fatal("busy worker did not reject promptly", e)
+	}
+}
+
+func TestPaymentApprovalSharesRPCCapacityAndRecovers(t *testing.T) {
+	f := newPaymentFixture(t)
+	started := make(chan struct{}, 8)
+	finish := make(chan struct{})
+	var finishOnce sync.Once
+	releaseCalls := func() { finishOnce.Do(func() { close(finish) }) }
+	defer releaseCalls()
+	f.paymentServe(t, paymentProcessor{create: func(ctx context.Context, _ paymentv1.Config, _ paymentv1.Intent) (paymentv1.Checkout, error) {
+		started <- struct{}{}
+		select {
+		case <-finish:
+		case <-ctx.Done():
+		}
+		return paymentCheckout(), nil
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls sync.WaitGroup
+	results := make(chan error, 8)
+	for n := 0; n < 8; n++ {
+		calls.Add(1)
+		go func() {
+			defer calls.Done()
+			_, e := f.manager.CreatePayment(ctx, f.paymentConfig(), paymentIntent())
+			results <- e
+		}()
+	}
+	for n := 0; n < 8; n++ {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("payment calls did not fill capacity")
+		}
+	}
+	// Every RPC has finished its approval read before signaling started. Empty
+	// paths would yield ErrDisabled if either method reached approval loading.
+	root, policy := f.manager.root, f.manager.policy
+	f.manager.root, f.manager.policy = "", ""
+	start := time.Now()
+	if _, _, e := f.manager.PaymentSelection(); !errors.Is(e, ErrUnavailable) {
+		t.Fatal("busy selection reached disabled approval paths", e)
+	}
+	if _, e := f.manager.PaymentCheck(context.Background()); !errors.Is(e, ErrUnavailable) {
+		t.Fatal("busy check reached disabled approval paths", e)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("busy approval did not reject promptly")
+	}
+	releaseCalls()
+	calls.Wait()
+	close(results)
+	for e := range results {
+		if e != nil {
+			t.Fatal("held RPC failed", e)
+		}
+	}
+	if _, _, e := f.manager.PaymentSelection(); !errors.Is(e, ErrDisabled) {
+		t.Fatal("released selection did not inspect approval paths", e)
+	}
+	f.manager.root, f.manager.policy = root, policy
+	if m, _, e := f.manager.PaymentSelection(); e != nil || m.ID != "payment.fixture" {
+		t.Fatal("selection capacity did not recover", m, e)
+	}
+	if id, e := f.manager.PaymentCheck(context.Background()); e != nil || id.ID != "payment.fixture" {
+		t.Fatal("check capacity did not recover", id, e)
 	}
 }
 
