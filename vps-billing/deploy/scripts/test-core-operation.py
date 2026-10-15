@@ -772,6 +772,39 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual([event for event in self.native.events if event[:2] == ("service", "start")], [])
         self.assertEqual(self.native.active, "inactive")
 
+    def test_manual_schema_repair_then_verified_resume_clears_stale_rollback_hold(self):
+        digest = self.plan()["plan_sha256"]
+        original_api = self.native.api
+        def interrupted_migration(release, environment, command, allow_failure=False):
+            if command == "-migrate":
+                self.native.partial_migration = True
+                self.native.fail_migration = True
+            return original_api(release, environment, command, allow_failure)
+        self.native.api = interrupted_migration
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest)
+        held = self.read_journal()
+        self.assertEqual(held["status"], "recovery_required")
+        self.assertEqual(held["program_rollback"], "blocked_schema_or_readiness")
+        self.assertEqual(held["database_migration"], {"started": True, "completed": False})
+        self.assertTrue((self.config / "maintenance").exists())
+        # Model an independent operator repair; resume only observes this state.
+        self.native.partial_migration = False
+        self.native.fail_migration = False
+        result = self.execute(digest, resume=True)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["program_rollback"], "none")
+        self.assertTrue(result["https_ready"])
+        self.assertFalse(result["maintenance"])
+        self.assertEqual(os.readlink(self.current), str(self.target))
+        self.assertEqual([event[1] for event in self.native.events if event[0] == "api"], ["-migrate"])
+        journal = self.read_journal()
+        operation.validate_journal(journal)
+        self.assertEqual(operation.status(str(self.state), self.spec["operation_id"], self.trust), result)
+        before = list(self.native.events)
+        self.assertEqual(self.execute(digest, resume=True), result)
+        self.assertEqual(self.native.events, before)
+
     def test_interrupted_migration_can_reconcile_completed_schema_without_repeating(self):
         digest = self.plan()["plan_sha256"]
         self.native.fail_migration = True

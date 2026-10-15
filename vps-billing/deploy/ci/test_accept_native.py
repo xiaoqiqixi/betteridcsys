@@ -188,6 +188,49 @@ class CoreExecutorAcceptanceGuardTests(NativeAcceptanceGuardTests):
 
 
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
+    def test_selected_unit_diagnostics_only_emit_expected_checks_and_bounded_categories(self):
+        spec = {"api_unit": "aster-fixture.service", "instance_root": "/opt/aster-fixture",
+                "config_root": "/etc/aster-fixture", "runtime_user": "astfixture"}
+        executable = spec["instance_root"] + "/current/bin/aster-api"
+        values = {"LoadState": "loaded", "ActiveState": "failed", "SubState": "failed", "Result": "exit-code",
+            "FragmentPath": "/etc/systemd/system/" + spec["api_unit"], "DropInPaths": "",
+            "User": "astfixture", "Group": "astfixture", "WorkingDirectory": spec["instance_root"] + "/current",
+            "ExecStart": "{ path=" + executable + " ; argv[]=" + executable + " ; ignore_errors=no ; }",
+            "EnvironmentFiles": spec["config_root"] + "/api.env (ignore_errors=no)",
+            "ExecStartPre": "", "ExecStartPost": "", "ExecStop": "", "ExecReload": "",
+            "ExecMainCode": "1", "ExecMainStatus": "203", "StatusErrno": "0"}
+        report = CORE.selected_unit_diagnostics(spec, "api", values)
+        self.assertTrue(all(report["checks"].values()))
+        self.assertEqual(report["ExecMainStatus"], 203)
+        values.update(ExecStart="private-command-with-secret", EnvironmentFiles="private-credentials",
+                      ActiveState="private-provider-reply", ExecMainStatus="private-password")
+        report = CORE.selected_unit_diagnostics(spec, "api", values)
+        self.assertFalse(report["checks"]["exec_start_parsed"])
+        self.assertFalse(report["checks"]["environment_files_expected"])
+        self.assertEqual(report["ActiveState"], "other_or_absent")
+        self.assertIsNone(report["ExecMainStatus"])
+        self.assertNotIn("private-", json.dumps(report))
+        self.assertNotIn(spec["config_root"], json.dumps(report))
+
+    def test_native_diagnostic_wrapper_forwards_results_and_suppresses_exception_bodies(self):
+        class Native:
+            def __init__(self, spec):
+                self.spec = spec
+            def service(self, verb, unit):
+                return "private-native-result"
+            def validate_service(self, release):
+                raise RuntimeError("private-command-DSN-password")
+        executor = SimpleNamespace(Native=Native, edge_unit=lambda spec: "aster-fixture-edge.service")
+        spec = {"operation_id": "d" * 32, "api_unit": "aster-fixture.service"}
+        CORE.NATIVE_TRACES.pop(spec["operation_id"], None)
+        native = CORE.diagnostic_native(executor)(spec)
+        self.assertEqual(native.service("start", spec["api_unit"]), "private-native-result")
+        with self.assertRaisesRegex(RuntimeError, "private-command"):
+            native.validate_service("/private-release")
+        trace = CORE.NATIVE_TRACES.pop(spec["operation_id"])
+        self.assertEqual(trace["first_failure"], {"substep": "validate-service", "event": "failed", "reason": "failure_details_suppressed"})
+        self.assertNotIn("private-", json.dumps(trace))
+
     def test_real_umask_077_keeps_new_public_ancestors_traversable_and_secrets_private(self):
         with tempfile.TemporaryDirectory(prefix="aster-core-umask-") as directory:
             root = Path(directory)

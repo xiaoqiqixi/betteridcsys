@@ -34,6 +34,16 @@ class AcceptanceFailure(RuntimeError):
 
 
 STAGE = "initializing"
+NATIVE_TRACES = {}
+SAFE_REJECTIONS = {
+    "Public status ancestors must be traversable by the non-root API.": "public_status_parent_not_traversable",
+    "Public status ancestors cannot be shared writable or privileged directories.": "public_status_parent_unsafe_mode",
+    "A fixed native operation failed; raw diagnostics were suppressed.": "fixed_native_command_failed",
+    "Native operation stopped; inspect its redacted status and private journal. No database rollback was performed.": "executor_recorded_recovery_checkpoint",
+    "Effective systemd API service differs from the reviewed dedicated instance.": "effective_api_service_mismatch",
+    "Effective managed edge service differs from its reviewed unit.": "effective_edge_service_mismatch",
+    "API did not become active.": "api_not_active",
+}
 
 
 def stage(name):
@@ -117,19 +127,103 @@ def fact(evidence, name, value):
     print("CORE_NATIVE_" + name.upper().replace("-", "_") + "_JSON=" + json.dumps(value, sort_keys=True), flush=True)
 
 
+def diagnostic_native(executor):
+    """Trace real native calls with fixed labels; no output or result is faked."""
+    class DiagnosticNative(executor.Native):
+        def traced(self, label, function):
+            trace = NATIVE_TRACES.setdefault(self.spec["operation_id"], {"calls": []})
+            trace["calls"] = (trace["calls"] + [{"substep": label, "event": "started"}])[-24:]
+            try:
+                result = function()
+            except BaseException as failure:
+                event = {"substep": label, "event": "failed",
+                         "reason": SAFE_REJECTIONS.get(str(failure), "failure_details_suppressed")}
+                trace.setdefault("first_failure", event)
+                trace["calls"] = (trace["calls"] + [event])[-24:]
+                raise
+            trace["calls"] = (trace["calls"] + [{"substep": label, "event": "completed"}])[-24:]
+            return result
+
+        def validate_service(self, release):
+            parent = super()
+            return self.traced("validate-service", lambda: parent.validate_service(release))
+
+        def service(self, verb, unit=None):
+            require(verb in {"start", "stop", "restart", "daemon-reload", "show", "enable", "is-enabled"}, "Unexpected diagnostic service verb")
+            selected = "api" if unit == self.spec["api_unit"] else "edge" if unit == executor.edge_unit(self.spec) else "manager"
+            parent = super()
+            return self.traced(selected + "-" + verb, lambda: parent.service(verb, unit))
+
+        def edge(self, action):
+            require(action in {"test", "start", "reload"}, "Unexpected diagnostic edge action")
+            parent = super()
+            return self.traced("nginx-" + action, lambda: parent.edge(action))
+    return DiagnosticNative
+
+
+def selected_unit_diagnostics(spec, role, values):
+    """Project systemctl properties into enums, numbers and expected-value checks."""
+    api = role == "api"
+    expected_unit = spec["api_unit"] if api else spec["api_unit"][:-8] + "-edge.service"
+    checks = {
+        "fragment_expected": values.get("FragmentPath") == "/etc/systemd/system/" + expected_unit,
+        "no_dropins": values.get("DropInPaths") == "",
+    }
+    if api:
+        current = spec["instance_root"] + "/current"
+        executable = current + "/bin/aster-api"
+        parsed = re.search(r"(?:^|[ {])path=([^ ;]+) ; argv\[\]=([^;]+?) ;", values.get("ExecStart", ""))
+        checks.update({"user_expected": values.get("User") == spec["runtime_user"],
+            "group_expected": values.get("Group") == spec["runtime_user"],
+            "working_directory_expected": values.get("WorkingDirectory") == current,
+            "exec_start_parsed": parsed is not None,
+            "exec_start_path_expected": parsed is not None and parsed[1] == executable,
+            "exec_start_argv_expected": parsed is not None and parsed[2].strip() == executable,
+            "environment_files_expected": values.get("EnvironmentFiles") == spec["config_root"] + "/api.env (ignore_errors=no)"})
+        for key in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
+            checks[key + "_empty"] = values.get(key) == ""
+    known = {
+        "LoadState": {"loaded", "not-found", "error", "bad-setting", "masked", "stub", "merged"},
+        "ActiveState": {"active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance", "refreshing"},
+        "SubState": {"dead", "running", "failed", "start", "start-pre", "start-post", "stop", "stop-sigterm", "stop-sigkill", "stop-post", "auto-restart", "auto-restart-queued", "exited", "condition", "final-sigterm", "final-sigkill", "listening", "reload", "cleaning"},
+        "Result": {"success", "exit-code", "signal", "core-dump", "watchdog", "timeout", "start-limit-hit", "resources", "protocol", "oom-kill", "exec-condition", "condition", "skipped"},
+    }
+    report = {"role": role, "checks": checks, "properties_present": {key: key in values for key in
+        ("LoadState", "ActiveState", "SubState", "Result", "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")}}
+    for key, allowed in known.items():
+        report[key] = values.get(key) if values.get(key) in allowed else "other_or_absent"
+    for key in ("ExecMainCode", "ExecMainStatus", "StatusErrno"):
+        value = values.get(key, "")
+        report[key] = int(value) if re.fullmatch(r"[0-9]{1,5}", value) and int(value) <= 65535 else None
+    return report
+
+
+def actual_unit_diagnostics(spec):
+    properties = ("LoadState", "ActiveState", "SubState", "Result", "ExecMainCode", "ExecMainStatus", "StatusErrno",
+                  "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles",
+                  "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
+    output = []
+    for role, unit in (("api", spec["api_unit"]), ("edge", spec["api_unit"][:-8] + "-edge.service")):
+        result = subprocess.run(["/usr/bin/systemctl", "show", unit, *["--property=" + key for key in properties]],
+                                capture_output=True, timeout=5, cwd="/")
+        require(len(result.stdout) <= 64 << 10, "Selected unit properties exceeded their diagnostic bound")
+        values = dict(line.split("=", 1) for line in result.stdout.decode("utf-8", errors="replace").splitlines() if "=" in line)
+        output.append(selected_unit_diagnostics(spec, role, values))
+    return output
+
+
 def failure_diagnostics(resources, failure):
     """Only fixed reasons, validated public receipts and file metadata escape."""
-    reasons = {
-        "Public status ancestors must be traversable by the non-root API.": "public_status_parent_not_traversable",
-        "Public status ancestors cannot be shared writable or privileged directories.": "public_status_parent_unsafe_mode",
-        "A fixed native operation failed; raw diagnostics were suppressed.": "fixed_native_command_failed",
-        "Native operation stopped; inspect its redacted status and private journal. No database rollback was performed.": "executor_recorded_recovery_checkpoint",
-    }
-    reason = reasons.get(str(failure), "unclassified_failure_details_suppressed")
+    reason = SAFE_REJECTIONS.get(str(failure), "unclassified_failure_details_suppressed")
     report = {"stage": STAGE, "reason": reason, "failure_class": type(failure).__name__, "fixtures": []}
     for fixture in getattr(resources, "fixtures", []):
         entry = {"action": fixture.spec["action"], "operation_id": fixture.spec["operation_id"],
                  "checkpoint_available": False, "path_metadata": []}
+        entry["native_trace"] = NATIVE_TRACES.get(fixture.spec["operation_id"], {"calls": []})
+        try:
+            entry["selected_units"] = actual_unit_diagnostics(fixture.spec)
+        except Exception:
+            entry["selected_unit_diagnostics_unavailable"] = True
         try:
             entry["checkpoint"] = fixture.status()
             entry["checkpoint_available"] = True
@@ -404,6 +498,7 @@ class Fixture:
 
     def execute(self, native=None, resume=False):
         stage(self.name + ("-resume" if resume else "-apply"))
+        NATIVE_TRACES[self.spec["operation_id"]] = {"calls": []}
         return self.executor.execute(self.spec_path, self.planned["plan_sha256"], resume=resume, native=native)
 
     def upgrade(self):
@@ -620,6 +715,7 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
 
 def run_scenarios(args, candidate, baseline):
     executor = module("core_acceptance_executor", "core-operation.py")
+    executor.Native = diagnostic_native(executor)
     original_prepared = executor.prepared_release
     overrides = {}
 
@@ -829,12 +925,23 @@ def run_scenarios(args, candidate, baseline):
              incompatible_released_schema_claimed=False))
         # Synthetic canary removal is the explicitly reviewed manual repair.
         resources.sql("ALTER TABLE plans MODIFY COLUMN cpu INT NOT NULL;", database=unknown.spec["database"])
-        require(unknown.execute(resume=True)["status"] == "succeeded", "Manual fixture schema repair could not safely resume")
-        unknown.login()
+        repaired = unknown.execute(resume=True)
+        require(repaired["status"] == "succeeded" and repaired["program_rollback"] == "none",
+                "Manual fixture schema repair did not produce a consistent successful receipt")
+        require(unknown.status() == repaired, "Repaired operation journal failed independent status validation")
+        repaired_live = unknown.confirm_current(unknown.candidate)
+        repaired_api = unknown.verify_status_api(repaired)
+        require(unknown.execute(resume=True) == repaired and
+                unknown.confirm_current(unknown.candidate)["api_pid"] == repaired_live["api_pid"],
+                "Repaired terminal resume repeated activation or changed its receipt")
+        fact(args.evidence, "unknown-schema-recovered", dict(repaired, **repaired_live, **repaired_api,
+             independently_validated_journal=True, terminal_resume_idempotent=True,
+             manual_fixture_repair="required-cpu-column-restored-to-int", automatic_database_restore=False))
         fact(args.evidence, "core-native", {"status": "passed", "candidate_source_commit": candidate["source_commit"],
              "candidate_version": candidate["version"], "published_baseline": "0.5.1", "actual_native_executor": True,
              "fresh_install": True, "published_to_candidate_upgrade": True, "interrupt_resume": True,
              "compatible_program_rollback": True, "unknown_schema_manual_recovery": True,
+             "manual_recovery_receipt_and_terminal_resume_verified": True,
              "separate_actual_legacy_schema_6_to_7_migration": True,
              "separate_empty_database_restore": True, "new_release_schema_delta": False,
              "production_deployment": False, "real_mail_or_payment": False})

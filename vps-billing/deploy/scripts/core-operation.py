@@ -1065,7 +1065,10 @@ class Operation:
         self.journal["maintenance"] = False
         self.save()
         self.readiness(static=True)
-        self.journal.update(status="succeeded", phase="complete", https_ready=True, error_code="none")
+        # A repaired/resumed target has now passed process, schema, HTTPS and
+        # asset verification. Its receipt must no longer describe a blocked
+        # recovery decision from an earlier attempt.
+        self.journal.update(status="succeeded", phase="complete", https_ready=True, error_code="none", program_rollback="none")
         self.save()
         return public_status(self.journal)
 
