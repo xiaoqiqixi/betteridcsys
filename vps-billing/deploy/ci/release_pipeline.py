@@ -832,8 +832,8 @@ def verify_runtime_source(api, files, provenance):
             raise GuardError("Invalid selected input Git encoding") from exc
         require(len(data) == blob["size"] and git_blob_sha(data) == expected[source] and sha256(data) == build["input_sha256"][source], "BUILD input differs from tagged Git blob")
         input_bytes[source] = data
-    core = re.search(rb'CoreVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', input_bytes["vps-billing/backend/pkg/pluginapi/protocol.go"])
-    require(core is not None and core[1].decode() == build["component_versions"]["core"] and
+    core = re.findall(rb'(?m)^\s*(?:const\s+)?CoreVersion\s*=\s*"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"', input_bytes["vps-billing/backend/pkg/pluginapi/protocol.go"])
+    require(len(core) == 1 and core[0].decode() == build["component_versions"]["core"] and
             input_bytes["vps-billing/backend/plugins/smtp/VERSION"].decode().strip() == build["component_versions"]["smtp"], "Declared component version differs from Git source")
 
 

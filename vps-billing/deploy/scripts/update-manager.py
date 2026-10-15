@@ -486,8 +486,8 @@ def verify_source(api, build, bundle, source, provenance):
             raise Rejected("Invalid tagged input encoding.") from exc
         require(len(raw) == blob["size"] and blob_sha(raw) == selected[path] and digest(raw) == build["input_sha256"][path], "Release input does not match tagged source.")
         inputs[path] = raw
-    core = re.search(rb'CoreVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', inputs["vps-billing/backend/pkg/pluginapi/protocol.go"])
-    require(core is not None and core[1].decode() == build["component_versions"]["core"] and inputs["vps-billing/backend/plugins/smtp/VERSION"].decode().strip() == build["component_versions"]["smtp"], "Release component version differs from source.")
+    core = re.findall(rb'(?m)^\s*(?:const\s+)?CoreVersion\s*=\s*"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"', inputs["vps-billing/backend/pkg/pluginapi/protocol.go"])
+    require(len(core) == 1 and core[0].decode() == build["component_versions"]["core"] and inputs["vps-billing/backend/plugins/smtp/VERSION"].decode().strip() == build["component_versions"]["smtp"], "Release component version differs from source.")
 
 
 def verify_downloads(api, intent, files, current_core, *, with_bundle=False):

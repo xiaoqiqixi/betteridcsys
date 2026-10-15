@@ -74,6 +74,26 @@ class SourceVersionTest(unittest.TestCase):
             with self.subTest(kind=kind, version=version), self.assertRaises(SystemExit):
                 manifest.verify_version(root, kind, version)
 
+    def test_core_declaration_is_distinct_from_payment_minimum_and_comments(self):
+        root = self.fixture()
+        protocol = root / "vps-billing/backend/pkg/pluginapi/protocol.go"
+        for source in ('package pluginapi\nconst (\n PaymentMinCoreVersion = "0.5.3"\n CoreVersion = "0.4.0"\n)\n',
+                       'package pluginapi\n// CoreVersion = "9.9.9"\nconst CoreVersion = "0.4.0"\n'):
+            with self.subTest(source=source):
+                protocol.write_text(source)
+                self.assertEqual(manifest.selected_versions(root), {"core": "0.4.0", "smtp": "1.0.0"})
+
+    def test_missing_or_duplicate_core_declaration_cannot_be_replaced_by_similar_name(self):
+        root = self.fixture()
+        protocol = root / "vps-billing/backend/pkg/pluginapi/protocol.go"
+        for source in ('package pluginapi\nconst PaymentMinCoreVersion = "0.4.0"\n',
+                       'package pluginapi\n// CoreVersion = "0.4.0"\n',
+                       'package pluginapi\nconst CoreVersion = "0.4.0"\nconst CoreVersion = "0.4.0"\n'):
+            with self.subTest(source=source):
+                protocol.write_text(source)
+                with self.assertRaises(SystemExit):
+                    manifest.selected_versions(root)
+
     def test_invalid_or_missing_source_version_fails_closed(self):
         for version in ("01.0.0", "1.0", "1.0.0-rc.1", "1.0.0\nextra"):
             with self.subTest(version=version), self.assertRaises(SystemExit):

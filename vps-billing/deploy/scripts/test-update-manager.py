@@ -575,6 +575,25 @@ class HandoffTest(unittest.TestCase):
         with self.assertRaisesRegex(manager.Rejected, "tagged source"):
             self.run_stage()
 
+    def test_source_version_uses_one_core_declaration_and_ignores_payment_minimum_comments(self):
+        protocol = "vps-billing/backend/pkg/pluginapi/protocol.go"
+        accepted = ('package pluginapi\nconst (\n PaymentMinCoreVersion = "9.9.9"\n CoreVersion = "0.4.1"\n)\n',
+                    'package pluginapi\n// CoreVersion = "9.9.9"\nconst CoreVersion = "0.4.1"\n')
+        rejected = ('package pluginapi\nconst PaymentMinCoreVersion = "0.4.1"\n',
+                    'package pluginapi\n// CoreVersion = "0.4.1"\n',
+                    'package pluginapi\nconst CoreVersion = "0.4.1"\nconst CoreVersion = "0.4.1"\n')
+        for source in accepted + rejected:
+            with self.subTest(source=source):
+                fixture = Fixture()
+                fixture.source[protocol] = source.encode()
+                fixture.build["input_sha256"][protocol] = manager.digest(source.encode())
+                fixture.refresh()
+                if source in accepted:
+                    manager.verify_source(fixture, fixture.build, fixture.bundle, SOURCE, fixture.provenance)
+                else:
+                    with self.assertRaisesRegex(manager.Rejected, "component version"):
+                        manager.verify_source(fixture, fixture.build, fixture.bundle, SOURCE, fixture.provenance)
+
     def test_claimed_policy_blobs_bind_exact_tag_default_and_workflow_trees(self):
         self.fixture.provenance["trusted_blobs"][manager.WORKFLOW] = "f" * 40
         self.fixture.reseal()

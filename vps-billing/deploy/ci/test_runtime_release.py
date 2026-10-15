@@ -31,7 +31,7 @@ def elf_bytes():
     return bytes(data)
 
 
-def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False):
+def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False, protocol_source=None):
     version = ('0.5.2' if kind == 'core' else '1.1.0') if raw else ('0.4.0' if kind == 'core' else '1.0.0')
     tag = ('v' if kind == 'core' else 'smtp-v') + version
     root = ('aster' if kind == 'core' else 'aster-smtp') + '-' + version + '-linux-amd64'
@@ -44,6 +44,8 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
     if raw:
         inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = b'package pluginapi\nconst CoreVersion = "0.5.2"\n'
         inputs['vps-billing/backend/plugins/smtp/VERSION'] = b'1.1.0\n'
+    if protocol_source is not None:
+        inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = protocol_source
     copies = {'LICENSE': 'LICENSE'}
     binaries = {'bin/aster-api': elf_bytes(), 'bin/aster-plugin-host': elf_bytes()} if kind == 'core' else {'plugin': elf_bytes()}
     bundle = {'LICENSE': license_bytes, **binaries}
@@ -105,9 +107,9 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
     return tag, version, files, inputs, bundle
 
 
-def normal_flow(kind='core', raw=False):
+def normal_flow(kind='core', raw=False, protocol_source=None):
     api, env, event, policy, _, _ = flow_fixture()
-    tag, version, files, inputs, _ = runtime_fixture(kind, raw=raw)
+    tag, version, files, inputs, _ = runtime_fixture(kind, raw=raw, protocol_source=protocol_source)
     run = api.responses[('GET', PREFIX + f'/actions/runs/{RUN_ID}')]
     old_tag = run['head_branch']
     run['head_branch'] = tag
@@ -169,6 +171,23 @@ class RuntimeReleaseTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(pipeline.GuardError):
                 pipeline.verify_provenance(files, policy, api)
             self.assertFalse(api.mutations)
+
+    def test_git_source_version_uses_exact_core_declaration_not_payment_minimum_or_comment(self):
+        accepted = (b'package pluginapi\nconst (\n PaymentMinCoreVersion = "9.9.9"\n CoreVersion = "0.4.0"\n)\n',
+                    b'package pluginapi\n// CoreVersion = "9.9.9"\nconst CoreVersion = "0.4.0"\n')
+        rejected = (b'package pluginapi\nconst PaymentMinCoreVersion = "0.4.0"\n',
+                    b'package pluginapi\n// CoreVersion = "0.4.0"\n',
+                    b'package pluginapi\nconst CoreVersion = "0.4.0"\nconst CoreVersion = "0.4.0"\n')
+        for source in accepted + rejected:
+            with self.subTest(source=source):
+                api, env, event, files, _, _, _ = normal_flow(protocol_source=source)
+                policy = pipeline.prepare_publish(api, env, event)
+                if source in accepted:
+                    pipeline.verify_provenance(files, policy, api)
+                else:
+                    with self.assertRaisesRegex(pipeline.GuardError, "component version"):
+                        pipeline.verify_provenance(files, policy, api)
+                self.assertFalse(api.mutations)
 
     def test_runtime_manifest_core_hash_and_missing_host_are_rejected(self):
         for override in ({'schema': True}, {'release_kind': 'smtp'}, {'component_versions': {'core': '0.5.0', 'smtp': '1.0.0'}}, {'binary_sha256': {'bin/aster-api': '0' * 64}}, {'input_sha256': {}}):

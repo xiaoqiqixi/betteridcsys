@@ -169,7 +169,7 @@ core_version=$(python3 - "$project/backend/pkg/pluginapi/protocol.go" <<'PYVERSI
 from pathlib import Path
 import re
 import sys
-matches = re.findall(r'CoreVersion\s*=\s*"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"', Path(sys.argv[1]).read_text())
+matches = re.findall(r'(?m)^\s*(?:const\s+)?CoreVersion\s*=\s*"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"', Path(sys.argv[1]).read_text())
 if len(matches) != 1:
     raise SystemExit('Selected source must contain one stable Core version.')
 print(matches[0])

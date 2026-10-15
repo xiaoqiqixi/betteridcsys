@@ -62,13 +62,13 @@ def go_dependency_metadata(entry, linked_modules):
 
 def selected_versions(source):
     protocol = (source / "vps-billing/backend/pkg/pluginapi/protocol.go").read_text()
-    match = re.search(r'CoreVersion\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', protocol)
-    if not match:
-        raise SystemExit("Core version missing from selected source")
+    versions = re.findall(r'(?m)^\s*(?:const\s+)?CoreVersion\s*=\s*"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"', protocol)
+    if len(versions) != 1:
+        raise SystemExit("Selected source must contain one stable Core version")
     smtp = (source / "vps-billing/backend/plugins/smtp/VERSION").read_text().strip()
     if not re.fullmatch(r"(?:0|[1-9][0-9]{0,5})(?:\.(?:0|[1-9][0-9]{0,5})){2}", smtp):
         raise SystemExit("Invalid SMTP source version")
-    return {"core": match[1], "smtp": smtp}
+    return {"core": versions[0], "smtp": smtp}
 
 
 def verify_version(source, kind, version):

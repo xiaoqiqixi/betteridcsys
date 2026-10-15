@@ -10,6 +10,7 @@ import re
 import ssl
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -30,6 +31,27 @@ SPEC.loader.exec_module(HTTP)
 
 
 class NativeReleaseModeTests(unittest.TestCase):
+    def test_source_version_parser_uses_only_the_actual_core_declaration(self):
+        parser = SCRIPT.read_text().split("<<'PYVERSION'\n", 1)[1].split("\nPYVERSION", 1)[0]
+        valid = 'package pluginapi\nconst (\n CoreVersion = "0.5.3"\n PaymentMinCoreVersion = "0.5.3"\n)\n'
+        cases = [(valid, True),
+                 ('package pluginapi\nconst CoreVersion = "0.5.3"\n', True),
+                 (valid.replace(' CoreVersion = "0.5.3"\n', ''), False),
+                 (valid + '\nconst CoreVersion = "0.5.4"\n', False),
+                 (valid.replace(' CoreVersion = "0.5.3"', ' CoreVersion = "0.5.3-rc1"'), False)]
+        with tempfile.TemporaryDirectory(prefix='aster-source-version-') as directory:
+            source = Path(directory) / 'protocol.go'
+            for document, accepted in cases:
+                with self.subTest(document=document):
+                    source.write_text(document)
+                    result = subprocess.run([sys.executable, '-', str(source)], input=parser,
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                    if accepted:
+                        self.assertEqual(result.stdout.strip(), '0.5.3')
+                    else:
+                        self.assertIn('one stable Core version', result.stderr)
+
     def test_surviving_public_preparation_is_reused_as_the_pinned_upgrade_baseline(self):
         source = SCRIPT.read_text()
         assignments = re.findall(r'^(?:public|baseline)_(?:version|target)=.*$', source, re.M)
