@@ -239,6 +239,75 @@ class NativePreparationSmokeGuardTests(unittest.TestCase):
 
 
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
+    def test_restore_component_projection_stops_at_links_and_exports_only_metadata(self):
+        with tempfile.TemporaryDirectory(prefix="aster-restore-components-") as directory:
+            root = Path(directory)
+            target = root / "private-credential"
+            target.write_text("private-password")
+            target.chmod(0o622)
+            observed = CORE.protected_component_diagnostics(str(target))
+            final = observed["components"][-1]
+            self.assertTrue(final["endpoint"])
+            self.assertTrue(final["group_or_world_writable"])
+            self.assertFalse(final["privileged_bits"])
+            self.assertEqual(final["mode"], "0o622")
+            link = root / "private-link"
+            link.symlink_to(root)
+            linked = CORE.protected_component_diagnostics(str(link / target.name))
+            self.assertEqual(linked["components"][-1]["type"], "symlink")
+            self.assertFalse(linked["components"][-1]["endpoint"])
+            self.assertNotIn("private", json.dumps(observed) + json.dumps(linked))
+            self.assertLessEqual(len(observed["components"]), 12)
+
+    def test_restore_open_observer_preserves_actual_descriptor_error_and_restores_function(self):
+        class Rejected(RuntimeError):
+            pass
+        failure = Rejected("private-filesystem-path-and-password")
+        with tempfile.TemporaryDirectory(prefix="aster-restore-observer-") as directory:
+            root = Path(directory)
+            target = root / "private-file"
+            target.write_bytes(b"private-data")
+            calls = []
+            def original(path, *args, **kwargs):
+                calls.append((path, args, kwargs))
+                if kwargs.get("private"):
+                    raise failure
+                return os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            updater = SimpleNamespace(protected_open=original, Rejected=Rejected)
+            resources = SimpleNamespace(restore_paths={"restore_credentials": target})
+            fixture = SimpleNamespace(resources=resources, baseline=str(root / "private-baseline"))
+            with CORE.observe_restore_protected_open(SimpleNamespace(updater=updater), fixture):
+                descriptor = updater.protected_open(str(target), False)
+                try:
+                    self.assertEqual(os.read(descriptor, 12), b"private-data")
+                finally:
+                    os.close(descriptor)
+                with self.assertRaises(Rejected) as caught:
+                    updater.protected_open(str(target), private=True)
+                self.assertIs(caught.exception, failure)
+            self.assertIs(updater.protected_open, original)
+            self.assertEqual(calls, [(str(target), (False,), {}), (str(target), (), {"private": True})])
+            self.assertEqual(resources.restore_filesystem_trace["failed_opens"][0]["role"], "restore_credentials")
+            self.assertNotIn("private", json.dumps(resources.restore_filesystem_trace))
+
+    def test_restore_path_projection_reports_metadata_without_following_links_or_reading_contents(self):
+        with tempfile.TemporaryDirectory(prefix="aster-restore-metadata-") as directory:
+            root = Path(directory)
+            output = root / "private-backup-output"
+            output.mkdir(mode=0o700)
+            completed = output / "private-database-and-timestamp"
+            completed.mkdir(mode=0o700)
+            (completed / "BACKUP.json").write_text("private-password-and-DSN")
+            (completed / "database.sql.gz").symlink_to("/nonexistent-private-target")
+            observed = CORE.restore_path_diagnostics({"backup_output": output})
+            by_label = {entry["label"]: entry for entry in observed}
+            self.assertEqual(by_label["backup_output"]["mode"], "0o700")
+            self.assertTrue(by_label["backup_child_0_metadata"]["regular_file"])
+            self.assertFalse(by_label["backup_child_0_archive"]["regular_file"])
+            self.assertFalse(by_label["backup_child_0_archive"]["directory"])
+            self.assertNotIn("private", json.dumps(observed))
+            self.assertNotIn(str(root), json.dumps(observed))
+
     def test_prepared_verification_fixed_rejections_have_complete_safe_categories(self):
         scripts = SCRIPT.parent.parent / "scripts"
         targets = {

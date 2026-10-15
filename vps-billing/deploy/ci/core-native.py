@@ -270,6 +270,10 @@ def failure_diagnostics(resources, failure):
     report = {"stage": STAGE, "reason": reason, "failure_class": type(failure).__name__, "fixtures": []}
     if hasattr(resources, "legacy_migration_trace"):
         report["legacy_migration"] = resources.legacy_migration_trace
+    if hasattr(resources, "restore_paths"):
+        report["restore_paths"] = restore_path_diagnostics(resources.restore_paths)
+    if hasattr(resources, "restore_filesystem_trace"):
+        report["restore_filesystem"] = resources.restore_filesystem_trace
     for fixture in getattr(resources, "fixtures", []):
         entry = {"action": fixture.spec["action"], "operation_id": fixture.spec["operation_id"],
                  "checkpoint_available": False, "path_metadata": []}
@@ -296,6 +300,108 @@ def failure_diagnostics(resources, failure):
                 entry["path_metadata"].append({"label": label, "unavailable": True})
         report["fixtures"].append(entry)
     return report
+
+
+def restore_path_diagnostics(paths):
+    """Only owned restore-path metadata escapes; names and contents stay private."""
+    selected = list(paths.items())
+    output = paths.get("backup_output")
+    if output is not None:
+        try:
+            info = output.lstat()
+            if stat.S_ISDIR(info.st_mode):
+                for number, path in zip(range(8), output.iterdir()):
+                    prefix = "backup_child_" + str(number)
+                    selected.append((prefix, path))
+                    if stat.S_ISDIR(path.lstat().st_mode):
+                        selected.extend((prefix + "_" + label, path / name) for label, name in (
+                            ("archive", "database.sql.gz"), ("metadata", "BACKUP.json"),
+                            ("notice", "BACKUP.txt"), ("checksums", "SHA256SUMS")))
+        except OSError:
+            pass
+    result = []
+    for label, path in selected:
+        try:
+            info = path.lstat()
+            result.append({"label": label, "uid": info.st_uid, "gid": info.st_gid,
+                "mode": oct(stat.S_IMODE(info.st_mode)), "nlink": info.st_nlink,
+                "directory": stat.S_ISDIR(info.st_mode), "regular_file": stat.S_ISREG(info.st_mode)})
+        except OSError:
+            result.append({"label": label, "unavailable": True})
+    return result
+
+
+def protected_component_diagnostics(path):
+    """Read bounded component metadata through descriptors; export no names."""
+    if not isinstance(path, str) or len(path) > 1024 or not path.startswith("/"):
+        return {"invalid_path_input": True}
+    parts = path[1:].split("/")
+    if len(parts) > 64 or any(part in {"", ".", ".."} for part in parts):
+        return {"invalid_path_input": True}
+    result = {"component_count": len(parts), "components": []}
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for index, part in enumerate(parts):
+            try:
+                info = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                kind = "directory" if stat.S_ISDIR(info.st_mode) else "regular_file" if stat.S_ISREG(info.st_mode) else "symlink" if stat.S_ISLNK(info.st_mode) else "other"
+                entry = {"index": index, "ancestor": index < len(parts) - 1,
+                    "endpoint": index == len(parts) - 1, "uid": info.st_uid, "gid": info.st_gid,
+                    "mode": oct(stat.S_IMODE(info.st_mode)), "nlink": info.st_nlink, "type": kind,
+                    "privileged_bits": bool(info.st_mode & (stat.S_ISUID | stat.S_ISGID)),
+                    "group_or_world_writable": bool(info.st_mode & 0o022),
+                    "sticky_directory": stat.S_ISDIR(info.st_mode) and bool(info.st_mode & stat.S_ISVTX)}
+                if index >= len(parts) - 12:
+                    result["components"].append(entry)
+                if index == len(parts) - 1 or kind != "directory":
+                    break
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+            except OSError:
+                result["metadata_unavailable_at_index"] = index
+                break
+    finally:
+        os.close(descriptor)
+    return result
+
+
+@contextlib.contextmanager
+def observe_restore_protected_open(executor, fixture):
+    """Observe the actual protected open only during this isolated restore."""
+    original = executor.updater.protected_open
+    resources = fixture.resources
+    trace = resources.restore_filesystem_trace = {"failed_opens": []}
+    def observed(path, *args, **kwargs):
+        try:
+            return original(path, *args, **kwargs)
+        except executor.updater.Rejected:
+            role = "other_reviewed_input"
+            if isinstance(path, str):
+                output = getattr(resources, "restore_paths", {}).get("backup_output")
+                if path == fixture.baseline or path.startswith(fixture.baseline + "/"):
+                    role = "published_release"
+                elif output is not None and (path == str(output) or path.startswith(str(output) + "/")):
+                    relative = path[len(str(output)):].strip("/")
+                    role = "backup_output" if not relative else "backup_folder" if "/" not in relative else {
+                        "database.sql.gz": "backup_archive", "BACKUP.json": "backup_metadata",
+                        "BACKUP.txt": "backup_notice", "SHA256SUMS": "backup_checksums"}.get(relative.rsplit("/", 1)[-1], "backup_other_member")
+                else:
+                    for label, selected in getattr(resources, "restore_paths", {}).items():
+                        if path == str(selected):
+                            role = label
+                            break
+            try:
+                details = protected_component_diagnostics(path)
+            except Exception:
+                details = {"metadata_unavailable": True}
+            trace["failed_opens"] = (trace["failed_opens"] + [{"role": role, **details}])[-8:]
+            raise
+    executor.updater.protected_open = observed
+    try:
+        yield
+    finally:
+        executor.updater.protected_open = original
 
 
 def verify_source_candidate(source, assets, installed):
@@ -641,8 +747,14 @@ class Fixture:
         return sha256(raw)
 
     def restore(self):
+        with observe_restore_protected_open(self.executor, self):
+            return self._restore()
+
+    def _restore(self):
         """Actual old-release backup and restore into another empty dedicated DB."""
+        stage("restore-source-data-hash")
         source_hash = self.full_data_hash()
+        stage("restore-create-owned-target")
         target = "ar" + secrets.token_hex(5)
         account = target + "_restore"
         password = secrets.token_hex(24)
@@ -653,19 +765,30 @@ class Fixture:
         require(self.resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='" + target + "';") == "0", "Restore target was not empty")
         output = self.private / ("restore-backups-" + secrets.token_hex(4))
         output.mkdir(mode=0o700)
+        self.resources.restore_paths = {"private_parent": self.private, "backup_output": output,
+            "backup_credentials": Path(self.spec["backup_client_config"])}
         native = self.executor.Native(self.spec)
+        stage("restore-actual-published-backup-and-validate")
         backup = native.backup(self.baseline, str(output))
         archive = Path(backup["directory"], "database.sql.gz")
         import gzip
+        stage("restore-write-private-import-credentials")
         restore_config = self.private / (target + ".cnf")
         write(restore_config, "[client]\nuser=" + account + "\npassword=" + password + "\n")
+        self.resources.restore_paths["restore_credentials"] = restore_config
+        stage("restore-import-into-empty-target")
         self.resources.sql(gzip.decompress(archive.read_bytes()).decode(), restore_config, target)
+        stage("restore-compare-full-table-data-hash")
         restored_hash = self.full_data_hash(target)
         require(source_hash == restored_hash, "Restored data differs from stopped source")
+        stage("restore-write-private-preflight-dsn")
         restored_dsn = self.private / (target + ".dsn")
         write(restored_dsn, account + ":" + password + "@unix(" + str(self.resources.socket) + ")/" + target + "?parseTime=true\n")
+        self.resources.restore_paths["restore_dsn"] = restored_dsn
+        stage("restore-read-runtime-environment")
         environment = self.executor.read_environment(str(self.config / "api.env"))[0]
         environment["MYSQL_DSN_FILE"] = str(restored_dsn)
+        stage("restore-actual-published-preflight")
         restored_report = native.preflight(self.baseline, environment)
         require(restored_report["exit_code"] == 0 and restored_report["database"]["database"] == target and
                 restored_report["database"]["status"] == "current" and restored_report["database"]["admin_count"] == 1,
