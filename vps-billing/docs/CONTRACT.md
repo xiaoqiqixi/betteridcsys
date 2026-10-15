@@ -1,12 +1,12 @@
 # 当前 API 与业务约定
 
-本文件对应 Core 0.5.2 的可配置财务币种、独立报价、历史快照、主机执行回执与独立 SMTP 插槽。默认站点名“星屿云”、语言 `zh-CN`；全新安装只启用默认币种 `CNY`，升级保留旧币种及合法默认值。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付、真实 VPS 开通与完整财务账本均未实现；官方 SMTP 默认关闭，仅提供管理员配置和测试邮件，未接入通知、邮箱验证或密码找回。
+本文件对应 Core 0.5.3 的可配置财务币种、独立报价、历史快照、主机执行回执及独立 SMTP、支付运行时插槽。默认站点名“星屿云”、语言 `zh-CN`；全新安装只启用默认币种 `CNY`，升级保留旧币种及合法默认值。前端 Vue/TypeScript，后端 Go，持久化 MySQL InnoDB；显式 demo 模式仅使用内存。支付接入边界与持久幂等结算已实现，默认关闭且没有内置真实渠道；真实 VPS 开通与完整财务账本仍未实现。官方 SMTP 默认关闭，仅提供管理员配置和测试邮件，未接入通知、邮箱验证或密码找回。
 
 ## 共通规则
 
 - API 前缀 `/api/v1`；成功 `{data: ...}`，失败 `{error:{code,message,request_id?}}`。
 - 时间 RFC3339 UTC。`*_minor` 是整数最小单位，按该记录 `currency_format.decimal_places`（0–6）解释，上限 `9007199254740991`；不隐式舍入、换汇或跨币种汇总。
-- 浏览器通过同源 HttpOnly cookie 鉴权，变更请求必须携带 `X-CSRF-Token`，校验来源和 Host。价格、角色、所有权及付款结果不信任浏览器。
+- 浏览器通过同源 HttpOnly cookie 鉴权，浏览器变更请求必须携带 `X-CSRF-Token`，校验来源和 Host。专用支付回调免浏览器 CSRF，仍须通过 Host、方法、请求限制和渠道验签。价格、角色、所有权及付款结果不信任浏览器。
 - 结构化错误 code 用于界面翻译；无法识别的新错误回退为安全通用文案，不向用户显示 SQL、密钥或服务商原始错误。
 - 当前列表上限 1,000；金额汇总使用 SQL 聚合而非列表求和，`unpaid_total_minor` 是所选币种全部待付金额。没有完整分页/导出协议。
 
@@ -80,7 +80,7 @@
 
 ## 适配器
 
-支付保持禁用；官方 `email.smtp` 是独立进程的运行时插件，默认关闭且无内置传输回退。SMTP 保存请求必须包含 `revision/enabled/host/port/tls_mode/from_address/from_name`；`username/password` 只写，空值保留；显式清除须同时清除两项并关闭。更改服务器地址、端口或 TLS 模式时必须替换完整凭据或同时清除并关闭。请求拒绝重复/未知字段、null 和超过 8 KiB 的正文。配置可在插件安装前保存，保存不连接或发信；实际测试还须通过 root 审批、程序/兼容/UID/握手及精确目标检查。
+支付使用 `aster.payment/1` 独立运行时插槽，默认关闭，结账与结算规则见下文；官方 `email.smtp` 是独立进程的运行时插件，默认关闭且无内置传输回退。SMTP 保存请求必须包含 `revision/enabled/host/port/tls_mode/from_address/from_name`；`username/password` 只写，空值保留；显式清除须同时清除两项并关闭。更改服务器地址、端口或 TLS 模式时必须替换完整凭据或同时清除并关闭。请求拒绝重复/未知字段、null 和超过 8 KiB 的正文。配置可在插件安装前保存，保存不连接或发信；实际测试还须通过 root 审批、程序/兼容/UID/握手及精确目标检查。
 
 读取不返回用户名、密码或密文，返回 `username_configured/password_configured/key_configured` 与 `plugin_available/plugin_status/plugin_version/destination_allowed`。`key_configured` 仅表示已加载本机密钥；`plugin_status` 为 `not_installed/disabled/unavailable/approved`，`approved` 是本地验证结果，非服务连通或投递证明。插件握手检查失败返回 503 `PLUGIN_UNAVAILABLE`，匿名 401、客户 403；该接口不是安装/审批入口。
 
@@ -102,10 +102,14 @@
 
 ## 未付款订单取消
 
-两个取消接口接收最多 4KiB 的严格 JSON `{reason:string}`，原因修剪后须为 1–500 字节纯文本。成功返回 `{data:{order,invoice}}`，分别为 `cancelled` 与 `void`；重复成功请求不重复记审计或 outbox。金额、币种格式、issuer/套餐快照、开具/创建/到期时间与原创建幂等映射均保留。主干在相同数据库事务中检查支付尝试；存在创建中、有效会话、结果未确认或已结算尝试时拒绝取消，停用插件也不解除该限制。旧编译期定制接口继续保守拒绝取消。
+两个取消接口接收最多 4KiB 的严格 JSON `{reason:string}`，原因修剪后须为 1–500 字节纯文本。成功返回 `{data:{order,invoice}}`，分别为 `cancelled` 与 `void`；重复成功请求不重复记审计或 outbox。金额、币种格式、issuer/套餐快照、开具/创建/到期时间与原创建幂等映射均保留。Core 在相同数据库事务中检查支付尝试；存在创建中、有效会话、结果未确认或已结算尝试时拒绝取消，停用插件也不解除该限制。保留的旧编译期适配器兼容层仍会保守阻止取消；该兼容层不是当前渠道的接入路径。
 
-非本人订单返回 404 `NOT_FOUND`；结构错误为 400 `INVALID_BODY`，语义错误为 400 `INVALID_CANCELLATION`，已处理、关联服务、配对不一致或无法验证的历史为 409 `CANCELLATION_STATE_CONFLICT`，在途付款或旧定制付款处理不能排除时为 409 `CANCELLATION_UNAVAILABLE`。不会独立作废账单、删除、标记付款、退款或执行资源操作。不确定响应不能假称取消成功；先重新查询，必要时重复相同取消操作。
+非本人订单返回 404 `NOT_FOUND`；结构错误为 400 `INVALID_BODY`，语义错误为 400 `INVALID_CANCELLATION`。存在支付尝试、已处理、关联服务、配对不一致或无法验证的历史为 409 `CANCELLATION_STATE_CONFLICT`；旧兼容层声明存在定制付款处理而无法排除时为 409 `CANCELLATION_UNAVAILABLE`。不会独立作废账单、删除、标记付款、退款或执行资源操作。不确定响应不能假称取消成功；先重新查询，必要时重复相同取消操作。
 
-## 支付运行时合同（主干）
+## 支付运行时合同
 
-主干新增的支付运行时协议、会话复用、回调应答、去重与不确定结果处理以 [PAYMENT_PLUGINS.md](PAYMENT_PLUGINS.md) 为准。该能力尚未随正式 Core 0.5.2 发布，没有内置真实渠道。仅验签后的独立插件结果可以进入核心结算事务，浏览器成功字段不能改账。
+Core 0.5.3 提供 `aster.payment/1`，按已批准的版本、程序及 manifest 哈希、非特权进程身份和商户调用独立 worker。已批准的验签程序属于信任边界：渠道开发者负责原始通知签名、商户及时间窗口验证，进程隔离不证明任意验签实现正确。插件没有数据库或 Store 接口，浏览器成功字段和跳转均不能改账。
+
+Core 在外部调用前保存唯一支付尝试，固定客户、订单、账单、金额、币种精度、provider 和商户预期。回调进入结算事务后，Core 从保存的尝试取得预期值，重新锁定并核对权威订单和账单；`(provider_id,event_id)`、`(provider_id,transaction_id)` 分别唯一。合法重放不重复入账，冲突拒绝；账单和订单变为 `paid`、结算记录、审计及 outbox 同事务提交，不自动开通 VPS。超时或会话过期不释放原尝试。
+
+默认支付关闭，没有内置真实渠道。当前提供创建会话和验证已结算通知，不提供渠道交易查询、撤销、退款、订阅、对账或特定渠道要求的回调应答（ACK）。成功通知使用通用 JSON 应答，需特定格式的渠道须先扩展并审查协议。会话复用、错误码、去重及不确定结果处理以 [PAYMENT_PLUGINS.md](PAYMENT_PLUGINS.md) 为准。

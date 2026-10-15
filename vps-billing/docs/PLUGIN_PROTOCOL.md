@@ -1,6 +1,6 @@
 # 运行时插件协议与信任边界
 
-主干实现目标为 Linux amd64 的 Core `0.5.3`、独立 SMTP `1.1.0` 与 `aster.payment/1` 支付插槽。支付插槽尚未随正式 Core 发布，当前正式 Core `0.5.2` 不具有此运行时支付协议。安装/操作见 [PLUGINS.md](PLUGINS.md)，实际执行结果见 [VALIDATION.md](VALIDATION.md) 和对应 Release 来源。本文件说明协议与边界，不能替代原生进程/版本替换的实际验收。
+本协议适用于 Linux amd64 的 Core `0.5.3`、独立 SMTP `1.1.0` 与 `aster.payment/1` 支付插槽。Core `0.5.2` 及更早程序不具有此运行时支付协议。安装/操作见 [PLUGINS.md](PLUGINS.md)，实际执行结果见 [VALIDATION.md](VALIDATION.md) 和对应 Release 来源。本文件说明协议与边界，不能替代原生进程/版本替换的实际验收。
 
 ## 被动发现与明确批准
 

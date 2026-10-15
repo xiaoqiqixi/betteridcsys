@@ -1066,6 +1066,34 @@ def publish(api, policy, archive_bytes):
             build = strict_json(files["BUILD.json"])
             compatibility = build["smtp_core_compatibility"]
             fields["body"] += f"\n\n附件为一个裸 SMTP 程序、资源和三份元数据，共五项；协议保持 `aster.smtp/1`，声明 Core `>={compatibility['min']},<{compatibility['max_exclusive']}`。资源与程序须分别核验；旧工具不会自动支持新拆分输入，首次升级使用已核验的新管理工具。安装不自动批准或启用，仅支持管理员固定测试邮件。[插件安装与回退]({source_docs}PLUGINS.md)。"
+        if kind == "core" and tuple(map(int, provenance["version"].split("."))) >= (0, 5, 3):
+            fields["body"] = (
+                f"Aster Core {provenance['version']}，原生 Linux amd64。"
+                f"[源码提交 `{provenance['source_sha']}`](https://github.com/{REPOSITORY}/commit/{provenance['source_sha']})。\n\n"
+                "支付扩展新增独立运行时插槽 `aster.payment/1`，兼容插件安装或替换无需重新编译 Core。"
+                "Core 读取插件元数据；主机管理员须明确批准插件身份、manifest 与程序的 SHA-256，以及商户身份，"
+                "再由独立的非特权进程通过 Unix socket 提供结账和回调验签能力。"
+                "支付默认关闭，第三方渠道由开发者依据渠道官方协议实现；仓库仅提供不连接支付平台的合成示例。"
+                "尚未提供渠道查询、撤销、退款或渠道特定 ACK，不能据此宣称生产支付可用。\n\n"
+                "Core 根据自己的订单、账单、金额、币种精度和所有权核对已验签证据，持久化支付尝试，"
+                "在数据库事务内完成回调重放保护、渠道交易 ID 唯一性检查和幂等账务状态转换。"
+                "取消订单与在途支付互斥；结果不确定或链接过期不会被当作未付款，也不会自动释放支付尝试。"
+                "客户端成功提示和跳转不能改变账务状态。\n\n"
+                "界面修复了页头高度、路由切换滚动、币种标签、按钮样式和财务副标题。"
+                f"自动化检查与人工视觉复验的具体范围分别记录在[验证记录]({source_docs}VALIDATION.md)，不互相替代。\n\n"
+                "发行附件共六项：裸 API 程序、裸插件宿主、配套资源包，以及 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`。"
+                "运行无需 Docker、Go 或 Node.js；两个程序和资源须来自同一版本并核验摘要与来源，单个 API 程序不足以完成安装。"
+                "官方 SMTP 仍独立分发，使用 `aster.smtp/1` 并遵守声明的 Core 兼容范围；"
+                "默认关闭，仅支持管理员固定测试邮件，尚无业务通知或密码找回。\n\n"
+                "管理员在主机审查私密配置和计划 SHA-256 后执行安装或升级；网页没有 root、迁移或服务控制权限。"
+                "升级须停写、核对版本与插件兼容性，并验证备份和恢复资料；中断后由原操作的 `resume` 核实现场。"
+                "数据库升级后不能直接换回不兼容的旧程序，也不能用旧程序降低 schema；"
+                "没有自动向下迁移或自动导入数据库，遇到不兼容状态须保持维护并按恢复文档处理。"
+                f"[安装]({source_docs}INSTALL.md) · [升级恢复]({source_docs}UPGRADE.md) · [支付接入]({source_docs}PAYMENT_PLUGINS.md)。\n\n"
+                f"[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，"
+                f"尝试 {policy['run_attempt']}。本版本通过该构建的回归、原生 systemd/HTTPS、备份恢复、独立插件生命周期、浏览器与依赖扫描门槛；"
+                "支付结算和邮件测试均使用隔离的合成环境，不代表真实渠道或生产部署验收。"
+            )
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

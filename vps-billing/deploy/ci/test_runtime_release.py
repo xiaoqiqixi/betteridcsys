@@ -31,8 +31,9 @@ def elf_bytes():
     return bytes(data)
 
 
-def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False, protocol_source=None):
-    version = ('0.5.2' if kind == 'core' else '1.1.0') if raw else ('0.4.0' if kind == 'core' else '1.0.0')
+def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False, protocol_source=None, version=None):
+    version = version or (('0.5.2' if kind == 'core' else '1.1.0') if raw else ('0.4.0' if kind == 'core' else '1.0.0'))
+    core_version = version if kind == 'core' else ('0.5.2' if raw else '0.4.0')
     tag = ('v' if kind == 'core' else 'smtp-v') + version
     root = ('aster' if kind == 'core' else 'aster-smtp') + '-' + version + '-linux-amd64'
     if raw: root = pipeline.resources_asset(version, kind)[:-7]
@@ -42,7 +43,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
                    'vps-billing/backend/pkg/pluginapi/protocol.go': b'package pluginapi\nconst CoreVersion = "0.4.0"\n',
                    'vps-billing/backend/plugins/smtp/VERSION': b'1.0.0\n'})
     if raw:
-        inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = b'package pluginapi\nconst CoreVersion = "0.5.2"\n'
+        inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = f'package pluginapi\nconst CoreVersion = "{core_version}"\n'.encode()
         inputs['vps-billing/backend/plugins/smtp/VERSION'] = b'1.1.0\n'
     if protocol_source is not None:
         inputs['vps-billing/backend/pkg/pluginapi/protocol.go'] = protocol_source
@@ -85,7 +86,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
              'input_sha256': {path: pipeline.sha256(inputs[path]) for path in pipeline.CURRENT_INPUT_PATHS},
              'source_files': copies, 'binary_sha256': {path: pipeline.sha256(data) for path, data in binaries.items()}}
     if raw:
-        build.update(schema=3, distribution_format="raw-binaries-v1", component_versions={"core": "0.5.2", "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=pipeline.binary_assets(version, kind), resources_asset=pipeline.resources_asset(version, kind))
+        build.update(schema=3, distribution_format="raw-binaries-v1", component_versions={"core": core_version, "smtp": "1.1.0"}, smtp_core_compatibility={"min": "0.4.0", "max_exclusive": "0.6.0"}, binary_assets=pipeline.binary_assets(version, kind), resources_asset=pipeline.resources_asset(version, kind))
     build.update(build_override or {})
     build_raw = json_bytes(build)
     if kind == 'core':
@@ -107,9 +108,9 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
     return tag, version, files, inputs, bundle
 
 
-def normal_flow(kind='core', raw=False, protocol_source=None):
+def normal_flow(kind='core', raw=False, protocol_source=None, version=None):
     api, env, event, policy, _, _ = flow_fixture()
-    tag, version, files, inputs, _ = runtime_fixture(kind, raw=raw, protocol_source=protocol_source)
+    tag, version, files, inputs, _ = runtime_fixture(kind, raw=raw, protocol_source=protocol_source, version=version)
     run = api.responses[('GET', PREFIX + f'/actions/runs/{RUN_ID}')]
     old_tag = run['head_branch']
     run['head_branch'] = tag
@@ -302,6 +303,49 @@ class RuntimeReleaseTests(unittest.TestCase):
             resources = pipeline.tar_files(files[pipeline.resources_asset(version, kind)], pipeline.resources_asset(version, kind)[:-7])
             self.assertFalse(any(data.startswith(b"\x7fELF") for data in resources.values()))
             self.assertTrue(all(name in files for name in pipeline.binary_assets(version, kind).values()))
+
+    def test_current_core_publication_describes_payment_boundaries_and_six_assets(self):
+        for version in ('0.5.3', '0.5.4'):
+            with self.subTest(version=version):
+                api, env, event, files, artifact, _, _ = normal_flow(raw=True, version=version)
+                policy = pipeline.prepare_publish(api, env, event)
+                pipeline.publish(api, policy, artifact)
+                fields = api.mutations[0][2]
+                body = fields['body']
+                for text in ('Aster Core ' + version, 'aster.payment/1', 'manifest 与程序的 SHA-256', '商户身份',
+                             '独立的非特权进程', '无需重新编译 Core', '支付默认关闭', '第三方渠道由开发者',
+                             '合成示例', '尚未提供渠道查询、撤销、退款或渠道特定 ACK', '幂等账务状态转换',
+                             '渠道交易 ID 唯一性', '取消订单与在途支付互斥', '客户端成功提示和跳转不能改变账务状态',
+                             '页头高度、路由切换滚动、币种标签、按钮样式和财务副标题', '不互相替代',
+                             '裸 API 程序、裸插件宿主、配套资源包', 'BUILD.json', 'PROVENANCE.json', 'SHA256SUMS',
+                             '共六项', '不能用旧程序降低 schema', '没有自动向下迁移或自动导入数据库',
+                             f'https://github.com/{pipeline.REPOSITORY}/commit/{SHA}',
+                             f'https://github.com/{pipeline.REPOSITORY}/actions/runs/{RUN_ID}'):
+                    self.assertIn(text, body)
+                self.assertEqual(fields['name'], 'Aster Core ' + version)
+                self.assertEqual(len(api.uploads), 6)
+                self.assertEqual({name: data for _, name, data in api.uploads}, files)
+                self.assertEqual([call[0] for call in api.mutations], ['POST', 'PATCH'])
+                self.assertEqual(api.mutations[-1][2], {'draft': False, 'prerelease': False, 'make_latest': 'true'})
+
+    def test_historical_core_and_smtp_release_bodies_keep_existing_scope(self):
+        for kind, raw in (('core', False), ('core', True), ('smtp', False), ('smtp', True)):
+            with self.subTest(kind=kind, raw=raw):
+                api, env, event, _, artifact, _, version = normal_flow(kind, raw=raw)
+                pipeline.publish(api, pipeline.prepare_publish(api, env, event), artifact)
+                body = api.mutations[0][2]['body']
+                self.assertNotIn('aster.payment/1', body)
+                self.assertIn('支付渠道由运营者与开发者按支付适配器接口接入', body)
+                self.assertIn('aster.smtp/1', body)
+                if kind == 'core' and raw:
+                    self.assertEqual(version, '0.5.2')
+                    self.assertIn('附件为两个裸程序、资源和三份元数据，共六项', body)
+                    self.assertIn('旧程序仅在数据库仍完全兼容时回退', body)
+                if kind == 'smtp' and raw:
+                    self.assertEqual(version, '1.1.0')
+                    self.assertIn('共五项', body)
+                    self.assertIn('>=0.4.0,<0.6.0', body)
+                    self.assertEqual(api.mutations[-1][2]['make_latest'], 'false')
 
     def test_raw_sealing_covers_every_asset_without_resource_hash_cycle(self):
         import tempfile

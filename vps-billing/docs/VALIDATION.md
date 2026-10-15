@@ -4,6 +4,16 @@
 
 ## Core 0.5.3：支付运行时接入与界面复验
 
+### 发布前已确认的源码与视觉范围
+
+固定源码 [`c5257e1cc8185db81e3a99bf7400fcb7cd4214e8`](https://github.com/xiaoqiqixi/betteridcsys/commit/c5257e1cc8185db81e3a99bf7400fcb7cd4214e8) 的 [完整 CI 38724893739](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38724893739) 全部成功。Go 为 836 PASS、0 FAIL、0 SKIP，包含真实 ACL/inode 测试；前端 14 文件、426 项通过，部署脚本回归 478 项通过。原生支付 HTTPS/MySQL 结算、并发取消与重放、独立插件故障恢复、历史升级、备份与非空支付记录恢复均通过。沙箱浏览器完成导航、历史滚动、财务布局等断言并保留 20 张截图；原生、核心和浏览器资源清理成功。
+
+独立 Mac 任务随后对同一源码完成实际截图与交互复验：720/721/768px 顶栏、普通导航回顶与历史恢复、桌面和手机 CNY 单行、44px 财务按钮与焦点、财务中英文副标题均通过，手机支付结果不确定提示完整。该任务回报临时环境和进程已清理。此处采用该独立任务的限定结论，不将云端截图元数据当作人工视觉通过。
+
+721px 面包屑换行偏碎属于已记录的非阻断显示问题。外层长品牌、极端合法金额与最长前后缀组合、支付超时和过期入口没有 Mac 预览全覆盖；已有自动测试分别覆盖部分长品牌布局、数值精度、运行时超时和中英文状态提示，不证明这些极端组合的完整视觉效果。发布准备仅更新说明和文档，不为此调整已验收 UI；新的正式来源、双构建和发布状态仍以对应流水线及实际 Release 为准。
+
+### 支付实现与失败迭代
+
 支付实现从 [`c9b86af`](https://github.com/xiaoqiqixi/betteridcsys/commit/c9b86af11a4c99531dd38c358b60ce371a67ef7f) 引入独立 `aster.payment/1` 插槽、受保护审批、商户身份与程序摘要、合成插件，以及持久化支付尝试和原子结算。Core 根据自身订单、账单、金额、币种精度和所有权核对已验签证据，事务内处理重放、交易唯一性、财务状态、审计和 outbox；取消与支付尝试互斥。渠道验签程序仍是经过管理员批准的信任边界，仓库没有真实第三方支付渠道。
 
 [`207e9da`](https://github.com/xiaoqiqixi/betteridcsys/commit/207e9dada4b1da518e4392ff31c7f3fe4dc5f98b) 进一步让审批读取、握手检查与支付 RPC 共用 8 个并发名额。程序哈希读取本身不可中途取消，12 秒期限约束 RPC。支付结果不确定或会话过期不会释放尝试，也不能据此取消订单；渠道查询、撤销、退款和特定渠道应答格式仍需后续明确设计，见[支付插件指南](PAYMENT_PLUGINS.md)。
@@ -16,9 +26,9 @@
 
 该轮完整 CI 最终仍**失败**：浏览器键盘脚本期望移动菜单关闭，实际仍展开，工作流语法检查尚未运行。复核发现断点切换后没有等待应用移动状态、打开菜单后没有等待自动聚焦完成；后续脚本修复保留原有关闭、焦点与路由断言，不关闭沙箱、不增加超时。支付提示另作文字修正，避免在渠道停用、响应丢失或链接过期时宣称“未扣款”或“账单状态未改变”。上述后续修改仍须绑定各自的新提交验收。
 
-[`4381287`](https://github.com/xiaoqiqixi/betteridcsys/commit/43812876eba53e9086fa7e5f5c8d73aaa4788c4c) 修复 Mac 反馈的页头高度、路由滚动、币种标签、按钮样式与财务副标题。自动测试和截图元数据均不能替代 Mac 人工视觉复验；正式 0.5.3 发布仍等待该结论。
+[`4381287`](https://github.com/xiaoqiqixi/betteridcsys/commit/43812876eba53e9086fa7e5f5c8d73aaa4788c4c) 修复 Mac 反馈的页头高度、路由滚动、币种标签、按钮样式与财务副标题。其后支付提示修订并入 `c5257e1`，实际 Mac 复验的范围以上方固定提交记录为准。
 
-现有正式 Release 仅保留 [Core v0.5.2](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.2) 和 [SMTP smtp-v1.1.0](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/smtp-v1.1.0)，其资产未覆盖，Git 标签保留。下方旧记录中的“清理尚未执行”和编译期支付示例描述属于当时状态，不代表当前主干实现或当前 Release 集合。
+本轮发布准备开始时核对的正式 Release 为 [Core v0.5.2](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.2) 和 [SMTP smtp-v1.1.0](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/smtp-v1.1.0)，其资产未覆盖，Git 标签保留。下方旧记录中的“清理尚未执行”和编译期支付示例描述属于当时状态，不代表当前主干实现或后续 Release 集合。
 
 ## Core 0.5.3：先前界面与文档迭代（历史记录）
 
