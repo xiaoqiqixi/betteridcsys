@@ -43,6 +43,13 @@ SAFE_REJECTIONS = {
     "Effective systemd API service differs from the reviewed dedicated instance.": "effective_api_service_mismatch",
     "Effective managed edge service differs from its reviewed unit.": "effective_edge_service_mismatch",
     "API did not become active.": "api_not_active",
+    "Application preflight did not return a valid checked report.": "preflight_report_not_checked",
+    "A verified, source-pinned local preparation receipt is required.": "prepared_receipt_identity_rejected",
+    "Prepared file permissions changed.": "prepared_file_mode_changed",
+    "Prepared release bytes changed.": "prepared_file_hash_changed",
+    "Required source-bound runtime resources are missing.": "prepared_runtime_resources_missing",
+    "Prepared source mapping differs from the reviewed runtime layout.": "prepared_source_layout_rejected",
+    "Prepared release has an incomplete or unexpected runtime inventory.": "prepared_runtime_inventory_rejected",
 }
 
 
@@ -226,6 +233,8 @@ def failure_diagnostics(resources, failure):
     """Only fixed reasons, validated public receipts and file metadata escape."""
     reason = SAFE_REJECTIONS.get(str(failure), "unclassified_failure_details_suppressed")
     report = {"stage": STAGE, "reason": reason, "failure_class": type(failure).__name__, "fixtures": []}
+    if hasattr(resources, "legacy_migration_trace"):
+        report["legacy_migration"] = resources.legacy_migration_trace
     for fixture in getattr(resources, "fixtures", []):
         entry = {"action": fixture.spec["action"], "operation_id": fixture.spec["operation_id"],
                  "checkpoint_available": False, "path_metadata": []}
@@ -665,12 +674,63 @@ class HTTPSClient:
         return self
 
 
+def redacted_preflight_report(raw):
+    """Project actual API output into fixed flags/counts, never arbitrary values."""
+    result = {"json_valid": False}
+    if len(raw) > 128 << 10:
+        result["exceeded_json_bound"] = True
+        return result
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        return result
+    result["json_valid"] = True
+    result["object"] = isinstance(value, dict)
+    if not isinstance(value, dict):
+        return result
+    for name in ("read_only", "configuration_checked"):
+        result[name] = value.get(name) if type(value.get(name)) is bool else None
+    result["schema_is_one"] = type(value.get("schema")) is int and value["schema"] == 1
+    result["error_present"] = bool(value.get("error"))
+    database = value.get("database")
+    result["database_object"] = isinstance(database, dict)
+    if isinstance(database, dict):
+        state = database.get("status")
+        result["database_status"] = state if isinstance(state, str) and state in {"empty", "pending_migrations", "current", "incompatible"} else "other_or_absent"
+        for name in ("schema_version", "required_schema_version"):
+            number = database.get(name)
+            result[name] = number if type(number) is int and 0 <= number <= 64 else None
+        result["database_error_present"] = bool(database.get("error"))
+    return result
+
+
+def legacy_native(executor, spec, candidate, trace):
+    class ObservedLegacy(executor.Native):
+        def api(self, release, environment, command_name, allow_failure=False):
+            require(command_name in {"-preflight", "-migrate"}, "Unexpected legacy API command")
+            entry = {"command": command_name, "release": "candidate" if release == candidate else "published-baseline",
+                     "completed": False}
+            trace["calls"] = (trace["calls"] + [entry])[-8:]
+            try:
+                result = super().api(release, environment, command_name, allow_failure=True)
+                entry.update(completed=True, exit_code=result.returncode if -255 <= result.returncode <= 255 else None,
+                             report=redacted_preflight_report(result.stdout))
+                executor.require(allow_failure or result.returncode == 0, "A fixed native operation failed; raw diagnostics were suppressed.")
+                return result
+            except BaseException as failure:
+                entry["rejection"] = SAFE_REJECTIONS.get(str(failure), "prepared_or_native_input_details_suppressed")
+                raise
+    return ObservedLegacy(spec)
+
+
 def legacy_schema_migration(resources, executor, fresh, baseline):
     """Real unchanged SQL 1..6 fixture, then actual candidate 6 -> 7 migration.
 
     This is a separate schema compatibility exercise. Published Core v0.5.1
     itself already requires schema 7; the version upgrade is honestly 7 -> 7.
     """
+    resources.legacy_migration_trace = {"calls": []}
+    stage("legacy-create-owned-prefix-database")
     database = "al" + secrets.token_hex(5)
     account = database + "_migrate"
     password = secrets.token_hex(24)
@@ -682,6 +742,7 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
     files = sorted(Path(fresh.candidate, "migrations").glob("*.sql"))
     require(len(files) == 7, "Legacy fixture requires the reviewed seven-migration inventory")
     for number, path in enumerate(files[:6], 1):
+        stage("legacy-apply-prefix-" + str(number))
         if number == 3:
             # Match the actual migration runner's documented legacy USD check
             # removal. SQL resources remain byte-identical and fully hashed.
@@ -698,14 +759,18 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
     write(dsn, account + ":" + password + "@unix(" + str(resources.socket) + ")/" + database + "?parseTime=true\n")
     environment = executor.runtime_environment(fresh.spec)
     environment["MYSQL_DSN_FILE"] = str(dsn)
-    native = executor.Native(fresh.spec)
+    native = legacy_native(executor, fresh.spec, fresh.candidate, resources.legacy_migration_trace)
+    stage("legacy-preflight-prefix")
     before = native.preflight(fresh.candidate, environment)
     require(before["exit_code"] == 0 and before["database"]["status"] == "pending_migrations" and
             before["database"]["schema_version"] == 6, "Unchanged legacy prefix did not pass actual candidate preflight")
     count_before = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
     usd_before = resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database)
+    stage("legacy-apply-migration")
     native.api(fresh.candidate, environment, "-migrate")
+    stage("legacy-preflight-candidate")
     after = native.preflight(fresh.candidate, environment)
+    stage("legacy-preflight-published")
     old = native.preflight(baseline["directory"], environment)
     require(after["exit_code"] == old["exit_code"] == 0 and after["database"]["status"] == old["database"]["status"] == "current" and
             after["database"]["schema_version"] == old["database"]["schema_version"] == 7,
@@ -715,6 +780,7 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
     require(resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database) == usd_before,
             "Actual migration rewrote historical independent USD prices")
     digest_before = fresh.full_data_hash(database)
+    stage("legacy-repeat-migration")
     native.api(fresh.candidate, environment, "-migrate")
     require(fresh.full_data_hash(database) == digest_before, "Repeated migration changed actual database data")
     return {"schema_before": 6, "schema_after": 7, "tables_before": 13, "tables_after": 14,

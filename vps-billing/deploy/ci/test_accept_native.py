@@ -239,6 +239,53 @@ class NativePreparationSmokeGuardTests(unittest.TestCase):
 
 
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
+    def test_legacy_api_report_projection_never_echoes_arbitrary_values(self):
+        raw = json.dumps({"schema": 1, "read_only": True, "configuration_checked": True,
+            "error": "private-provider-password", "database": {"status": "pending_migrations", "schema_version": 6,
+            "required_schema_version": 7, "error": "private-database-DSN", "database": "private-name"}}).encode()
+        observed = CORE.redacted_preflight_report(raw)
+        self.assertTrue(observed["schema_is_one"])
+        self.assertTrue(observed["configuration_checked"])
+        self.assertTrue(observed["error_present"])
+        self.assertEqual(observed["database_status"], "pending_migrations")
+        self.assertEqual(observed["schema_version"], 6)
+        self.assertNotIn("private", json.dumps(observed))
+        wrong = CORE.redacted_preflight_report(b'{"schema":true,"read_only":"private","database":{"status":[],"schema_version":true,"required_schema_version":999}}')
+        self.assertFalse(wrong["schema_is_one"])
+        self.assertIsNone(wrong["read_only"])
+        self.assertIsNone(wrong["schema_version"])
+        self.assertIsNone(wrong["required_schema_version"])
+        self.assertEqual(wrong["database_status"], "other_or_absent")
+        self.assertEqual(CORE.redacted_preflight_report(b"private-native-stderr"), {"json_valid": False})
+        self.assertTrue(CORE.redacted_preflight_report(b"x" * ((128 << 10) + 1))["exceeded_json_bound"])
+
+    def test_legacy_api_observer_forwards_actual_result_and_preserves_strict_failure(self):
+        class Rejected(RuntimeError):
+            pass
+        calls = []
+        result = subprocess.CompletedProcess(["private-command"], 1, b'{"schema":1,"read_only":true,"configuration_checked":true,"database":{"status":"incompatible","schema_version":6}}')
+        class Native:
+            def __init__(self, spec):
+                self.spec = spec
+            def api(self, release, environment, command_name, allow_failure=False):
+                calls.append((release, environment, command_name, allow_failure))
+                return result
+        def require(ok, message):
+            if not ok:
+                raise Rejected(message)
+        executor = SimpleNamespace(Native=Native, require=require)
+        trace = {"calls": []}
+        native = CORE.legacy_native(executor, {}, "/private-candidate", trace)
+        environment = {"MYSQL_DSN_FILE": "/private-credential"}
+        self.assertIs(native.api("/private-candidate", environment, "-preflight", allow_failure=True), result)
+        self.assertEqual(calls, [("/private-candidate", environment, "-preflight", True)])
+        with self.assertRaisesRegex(Rejected, "raw diagnostics were suppressed"):
+            native.api("/private-baseline", environment, "-migrate")
+        self.assertTrue(trace["calls"][-1]["completed"])
+        self.assertEqual(trace["calls"][-1]["exit_code"], 1)
+        self.assertEqual(trace["calls"][-1]["rejection"], "fixed_native_command_failed")
+        self.assertNotIn("private", json.dumps(trace))
+
     def test_selected_unit_diagnostics_only_emit_expected_checks_and_bounded_categories(self):
         spec = {"api_unit": "aster-fixture.service", "instance_root": "/opt/aster-fixture",
                 "config_root": "/etc/aster-fixture", "runtime_user": "astfixture"}
