@@ -38,6 +38,9 @@ TRUSTED_PATHS = (
     "vps-billing/deploy/ci/accept-native-http.py",
     "vps-billing/deploy/ci/plugin-native.sh",
     "vps-billing/deploy/ci/plugin-native.py",
+    "vps-billing/deploy/ci/payment-native.sh",
+    "vps-billing/deploy/ci/payment-native.py",
+    "vps-billing/deploy/ci/test_payment_native.py",
     "vps-billing/deploy/ci/smtp-loopback-fixture.py",
     "vps-billing/deploy/ci/test_plugin_native.py",
     "vps-billing/deploy/ci/browser-demo.py",
@@ -56,6 +59,7 @@ TRUSTED_PATHS = (
     "vps-billing/deploy/ci/core-native.py",
     "vps-billing/deploy/systemd/aster-api.service",
     "vps-billing/deploy/systemd/aster-smtp.service",
+    "vps-billing/deploy/systemd/aster-payment.service",
 )
 MAX_ZIP = 256 * 1024 * 1024
 MAX_TAR = 256 * 1024 * 1024
@@ -82,7 +86,8 @@ CORE_DEPLOY_FILES = {"deploy/systemd/aster-api.service", "deploy/systemd/aster-s
 
 
 def core_deploy_files(version):
-    return CORE_DEPLOY_FILES | ({"deploy/scripts/core-operation.py"} if tuple(map(int, version.split("."))) >= (0, 5, 2) else set())
+    selected = tuple(map(int, version.split(".")))
+    return CORE_DEPLOY_FILES | ({"deploy/scripts/core-operation.py"} if selected >= (0, 5, 2) else set()) | ({"deploy/systemd/aster-payment.service"} if selected >= (0, 5, 3) else set())
 
 
 class GuardError(Exception):

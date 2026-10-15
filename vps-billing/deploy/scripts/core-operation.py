@@ -178,6 +178,8 @@ def prepared_release(root, trust=updater._Trust()):
     required_deploy = {"deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py", "deploy/scripts/core-manager.py", "deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf"}
     if updater.stable(receipt["version"]) >= (0, 5, 2):
         required_deploy.add("deploy/scripts/core-operation.py")
+    if updater.stable(receipt["version"]) >= (0, 5, 3):
+        required_deploy.add("deploy/systemd/aster-payment.service")
     expected_copies = {"LICENSE": "LICENSE", "REPOSITORY-README.md": "README.md", "PROJECT-README.md": "vps-billing/README.md", "manifests/go.mod": "vps-billing/backend/go.mod", "manifests/go.sum": "vps-billing/backend/go.sum", "manifests/package.json": "vps-billing/frontend/package.json", "manifests/package-lock.json": "vps-billing/frontend/package-lock.json"}
     expected_copies.update({name: "vps-billing/" + name for name in required_deploy})
     require(build.get("schema") == 3 and build.get("distribution_format") == "raw-binaries-v1" and build.get("cgo_enabled") is False and isinstance(copies, dict) and 1 <= len(copies) <= 512, "A complete raw Core BUILD/source inventory is required.")
@@ -286,7 +288,7 @@ def installed_plugin_facts(environment, version, trust):
     for identifier in os.listdir(root):
         if identifier.startswith("."):
             continue
-        require(identifier == "email.smtp", "Unrecognized installed plugin requires a reviewed compatibility procedure.")
+        plugins.plugin_kind(identifier)
         for selected_version in os.listdir(root + "/" + identifier):
             raw = read_file(root + "/" + identifier + "/" + selected_version + "/manifest.json", 8192, trust)
             identity = plugins.strict_json(raw, 8192)
@@ -294,10 +296,12 @@ def installed_plugin_facts(environment, version, trust):
             result["manifests"][identifier + "/" + selected_version] = value
             manifests[identifier + "/" + selected_version] = manifest
     policy = plugins.read_policy(policy_path, plugins._Trust(trust.owner, trust.ancestor))
-    selected = policy.get("smtp")
-    if selected:
-        require(result["manifests"].get("email.smtp/" + selected["version"]) == selected["manifest_sha256"], "Approved plugin manifest differs from its installed file.")
-        plugins.validate_manifest(manifests["email.smtp/" + selected["version"]], version)
+    for kind in ("smtp", "payment"):
+        selected = policy.get(kind)
+        if selected:
+            key = selected["id"] + "/" + selected["version"]
+            require(result["manifests"].get(key) == selected["manifest_sha256"], "Approved plugin manifest differs from its installed file.")
+            plugins.validate_manifest(manifests[key], version)
     return result
 
 

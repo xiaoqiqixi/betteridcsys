@@ -209,12 +209,12 @@ class CheckScriptTest(unittest.TestCase):
         self.assert_api_stopped()
 
     def test_builtin_smtp_or_process_execution_dependencies_fail_before_build(self):
-        for dependency in ("aster/billing/plugins/smtp", "net/smtp", "os/exec"):
+        for dependency in ("aster/billing/plugins/smtp", "aster/billing/plugins/paymentfixture", "net/smtp", "os/exec"):
             with self.subTest(dependency=dependency):
                 if self.events.exists(): self.events.unlink()
                 result = self.run_check(CI_TEST_GO_FORBIDDEN_DEP=dependency)
                 self.assertEqual(result.returncode, 1)
-                self.assertIn("core imported SMTP transport or process execution", result.stderr)
+                self.assertIn("core imported concrete plugin transport or process execution", result.stderr)
                 self.assertEqual(self.events.read_text().splitlines(), ["go test", "go vet", "go list"])
                 self.assertFalse(self.pid_file.exists())
 

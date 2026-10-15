@@ -33,6 +33,28 @@ func validateAppliedMigrations(ctx context.Context, conn *sql.Conn, sources []st
 // MySQL DDL commits independently. Resume only known statements whose existing
 // definitions match exactly; a matching object name alone is insufficient.
 func prepareMigrationStatement(ctx context.Context, conn *sql.Conn, version int, q string) (string, bool, error) {
+	if version == 8 {
+		for _, table := range []string{"payment_attempts", "payment_settlements"} {
+			if strings.HasPrefix(q, "CREATE TABLE IF NOT EXISTS "+table+" (") {
+				var kind, engine, databaseCollation string
+				err := conn.QueryRowContext(ctx, "SELECT TABLE_TYPE,COALESCE(ENGINE,''),@@collation_database FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?", table).Scan(&kind, &engine, &databaseCollation)
+				if errors.Is(err, sql.ErrNoRows) {
+					return q, false, nil
+				}
+				if err != nil {
+					return "", false, err
+				}
+				if kind != "BASE TABLE" || engine != "InnoDB" {
+					return "", false, errors.New("existing payment object differs from migration")
+				}
+				if err = validatePreflightTableShape(ctx, conn, version, map[string]string{table: engine}, databaseCollation, true); err != nil {
+					return "", false, err
+				}
+				return q, true, nil
+			}
+		}
+		return "", false, errors.New("unsupported resumable payment migration")
+	}
 	if version == 3 && strings.Join(strings.Fields(q), " ") == strings.Join(strings.Fields(`INSERT IGNORE INTO plan_prices(plan_id,currency,amount_minor,available) VALUES
  ('starter','CNY',3900,FALSE),('standard','CNY',7900,FALSE),('performance','CNY',15900,FALSE)`), " ") {
 		// An operator may legitimately have removed the original example plans.

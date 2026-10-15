@@ -22,3 +22,6 @@ var EmailSettings string
 
 //go:embed 007_currency_registry.sql
 var CurrencyRegistry string
+
+//go:embed 008_payment_runtime.sql
+var PaymentRuntime string

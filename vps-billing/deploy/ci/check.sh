@@ -95,9 +95,9 @@ import sys
 deps = set(Path(sys.argv[1]).read_text().splitlines())
 if not deps or "aster/billing/cmd/server" not in deps:
     raise SystemExit("FAIL: core dependency inventory is incomplete")
-if deps.intersection({"aster/billing/plugins/smtp", "net/smtp", "os/exec"}):
-    raise SystemExit("FAIL: core imported SMTP transport or process execution")
-print("PASS: core excludes SMTP transport and process execution")
+if deps.intersection({"net/smtp", "os/exec"}) or any(name.startswith("aster/billing/plugins/") for name in deps):
+    raise SystemExit("FAIL: core imported concrete plugin transport or process execution")
+print("PASS: core excludes concrete plugin transport and process execution")
 PYDEPS
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$check_tmp/aster-api" ./cmd/server
 )

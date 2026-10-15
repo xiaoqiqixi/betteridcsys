@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -168,10 +169,10 @@ func TestPreflightServiceCurrencyCheckStartsAtMigration4(t *testing.T) {
 }
 
 func TestMySQLPreflightFreshAndPrefixes(t *testing.T) {
-	for _, version := range []int{0, 1, 2, 3, 4, 5, 6, 7} {
-		t.Run(string(rune('0'+version)), func(t *testing.T) {
+	for version := 0; version <= len(schemaVersions); version++ {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			m, ctx := migrationTestDatabase(t)
-			if version == 7 {
+			if version == len(schemaVersions) {
 				if err := m.Migrate(ctx); err != nil {
 					t.Fatal(err)
 				}
@@ -186,7 +187,7 @@ func TestMySQLPreflightFreshAndPrefixes(t *testing.T) {
 			if version == 0 {
 				want = "empty"
 			}
-			if version == 7 {
+			if version == len(schemaVersions) {
 				want = "current"
 			}
 			if status.Status != want || status.SchemaVersion != version || len(status.PendingMigrations) != len(schemaVersions)-version {
@@ -213,7 +214,7 @@ func TestMySQLPreflightFreshAndPrefixes(t *testing.T) {
 
 func TestMySQLPreflightRejectsIncompatibleSchema(t *testing.T) {
 	for name, mutation := range map[string]string{
-		"unknown_version":     "INSERT INTO schema_migrations(version,checksum) VALUES(8,REPEAT('a',64))",
+		"unknown_version":     fmt.Sprintf("INSERT INTO schema_migrations(version,checksum) VALUES(%d,REPEAT('a',64))", len(schemaVersions)+1),
 		"modified_checksum":   "UPDATE schema_migrations SET checksum=REPEAT('a',64) WHERE version=1",
 		"missing_history":     "DELETE FROM schema_migrations WHERE version=4",
 		"unknown_table":       "CREATE TABLE unexpected(id INT) ENGINE=InnoDB",

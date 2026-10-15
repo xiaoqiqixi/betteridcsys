@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and explicitly approve the SMTP slot; never execute package contents.
+"""Install and explicitly approve runtime slots; never execute package contents.
 
 Production trust is fixed to root. The private _Trust object is only useful to
 unit tests invoking Python functions; the CLI has no relaxed-trust option.
@@ -10,6 +10,7 @@ import ctypes
 import dataclasses
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -19,7 +20,8 @@ import struct
 import sys
 import zlib
 
-CORE_VERSION = "0.5.0"
+CORE_VERSION = "0.5.3"
+PAYMENT_MIN_CORE_VERSION = "0.5.3"
 FILES = frozenset({"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"})
 MAX_ARCHIVE = 80 << 20
 MAX_BINARY = 64 << 20
@@ -28,6 +30,20 @@ VERSION = re.compile(r"(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][
 DIGEST = re.compile(r"[a-f0-9]{64}\Z")
 MANIFEST_KEYS = {"schema", "id", "version", "protocol", "core_min", "core_max_exclusive", "capabilities", "executable", "sha256"}
 SELECTION_KEYS = {"enabled", "id", "version", "manifest_sha256", "worker_uid", "client_uid", "socket", "allowed_targets"}
+PAYMENT_ID = re.compile(r"payment\.[a-z][a-z0-9-]{0,47}\Z")
+MERCHANT_ID = re.compile(r"[!-~]{1,128}\Z")
+
+
+def plugin_kind(identifier):
+    if identifier == "email.smtp":
+        return "smtp"
+    if isinstance(identifier, str) and identifier != "payment.disabled" and PAYMENT_ID.fullmatch(identifier):
+        return "payment"
+    raise Rejected("Unsupported runtime plugin identity.")
+
+
+def package_prefix(identifier):
+    return "aster-smtp" if plugin_kind(identifier) == "smtp" else "aster-payment-" + identifier.removeprefix("payment.")
 
 
 class Rejected(Exception):
@@ -142,11 +158,41 @@ def strict_json(raw, maximum):
 
 
 def validate_manifest(value, core):
-    if not isinstance(value, dict) or set(value) != MANIFEST_KEYS or type(value["schema"]) is not int or value["schema"] != 1 or value["id"] != "email.smtp" or value["protocol"] != "aster.smtp/1" or value["capabilities"] != ["smtp.send"] or value["executable"] != "plugin" or not isinstance(value["sha256"], str) or not DIGEST.fullmatch(value["sha256"]):
-        raise Rejected("Unsupported SMTP manifest.")
+    if not isinstance(value, dict) or not MANIFEST_KEYS <= set(value):
+        raise Rejected("Unsupported runtime manifest.")
+    kind = plugin_kind(value["id"])
+    expected_keys = MANIFEST_KEYS | ({"payment"} if kind == "payment" else set())
+    capabilities = ["smtp.send"] if kind == "smtp" else ["payment.checkout", "payment.verify_callback"]
+    if set(value) != expected_keys or type(value["schema"]) is not int or value["schema"] != 1 or value["protocol"] != "aster." + kind + "/1" or value["capabilities"] != capabilities or value["executable"] != "plugin" or not isinstance(value["sha256"], str) or not DIGEST.fullmatch(value["sha256"]):
+        raise Rejected("Unsupported runtime manifest.")
+    if kind == "payment":
+        validate_payment(value["payment"])
+        if version_tuple(core) < version_tuple(PAYMENT_MIN_CORE_VERSION) or version_tuple(value["core_min"]) < version_tuple(PAYMENT_MIN_CORE_VERSION):
+            raise Rejected("Payment runtime protocol requires Core 0.5.3 or newer.")
     version_tuple(value["version"])
     if not version_tuple(value["core_min"]) <= version_tuple(core) < version_tuple(value["core_max_exclusive"]):
         raise Rejected("Plugin is incompatible with the selected core version.")
+    return value
+
+
+def validate_payment(value):
+    if not isinstance(value, dict) or set(value) != {"currencies", "checkout_hosts"} or not isinstance(value["currencies"], list) or not 1 <= len(value["currencies"]) <= 32 or not isinstance(value["checkout_hosts"], list) or not 1 <= len(value["checkout_hosts"]) <= 8:
+        raise Rejected("Unsupported payment declarations.")
+    codes, hosts = set(), set()
+    for currency in value["currencies"]:
+        if not isinstance(currency, dict) or set(currency) != {"code", "precision"} or not isinstance(currency["code"], str) or not re.fullmatch(r"[A-Z]{3}", currency["code"]) or currency["code"] in codes or type(currency["precision"]) is not int or not 0 <= currency["precision"] <= 6:
+            raise Rejected("Unsupported payment currency declarations.")
+        codes.add(currency["code"])
+    for host in value["checkout_hosts"]:
+        if not isinstance(host, str) or not 1 <= len(host) <= 253 or host in hosts or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")):
+            raise Rejected("Unsupported payment checkout host.")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            raise Rejected("Payment checkout hosts must be DNS names.")
+        hosts.add(host)
     return value
 
 
@@ -215,8 +261,8 @@ def unpack_archive(compressed, raw_resources=False):
             raise Rejected("Archive contains an unsafe path.")
         if root is None:
             root = parts[0]
-        if parts[0] != root or not re.fullmatch(r"aster-smtp-(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})-linux-amd64" + suffix, root):
-            raise Rejected("Archive root does not identify the SMTP package.")
+        if parts[0] != root or not re.fullmatch(r"aster-(?:smtp|payment-[a-z][a-z0-9-]{0,47})-(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})-linux-amd64" + suffix, root):
+            raise Rejected("Archive root does not identify a runtime package.")
         data_start = offset + 512
         offset = data_start + (size + 511) // 512 * 512
         if offset > len(raw):
@@ -235,7 +281,7 @@ def unpack_archive(compressed, raw_resources=False):
     else:
         raise Rejected("Archive is missing terminal records.")
     if not directory_seen or set(files) != expected_files:
-        raise Rejected("Archive must contain the exact declared SMTP inventory.")
+        raise Rejected("Archive must contain the exact declared runtime inventory.")
     return root, files
 
 
@@ -258,7 +304,7 @@ def verify_package(path, expected, core=CORE_VERSION, trust=_Trust(), *, binary=
         validate_elf(raw_binary)
         files["plugin"] = raw_binary
     manifest = validate_manifest(strict_json(files["manifest.json"], 8192), core)
-    if root != "aster-smtp-" + manifest["version"] + "-linux-amd64" + ("-resources" if raw_resources else ""):
+    if root != package_prefix(manifest["id"]) + "-" + manifest["version"] + "-linux-amd64" + ("-resources" if raw_resources else ""):
         raise Rejected("Manifest version does not match archive root.")
     expected_lines = {}
     try:
@@ -392,41 +438,48 @@ def install_package(root, package, trust=_Trust()):
 
 def validate_targets(targets):
     if not isinstance(targets, list) or len(targets) > 8:
-        raise Rejected("At most eight explicit SMTP destinations are allowed.")
+        raise Rejected("At most eight explicit plugin destinations are allowed.")
     seen = set()
     for item in targets:
         if not isinstance(item, dict) or set(item) != {"host", "port"} or not isinstance(item["host"], str) or not 0 < len(item["host"]) <= 253 or any(ord(c) < 32 or ord(c) == 127 or c in "/\\ " for c in item["host"]) or type(item["port"]) is not int or not 1 <= item["port"] <= 65535:
-            raise Rejected("SMTP destination is invalid.")
+            raise Rejected("Plugin destination is invalid.")
         pair = (item["host"], item["port"])
         if pair in seen:
-            raise Rejected("Duplicate SMTP destinations are forbidden.")
+            raise Rejected("Duplicate plugin destinations are forbidden.")
         seen.add(pair)
     return targets
 
 
 def validate_policy(value):
-    if not isinstance(value, dict) or set(value) not in ({"schema", "revision"}, {"schema", "revision", "smtp"}) or type(value["schema"]) is not int or value["schema"] != 1 or type(value["revision"]) is not int or not 1 <= value["revision"] <= (1 << 64) - 1:
+    if not isinstance(value, dict) or not {"schema", "revision"} <= set(value) <= {"schema", "revision", "smtp", "payment"} or type(value["schema"]) is not int or value["schema"] != 1 or type(value["revision"]) is not int or not 1 <= value["revision"] <= (1 << 64) - 1:
         raise Rejected("Unsupported plugin policy.")
-    selected = value.get("smtp")
-    if selected is None:
-        return value
-    if not isinstance(selected, dict) or set(selected) != SELECTION_KEYS or type(selected["enabled"]) is not bool or selected["id"] != "email.smtp" or not isinstance(selected["manifest_sha256"], str) or not DIGEST.fullmatch(selected["manifest_sha256"]):
-        raise Rejected("Unsupported SMTP selection.")
-    version_tuple(selected["version"])
-    if any(type(selected[key]) is not int or not 1 <= selected[key] <= (1 << 32) - 1 for key in ("worker_uid", "client_uid")) or selected["worker_uid"] == selected["client_uid"]:
-        raise Rejected("Separate non-root worker and API identities are required.")
-    absolute(selected["socket"])
-    if len(selected["socket"]) > 100:
-        raise Rejected("Plugin socket path is too long.")
-    validate_targets(selected["allowed_targets"])
-    if selected["enabled"] and not selected["allowed_targets"]:
-        raise Rejected("Enabling SMTP requires an explicit destination.")
+    for kind in ("smtp", "payment"):
+        if kind not in value:
+            continue
+        selected = value[kind]
+        expected_keys = SELECTION_KEYS | ({"merchant_id"} if kind == "payment" else set())
+        if not isinstance(selected, dict) or set(selected) != expected_keys or type(selected["enabled"]) is not bool or plugin_kind(selected["id"]) != kind or not isinstance(selected["manifest_sha256"], str) or not DIGEST.fullmatch(selected["manifest_sha256"]):
+            raise Rejected("Unsupported runtime selection.")
+        if kind == "payment" and (not isinstance(selected["merchant_id"], str) or not MERCHANT_ID.fullmatch(selected["merchant_id"])):
+            raise Rejected("Payment requires an explicit non-secret merchant identity.")
+        version_tuple(selected["version"])
+        if any(type(selected[key]) is not int or not 1 <= selected[key] <= (1 << 32) - 1 for key in ("worker_uid", "client_uid")) or selected["worker_uid"] == selected["client_uid"]:
+            raise Rejected("Separate non-root worker and API identities are required.")
+        absolute(selected["socket"])
+        if len(selected["socket"]) > 100:
+            raise Rejected("Plugin socket path is too long.")
+        validate_targets(selected["allowed_targets"])
+        if selected["enabled"] and not selected["allowed_targets"]:
+            raise Rejected("Enabling a plugin requires an explicit destination.")
+    if "smtp" in value and "payment" in value:
+        smtp, payment = value["smtp"], value["payment"]
+        if smtp["worker_uid"] == payment["worker_uid"] or smtp["worker_uid"] == payment["client_uid"] or payment["worker_uid"] == smtp["client_uid"] or smtp["socket"] == payment["socket"]:
+            raise Rejected("Runtime slots require separate workers and sockets.")
     return value
 
 
 def installed_manifest(root, identifier, version, core, trust):
-    if identifier != "email.smtp":
-        raise Rejected("Only the SMTP runtime slot is implemented.")
+    plugin_kind(identifier)
     version_tuple(version)
     base = absolute(root) + "/" + identifier + "/" + version
     raw = read_protected(base + "/manifest.json", 8192, trust)
@@ -480,9 +533,11 @@ def write_policy(parent_fd, name, policy):
             pass
 
 
-def mutate_policy(root, path, action, revision, core=CORE_VERSION, selection=None, version=None, trust=_Trust()):
+def mutate_policy(root, path, action, revision, core=CORE_VERSION, selection=None, version=None, trust=_Trust(), *, kind="smtp"):
     if type(revision) is not int or revision < 0 or revision >= (1 << 64) - 1:
         raise Rejected("An explicit valid current revision is required.")
+    if kind not in ("smtp", "payment"):
+        raise Rejected("Unsupported runtime slot.")
     root_fd = protected_open(root, True, trust)
     parent, name = os.path.split(absolute(path))
     parent_fd = protected_open(parent, True, trust)
@@ -493,14 +548,16 @@ def mutate_policy(root, path, action, revision, core=CORE_VERSION, selection=Non
                 raise Rejected("Policy revision changed; inspect status before retrying.")
             if action == "select":
                 selected = dict(selection or {})
+                if plugin_kind(selected.get("id")) != kind:
+                    raise Rejected("Selection identity must match the runtime slot.")
                 selected["enabled"] = False
                 _, manifest_hash = installed_manifest(root, selected.get("id"), selected.get("version"), core, trust)
                 selected["manifest_sha256"] = manifest_hash
-                policy["smtp"] = selected
+                policy[kind] = selected
             elif action in ("enable", "disable", "rollback"):
-                if "smtp" not in policy:
+                if kind not in policy:
                     raise Rejected("Select an installed plugin before changing its state.")
-                selected = policy["smtp"]
+                selected = policy[kind]
                 if action == "rollback":
                     if version_tuple(version) >= version_tuple(selected["version"]):
                         raise Rejected("Rollback requires an earlier installed version.")
@@ -553,14 +610,16 @@ def main(argv=None):
     commands.add_parser("status")
     for name in ("select", "enable", "disable", "rollback"):
         command = commands.add_parser(name)
+        command.add_argument("--kind", choices=["smtp", "payment"])
         command.add_argument("--revision", required=True, type=int)
         if name == "select":
-            command.add_argument("--id", required=True, choices=["email.smtp"])
+            command.add_argument("--id", required=True)
             command.add_argument("--version", required=True)
             command.add_argument("--worker-uid", type=int, required=True)
             command.add_argument("--client-uid", type=int, required=True)
             command.add_argument("--socket", required=True)
             command.add_argument("--target", action="append", type=parse_target, default=[])
+            command.add_argument("--merchant-id")
         if name == "rollback":
             command.add_argument("--version", required=True)
     options = parser.parse_args(argv)
@@ -580,7 +639,10 @@ def main(argv=None):
             selection = None
             if options.action == "select":
                 selection = {"id": options.id, "version": options.version, "worker_uid": options.worker_uid, "client_uid": options.client_uid, "socket": options.socket, "allowed_targets": options.target}
-            result = mutate_policy(options.root, options.policy, options.action, options.revision, options.core_version, selection, getattr(options, "version", None))
+                if options.merchant_id is not None:
+                    selection["merchant_id"] = options.merchant_id
+            kind = options.kind or (plugin_kind(options.id) if options.action == "select" else "smtp")
+            result = mutate_policy(options.root, options.policy, options.action, options.revision, options.core_version, selection, getattr(options, "version", None), kind=kind)
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
         return 0
     except (Rejected, OSError) as exc:

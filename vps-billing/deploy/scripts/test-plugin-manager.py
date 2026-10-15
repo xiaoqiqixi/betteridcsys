@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import struct
 import subprocess
@@ -36,6 +37,17 @@ def contents(version="1.0.0"):
     binary = elf()
     manifest = {"schema": 1, "id": "email.smtp", "version": version, "protocol": "aster.smtp/1", "core_min": "0.4.0", "core_max_exclusive": "0.6.0", "capabilities": ["smtp.send"], "executable": "plugin", "sha256": hashlib.sha256(binary).hexdigest()}
     return {"plugin": binary, "manifest.json": json.dumps(manifest).encode(), "LICENSE": b"Preserved project license\n", "README.md": b"Independent SMTP plugin\n", "THIRD_PARTY_NOTICES.json": b'{"go_runtime":{"license":"Preserved runtime license"}}'}
+
+
+def payment_contents(version="1.0.0", identifier="payment.contract-example"):
+    files = contents(version)
+    manifest = json.loads(files["manifest.json"])
+    manifest.update(id=identifier, protocol="aster.payment/1", core_min="0.5.3", capabilities=["payment.checkout", "payment.verify_callback"],
+                    payment={"currencies": [{"code": "CNY", "precision": 2}, {"code": "JPY", "precision": 0}],
+                             "checkout_hosts": ["checkout.example.test"]})
+    files["manifest.json"] = json.dumps(manifest).encode()
+    files["README.md"] = b"Synthetic payment contract; no real payment service.\n"
+    return files
 
 
 def archive(files=None, version="1.0.0", edits=None, extras=(), format=tarfile.GNU_FORMAT, root=None):
@@ -103,6 +115,130 @@ class ManagerTest(unittest.TestCase):
 
     def mutate(self, action, revision, **kwargs):
         return manager.mutate_policy(str(self.root), str(self.policy), action, revision, trust=self.trust, **kwargs)
+
+    def install_payment(self, version="1.0.0"):
+        package = self.verify(files=payment_contents(version), version=version,
+                              root="aster-payment-contract-example-" + version + "-linux-amd64")
+        manager.install_package(str(self.root), package, self.trust)
+        return package
+
+    def payment_selection(self, version="1.0.0"):
+        result = self.selection(version)
+        result.update(id="payment.contract-example", worker_uid=2003, socket="/run/aster-payment/plugin.sock",
+                      merchant_id="synthetic-merchant", allowed_targets=[{"host": "api.example.test", "port": 443}])
+        return result
+
+    def test_payment_install_approval_enable_disable_and_rollback_preserve_smtp(self):
+        self.install()
+        self.mutate("select", 0, selection=self.selection())
+        smtp = self.mutate("enable", 1)["smtp"]
+        self.install_payment()
+        self.install_payment("1.0.1")
+        first = self.mutate("select", 2, kind="payment", selection=self.payment_selection("1.0.1"))
+        self.assertFalse(first["payment"]["enabled"])
+        self.assertEqual(first["payment"]["merchant_id"], "synthetic-merchant")
+        self.assertEqual(first["smtp"], smtp)
+        second = self.mutate("enable", 3, kind="payment")
+        self.assertTrue(second["payment"]["enabled"])
+        rollback = self.mutate("rollback", 4, kind="payment", version="1.0.0")
+        self.assertEqual(rollback["payment"]["version"], "1.0.0")
+        self.assertTrue(rollback["payment"]["enabled"])
+        self.assertEqual(rollback["smtp"], smtp)
+        final = self.mutate("disable", 5, kind="payment")
+        self.assertFalse(final["payment"]["enabled"])
+        self.assertTrue(final["smtp"]["enabled"])
+
+    def test_payment_package_identity_and_declared_capabilities_are_bound(self):
+        for field, value in (("id", "payment.disabled"), ("id", "payment.Upper"),
+                             ("protocol", "aster.payment/2"), ("capabilities", ["payment.checkout"]),
+                             ("payment", {"currencies": [], "checkout_hosts": ["checkout.example.test"]})):
+            files = payment_contents()
+            manifest = json.loads(files["manifest.json"])
+            manifest[field] = value
+            files["manifest.json"] = json.dumps(manifest).encode()
+            with self.subTest(field=field, value=value), self.assertRaises(manager.Rejected):
+                self.verify(files=files, root="aster-payment-contract-example-1.0.0-linux-amd64")
+        with self.assertRaises(manager.Rejected):
+            self.verify(files=payment_contents())
+        with self.assertRaises(manager.Rejected):
+            manager.validate_manifest(json.loads(payment_contents(identifier="payment.disabled")["manifest.json"]), manager.CORE_VERSION)
+
+    def test_default_core_compatibility_matches_compiled_runtime_protocol(self):
+        protocol = SCRIPT.parents[2] / "backend/pkg/pluginapi/protocol.go"
+        declared = re.search(r'\bCoreVersion\s*=\s*"([^"]+)"', protocol.read_text())
+        self.assertIsNotNone(declared)
+        self.assertEqual(declared[1], manager.CORE_VERSION)
+
+    def test_payment_protocol_rejects_old_core_override_and_inaccurate_minimum(self):
+        manifest = json.loads(payment_contents()["manifest.json"])
+        with self.assertRaises(manager.Rejected):
+            manager.validate_manifest(manifest, "0.5.2")
+        manifest["core_min"] = "0.4.0"
+        with self.assertRaises(manager.Rejected):
+            manager.validate_manifest(manifest, "0.5.3")
+
+    def test_payment_raw_resources_keep_binary_and_resource_hash_approvals_separate(self):
+        files = payment_contents()
+        files["SHA256SUMS"] = "".join(hashlib.sha256(data).hexdigest() + "  " + name + "\n"
+                                       for name, data in sorted(files.items())).encode()
+        raw_binary = files.pop("plugin")
+        raw = archive(files=files, root="aster-payment-contract-example-1.0.0-linux-amd64-resources")
+        path, digest = self.package(raw)
+        binary = self.base / "raw-payment"
+        binary.write_bytes(raw_binary)
+        binary.chmod(0o755)
+        package = manager.verify_package(str(path), digest, trust=self.trust, binary=str(binary),
+                                         binary_sha256=hashlib.sha256(raw_binary).hexdigest())
+        manager.install_package(str(self.root), package, self.trust)
+        self.assertEqual((self.root / "payment.contract-example/1.0.0/plugin").read_bytes(), raw_binary)
+        self.assertFalse(self.policy.exists())
+        with self.assertRaises(manager.Rejected):
+            manager.verify_package(str(path), digest, trust=self.trust, binary=str(binary), binary_sha256="0" * 64)
+
+    def test_payment_declarations_reject_ambiguous_currency_hosts_and_extra_fields(self):
+        baseline = json.loads(payment_contents()["manifest.json"])["payment"]
+        for field, value in (("currencies", [{"code": "CNY", "precision": 2}] * 2),
+                             ("currencies", [{"code": "cny", "precision": 2}]),
+                             ("currencies", [{"code": "CNY", "precision": True}]),
+                             ("currencies", [{"code": "CNY", "precision": 7}]),
+                             ("checkout_hosts", ["127.0.0.1"]), ("checkout_hosts", ["*.example.test"]),
+                             ("checkout_hosts", ["Checkout.example.test"]), ("checkout_hosts", ["checkout.example.test:443"]),
+                             ("checkout_hosts", ["checkout.example.test"] * 2), ("secret", "not-permitted")):
+            value = dict(baseline, **{field: value})
+            with self.subTest(declarations=value), self.assertRaises(manager.Rejected):
+                manager.validate_payment(value)
+
+    def test_payment_selection_requires_merchant_and_separate_workers_and_socket(self):
+        self.install()
+        self.mutate("select", 0, selection=self.selection())
+        self.install_payment()
+        for field, value in (("merchant_id", ""), ("merchant_id", "merchant with space"), ("merchant_id", "x" * 129),
+                             ("worker_uid", 2001), ("worker_uid", 2002), ("client_uid", 2001),
+                             ("socket", "/run/aster-smtp/plugin.sock")):
+            selection = self.payment_selection()
+            selection[field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(manager.Rejected):
+                self.mutate("select", 1, kind="payment", selection=selection)
+            self.assertEqual(manager.read_policy(str(self.policy), self.trust)["revision"], 1)
+        missing = self.payment_selection()
+        del missing["merchant_id"]
+        with self.assertRaises(manager.Rejected):
+            self.mutate("select", 1, kind="payment", selection=missing)
+        with self.assertRaises(manager.Rejected):
+            self.mutate("select", 1, selection=self.payment_selection())
+
+    def test_payment_manifest_corruption_blocks_enable_but_allows_disable(self):
+        self.install_payment()
+        first = self.mutate("select", 0, kind="payment", selection=self.payment_selection())
+        self.assertEqual(first["payment"]["manifest_sha256"], hashlib.sha256(
+            (self.root / "payment.contract-example/1.0.0/manifest.json").read_bytes()).hexdigest())
+        self.mutate("enable", 1, kind="payment")
+        executable = self.root / "payment.contract-example/1.0.0/plugin"
+        executable.chmod(0o755)
+        executable.write_bytes(b"corrupted")
+        with self.assertRaises(manager.Rejected):
+            self.mutate("enable", 2, kind="payment")
+        self.assertFalse(self.mutate("disable", 2, kind="payment")["payment"]["enabled"])
 
     def test_verify_gnu_and_ustar_without_execution(self):
         for format in (tarfile.GNU_FORMAT, tarfile.USTAR_FORMAT):

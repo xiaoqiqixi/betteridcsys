@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"aster/billing/internal/integrations"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -150,6 +151,10 @@ type Store interface {
 	CreateOrder(context.Context, User, string, string, string, string) (Order, bool, error)
 	CreateQuotedOrder(context.Context, User, string, string, string, string, *PriceQuote) (Order, bool, error)
 	CancelOrder(context.Context, User, string, string) (OrderCancellation, error)
+	ReservePayment(context.Context, User, string, string, string, string) (PaymentAttempt, bool, error)
+	PaymentAttempt(context.Context, User, string) (PaymentAttempt, error)
+	CompletePaymentCheckout(context.Context, string, integrations.Checkout, bool) (PaymentAttempt, error)
+	SettlePayment(context.Context, string, integrations.VerifiedPayment) (PaymentSettlement, error)
 }
 
 func ID() string {

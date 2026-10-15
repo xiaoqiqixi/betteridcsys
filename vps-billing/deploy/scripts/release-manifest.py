@@ -149,7 +149,8 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch, k
         "schema": 3, "distribution_format": "raw-binaries-v1", "release_kind": kind, "release_label": version, "source_commit": commit, "source_date_epoch": int(epoch),
         "component_versions": selected_versions(source), "plugin_protocol": "aster.smtp/1", "smtp_core_compatibility": {"min": "0.4.0", "max_exclusive": "0.6.0"},
         "target": "linux/amd64", "cgo_enabled": False,
-        "deployment_model": "single-server native Linux; independently managed nonprivileged Unix-RPC SMTP worker; external target-host validation pending",
+        "deployment_model": ("single-server native Linux; separately approved nonprivileged Unix-RPC SMTP and payment workers"
+                             if kind == "core" else "independent nonprivileged Unix-RPC SMTP worker"),
         "tools": {"go": tool("go", "version"), "tar": tool("tar", "--version").splitlines()[0], "gzip": tool("gzip", "--version").splitlines()[0], "python": tool("python3", "--version")},
         "go_build_flags": ["-mod=readonly", "-trimpath", "-buildvcs=false", "-ldflags=-s -w"] + (["-X main.version=" + version] if kind == "smtp" else []),
         "frontend_build": ["npm ci --no-audit --no-fund", "npm run build"] if kind == "core" else [],
@@ -160,7 +161,8 @@ def manifest(source, bundle, modules_path, build_path, commit, version, epoch, k
         "go_build_info": build_info,
         "source_delivery": "No manually uploaded project source archive; source remains in Git and GitHub automatic source downloads",
         "dependency_inventory": "Go module graph, linked module and runtime original notice texts; core also includes npm installed metadata/lockfiles; not a full SPDX/CycloneDX SBOM or legal certification",
-        "release_status": "Normal versioned runtime distribution; payment and provisioning unavailable; SMTP requires explicit installation and approval; no production deployment claim",
+        "release_status": ("Versioned core with a runtime payment extension interface; no live payment channel bundled; provisioning unavailable; plugins require explicit installation and approval; no production deployment claim"
+                           if kind == "core" else "Independent SMTP distribution requiring explicit installation and approval; no production deployment claim"),
     }
     if kind == "core":
         info["tools"].update(node=tool("node", "--version"), npm=tool("npm", "--version"))

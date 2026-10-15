@@ -81,7 +81,7 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	return &MySQL{DB: db, transport: transport, database: cfg.DBName}, nil
 }
 
-var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry}
+var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry, migrations.PaymentRuntime}
 
 func (m *MySQL) Ping(ctx context.Context) error {
 	rows, err := m.DB.QueryContext(ctx, "SELECT version,checksum FROM schema_migrations ORDER BY version")
@@ -174,6 +174,19 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 		if version == 7 {
 			if err = migrateCurrencyRegistry(ctx, conn); err != nil {
 				return fmt.Errorf("migration 7 failed: %w", err)
+			}
+		}
+		if version == 8 {
+			// Validate every existing payment object before creating either new
+			// table. A colliding second object must not cause partial new DDL.
+			for _, q := range strings.Split(source, ";") {
+				q = strings.TrimSpace(q)
+				if q == "" {
+					continue
+				}
+				if _, _, err = prepareMigrationStatement(ctx, conn, version, q); err != nil {
+					return fmt.Errorf("migration 8 preparation failed: %w", err)
+				}
 			}
 		}
 		for _, q := range strings.Split(source, ";") {

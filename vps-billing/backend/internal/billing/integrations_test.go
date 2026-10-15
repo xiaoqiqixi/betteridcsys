@@ -2,8 +2,11 @@ package billing
 
 import (
 	"aster/billing/internal/integrations"
+	"aster/billing/pkg/pluginapi"
+	"aster/billing/pkg/pluginapi/paymentv1"
 	"context"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +26,22 @@ func (p *checkoutRecorder) CreateCheckout(_ context.Context, r integrations.Chec
 func (p *checkoutRecorder) VerifyCallback(context.Context, integrations.CallbackRequest) (integrations.VerifiedPayment, error) {
 	return integrations.VerifiedPayment{}, integrations.ErrUnavailable
 }
+
+// Only the isolated test implements this adapter; the server selects approved
+// runtime workers rather than compiled payment factories.
+type recorderRuntime struct{ recorder *checkoutRecorder }
+
+func (p recorderRuntime) PaymentSelection() (pluginapi.Manifest, pluginapi.Selection, error) {
+	m := pluginapi.Manifest{Schema: 1, ID: "payment.test", Version: "1.0.0", Protocol: pluginapi.PaymentProtocol, CoreMin: "0.5.3", CoreMaxExclusive: "0.6.0", Capabilities: pluginapi.PaymentCapabilities(), Executable: "plugin", SHA256: strings.Repeat("a", 64), Payment: &paymentv1.Declarations{Currencies: []paymentv1.Currency{{Code: "CNY", Precision: 2}, {Code: "USD", Precision: 2}}, CheckoutHosts: []string{"checkout.example.com"}}}
+	return m, pluginapi.Selection{Enabled: true, ID: m.ID, Version: m.Version, ManifestSHA256: strings.Repeat("b", 64), MerchantID: "test-merchant"}, nil
+}
+func (p recorderRuntime) CreatePayment(ctx context.Context, cfg paymentv1.Config, r paymentv1.Intent) (paymentv1.Checkout, error) {
+	out, err := p.recorder.CreateCheckout(ctx, integrations.CheckoutRequest{AttemptID: r.AttemptID, MerchantAccountID: cfg.MerchantID, InvoiceID: r.InvoiceID, OrderID: r.OrderID, AccountID: r.AccountID, AmountMinor: r.AmountMinor, Currency: r.Currency, CurrencyDecimalPlaces: r.CurrencyDecimalPlaces, IdempotencyKey: r.IdempotencyKey})
+	return paymentv1.Checkout{ProviderID: out.ProviderID, SessionID: out.SessionID, URL: out.URL, ExpiresAt: out.ExpiresAt}, err
+}
+func (p recorderRuntime) VerifyPaymentCallback(context.Context, paymentv1.Config, paymentv1.Callback) (paymentv1.VerifiedEvent, error) {
+	return paymentv1.VerifiedEvent{}, paymentv1.ErrUnavailable
+}
 func TestInjectedCheckoutBoundary(t *testing.T) {
 	recorder := &checkoutRecorder{}
 	registry, e := integrations.New(context.Background(), []integrations.Definition{{Manifest: integrations.Manifest{ID: "payment.test", Kind: integrations.Payment, Name: "Test", Description: "Test only", Capabilities: []string{"checkout"}, SupportedCurrencies: []string{"CNY", "USD"}, CurrencyDecimalPlaces: map[string]int{"CNY": 2, "USD": 2}}, CheckoutHosts: []string{"checkout.example.com"}, PaymentFactory: func(context.Context, integrations.Config) (integrations.PaymentProvider, error) { return recorder, nil }}}, integrations.Options{PaymentID: "payment.test"})
@@ -30,7 +49,7 @@ func TestInjectedCheckoutBoundary(t *testing.T) {
 		t.Fatal(e)
 	}
 	m := NewMemory()
-	srv := httptest.NewServer(NewAppWithIntegrations(m, Config{Demo: true, Origin: "http://localhost", Secret: ID() + ID()}, registry).Handler())
+	srv := httptest.NewServer(NewAppWithIntegrations(m, Config{Demo: true, Origin: "http://localhost", Secret: ID() + ID(), PaymentRuntime: recorderRuntime{recorder}}, registry).Handler())
 	defer srv.Close()
 	c := client(t, srv.URL, "demo@aster.local", "DemoCustomer!2026")
 	other := client(t, srv.URL, "other@aster.local", "DemoOther!2026")
@@ -79,7 +98,7 @@ func TestInjectedCheckoutBoundary(t *testing.T) {
 	recorder.mu.Lock()
 	requests := append([]integrations.CheckoutRequest{}, recorder.requests...)
 	recorder.mu.Unlock()
-	if len(requests) != 2 || requests[0].AmountMinor != 3900 || requests[0].Currency != "CNY" || requests[0].InvoiceID != id || requests[0].OrderID != inv["order_id"] || requests[0].AccountID == "" || requests[0].IdempotencyKey != requests[1].IdempotencyKey {
+	if len(requests) != 1 || requests[0].AmountMinor != 3900 || requests[0].Currency != "CNY" || requests[0].InvoiceID != id || requests[0].OrderID != inv["order_id"] || requests[0].AccountID == "" || requests[0].IdempotencyKey != requests[0].AttemptID || requests[0].AttemptID == "" || requests[0].MerchantAccountID != "test-merchant" {
 		t.Fatal(requests)
 	}
 	_, v = c.request("GET", "/api/v1/invoices/"+id, nil, "")
@@ -102,7 +121,7 @@ func TestInjectedCheckoutBoundary(t *testing.T) {
 	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
-	if len(recorder.requests) != 2 {
+	if len(recorder.requests) != 1 {
 		t.Fatal("paid invoice reached provider")
 	}
 }

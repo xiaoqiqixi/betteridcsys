@@ -30,7 +30,8 @@
 | `POST /orders/{id}/cancel` | 客户 + CSRF | `{reason}`，安全取消本人未付订单并同步作废配对账单 |
 | `POST /admin/orders/{id}/cancel` | 管理员 + CSRF | 相同原子操作，可处理任意有权且符合条件的订单 |
 | `GET /invoices/{id}` | 账单所有人 | 直接按账单 ID 和当前用户查找，不依赖列表上限 |
-| `POST /invoices/{id}/checkout` | 账单所有人 + CSRF | 未配置提供商返回 503 `PAYMENT_NOT_CONFIGURED`，不改变付款状态 |
+| `POST /invoices/{id}/checkout` | 账单所有人 + CSRF | 先保存唯一支付尝试，再创建或复用获准插件会话；默认关闭返回 503 |
+| `POST /payment-callbacks/{providerID}` | 渠道验签 | 原始通知，免浏览器 CSRF；原子去重与结算，成功 200 |
 | `GET /admin/overview?currency=CNY` | 管理员 | 该币种金额/服务/账单数；客户数是全局 |
 | `GET /admin/customers`, `/admin/orders`, `/admin/invoices` | 管理员 | 全站只读列表 |
 | `GET /admin/invoices/{id}` | 管理员 | 直接读取任意账单；该路由无支付操作 |
@@ -40,8 +41,9 @@
 | `POST /admin/updates/check` | 管理员 + CSRF | 严格空 JSON `{}`；明确检查固定官方正常 Release |
 | `POST /admin/updates/handoff` | 管理员 + CSRF | 重核候选/本地状态、保存审计后生成未签名主机交接，不安装/执行 |
 | `GET /admin/integrations` | 管理员 | 只读适配器能力/配置字段说明，永不返回秘密值或引用 |
-| `GET /admin/plugins` | 管理员 | 被动发现清单与 SMTP 本地审批状态，不执行代码/连接 |
+| `GET /admin/plugins` | 管理员 | 被动发现清单与 SMTP/支付本地审批状态，不执行代码/连接 |
 | `POST /admin/plugins/check` | 管理员 + CSRF | 严格空 JSON `{}`；主动兼容握手，不传 SMTP 凭据、不发信 |
+| `POST /admin/plugins/payment/check` | 管理员 + CSRF | 严格空 JSON `{}`；支付 worker 身份及协议握手，不调用渠道 |
 | `GET /admin/email-settings` | 管理员 | SMTP 非秘密配置、revision、凭据/密钥标志和插件/目的地状态 |
 | `POST /admin/email-settings` | 管理员 + CSRF | 保存 SMTP 配置及加密凭据；revision 冲突拒绝，配置/审计同事务 |
 | `POST /admin/email-settings/test` | 管理员 + CSRF | `{revision,to}`；仅按已保存启用配置发送单封固定测试邮件 |
@@ -100,6 +102,10 @@
 
 ## 未付款订单取消
 
-两个取消接口接收最多 4KiB 的严格 JSON `{reason:string}`，原因修剪后须为 1–500 字节纯文本。成功返回 `{data:{order,invoice}}`，分别为 `cancelled` 与 `void`；重复成功请求不重复记审计或 outbox。金额、币种格式、issuer/套餐快照、开具/创建/到期时间与原创建幂等映射均保留。只有 `payment.disabled` 可用；当前没有在途付款预约协议，接入付款时核心拒绝直接取消。
+两个取消接口接收最多 4KiB 的严格 JSON `{reason:string}`，原因修剪后须为 1–500 字节纯文本。成功返回 `{data:{order,invoice}}`，分别为 `cancelled` 与 `void`；重复成功请求不重复记审计或 outbox。金额、币种格式、issuer/套餐快照、开具/创建/到期时间与原创建幂等映射均保留。主干在相同数据库事务中检查支付尝试；存在创建中、有效会话、结果未确认或已结算尝试时拒绝取消，停用插件也不解除该限制。旧编译期定制接口继续保守拒绝取消。
 
-非本人订单返回 404 `NOT_FOUND`；结构错误为 400 `INVALID_BODY`，语义错误为 400 `INVALID_CANCELLATION`，已处理、关联服务、配对不一致或无法验证的历史为 409 `CANCELLATION_STATE_CONFLICT`，付款已接入为 409 `CANCELLATION_UNAVAILABLE`。不会独立作废账单、删除、标记付款、退款或执行资源操作。不确定响应不能假称取消成功；先重新查询，必要时重复相同取消操作。
+非本人订单返回 404 `NOT_FOUND`；结构错误为 400 `INVALID_BODY`，语义错误为 400 `INVALID_CANCELLATION`，已处理、关联服务、配对不一致或无法验证的历史为 409 `CANCELLATION_STATE_CONFLICT`，在途付款或旧定制付款处理不能排除时为 409 `CANCELLATION_UNAVAILABLE`。不会独立作废账单、删除、标记付款、退款或执行资源操作。不确定响应不能假称取消成功；先重新查询，必要时重复相同取消操作。
+
+## 支付运行时合同（主干）
+
+主干新增的支付运行时协议、会话复用、回调应答、去重与不确定结果处理以 [PAYMENT_PLUGINS.md](PAYMENT_PLUGINS.md) 为准。该能力尚未随正式 Core 0.5.2 发布，没有内置真实渠道。仅验签后的独立插件结果可以进入核心结算事务，浏览器成功字段不能改账。

@@ -2,6 +2,7 @@ package runtimeplugins
 
 import (
 	"aster/billing/pkg/pluginapi"
+	"aster/billing/pkg/pluginapi/paymentv1"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -110,16 +111,24 @@ func (a *Approval) Close() {
 	}
 }
 
-func validatePolicy(policy pluginapi.Policy, rules trust) error {
-	if policy.Schema != 1 || policy.Revision == 0 {
+func selectionFor(policy pluginapi.Policy, kind string) *pluginapi.Selection {
+	if kind == "payment" {
+		return policy.Payment
+	}
+	return policy.SMTP
+}
+func validateSelection(s *pluginapi.Selection, kind string, rules trust) error {
+	if s == nil {
+		return nil
+	}
+	prefix := "email."
+	if kind == "payment" {
+		prefix = "payment."
+	}
+	if !pluginapi.ValidID(s.ID) || !strings.HasPrefix(s.ID, prefix) || !pluginapi.ValidVersion(s.Version) || !pluginapi.ValidDigest(s.ManifestSHA256) || !cleanAbsolute(s.Socket) || len(s.Socket) > 100 || s.WorkerUID == 0 || s.ClientUID == 0 || (!rules.allowSameUID && s.WorkerUID == s.ClientUID) || len(s.AllowedTargets) > 8 || s.Enabled && len(s.AllowedTargets) == 0 {
 		return ErrUnavailable
 	}
-	s := policy.SMTP
-	if s == nil {
-		return ErrDisabled
-	}
-	if !pluginapi.ValidID(s.ID) || !pluginapi.ValidVersion(s.Version) || !pluginapi.ValidDigest(s.ManifestSHA256) ||
-		!cleanAbsolute(s.Socket) || len(s.Socket) > 100 || s.WorkerUID == 0 || s.ClientUID == 0 || (!rules.allowSameUID && s.WorkerUID == s.ClientUID) || len(s.AllowedTargets) > 8 || s.Enabled && len(s.AllowedTargets) == 0 {
+	if kind == "payment" && (s.ID == "payment.disabled" || !paymentv1.ValidID(s.MerchantID)) || kind == "smtp" && s.MerchantID != "" {
 		return ErrUnavailable
 	}
 	seen := map[pluginapi.Target]bool{}
@@ -129,13 +138,31 @@ func validatePolicy(policy pluginapi.Policy, rules trust) error {
 		}
 		seen[target] = true
 	}
-	if !s.Enabled {
+	return nil
+}
+func validatePolicyKind(policy pluginapi.Policy, kind string, rules trust) error {
+	if policy.Schema != 1 || policy.Revision == 0 || kind != "smtp" && kind != "payment" {
+		return ErrUnavailable
+	}
+	if validateSelection(policy.SMTP, "smtp", rules) != nil || validateSelection(policy.Payment, "payment", rules) != nil {
+		return ErrUnavailable
+	}
+	if a, b := policy.SMTP, policy.Payment; a != nil && b != nil && (a.Socket == b.Socket || !rules.allowSameUID && (a.WorkerUID == b.WorkerUID || a.WorkerUID == b.ClientUID || b.WorkerUID == a.ClientUID)) {
+		return ErrUnavailable
+	}
+	if s := selectionFor(policy, kind); s == nil || !s.Enabled {
 		return ErrDisabled
 	}
 	return nil
 }
+func validatePolicy(policy pluginapi.Policy, rules trust) error {
+	return validatePolicyKind(policy, "smtp", rules)
+}
 
 func loadApproval(root, policyPath string, rules trust) (*Approval, error) {
+	return loadApprovalKind(root, policyPath, "smtp", rules)
+}
+func loadApprovalKind(root, policyPath, kind string, rules trust) (*Approval, error) {
 	if root == "" && policyPath == "" {
 		return nil, ErrDisabled
 	}
@@ -155,15 +182,15 @@ func loadApproval(root, policyPath string, rules trust) (*Approval, error) {
 	if pluginapi.DecodeStrict(raw, pluginapi.MaxPolicyBytes, &policy) != nil {
 		return nil, ErrUnavailable
 	}
-	if err := validatePolicy(policy, rules); err != nil {
+	if err := validatePolicyKind(policy, kind, rules); err != nil {
 		// Disabled policy metadata is useful for version/update status, but it
 		// grants no executable approval and does not read the selected binary.
-		if errors.Is(err, ErrDisabled) && policy.SMTP != nil {
-			return &Approval{Selection: *policy.SMTP, PolicyRevision: policy.Revision}, err
+		if errors.Is(err, ErrDisabled) && selectionFor(policy, kind) != nil {
+			return &Approval{Selection: *selectionFor(policy, kind), PolicyRevision: policy.Revision}, err
 		}
 		return nil, err
 	}
-	s := *policy.SMTP
+	s := *selectionFor(policy, kind)
 	base := filepath.Join(root, s.ID, s.Version)
 	raw, err = readProtected(filepath.Join(base, "manifest.json"), pluginapi.MaxManifestBytes, rules)
 	if err != nil {
@@ -174,7 +201,7 @@ func loadApproval(root, policyPath string, rules trust) (*Approval, error) {
 		return nil, ErrUnavailable
 	}
 	var manifest pluginapi.Manifest
-	if pluginapi.DecodeStrict(raw, pluginapi.MaxManifestBytes, &manifest) != nil || manifest.Validate(pluginapi.CoreVersion) != nil || manifest.ID != s.ID || manifest.Version != s.Version {
+	if pluginapi.DecodeStrict(raw, pluginapi.MaxManifestBytes, &manifest) != nil || manifest.Validate(pluginapi.CoreVersion) != nil || manifest.ID != s.ID || manifest.Version != s.Version || kind == "payment" && manifest.Protocol != pluginapi.PaymentProtocol || kind == "smtp" && manifest.Protocol != pluginapi.SMTPProtocol {
 		return nil, ErrUnavailable
 	}
 	file, err := protectedOpen(filepath.Join(base, manifest.Executable), false, rules)
@@ -214,4 +241,10 @@ func loadApproval(root, policyPath string, rules trust) (*Approval, error) {
 // launcher. Only root-owned approved artifacts are accepted in production.
 func OpenApproved(root, policyPath string) (*Approval, error) {
 	return loadApproval(root, policyPath, trust{})
+}
+
+// OpenApprovedPayment pins the independently selected payment worker without
+// executing it. The launcher applies the same approval checks as the core.
+func OpenApprovedPayment(root, policyPath string) (*Approval, error) {
+	return loadApprovalKind(root, policyPath, "payment", trust{})
 }

@@ -11,7 +11,8 @@ import (
 )
 
 // CancelOrder changes only an unfulfilled local order and its paired invoice.
-// The application service must first establish that payments are disabled.
+// Reservation and settlement take the same order/invoice locks. Payment
+// attempts remain reservations even when an adapter times out or expires.
 func (m *MySQL) CancelOrder(ctx context.Context, actor User, orderID, reason string) (OrderCancellation, error) {
 	reason, err := normalizeCancellationInput(actor, orderID, reason)
 	if err != nil {
@@ -66,6 +67,14 @@ func (m *MySQL) cancelOrderOnce(ctx context.Context, actor User, orderID, reason
 	}
 	replay, err := validateCancellationPair(actor, order, invoice)
 	if err != nil {
+		return OrderCancellation{}, err
+	}
+	var attemptID string
+	err = tx.QueryRowContext(ctx, "SELECT id FROM payment_attempts WHERE order_id=? LIMIT 1 FOR UPDATE", order.ID).Scan(&attemptID)
+	if err == nil {
+		return OrderCancellation{}, ErrCancellationState
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return OrderCancellation{}, err
 	}
 	// There is no order_id on services in this schema. A matching owner/name

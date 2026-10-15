@@ -4,7 +4,7 @@
 
 全新安装默认只启用 CNY，支持配置 0–6 位精度、名称、金额前后缀和价格。升级保留已有 USD 报价与历史记录。语言切换不换汇，当前配置也不重写历史金额。
 
-运营者和开发者可按[支付插件接入指南](docs/PAYMENT_PLUGINS.md)对接第三方渠道。现有支付适配器通过受信代码注册并随 Core 构建，官方发行默认关闭支付。结账会话与付款结算是不同步骤，完整接入须按指南完成回调、去重、结算及渠道验收。VPS 主控/被控、自动开通、完整财务账本、退款对账和税务发票仍需另行实现。
+运营者和开发者可按[支付插件接入指南](docs/PAYMENT_PLUGINS.md)对接第三方渠道。主干提供独立运行时支付插槽、持久化支付尝试与验签后原子结算，兼容插件无需重编 Core；尚未随正式 Core 0.5.2 发布，且没有内置真实渠道。官方发行默认关闭支付，具体渠道接口及商户验收由开发者完成。VPS 主控/被控、自动开通、完整财务账本、退款对账和税务发票仍需另行实现。
 
 SMTP 目前只提供管理员配置和固定测试邮件，尚无业务邮件通知、邮箱验证、密码找回或 MFA。创建订单本身不会生成虚拟机或将账单记为已付。
 
@@ -12,7 +12,7 @@ SMTP 目前只提供管理员配置和固定测试邮件，尚无业务邮件通
 
 Core `0.5.2` 与官方 SMTP `1.1.0` 分开构建、安装和正常发布。SMTP 插件实现 `aster.smtp/1`，兼容 Core `>=0.4.0,<0.6.0`，只支持管理员固定测试邮件，默认关闭。Core 没有内置 SMTP 传输；安装独立包并经 root 明确批准后，独立 systemd 身份通过 Unix socket 提供能力。
 
-独立运行时插件目前用于 SMTP，与编译期支付适配器分开管理。Core 被动读取 manifest，不因发现文件而执行程序、启动服务或自动下载。安装、启停及版本切换见[插件指南](docs/PLUGINS.md)，协议、身份与秘密边界见 [PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md)。替换 SMTP 插件无需重编 Core，具体兼容与恢复结果见[验证记录](docs/VALIDATION.md)。
+主干支付与 SMTP 分别使用独立运行时插槽。Core 被动读取 manifest，不因发现文件而执行程序、启动服务或自动下载。安装、启停及版本切换见[插件指南](docs/PLUGINS.md)，协议、身份与秘密边界见 [PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md)。替换 SMTP 插件无需重编 Core，具体兼容与恢复结果见[验证记录](docs/VALIDATION.md)。
 
 ## 原生 Linux 安装
 
@@ -31,7 +31,7 @@ Core 的 API、插件宿主和资源包须来自同一版本；资源包含编�
 /opt/aster/current                  当前 Core 版本链接
 /opt/aster/plugins/<id>/<version>/  独立、不可覆盖的插件版本
 /etc/aster/api.env                  文件引用和非秘密配置
-/etc/aster/plugins.json             root 审批与精确 SMTP 目的地
+/etc/aster/plugins.json             root 审批与插件身份、商户与精确 SMTP 目的地
 /etc/aster/secrets/                 Core 可读、插件不可读的秘密
 ```
 
@@ -67,7 +67,7 @@ API_PROXY_TARGET=http://127.0.0.1:18080 npm run dev -- --host 127.0.0.1 --port 5
 | ------------------------------------ | --------------------------------------------------------------------- |
 | `frontend/`                          | 客户/管理控制台，偏好、配置与组件测试                                 |
 | `backend/internal/billing/`          | 认证、权限、订单/账单、设置、审计、MySQL/内存存储                     |
-| `backend/pkg/pluginapi/`             | 纯协议与 SMTP 类型，不含具体网络传输                                  |
+| `backend/pkg/pluginapi/`             | 纯协议、SMTP 与支付类型，不含渠道传输                                  |
 | `backend/internal/runtimeplugins/`   | 被动发现、受保护文件与审批、Unix RPC 客户端                           |
 | `backend/cmd/plugin-host/`           | 独立身份验证并执行批准的程序 inode                                    |
 | `backend/plugins/smtp/`              | 独立 SMTP 程序、TLS 传输与测试                                        |

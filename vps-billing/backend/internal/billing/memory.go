@@ -13,21 +13,23 @@ type memoRequest struct {
 	Order       Order
 }
 type Memory struct {
-	currencies     CurrencyConfiguration
-	pricesRevision int64
-	emailSettings  EmailSettingsRecord
-	settings       SiteSettings
-	mu             sync.Mutex
-	users          map[string]User
-	sessions       map[string]Session
-	plans          []Plan
-	prices         map[string]map[string]PlanPrice
-	orders         []Order
-	invoices       []Invoice
-	services       []Service
-	audits         []Audit
-	requests       map[string]memoRequest
-	orderEvents    []orderOutboxEvent
+	currencies      CurrencyConfiguration
+	pricesRevision  int64
+	emailSettings   EmailSettingsRecord
+	settings        SiteSettings
+	mu              sync.Mutex
+	users           map[string]User
+	sessions        map[string]Session
+	plans           []Plan
+	prices          map[string]map[string]PlanPrice
+	orders          []Order
+	invoices        []Invoice
+	services        []Service
+	audits          []Audit
+	requests        map[string]memoRequest
+	orderEvents     []orderOutboxEvent
+	paymentAttempts map[string]PaymentAttempt
+	paymentReceipts []paymentReceipt
 }
 
 func NewMemory() *Memory {

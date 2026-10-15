@@ -50,9 +50,7 @@ FILE 形式优先。生产拒绝弱/示例会话秘密、无 DSN、非 HTTPS 来
 
 ## 数据库、迁移与身份
 
-开发和排错记录中的 `007` 是第七份数据库变更文件的序号，`14 张基础表` 是该版本完整数据库的表数量；两者不是同一计数，也不是要求运营者从七张表手动改成十四张。安装和升级按版本运行工具并核对预检结果，具体步骤见 [安装](../docs/INSTALL.md)和 [升级](../docs/UPGRADE.md)。
-
-迁移 1–6 保持原文，迁移 007 新增币种登记、全局价格 revision、订单/账单/服务的币种格式快照与订单套餐快照，当前共 14 张基础表。旧 CNY/USD 仅按旧版固定两位格式回填，历史缺失套餐规格不补造。迁移经 advisory lock 串行执行，校验完整版本、checksum 和结构；就绪拒绝未知新 schema。MySQL DDL 不能整体事务回滚，执行前停写并验证备份恢复，不删除表/快照或手改迁移记录降级。详见 [升级说明](../docs/UPGRADE.md)。
+数据库更新保留历史金额和快照，并新增持久化支付尝试与结算去重记录。工具通过独占迁移锁、校验和与结构预检验证版本；MySQL DDL 无法整体回滚，升级前须停写并验证备份与隔离恢复，不能删除记录手动降级。具体步骤见 [安装](../docs/INSTALL.md)和 [升级](../docs/UPGRADE.md)。
 
 以独立 DDL 身份执行 `aster-api -migrate`，API 用只有本库 SELECT/INSERT/UPDATE/DELETE 的 DML 身份。CLI 仍需完整生产配置。以 BOOTSTRAP_* 配置执行 `aster-api -create-user` 创建测试用户；没有公开注册、密码找回、自助改密、MFA、角色修改或完整账号管理 API。详细配置和权限步骤见 [INSTALL.md](../docs/INSTALL.md)。
 
@@ -64,7 +62,7 @@ FILE 形式优先。生产拒绝弱/示例会话秘密、无 DSN、非 HTTPS 来
 2. POST /api/v1/auth/login 携带 JSON email/password 与 X-CSRF-Token；成功后使用新 token。
 3. GET /currencies 读取币种元数据，仅选择 enabled 项；GET /plans?currency=CODE 读取独立报价和 price_revision，省略币种使用已配置默认。
 4. POST /orders 携带 plan_id、hostname、显式 currency、`quote:{price_minor,decimal_places,price_revision}` 和唯一 Idempotency-Key（8–128 个 ASCII 字母/数字/_.:-）。quote 必须来自已展示报价，变化返回 409 PRICE_CHANGED 且不创建记录。旧客户端可省略 quote，按执行时价格执行；新客户端始终提供。
-5. 所有变更都需 CSRF；存在 Origin 时必须精确匹配 APP_ORIGIN。未知 JSON 字段（含顶层价格/owner/role）拒绝，quote 仅作为服务端价格的确认条件，不允许客户端定价。
+5. 浏览器变更请求均需 CSRF；支付渠道专用通知路径另行验签。存在 Origin 时必须精确匹配 APP_ORIGIN。未知 JSON 字段（含顶层价格/owner/role）拒绝，quote 仅作为服务端价格的确认条件，不允许客户端定价。
 6. 注销撤销原会话并轮换匿名 token；会话 8 小时到期，数据库保存 token 哈希。
 
 请求 locale 使用受支持的语言，界面独立选择 zh-CN/en，默认中文。locale 不决定货币；报价/统计按显式 currency 查询。客户数全局，服务/账单计数和金额按币种。列表历史可以混合登记币种，每条记录自己的币种，不跨币种求和。
@@ -83,7 +81,7 @@ GET /site-settings 公开展示子集；管理员 GET/POST /admin/site-settings 
 
 管理员 GET /admin/invoices/{id} 提供直接只读详情；客户 GET /invoices/{id} 仍按所有权查询，避免用最多 1,000 条列表筛选漏掉旧账单。
 
-POST /invoices/{id}/checkout 核对所有权和待付状态后调用类型化注册表。官方入口注册禁用适配器，返回 503 PAYMENT_NOT_CONFIGURED，不改变订单/账单/服务。第三方适配器通过受信代码注册并随 Core 构建；现有 VerifyCallback Go 方法尚无 HTTP 路由或持久化结算流程，接入须同时完成验签、去重和原子入账。order.created 不是开通授权，退款、续费或 outbox 消费不能从结账接口推导为已有能力。接口、责任与可编译示例见 [PAYMENT_PLUGINS.md](../docs/PAYMENT_PLUGINS.md)。
+POST /invoices/{id}/checkout 验证所有权和持久化账单，先保存支付尝试再调用获准的独立运行时插件。主干通过 `aster.payment/1` 接入，替换兼容插件无需重编 Core；具体真实渠道由开发者维护。专用 POST /payment-callbacks/{providerID} 验签后，由 Core 事务比对业务绑定、去重并原子记录付款。浏览器回跳不记账，超时保持未确认，在途尝试阻止取消。没有插件时返回 503 PAYMENT_NOT_CONFIGURED。自动开通、退款与查询对账尚未提供，完整合同及合成程序见 [PAYMENT_PLUGINS.md](../docs/PAYMENT_PLUGINS.md)。
 
 ## 官方 SMTP
 

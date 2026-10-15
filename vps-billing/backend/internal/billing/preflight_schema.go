@@ -8,7 +8,7 @@ import (
 )
 
 // These bounded descriptions are the physical columns shipped by migrations
-// 1–7, not an SQL interpreter. A history row alone cannot detect interrupted
+// 1–8, not an SQL interpreter. A history row alone cannot detect interrupted
 // DDL or a later manual edit. Compatible extra indexes/checks are permitted.
 func preflightColumns(version int) map[string]map[string]string {
 	specs := map[string]string{
@@ -41,6 +41,10 @@ func preflightColumns(version int) map[string]map[string]string {
 		specs["orders"] += " currency_snapshot:json? plan_snapshot:json?"
 		specs["invoices"] += " currency_snapshot:json?"
 		specs["services"] += " currency_snapshot:json?"
+	}
+	if version >= 8 {
+		specs["payment_attempts"] = "id:char(32)! request_key:varchar(128)! user_id:char(32)! invoice_id:char(32)! order_id:char(32)! provider_id:varchar(64)! merchant_account_id:varchar(128)! amount_minor:bigint! currency:char(3)! currency_decimal_places:int! state:enum('pending','checkout','uncertain','settled')! checkout:json? created_at:datetime(6)! updated_at:datetime(6)!"
+		specs["payment_settlements"] = "attempt_id:char(32)! provider_id:varchar(64)! event_id:varchar(128)! transaction_id:varchar(128)! settled_at:datetime(6)! received_at:datetime(6)!"
 	}
 	result := make(map[string]map[string]string, len(specs))
 	for table, spec := range specs {
@@ -101,6 +105,13 @@ func preflightChecks(version int) map[string]map[string]string {
 			checks[table][table+"_currency_code"] = currencyCodeMigrationCheck()
 		}
 	}
+	if version >= 8 {
+		checks["payment_attempts"] = map[string]string{
+			"payment_attempts_positive_minor": "amount_minor > 0", "payment_attempts_exact_minor": "amount_minor <= 9007199254740991",
+			"payment_attempts_decimal_places_min": "currency_decimal_places >= 0", "payment_attempts_decimal_places_max": "currency_decimal_places <= 6",
+			"payment_attempts_currency_code": currencyCodeMigrationCheck(),
+		}
+	}
 	return checks
 }
 
@@ -132,13 +143,29 @@ func preflightColumnMatches(table, name, spec, kind, nullable, extra, generated 
 		case "order_requests.request_key", "plan_prices.currency":
 			wantCharset, wantCollation = "ascii", "ascii_bin"
 		}
+		if (table == "payment_attempts" && name != "user_id" && name != "invoice_id" && name != "order_id" && name != "state") || table == "payment_settlements" {
+			wantCharset, wantCollation = "ascii", "ascii_bin"
+		}
 		return charset.Valid && charset.String == wantCharset && collation.Valid && collation.String == wantCollation
 	}
 	return !charset.Valid && !collation.Valid
 }
 
 func validatePreflightShape(ctx context.Context, conn *sql.Conn, version int, tables map[string]string, databaseCollation string) error {
+	return validatePreflightTableShape(ctx, conn, version, tables, databaseCollation, false)
+}
+
+// A resumable CREATE validates just its already-existing table through the same
+// rules as preflight. Other migration statements may not have run yet.
+func validatePreflightTableShape(ctx context.Context, conn *sql.Conn, version int, tables map[string]string, databaseCollation string, partial bool) error {
 	want := preflightColumns(version)
+	if partial {
+		for table := range want {
+			if _, included := tables[table]; !included {
+				delete(want, table)
+			}
+		}
+	}
 	if len(want) != len(tables) {
 		return errors.New("schema table inventory differs from applied migrations")
 	}
@@ -159,6 +186,9 @@ func validatePreflightShape(ctx context.Context, conn *sql.Conn, version int, ta
 			rows.Close()
 			return err
 		}
+		if partial && tables[table] == "" {
+			continue
+		}
 		spec := want[table][name]
 		if seen >= 256 || spec == "" || !preflightColumnMatches(table, name, spec, kind, nullable, extra, generated, def, charset, collation, databaseCollation) {
 			rows.Close()
@@ -178,6 +208,13 @@ func validatePreflightShape(ctx context.Context, conn *sql.Conn, version int, ta
 		}
 	}
 	checks := preflightChecks(version)
+	if partial {
+		for table := range checks {
+			if tables[table] == "" {
+				delete(checks, table)
+			}
+		}
+	}
 	knownChecks := map[string]map[string]bool{}
 	for prefix := 1; prefix <= len(schemaVersions); prefix++ {
 		for table, definitions := range preflightChecks(prefix) {
@@ -205,6 +242,9 @@ func validatePreflightShape(ctx context.Context, conn *sql.Conn, version int, ta
 			return errors.New("too many schema checks")
 		}
 		seen++
+		if partial && tables[table] == "" {
+			continue
+		}
 		// Migration 7 removes these exact historical allowlists. Their presence
 		// after a claimed completion is interrupted/manual DDL, even if the new
 		// byte-oriented code check was already added.
@@ -235,10 +275,14 @@ func validatePreflightShape(ctx context.Context, conn *sql.Conn, version int, ta
 			return errors.New("schema has missing required checks")
 		}
 	}
-	return validatePreflightKeys(ctx, conn, version)
+	return validatePreflightTableKeys(ctx, conn, version, tables, partial)
 }
 
 func validatePreflightKeys(ctx context.Context, conn *sql.Conn, version int) error {
+	return validatePreflightTableKeys(ctx, conn, version, nil, false)
+}
+
+func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int, tables map[string]string, partial bool) error {
 	// Required unique keys are correctness boundaries for auth and idempotency.
 	// Extra operator indexes and check constraints do not invalidate a schema.
 	required := map[string]bool{
@@ -258,6 +302,19 @@ func validatePreflightKeys(ctx context.Context, conn *sql.Conn, version int) err
 	}
 	if version >= 7 {
 		required["currency_settings:id"] = true
+	}
+	if version >= 8 {
+		for _, key := range []string{"payment_attempts:id", "payment_attempts:user_id,request_key", "payment_attempts:invoice_id", "payment_settlements:attempt_id", "payment_settlements:provider_id,event_id", "payment_settlements:provider_id,transaction_id"} {
+			required[key] = true
+		}
+	}
+	if partial {
+		for key := range required {
+			table, _, _ := strings.Cut(key, ":")
+			if tables[table] == "" {
+				delete(required, key)
+			}
+		}
 	}
 	rows, err := conn.QueryContext(ctx, "SELECT TABLE_NAME,INDEX_NAME,COLUMN_NAME,NON_UNIQUE,SEQ_IN_INDEX,SUB_PART,EXPRESSION,IS_VISIBLE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX LIMIT 513")
 	if err != nil {
@@ -306,6 +363,16 @@ func validatePreflightKeys(ctx context.Context, conn *sql.Conn, version int) err
 	if len(required) != 0 {
 		return errors.New("schema has missing required unique keys")
 	}
+	if version >= 8 {
+		for table, column := range map[string]string{"payment_attempts": "id", "payment_settlements": "attempt_id"} {
+			if partial && tables[table] == "" {
+				continue
+			}
+			if id := table + ":PRIMARY"; !valid[id] || keys[id] != column {
+				return errors.New("payment schema has an unexpected primary key")
+			}
+		}
+	}
 	fks := map[string]bool{
 		"sessions:user_id:users:id:CASCADE": true, "orders:user_id:users:id:RESTRICT": true, "orders:plan_id:plans:id:RESTRICT": true,
 		"invoices:user_id:users:id:RESTRICT": true, "invoices:order_id:orders:id:RESTRICT": true,
@@ -314,6 +381,19 @@ func validatePreflightKeys(ctx context.Context, conn *sql.Conn, version int) err
 	}
 	if version >= 3 {
 		fks["plan_prices:plan_id:plans:id:RESTRICT"] = true
+	}
+	if version >= 8 {
+		for _, key := range []string{"payment_attempts:user_id:users:id:RESTRICT", "payment_attempts:invoice_id:invoices:id:RESTRICT", "payment_attempts:order_id:orders:id:RESTRICT", "payment_settlements:attempt_id:payment_attempts:id:RESTRICT"} {
+			fks[key] = true
+		}
+	}
+	if partial {
+		for key := range fks {
+			table, _, _ := strings.Cut(key, ":")
+			if tables[table] == "" {
+				delete(fks, key)
+			}
+		}
 	}
 	rows, err = conn.QueryContext(ctx, "SELECT k.TABLE_NAME,k.COLUMN_NAME,k.REFERENCED_TABLE_NAME,k.REFERENCED_COLUMN_NAME,r.DELETE_RULE,r.UPDATE_RULE,k.REFERENCED_TABLE_SCHEMA=DATABASE(),k.ORDINAL_POSITION,k.CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON k.CONSTRAINT_SCHEMA=r.CONSTRAINT_SCHEMA AND k.CONSTRAINT_NAME=r.CONSTRAINT_NAME WHERE k.TABLE_SCHEMA=DATABASE() AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.TABLE_NAME,k.CONSTRAINT_NAME,k.ORDINAL_POSITION LIMIT 129")
 	if err != nil {
@@ -337,6 +417,17 @@ func validatePreflightKeys(ctx context.Context, conn *sql.Conn, version int) err
 		count++
 		id := table + ":" + constraint
 		foreignKeySizes[id]++
+		if version >= 8 && (table == "payment_attempts" || table == "payment_settlements") && (!partial || tables[table] != "") {
+			deletionRule := deletion
+			if deletionRule == "NO ACTION" {
+				deletionRule = "RESTRICT"
+			}
+			signature := strings.Join([]string{table, col, refTable, refCol, deletionRule}, ":")
+			if !sameDB || ordinal != 1 || (update != "RESTRICT" && update != "NO ACTION") || !fks[signature] {
+				rows.Close()
+				return errors.New("payment schema has an unexpected foreign key")
+			}
+		}
 		if sameDB && ordinal == 1 && (update == "RESTRICT" || update == "NO ACTION") {
 			if deletion == "NO ACTION" {
 				deletion = "RESTRICT"

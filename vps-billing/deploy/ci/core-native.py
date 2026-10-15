@@ -816,12 +816,12 @@ class Fixture:
         require(sha256(Path("/proc/" + str(pid) + "/exe").read_bytes()) == sha256(Path(directory, "bin/aster-api").read_bytes()), "Live process hash differs from selected Core")
         return {"api_pid": pid, "live_api_sha256": sha256(Path("/proc/" + str(pid) + "/exe").read_bytes())}
 
-    def full_data_hash(self, database=None):
+    def full_data_hash(self, database=None, tables=()):
         raw = command([self.resources.dump, "--defaults-file=" + str(self.resources.control / "dba.cnf"),
             "--no-login-paths", "--protocol=SOCKET", "--socket=" + str(self.resources.socket),
             "--single-transaction", "--no-tablespaces", "--set-gtid-purged=OFF", "--hex-blob", "--no-create-info",
             "--skip-comments", "--compact", "--skip-extended-insert", "--order-by-primary", "--skip-triggers",
-            database or self.spec["database"]])
+            database or self.spec["database"], *tables])
         return sha256(raw)
 
     def restore(self):
@@ -869,11 +869,17 @@ class Fixture:
         stage("restore-actual-published-preflight")
         restored_report = native.preflight(self.baseline, environment)
         require(restored_report["exit_code"] == 0 and restored_report["database"]["database"] == target and
-                restored_report["database"]["status"] == "current" and restored_report["database"]["admin_count"] == 1,
+                restored_report["database"]["status"] == "current" and restored_report["database"]["schema_version"] == 7 and
+                restored_report["database"]["admin_count"] == 1,
                 "Actual published old program did not validate the restored database")
+        candidate_report = native.preflight(self.candidate, environment)
+        require(candidate_report["exit_code"] == 0 and candidate_report["database"]["status"] == "pending_migrations" and
+                candidate_report["database"]["schema_version"] == 7 and candidate_report["database"]["required_schema_version"] == 8,
+                "Restored historical database is not the candidate's unchanged schema-7 prefix")
         return {"backup_source_core_version": PUBLISHED_VERSION, "source_database": self.spec["database"], "restore_database": target,
                 "empty_target_verified": True, "full_table_data_sha256": source_hash, "restored_table_data_sha256": restored_hash,
                 "actual_published_old_program_preflight_on_restored_database": "current",
+                "restored_schema_version": 7, "candidate_preflight_on_restored_database": "pending_migrations",
                 "same_mysql_instance_separate_empty_database": True, "independent_server_restore": False}
 
 
@@ -960,10 +966,10 @@ def legacy_native(executor, spec, candidate, trace):
 
 
 def legacy_schema_migration(resources, executor, fresh, baseline):
-    """Real unchanged SQL 1..6 fixture, then actual candidate 6 -> 7 migration.
+    """Unchanged SQL 1..6, published 6 -> 7, then candidate payment 7 -> 8.
 
-    This is a separate schema compatibility exercise. Published Core v0.5.2
-    itself already requires schema 7; the version upgrade is honestly 7 -> 7.
+    The published binary must reject schema 8. Historical restore is verified
+    separately while the source and restored databases are still schema 7.
     """
     resources.legacy_migration_trace = {"calls": []}
     stage("legacy-create-owned-prefix-database")
@@ -976,7 +982,7 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
         "GRANT ALL PRIVILEGES ON `" + database + "`.* TO '" + account + "'@'localhost';")
     resources.sql("CREATE TABLE schema_migrations(version INT PRIMARY KEY, checksum CHAR(64) NOT NULL, applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)) ENGINE=InnoDB;", database=database)
     files = sorted(Path(fresh.candidate, "migrations").glob("*.sql"))
-    require(len(files) == 7, "Legacy fixture requires the reviewed seven-migration inventory")
+    require(len(files) == 8, "Legacy fixture requires the reviewed eight-migration inventory")
     for number, path in enumerate(files[:6], 1):
         stage("legacy-apply-prefix-" + str(number))
         if number == 3:
@@ -1002,27 +1008,48 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
             before["database"]["schema_version"] == 6, "Unchanged legacy prefix did not pass actual candidate preflight")
     count_before = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
     usd_before = resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database)
-    stage("legacy-apply-migration")
+    stage("legacy-published-apply-registry-migration")
+    native.api(baseline["directory"], environment, "-migrate")
+    published = native.preflight(baseline["directory"], environment)
+    pending = native.preflight(fresh.candidate, environment)
+    require(published["exit_code"] == pending["exit_code"] == 0 and
+            published["database"]["status"] == "current" and pending["database"]["status"] == "pending_migrations" and
+            published["database"]["schema_version"] == pending["database"]["schema_version"] == 7,
+            "Actual published registry migration did not leave the candidate's unchanged schema prefix")
+    count_prefix7 = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
+    historical_tables = resources.sql("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME<>'schema_migrations' ORDER BY TABLE_NAME;", database=database).splitlines()
+    require(len(historical_tables) == 13 and all(re.fullmatch(r"[a-z_]+", name) for name in historical_tables),
+            "Historical schema table inventory is unexpected")
+    historical_hash = fresh.full_data_hash(database, historical_tables)
+    stage("legacy-candidate-apply-payment-migration")
     native.api(fresh.candidate, environment, "-migrate")
     stage("legacy-preflight-candidate")
     after = native.preflight(fresh.candidate, environment)
     stage("legacy-preflight-published")
     old = native.preflight(baseline["directory"], environment)
-    require(after["exit_code"] == old["exit_code"] == 0 and after["database"]["status"] == old["database"]["status"] == "current" and
-            after["database"]["schema_version"] == old["database"]["schema_version"] == 7,
-            "Actual 6 to 7 migration is not compatible with the published old program")
+    require(after["exit_code"] == 0 and after["database"]["status"] == "current" and after["database"]["schema_version"] == 8 and
+            old["exit_code"] != 0 and old["database"]["status"] == "incompatible",
+            "Payment schema migration must be current for the candidate and rejected by the published old program")
     count_after = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
-    require(count_before == "13" and count_after == "14", "Actual migration did not add the required registry table")
+    require(count_before == "13" and count_prefix7 == "14" and count_after == "16", "Actual migrations did not add the registry and two payment tables")
+    require(fresh.full_data_hash(database, historical_tables) == historical_hash,
+            "Additive payment migration changed existing business records")
+    require(resources.sql("SELECT (SELECT COUNT(*) FROM payment_attempts)+(SELECT COUNT(*) FROM payment_settlements);", database=database) == "0",
+            "Migration invented a payment attempt or settlement")
     require(resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database) == usd_before,
             "Actual migration rewrote historical independent USD prices")
     digest_before = fresh.full_data_hash(database)
     stage("legacy-repeat-migration")
     native.api(fresh.candidate, environment, "-migrate")
     require(fresh.full_data_hash(database) == digest_before, "Repeated migration changed actual database data")
-    return {"schema_before": 6, "schema_after": 7, "tables_before": 13, "tables_after": 14,
+    return {"schema_before": 6, "published_schema": 7, "schema_after": 8, "tables_before": 13, "tables_published": 14, "tables_after": 16,
             "actual_candidate_binary_migrate": True, "unchanged_selected_sql_prefix": True,
-            "published_baseline_version": PUBLISHED_VERSION, "published_baseline_preflight_after_migration": "current", "historical_usd_prices_preserved": True,
-            "repeat_migration_data_unchanged": True, "scope": "separate-legacy-schema-fixture-not-version-upgrade"}
+            "actual_published_binary_migrate_6_to_7": True, "actual_candidate_binary_migrate_7_to_8": True,
+            "published_baseline_version": PUBLISHED_VERSION, "published_baseline_preflight_before_payment_migration": "current",
+            "published_baseline_preflight_after_payment_migration": "incompatible", "historical_usd_prices_preserved": True,
+            "existing_business_table_data_sha256": historical_hash, "additive_payment_migration_preserved_existing_data": True,
+            "new_payment_tables_empty": True, "repeat_migration_data_unchanged": True,
+            "scope": "separate-historical-prefix-and-additive-payment-migration"}
 
 
 def late_schema_native(executor, fixture):
@@ -1202,6 +1229,54 @@ def run_scenarios(args, candidate, baseline):
         wait_ready(executor.Native(upgrade.spec))
         fact(args.evidence, "backup-restore", restore)
 
+        class FailAfterBackup(executor.Native):
+            def __init__(self, spec):
+                super().__init__(spec)
+                self.backup_completed = False
+                self.migration_calls = 0
+
+            def backup(self, old_release, output):
+                super().backup(old_release, output)
+                self.backup_completed = True
+                raise executor.Rejected("Synthetic failure after completed backup and before migration")
+
+            def api(self, release, environment, command_name, allow_failure=False):
+                if command_name == "-migrate":
+                    self.migration_calls += 1
+                return super().api(release, environment, command_name, allow_failure)
+
+        stage("compatible-pre-migration-program-rollback")
+        pre_migration_hash = upgrade.full_data_hash()
+        early_fault = FailAfterBackup(upgrade.spec)
+        try:
+            upgrade.execute(native=early_fault)
+            raise AcceptanceFailure("Pre-migration failure unexpectedly succeeded")
+        except executor.Rejected:
+            pass
+        rollback = upgrade.status()
+        old_recovered = upgrade.confirm_current(upgrade.baseline)
+        old_environment = executor.read_environment(str(upgrade.config / "api.env"))[0]
+        old_schema = early_fault.preflight(upgrade.baseline, old_environment)
+        require(early_fault.backup_completed and early_fault.migration_calls == 0 and
+                rollback["status"] == "rolled_back" and rollback["program_rollback"] == "verified_old_schema" and
+                rollback["database_migration"] == {"started": False, "completed": False} and
+                rollback["maintenance"] is True and early_fault.https("/api/v1/session")[0] == 503 and
+                old_schema["exit_code"] == 0 and old_schema["database"]["status"] == "current" and old_schema["database"]["schema_version"] == 7 and
+                upgrade.full_data_hash() == pre_migration_hash,
+                "Compatible rollback must recover the published program only before payment schema migration")
+        require(upgrade.execute(resume=True) == rollback, "Terminal compatible rollback retry changed state")
+        fact(args.evidence, "compatible-rollback", dict(rollback, **old_recovered,
+             old_program_was_actual_published_baseline=True, published_baseline_version=PUBLISHED_VERSION,
+             fault="after-real-backup-before-database-migration", migration_command_started=False,
+             schema_before=7, schema_after=7, new_schema_migration_added=False,
+             existing_database_data_unchanged=True, automatic_database_restore=False,
+             maintenance_until_explicit_validation=True))
+        # Only the independent schema-7 rollback was verified. Start a new
+        # reviewed upgrade after explicitly clearing this fixture's maintenance.
+        (upgrade.config / "maintenance").unlink()
+        upgrade.login()
+        upgrade.upgrade()
+
         class PauseAfterStop(executor.Native):
             def service(self, verb, unit=None):
                 value = super().service(verb, unit)
@@ -1245,6 +1320,12 @@ def run_scenarios(args, candidate, baseline):
                 super().__init__(spec)
                 self.blocker = None
                 self.injected = False
+                self.migration_calls = 0
+                self.target_starts = 0
+            def api(self, release, environment, command_name, allow_failure=False):
+                if release == upgrade.candidate and command_name == "-migrate":
+                    self.migration_calls += 1
+                return super().api(release, environment, command_name, allow_failure)
             def service(self, verb, unit=None):
                 if verb == "stop" and self.blocker is not None:
                     self.blocker.close()
@@ -1255,17 +1336,19 @@ def run_scenarios(args, candidate, baseline):
                     self.blocker.bind(("127.0.0.1", int(self.spec["listen_address"].split(":")[1])))
                     self.blocker.listen(1)
                     self.injected = True
+                if verb == "start" and unit == self.spec["api_unit"] and os.readlink(upgrade.root / "current") == upgrade.candidate:
+                    self.target_starts += 1
                 value = super().service(verb, unit)
                 if verb == "stop" and unit == self.spec["api_unit"] and self.injected:
                     # The intentionally crashing fixture may have exhausted its
                     # restart burst. Reset only this owned unit's failure count
-                    # after the port condition is gone, before real old startup.
+                    # after the port condition is gone, before reviewed resume.
                     command(["systemctl", "reset-failed", unit])
                 if verb == "start" and unit == self.spec["api_unit"] and self.injected and self.blocker is None:
                     wait_ready(self)
                 return value
 
-        stage("resume-and-occupied-port-rollback")
+        stage("resume-and-occupied-port-schema-hold")
         fault = OccupiedAPIPort(upgrade.spec)
         try:
             upgrade.execute(native=fault, resume=True)
@@ -1275,29 +1358,41 @@ def run_scenarios(args, candidate, baseline):
         finally:
             if fault.blocker is not None:
                 fault.blocker.close()
-        rollback = upgrade.status()
-        require(fault.injected and rollback["status"] == "rolled_back" and rollback["program_rollback"] == "verified_old_schema",
-                "Compatible failure did not recover the actual published old program")
-        require(rollback["database_migration"] == {"started": True, "completed": True}, "Resumed operation did not complete the real migration command")
-        old_recovered = upgrade.confirm_current(upgrade.baseline)
-        require(rollback["maintenance"] is True and fault.https("/api/v1/session")[0] == 503,
-                "Program rollback incorrectly reopened customer writes")
-        require(upgrade.execute(resume=True) == rollback, "Terminal rollback retry changed state")
+        hold = upgrade.status()
+        require(fault.injected and fault.migration_calls == 1 and fault.target_starts == 1 and
+                hold["status"] == "needs_manual_recovery" and hold["program_rollback"] == "blocked_schema_or_readiness" and
+                hold["database_migration"] == {"started": True, "completed": True} and
+                hold["maintenance"] is True and hold["https_ready"] is False and
+                os.readlink(upgrade.root / "current") == upgrade.candidate and
+                executor.Native(upgrade.spec).service("show", upgrade.spec["api_unit"]) in {"inactive", "failed"} and
+                fault.https("/api/v1/session")[0] == 503,
+                "Completed payment migration must hold stopped writes instead of restarting an incompatible old program")
+        held_environment = executor.read_environment(str(upgrade.config / "api.env"))[0]
+        held_environment["MYSQL_DSN_FILE"] = upgrade.spec["migrator_dsn_file"]
+        candidate_schema = fault.preflight(upgrade.candidate, held_environment)
+        rejected_old = fault.preflight(upgrade.baseline, held_environment)
+        require(candidate_schema["exit_code"] == 0 and candidate_schema["database"]["status"] == "current" and
+                candidate_schema["database"]["schema_version"] == 8 and
+                rejected_old["exit_code"] != 0 and rejected_old["database"]["status"] == "incompatible",
+                "Occupied-port recovery did not independently verify the schema-8 rollback boundary")
+        held_data_hash = upgrade.full_data_hash()
         fact(args.evidence, "interrupt-resume", {"process_killed_after_real_service_stop": True,
              "before_database_migration": interrupted["database_migration"], "original_operation_id_reused": True,
              "resume_reached_migration_and_candidate_start": True, "fault": "actual-bound-api-port"})
-        fact(args.evidence, "compatible-rollback", dict(rollback, **old_recovered, old_program_was_actual_published_baseline=True,
-             published_baseline_version=PUBLISHED_VERSION,
-             migration_command_completed=True, schema_before=7, schema_after=7, new_schema_migration_added=False,
-             automatic_database_restore=False, maintenance_until_explicit_validation=True))
-        # Explicit fixture recovery after the independent old-program checks.
-        # This is an operator step, never an executor auto-open or DB rollback.
-        stage("reviewed-recovery-and-version-upgrade")
-        (upgrade.config / "maintenance").unlink()
-        upgrade.login()
-        upgrade.upgrade()
-        upgraded = upgrade.execute()
+        fact(args.evidence, "payment-schema-rollback-blocked", dict(hold,
+             fault="actual-bound-api-port-after-payment-migration", schema_before=7, schema_after=8,
+             new_schema_migration_added=True, migration_command_count=1, target_start_attempts=1,
+             actual_published_old_schema_guard="incompatible", target_schema="current",
+             automatic_database_restore=False, api_stopped=True, https_maintenance=True))
+        # The synthetic port fault is now gone. Resume the original operation
+        # and preserved schema-8 data; never downgrade tables or open writes by
+        # deleting the maintenance marker before candidate checks succeed.
+        stage("reviewed-port-recovery-and-version-upgrade")
+        upgraded = upgrade.execute(native=fault, resume=True)
         require(upgraded["status"] == "succeeded", "Published Core v" + PUBLISHED_VERSION + " to candidate upgrade failed")
+        require(upgraded["operation_id"] == hold["operation_id"] and fault.migration_calls == 1 and fault.target_starts == 2 and
+                upgrade.full_data_hash() == held_data_hash,
+                "Reviewed schema-8 recovery repeated migration or changed existing database data")
         live = upgrade.confirm_current(upgrade.candidate)
         upgrade.login()
         require(upgrade.execute(resume=True) == upgraded and upgrade.confirm_current(upgrade.candidate)["api_pid"] == live["api_pid"], "Successful upgrade retry repeated activation")
@@ -1363,11 +1458,12 @@ def run_scenarios(args, candidate, baseline):
         fact(args.evidence, "core-native", {"status": "passed", "candidate_source_commit": candidate["source_commit"],
              "candidate_version": candidate["version"], "published_baseline": PUBLISHED_VERSION, "actual_native_executor": True,
              "fresh_install": True, "published_to_candidate_upgrade": True, "interrupt_resume": True,
-             "compatible_program_rollback": True, "unknown_schema_manual_recovery": True,
+             "compatible_program_rollback_before_migration": True, "unknown_schema_manual_recovery": True,
+             "payment_schema_upgrade_7_to_8": True, "incompatible_old_program_rollback_blocked": True,
              "manual_recovery_receipt_and_terminal_resume_verified": True,
              "late_readiness_schema_hold_and_reactivation_verified": True,
-             "separate_actual_legacy_schema_6_to_7_migration": True,
-             "separate_empty_database_restore": True, "new_release_schema_delta": False,
+             "separate_actual_legacy_schema_6_to_8_migration": True,
+             "separate_empty_database_restore": True, "historical_restore_schema_version": 7, "new_release_schema_delta": True,
              "production_deployment": False, "real_mail_or_payment": False})
         complete = True
     except BaseException as failure:

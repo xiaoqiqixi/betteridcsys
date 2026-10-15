@@ -20,7 +20,7 @@ func TestRuntimePluginAdminGuardsAndUnavailableDefaults(t *testing.T) {
 		c    *testClient
 		want int
 	}{{anonymous, 401}, {customer, 403}} {
-		for _, endpoint := range []struct{ method, path string }{{"GET", "/api/v1/admin/plugins"}, {"POST", "/api/v1/admin/plugins/check"}} {
+		for _, endpoint := range []struct{ method, path string }{{"GET", "/api/v1/admin/plugins"}, {"POST", "/api/v1/admin/plugins/check"}, {"POST", "/api/v1/admin/plugins/payment/check"}} {
 			if status, _ := tc.c.request(endpoint.method, endpoint.path, map[string]any{}, ""); status != tc.want {
 				t.Fatal("authorization", status, tc.want)
 			}
@@ -32,10 +32,16 @@ func TestRuntimePluginAdminGuardsAndUnavailableDefaults(t *testing.T) {
 	if status, _ := admin.request("POST", "/api/v1/admin/plugins", map[string]any{}, ""); status != 405 {
 		t.Fatal(status)
 	}
+	if status, _ := admin.request("POST", "/api/v1/admin/plugins/payment/check", map[string]any{}, ""); status != 503 {
+		t.Fatal("unavailable payment worker", status)
+	}
 	old := admin.csrf
 	admin.csrf = "invalid"
 	if status, _ := admin.request("POST", "/api/v1/admin/plugins/check", map[string]any{}, ""); status != 403 {
 		t.Fatal("csrf", status)
+	}
+	if status, _ := admin.request("POST", "/api/v1/admin/plugins/payment/check", map[string]any{}, ""); status != 403 {
+		t.Fatal("payment csrf", status)
 	}
 	admin.csrf = old
 	for _, raw := range []string{`null`, `[]`, `{"execute":"/tmp/file"}`, `{} {}`, `{"version":"1.0.0","Version":"1.0.1"}`} {

@@ -31,7 +31,8 @@ REPOSITORY_ID = 1418618420
 WORKFLOW = ".github/workflows/release-build.yml"
 LEGACY_TRUSTED_PATHS = {WORKFLOW, "vps-billing/deploy/ci/release_pipeline.py", "vps-billing/deploy/ci/historical-artifacts.json", "vps-billing/deploy/ci/check.sh", "vps-billing/deploy/ci/prepare-native-runner.sh", "vps-billing/deploy/ci/prepare-browser.py", "vps-billing/deploy/ci/accept-native.sh", "vps-billing/deploy/ci/accept-native-http.py", "vps-billing/deploy/ci/plugin-native.sh", "vps-billing/deploy/ci/plugin-native.py", "vps-billing/deploy/ci/smtp-loopback-fixture.py", "vps-billing/deploy/ci/test_plugin_native.py", "vps-billing/deploy/ci/browser-demo.py", "vps-billing/deploy/ci/mysql-native.sh", "vps-billing/deploy/ci/mysql-distribution.json", "vps-billing/deploy/scripts/package-release.sh", "vps-billing/deploy/scripts/release-manifest.py", "vps-billing/deploy/scripts/plugin-manager.py", "vps-billing/deploy/scripts/update-manager.py", "vps-billing/deploy/scripts/test-update-manager.py", "vps-billing/deploy/systemd/aster-api.service", "vps-billing/deploy/systemd/aster-smtp.service"}
 PREPARE_TRUSTED_PATHS = LEGACY_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-manager.py", "vps-billing/deploy/scripts/test-core-manager.py"}
-TRUSTED_PATHS = PREPARE_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-operation.py", "vps-billing/deploy/scripts/test-core-operation.py", "vps-billing/deploy/ci/core-native.sh", "vps-billing/deploy/ci/core-native.py"}
+EXECUTOR_TRUSTED_PATHS = PREPARE_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-operation.py", "vps-billing/deploy/scripts/test-core-operation.py", "vps-billing/deploy/ci/core-native.sh", "vps-billing/deploy/ci/core-native.py"}
+TRUSTED_PATHS = EXECUTOR_TRUSTED_PATHS | {"vps-billing/deploy/ci/payment-native.sh", "vps-billing/deploy/ci/payment-native.py", "vps-billing/deploy/ci/test_payment_native.py", "vps-billing/deploy/systemd/aster-payment.service"}
 LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 MAX_JSON = 2 << 20
 MAX_ARCHIVE = 80 << 20
@@ -75,7 +76,7 @@ def stable(value):
 
 def trusted_paths_for_core(version):
     parsed = stable(version)
-    return LEGACY_TRUSTED_PATHS if parsed <= (0, 5, 0) else PREPARE_TRUSTED_PATHS if parsed == (0, 5, 1) else TRUSTED_PATHS
+    return LEGACY_TRUSTED_PATHS if parsed <= (0, 5, 0) else PREPARE_TRUSTED_PATHS if parsed == (0, 5, 1) else EXECUTOR_TRUSTED_PATHS if parsed == (0, 5, 2) else TRUSTED_PATHS
 
 
 def positive(value):
@@ -550,6 +551,8 @@ def verify_downloads(api, intent, files, current_core, *, with_bundle=False):
             required_deploy.add("deploy/scripts/core-manager.py")
         if stable(version) >= (0, 5, 2):
             required_deploy.add("deploy/scripts/core-operation.py")
+        if stable(version) >= (0, 5, 3):
+            required_deploy.add("deploy/systemd/aster-payment.service")
         allowed = required | set(copies) | {"manifests/BUILD.json", "manifests/go-dependencies.json", "manifests/npm-installed-dependencies.json", "manifests/aster-api-build.txt", "manifests/aster-plugin-host-build.txt"}
         executable = required | {path for path in required_deploy if path.startswith("deploy/scripts/")}
         exact_copies = {"LICENSE": "LICENSE", "REPOSITORY-README.md": "README.md", "PROJECT-README.md": "vps-billing/README.md", "manifests/go.mod": "vps-billing/backend/go.mod", "manifests/go.sum": "vps-billing/backend/go.sum", "manifests/package.json": "vps-billing/frontend/package.json", "manifests/package-lock.json": "vps-billing/frontend/package-lock.json"}

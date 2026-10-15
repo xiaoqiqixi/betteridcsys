@@ -83,9 +83,13 @@ var englishErrors = map[string]string{
 	"PLAN_UNAVAILABLE":             "This plan is not available in the selected currency.",
 	"INVALID_CURRENCY":             "Currency codes must contain exactly three uppercase ASCII letters.",
 	"INVOICE_NOT_PAYABLE":          "This invoice cannot be paid in its current state.",
-	"PAYMENT_NOT_CONFIGURED":       "Payments are not connected. No charge will be made.",
+	"PAYMENT_NOT_CONFIGURED":       "Payments are currently unavailable. Check the provider for any existing payment.",
 	"PAYMENT_CURRENCY_UNSUPPORTED": "The payment provider does not support this invoice currency.",
-	"PAYMENT_PROVIDER_ERROR":       "Unable to create a payment session. Please try again later.",
+	"PAYMENT_PROVIDER_ERROR":       "The payment result is unconfirmed. Check the original provider before retrying.",
+	"PAYMENT_PENDING":              "A payment attempt already exists. Check its provider result before paying again.",
+	"PAYMENT_CALLBACK_INVALID":     "The payment notification could not be verified.",
+	"PAYMENT_CONFLICT":             "The payment notification conflicts with a saved transaction.",
+	"PAYMENT_STORAGE_UNAVAILABLE":  "Payment records are temporarily unavailable. Retry later.",
 }
 
 func (a *App) queryCurrency(w http.ResponseWriter, r *http.Request) (string, bool) {

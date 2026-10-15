@@ -119,6 +119,8 @@ jobs:
             ${{ runner.temp }}/native-acceptance-evidence/backup-metadata.json
             ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json
             ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native-failure.json
+            ${{ runner.temp }}/native-acceptance-evidence/payment-native/payment-native.json
+            ${{ runner.temp }}/native-acceptance-evidence/payment-native/payment-native-failure.json
             ${{ runner.temp }}/native-acceptance-evidence/cleanup.json
             ${{ runner.temp }}/native-acceptance-evidence/https-tests.json
             ${{ runner.temp }}/native-acceptance-evidence/restored-https-tests.json

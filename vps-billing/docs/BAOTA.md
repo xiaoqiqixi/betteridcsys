@@ -60,7 +60,7 @@ sudo python3 /var/lib/aster-bootstrap/0.5.2/core-manager.py prepare \
 
 复用已核实的 MySQL 8.4 实例和实际 Unix socket，不安装第二套数据库。全新安装要求本应用数据库及三个同名前缀账号不存在，由执行器在确认后创建独立 runtime/migrator/backup 身份；运行账号仅本库 DML。不要预先通过面板创建一个全权限用户再冒充全新安装，也不要更改共享实例 root 密码或开放远程访问。已有库/账号/配置转入 [升级](UPGRADE.md)，不能删除后重新安装。
 
-按 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)准备 root 私密 DBA client 文件、管理员密码文件和已核验 TLS 文件。秘密不进入 argv、shell history、面板网站上传目录或普通日志。规格设置实际 `origin`、回环 `listen_address`、数据库/socket、root 保护的真实 MySQL/Nginx 程序路径；本机 socket 明确使用 `MYSQL_ALLOW_INSECURE=true`，不扩展到明文 TCP。本文官方发行流程使用默认关闭的支付配置，SMTP 也默认关闭。第三方渠道按[支付插件接入指南](PAYMENT_PLUGINS.md)完成适配、构建与验收，不通过面板上传或只改环境变量安装。
+按 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)准备 root 私密 DBA client 文件、管理员密码文件和已核验 TLS 文件。秘密不进入 argv、shell history、面板网站上传目录或普通日志。规格设置实际 `origin`、回环 `listen_address`、数据库/socket、root 保护的真实 MySQL/Nginx 程序路径；本机 socket 明确使用 `MYSQL_ALLOW_INSECURE=true`，不扩展到明文 TCP。本文官方发行流程使用默认关闭的支付配置，SMTP 也默认关闭。第三方渠道按[支付插件接入指南](PAYMENT_PLUGINS.md)完成适配、构建与验收，主干支付采用独立运行时插件，须核验程序及 manifest、明确批准商户和身份，再运行专用 service；不通过面板上传或只改环境变量安装。该能力尚未随正式 Core 0.5.2 发布。
 
 API 仅由专用 systemd unit 管理，不添加面板进程守护、定时重启或第二份启动命令。执行器确认后生成受支持的 unit/配置、迁移并引导管理员；不接管任意自定义 unit/drop-in。已有 0.5.1 实例须通过回执、unit、配置/权限、schema 和插件门禁才可接纳。
 
@@ -187,3 +187,7 @@ sudo python3 /var/lib/aster-bootstrap/0.5.2/core-operation.py apply \
 SMTP 单独更新不上传新前端、不切换 `/opt/aster/current`，只安装独立兼容版本、按 revision 更新策略并重启 SMTP 服务，Core 文件和进程保持原样。失败按 [插件回退](PLUGINS.md#3-独立更新与回退)选择已有旧版本；不要删除凭据、重生成密钥或打开插件原始日志排障。
 
 原生 CI 的历史基线已覆盖加固服务、私有测试 CA 的 HTTPS、API 重启、同 schema A→B→A 和同实例空库恢复。宝塔面板操作、公共 CA 续期、数据库进程/整机重启、独立实例灾备与生产容量仍需按部署环境分别验证，不能由一次 CI 成功推导。
+
+## 可选支付插件
+
+主干支付插槽与 SMTP 分开审批、独立进程运行，部署合同见[支付插件接入](PAYMENT_PLUGINS.md)。使用专用非登录用户和 `aster-payment.service`，不读取 API 环境或数据库秘密。宝塔自定义 MySQL、备份、网站和凭据路径须纳入不可达规则，并核对共享组权限及实际出口；模板不能自动识别所有面板路径。先在隔离合成环境验证身份、故障、重复回调和恢复，再安排实际渠道测试。停用插件不解除在途交易，升级和备份须包含支付状态。当前没有官方真实渠道，勿把合成示例配置为营业收款。

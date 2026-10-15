@@ -106,7 +106,8 @@ class Fixture:
             for path in ("deploy/scripts/backup-native.sh", "deploy/scripts/plugin-manager.py", "deploy/scripts/update-manager.py", "deploy/systemd/aster-api.service", "deploy/systemd/aster-smtp.service", "deploy/systemd/api.env.example", "deploy/nginx.native.conf"):
                 copies[path] = "vps-billing/" + path
                 self.source[copies[path]] = b"Reviewed fixture deployment file\n"
-            for minimum, path in (((0, 5, 1), "deploy/scripts/core-manager.py"), ((0, 5, 2), "deploy/scripts/core-operation.py")):
+            for minimum, path in (((0, 5, 1), "deploy/scripts/core-manager.py"), ((0, 5, 2), "deploy/scripts/core-operation.py"),
+                                  ((0, 5, 3), "deploy/systemd/aster-payment.service")):
                 if manager.stable(selected_core) >= minimum:
                     copies[path] = "vps-billing/" + path
             for path in ("manifests/go-dependencies.json", "manifests/npm-installed-dependencies.json", "manifests/aster-api-build.txt", "manifests/aster-plugin-host-build.txt", "web/index.html"):

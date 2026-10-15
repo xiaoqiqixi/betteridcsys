@@ -33,7 +33,7 @@ API 只监听回环地址，网页和接口由 Nginx 在同一 HTTPS 来源提�
 
 Core `0.5.2` 与 SMTP `1.1.0` 分开构建、安装和发布。SMTP 使用 `aster.smtp/1`，兼容 Core `>=0.4.0,<0.6.0`；旧 SMTP `1.0.0` 的兼容上界是 `<0.5.0`，升级 Core 前须更新到兼容版本或明确停用。
 
-独立运行时插件目前用于 SMTP，与支付适配器的接入方式不同。Core 被动读取邮件插件 manifest；主机管理员核验并批准具体版本后，独立 systemd 身份通过 Unix socket 提供服务。替换 SMTP 插件无需重编 Core，旧版本可保留用于回退。
+主干新增支付运行时插槽 `aster.payment/1`，与 SMTP 一样通过独立进程接入，安装兼容插件无需重新编译 Core。Core 被动读取 manifest，主机管理员核验并批准具体身份和哈希后才可调用。支付尝试、回调去重和账务状态由 Core 持久化管理；具体第三方渠道仍由开发者编写。该能力尚未随正式 Core 0.5.2 发布。
 
 SMTP 插件会接触本次发信凭据和内容，需审查来源及出口策略；它没有数据库接口、会话秘密或主机服务管理权限。进程隔离不等于任意恶意代码沙箱。安装、启停、目的地授权及故障处理见[插件指南](vps-billing/docs/PLUGINS.md)，通信约定见 [PLUGIN_PROTOCOL.md](vps-billing/docs/PLUGIN_PROTOCOL.md)。
 
@@ -45,8 +45,8 @@ SMTP 插件会接触本次发信凭据和内容，需审查来源及出口策略
 
 ## 开发与维护
 
-当前正式 Core 为 `0.5.2`；主干 `0.5.3` 尚未发行，后续界面与文档变化不会覆盖旧安装包。源码和开发说明位于 [`vps-billing/`](vps-billing/README.md)，在 `main` 维护。可从[接口契约](vps-billing/docs/CONTRACT.md)、[财务模型](vps-billing/docs/FINANCIAL_MODEL.md)、[站点设置](vps-billing/docs/SITE_SETTINGS.md)、[日常运维](vps-billing/docs/OPERATIONS.md)及[构建发布](vps-billing/docs/RELEASE.md)继续阅读。Git 保留源码，GitHub 提供自动生成的源码下载；程序 Release 不额外手动附加源码归档。Git 标签与源码历史保留，正式资产不原地覆盖；旧 Release 清理按明确授权单独执行。
+当前正式 Core 为 `0.5.2`；主干 `0.5.3` 尚未发行，支付扩展、界面与文档变化不会覆盖旧安装包。源码和开发说明位于 [`vps-billing/`](vps-billing/README.md)，在 `main` 维护。可从[接口契约](vps-billing/docs/CONTRACT.md)、[财务模型](vps-billing/docs/FINANCIAL_MODEL.md)、[站点设置](vps-billing/docs/SITE_SETTINGS.md)、[日常运维](vps-billing/docs/OPERATIONS.md)及[构建发布](vps-billing/docs/RELEASE.md)继续阅读。Git 保留源码，GitHub 提供自动生成的源码下载；程序 Release 不额外手动附加源码归档。Git 标签与源码历史保留，正式资产不原地覆盖；旧 Release 清理按明确授权单独执行。
 
-已使用的币种代码和精度保持锁定，未完成付款或服务义务会阻止停用。订单、账单与服务保留各自的金额和币种格式，新订单另存套餐快照。符合条件的未付订单可在支付关闭时取消，同步作废原账单并保留历史记录。升级前应验证备份和隔离恢复，程序回退须满足数据库兼容条件。
+已使用的币种代码和精度保持锁定，未完成付款或服务义务会阻止停用。订单、账单与服务保留各自的金额和币种格式，新订单另存套餐快照。符合条件且没有在途支付尝试的未付订单可取消，同步作废原账单并保留历史记录。升级前应验证备份和隔离恢复，程序回退须满足数据库兼容条件。
 
 验证记录使用云端隔离环境和合成数据，结论对应具体提交和运行。目标环境仍需检查容量、公共证书续期、整机恢复、异地灾备，以及所接支付渠道和资源控制器。项目许可证见 [LICENSE](LICENSE)，依赖许可证随程序包交付。

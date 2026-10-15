@@ -643,6 +643,64 @@ class ExecutorTests(unittest.TestCase):
             self.assertIs(type(failure.exception), updater.Rejected)
             self.assertNotIn(CANARY, str(failure.exception))
 
+    def payment_fixture(self, selected="1.1.0", enabled=False):
+        environment, root, policy_path, smtp = self.plugin_fixture()
+        self.directory("instance/plugins/payment.contract-example", 0o755)
+        manifests = {}
+        for version, maximum in (("1.0.0", "0.5.4"), ("1.1.0", "0.6.0")):
+            prefix = "instance/plugins/payment.contract-example/" + version
+            self.directory(prefix, 0o755)
+            raw = updater.json_bytes({
+                "schema": 1, "id": "payment.contract-example", "version": version,
+                "protocol": "aster.payment/1", "core_min": "0.5.3",
+                "core_max_exclusive": maximum, "capabilities": ["payment.checkout", "payment.verify_callback"],
+                "executable": "plugin", "sha256": updater.digest(fixtures.elf()),
+                "payment": {"currencies": [{"code": "CNY", "precision": 2}],
+                            "checkout_hosts": ["checkout.example.test"]},
+            })
+            self.write(prefix + "/manifest.json", raw, 0o644)
+            self.write(prefix + "/plugin", fixtures.elf(), 0o755)
+            manifests[version] = updater.digest(raw)
+        policy = updater.strict_json(policy_path.read_bytes())
+        policy["payment"] = {"enabled": enabled, "id": "payment.contract-example", "version": selected,
+                             "manifest_sha256": manifests[selected], "worker_uid": 11003, "client_uid": 11001,
+                             "socket": "/run/aster-payment/plugin.sock", "merchant_id": "synthetic-merchant",
+                             "allowed_targets": [{"host": "api.example.test", "port": 443}]}
+        policy_path.write_bytes(updater.json_bytes(policy))
+        return environment, root, policy_path, smtp, manifests
+
+    def test_payment_upgrade_verification_pins_selected_and_retained_packages_without_execution(self):
+        environment, _, _, smtp, payment = self.payment_fixture()
+        with patch("subprocess.run", side_effect=AssertionError("Plugin verification executed a program")), \
+                patch("subprocess.Popen", side_effect=AssertionError("Plugin verification executed a program")):
+            facts = operation.plugin_facts(environment, "0.5.4", self.trust)
+        expected = {"email.smtp/" + version: value for version, value in smtp.items()}
+        expected.update({"payment.contract-example/" + version: value for version, value in payment.items()})
+        self.assertEqual(facts["manifests"], expected)
+
+    def test_incompatible_payment_selection_blocks_upgrade_even_when_disabled(self):
+        environment, _, policy_path, _, _ = self.payment_fixture(selected="1.0.0")
+        policy = updater.strict_json(policy_path.read_bytes())
+        for enabled in (False, True):
+            policy["payment"]["enabled"] = enabled
+            policy_path.write_bytes(updater.json_bytes(policy))
+            with self.subTest(enabled=enabled), self.assertRaises(updater.Rejected):
+                operation.plugin_facts(environment, "0.5.4", self.trust)
+
+    def test_changed_payment_manifest_and_cross_slot_uid_block_upgrade(self):
+        environment, _, policy_path, _, _ = self.payment_fixture()
+        policy = updater.strict_json(policy_path.read_bytes())
+        original = policy["payment"]["manifest_sha256"]
+        policy["payment"]["manifest_sha256"] = "0" * 64
+        policy_path.write_bytes(updater.json_bytes(policy))
+        with self.assertRaises(updater.Rejected):
+            operation.plugin_facts(environment, "0.5.4", self.trust)
+        policy["payment"]["manifest_sha256"] = original
+        policy["payment"]["worker_uid"] = policy["smtp"]["worker_uid"]
+        policy_path.write_bytes(updater.json_bytes(policy))
+        with self.assertRaises(updater.Rejected):
+            operation.plugin_facts(environment, "0.5.4", self.trust)
+
     def test_corrupt_retained_plugin_and_policy_raise_fixed_normalized_errors(self):
         environment, root, policy_path, _ = self.plugin_fixture(selected="1.1.0", enabled=False)
         executable = root / "email.smtp/1.0.0/plugin"

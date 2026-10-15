@@ -5,22 +5,31 @@ package main
 
 import (
 	"aster/billing/internal/runtimeplugins"
+	"aster/billing/pkg/pluginapi"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
 func main() {
 	root := flag.String("root", "", "Protected installed plugin directory")
 	policy := flag.String("policy", "", "Root-owned explicit plugin policy")
+	kind := flag.String("kind", "smtp", "Approved plugin slot: smtp or payment")
 	flag.Parse()
-	if flag.NArg() != 0 || os.Geteuid() == 0 {
+	if flag.NArg() != 0 || os.Geteuid() == 0 || *kind != "smtp" && *kind != "payment" {
 		stop()
 	}
-	approved, err := runtimeplugins.OpenApproved(*root, *policy)
+	var approved *runtimeplugins.Approval
+	var err error
+	if *kind == "payment" {
+		approved, err = runtimeplugins.OpenApprovedPayment(*root, *policy)
+	} else {
+		approved, err = runtimeplugins.OpenApproved(*root, *policy)
+	}
 	if err != nil {
 		stop()
 	}
@@ -54,7 +63,22 @@ func main() {
 	syscall.Umask(0077)
 	executable := "/proc/self/fd/" + strconv.Itoa(int(approved.Executable.Fd()))
 	args := []string{"plugin", "--socket", approved.Selection.Socket, "--client-uid", strconv.FormatUint(uint64(approved.Selection.ClientUID), 10), "--targets", string(targets)}
-	if syscall.Exec(executable, args, []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC", "TMPDIR=/tmp"}) != nil {
+	environment := []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC", "TMPDIR=/tmp"}
+	if *kind == "payment" {
+		args = append(args, "--merchant-id", approved.Selection.MerchantID)
+		if approved.Manifest.Protocol != pluginapi.PaymentProtocol {
+			stop()
+		}
+		// systemd supplies a read-only credential directory to this service only.
+		// No core configuration, database credentials or arbitrary environment leaks.
+		if directory := os.Getenv("CREDENTIALS_DIRECTORY"); directory != "" {
+			if !strings.HasPrefix(directory, "/run/credentials/") || strings.Contains(directory, "..") || strings.ContainsAny(directory, "\x00\r\n") || len(directory) > 1024 {
+				stop()
+			}
+			environment = append(environment, "CREDENTIALS_DIRECTORY="+directory)
+		}
+	}
+	if syscall.Exec(executable, args, environment) != nil {
 		stop()
 	}
 }

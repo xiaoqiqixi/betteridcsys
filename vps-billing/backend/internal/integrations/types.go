@@ -60,6 +60,7 @@ type Summary struct {
 // with ResolveSecret; neither Config nor resolved values belong in API output.
 type Config map[string]string
 type CheckoutRequest struct {
+	AttemptID, MerchantAccountID  string
 	CurrencyDecimalPlaces         int
 	InvoiceID, OrderID, AccountID string
 	AmountMinor                   int64
@@ -82,6 +83,7 @@ type CallbackRequest struct {
 // It is not permission to mark paid. Core must independently validate all fields
 // and atomically deduplicate ProviderID+EventID AND ProviderID+TransactionID.
 type VerifiedPayment struct {
+	AttemptID                                             string
 	CurrencyDecimalPlaces                                 int
 	ProviderID, EventID, TransactionID, MerchantAccountID string
 	AccountID, OrderID, InvoiceID                         string

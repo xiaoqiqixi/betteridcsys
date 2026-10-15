@@ -245,7 +245,7 @@ func TestMySQLCurrencyRegistryMigrationResumesPartialSnapshot(t *testing.T) {
 	config, _ := readMigrationCurrencyConfiguration(t, ctx, m)
 	// Model interruption after all schema/data work but before the version is
 	// recorded. Recovery recognizes exactly the expected initial registry.
-	migrationExec(t, ctx, m.DB, "DELETE FROM schema_migrations WHERE version=7")
+	migrationExec(t, ctx, m.DB, "DELETE FROM schema_migrations WHERE version>=7")
 	if err := m.Migrate(ctx); err != nil {
 		t.Fatal("resume completed but unrecorded migration", err)
 	}
@@ -437,7 +437,7 @@ func TestMySQLCurrencyRegistryMigrationRejectsUnexpectedPartialRegistry(t *testi
 			if err := m.Migrate(ctx); err != nil {
 				t.Fatal(err)
 			}
-			migrationExec(t, ctx, m.DB, "DELETE FROM schema_migrations WHERE version=7")
+			migrationExec(t, ctx, m.DB, "DELETE FROM schema_migrations WHERE version>=7")
 			migrationExec(t, ctx, m.DB, test.mutation)
 			before, beforePricesRevision := readMigrationCurrencyConfiguration(t, ctx, m)
 			assertCurrencyMigrationRefusedWithoutDDL(t, ctx, m)

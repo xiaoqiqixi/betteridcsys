@@ -1,4 +1,4 @@
-// Package pluginserver implements the SMTP v1 server boundary. It does not
+// Package pluginserver implements the SMTP and payment v1 server boundaries. It does not
 // provide database, account, filesystem, or arbitrary-command capabilities.
 package pluginserver
 

@@ -165,3 +165,7 @@ Core 不自动重试 RPC。SMTP 传输仅对 MAIL 前已明确的暂时失败最
 现有客户 `POST /api/v1/invoices/{id}/checkout` 校验会话、CSRF、Host、账单所有权、待付正金额及登记币种精度，再把核心保存的身份、金额和币种传给适配器。禁用适配器返回 503 `PAYMENT_NOT_CONFIGURED`。结账会话不会把账单改为已付；`VerifyCallback` 目前没有 HTTP 路由，持久化去重、原子结算、对账、退款及开通消费者需要独立实现，不能从接口名称推导为已有服务。
 
 币种登记与渠道支持分别管理。支付定义须逐代码声明 `supported_currencies` 和 `currency_decimal_places`，精度为 0–6；Core 检查账单快照与声明精确一致，不进行换算。签名通过的规范化结果仍需与独立取得的核心账单／商户期望比对，并在结算事务中按事件和渠道交易两组键处理幂等；纯校验函数本身不提供去重或入账。完整合同与安全本地示例见 [PAYMENT_PLUGINS.md](PAYMENT_PLUGINS.md)。
+
+## 支付运行时插槽（主干）
+
+主干 Core 提供独立的 `aster.payment/1` 插槽，使用 payment manifest、独立审批商户、专用 UID/service 和 socket；SMTP 的 `smtp.send` 不能用于支付。安装工具对支付操作使用 `--kind payment`，启停和版本回退不会删除在途账务记录。真实渠道、秘密与回调合同由开发者维护，当前仅有合成示例；详见[支付接入指南](PAYMENT_PLUGINS.md)。此能力尚未随正式 Core 0.5.2 发布。

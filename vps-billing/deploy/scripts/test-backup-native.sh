@@ -28,7 +28,7 @@ release = fixtures / "release"
 (release / "migrations").mkdir(parents=True)
 (release / "manifests").mkdir()
 paths = sorted(source.glob("[0-9][0-9][0-9]_*.sql"))
-assert len(paths) == 7, "Review the schema fixture for new migrations"
+assert len(paths) == 8, "Review the schema fixture for new migrations"
 for path in paths:
     (release / "migrations" / path.name).write_bytes(path.read_bytes())
 build = {"schema": 3, "distribution_format": "raw-binaries-v1", "release_kind": "core", "release_label": "0.5.0",
@@ -50,6 +50,8 @@ tables = {
     "outbox_events": "id aggregate_id event_type payload created_at processed_at attempts",
     "site_settings": "id document", "plan_prices": "plan_id currency amount_minor available",
     "email_settings": "id document", "currency_settings": "id document prices_revision",
+    "payment_attempts": "id request_key user_id invoice_id order_id provider_id merchant_account_id amount_minor currency currency_decimal_places state checkout created_at updated_at",
+    "payment_settlements": "attempt_id provider_id event_id transaction_id settled_at received_at",
     "schema_migrations": "version checksum applied_at",
 }
 identity = ["identity", "8.4.11", "MySQL Community Server - GPL", "aster_fixture", "12345678-1234-1234-1234-123456789abc"]
@@ -60,6 +62,7 @@ rows += [["column", table, column, "fixture-type", "YES", "NULL", "", "", "", ""
          for table in sorted(tables) for index, column in enumerate(tables[table].split(), 1)]
 rows += [["constraint", "users", "PRIMARY", "PRIMARY KEY", "YES", ""],
          ["index", "users", "PRIMARY", "0", "1", "id", "A", "0", "BTREE", "YES", ""]]
+inventory = [row for row in rows if row[0] != "migration"][2:]
 def write(name, contents):
     (fixtures / (name + ".tsv")).write_text("".join("\t".join(row) + "\n" for row in contents))
 write("valid", rows)
@@ -67,13 +70,15 @@ for name, contents in {
     "empty-history": [row for row in rows if row[0] != "migration"],
     "gap": [row for row in rows if row[:2] != ["migration", "2"]],
     "checksum": [[*row[:2], "0" * 64] if row[:2] == ["migration", "1"] else row for row in rows],
-    "unknown-version": rows[:2] + history + [["migration", "8", "0" * 64]] + rows[9:],
-    "duplicate-version": rows[:2] + history[:1] + history + rows[9:],
+    "unknown-version": rows[:2] + history + [["migration", "9", "0" * 64]] + inventory,
+    "duplicate-version": rows[:2] + history[:1] + history + inventory,
     "zero-version": rows[:2] + [["migration", "0", "0" * 64]] + rows[2:],
     "negative-version": rows[:2] + [["migration", "-1", "0" * 64]] + rows[2:],
     "empty-schema": [row for row in rows if row[0] not in {"table", "column"}],
     "missing-table": [row for row in rows if not (row[0] in {"table", "column"} and row[1] == "currency_settings")],
     "missing-column": [row for row in rows if row[:3] != ["column", "orders", "plan_snapshot"]],
+    "missing-payment-table": [row for row in rows if not (row[0] in {"table", "column"} and row[1] == "payment_settlements")],
+    "missing-payment-column": [row for row in rows if row[:3] != ["column", "payment_attempts", "merchant_account_id"]],
     "unknown-table": rows + [["table", "unreviewed", "BASE TABLE", "InnoDB"]],
     "extra-column": rows + [["column", "orders", "unreviewed", "int", "YES", "NULL", "", "", "", "", "14", ""]],
     "wrong-engine": [[*row[:3], "MyISAM"] if row[:2] == ["table", "plans"] else row for row in rows],
@@ -85,11 +90,16 @@ for name, contents in {
     "percona": [[*row[:2], "Percona Server (GPL)", *row[3:]] if row[0] == "identity" else row for row in rows],
 }.items():
     write(name, contents)
-prefix6 = [row for row in rows if row[:2] != ["migration", "7"] and not
+prefix7 = [row for row in rows if row[:2] != ["migration", "8"] and not
+           (row[0] in {"table", "column"} and row[1] in {"payment_attempts", "payment_settlements"})]
+write("prefix7", prefix7)
+prefix6 = [row for row in prefix7 if row[:2] != ["migration", "7"] and not
            (row[0] in {"table", "column"} and row[1] == "currency_settings") and not
            (row[0] == "column" and row[2] in {"currency_snapshot", "plan_snapshot"})]
 write("prefix6", prefix6)
-write("partial-next-migration", [row for row in rows if row[:2] != ["migration", "7"]])
+write("partial-next-migration", [row for row in rows if row[:2] != ["migration", "8"]])
+write("partial-payment-next-migration", [row for row in rows if row[:2] != ["migration", "8"] and not
+           (row[0] in {"table", "column"} and row[1] == "payment_settlements")])
 PY
 cat > "$test_dir/private/client.cnf" <<'CNF'
 # Test fixture only; not real credentials.
@@ -253,7 +263,7 @@ from pathlib import Path
 import sys
 backup, release = map(Path, sys.argv[1:])
 metadata = json.loads((backup / "BACKUP.json").read_bytes())
-assert metadata == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": 7,
+assert metadata == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": 8,
                     "migration_checksums": {str(number): hashlib.sha256(path.read_bytes()).hexdigest()
                                             for number, path in enumerate(sorted((release / "migrations").glob("*.sql")), 1)}}
 assert set(path.name for path in backup.iterdir()) == {"database.sql.gz", "BACKUP.txt", "BACKUP.json", "SHA256SUMS"}
@@ -275,7 +285,7 @@ printf '%s\n' 'PASS: dump, compression, compressed-data validation and checksum 
 expect_preflight_failure env ASTER_TEST_METADATA_FAIL=1 bash "$script" "${base_args[@]}"
 expect_preflight_failure env ASTER_TEST_SCHEMA_COUNT=1 bash "$script" "${base_args[@]}"
 expect_preflight_failure env ASTER_TEST_SCHEMA_COUNT=invalid bash "$script" "${base_args[@]}"
-for snapshot in empty-history gap checksum unknown-version duplicate-version zero-version negative-version empty-schema missing-table missing-column unknown-table extra-column wrong-engine wrong-database old-mysql mariadb percona partial-next-migration; do
+for snapshot in empty-history gap checksum unknown-version duplicate-version zero-version negative-version empty-schema missing-table missing-column missing-payment-table missing-payment-column unknown-table extra-column wrong-engine wrong-database old-mysql mariadb percona partial-next-migration partial-payment-next-migration; do
   expect_preflight_failure env ASTER_TEST_SNAPSHOT="$snapshot" bash "$script" "${base_args[@]}"
 done
 printf '%s\n' 'PASS: unsupported server/database identity, empty/gapped/changed/unknown migration history and unknown/partial tables or columns stop before dumping'
@@ -314,7 +324,7 @@ elif mutation == "source-missing":
 elif mutation == "source-mapping":
     build["source_files"]["migrations/001_initial.sql"] = "vps-billing/backend/migrations/002_site_settings.sql"
 elif mutation == "source-extra":
-    build["source_files"]["migrations/008_unknown.sql"] = "vps-billing/backend/migrations/008_unknown.sql"
+    build["source_files"]["migrations/009_unknown.sql"] = "vps-billing/backend/migrations/009_unknown.sql"
 elif mutation == "missing-sql":
     (root / "migrations/003_currencies.sql").unlink()
 elif mutation == "duplicate-number":
@@ -388,15 +398,17 @@ chmod 400 "$test_dir/private/client.cnf"
 bash "$script" "${base_args[@]}" >/dev/null
 assert_clean
 env ASTER_TEST_SNAPSHOT=prefix6 bash "$script" "${base_args[@]}" >/dev/null
+env ASTER_TEST_SNAPSHOT=prefix7 bash "$script" "${base_args[@]}" >/dev/null
 python3 - "$test_dir/backups" <<'PY'
 import json
 from pathlib import Path
 import sys
 metadata = [json.loads(path.read_bytes()) for path in Path(sys.argv[1]).glob("*/BACKUP.json")]
-assert len(metadata) == 10
-prefix = [item for item in metadata if item["schema_version"] == 6]
-assert len(prefix) == 1 and set(prefix[0]["migration_checksums"]) == {str(number) for number in range(1, 7)}
-assert prefix[0]["core_version"] == "0.5.0" and prefix[0]["source_commit"] == "a" * 40
+assert len(metadata) == 11
+for version in (6, 7):
+    prefix = [item for item in metadata if item["schema_version"] == version]
+    assert len(prefix) == 1 and set(prefix[0]["migration_checksums"]) == {str(number) for number in range(1, version + 1)}
+    assert prefix[0]["core_version"] == "0.5.0" and prefix[0]["source_commit"] == "a" * 40
 PY
 assert_clean
 printf '%s\n' 'PASS: BACKUP.json records the actual complete applied prefix, including an older schema, without inventing unapplied migrations'

@@ -3,6 +3,7 @@
 package pluginapi
 
 import (
+	"aster/billing/pkg/pluginapi/paymentv1"
 	"aster/billing/pkg/pluginapi/smtpv1"
 	"bytes"
 	"encoding/json"
@@ -15,9 +16,13 @@ import (
 )
 
 const (
-	CoreVersion    = "0.5.3"
-	SMTPProtocol   = "aster.smtp/1"
-	SMTPCapability = "smtp.send"
+	CoreVersion               = "0.5.3"
+	SMTPProtocol              = "aster.smtp/1"
+	SMTPCapability            = "smtp.send"
+	PaymentProtocol           = "aster.payment/1"
+	PaymentMinCoreVersion     = "0.5.3"
+	PaymentCheckoutCapability = "payment.checkout"
+	PaymentVerifyCapability   = "payment.verify_callback"
 	// JSON can expand a valid 64 KiB plain-text message up to sixfold. Include
 	// bounded configuration and envelope overhead without rejecting valid text.
 	MaxRequestBytes  = 512 << 10
@@ -27,20 +32,21 @@ const (
 )
 
 var ErrInvalid = errors.New("invalid plugin data")
-var identifier = regexp.MustCompile(`^email\.[a-z][a-z0-9-]{0,47}$`)
+var identifier = regexp.MustCompile(`^(email|payment)\.[a-z][a-z0-9-]{0,47}$`)
 var digest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var release = regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
 
 type Manifest struct {
-	Schema           int      `json:"schema"`
-	ID               string   `json:"id"`
-	Version          string   `json:"version"`
-	Protocol         string   `json:"protocol"`
-	CoreMin          string   `json:"core_min"`
-	CoreMaxExclusive string   `json:"core_max_exclusive"`
-	Capabilities     []string `json:"capabilities"`
-	Executable       string   `json:"executable"`
-	SHA256           string   `json:"sha256"`
+	Schema           int                     `json:"schema"`
+	ID               string                  `json:"id"`
+	Version          string                  `json:"version"`
+	Protocol         string                  `json:"protocol"`
+	CoreMin          string                  `json:"core_min"`
+	CoreMaxExclusive string                  `json:"core_max_exclusive"`
+	Capabilities     []string                `json:"capabilities"`
+	Executable       string                  `json:"executable"`
+	SHA256           string                  `json:"sha256"`
+	Payment          *paymentv1.Declarations `json:"payment,omitempty"`
 }
 
 type Target struct {
@@ -53,6 +59,7 @@ type Policy struct {
 	Schema   int        `json:"schema"`
 	Revision uint64     `json:"revision"`
 	SMTP     *Selection `json:"smtp,omitempty"`
+	Payment  *Selection `json:"payment,omitempty"`
 }
 
 type Selection struct {
@@ -64,6 +71,7 @@ type Selection struct {
 	ClientUID      uint32   `json:"client_uid"`
 	Socket         string   `json:"socket"`
 	AllowedTargets []Target `json:"allowed_targets"`
+	MerchantID     string   `json:"merchant_id,omitempty"`
 }
 
 type Hello struct {
@@ -121,7 +129,26 @@ func CompareVersion(a, b string) (int, error) {
 }
 
 func (m Manifest) Validate(core string) error {
-	if m.Schema != 1 || !ValidID(m.ID) || !ValidVersion(m.Version) || m.Protocol != SMTPProtocol || m.Executable != "plugin" || !ValidDigest(m.SHA256) || len(m.Capabilities) != 1 || m.Capabilities[0] != SMTPCapability {
+	if m.Schema != 1 || !ValidID(m.ID) || !ValidVersion(m.Version) || m.Executable != "plugin" || !ValidDigest(m.SHA256) {
+		return ErrInvalid
+	}
+	switch m.Protocol {
+	case SMTPProtocol:
+		if !strings.HasPrefix(m.ID, "email.") || m.Payment != nil || !EqualCapabilities(m.Capabilities, []string{SMTPCapability}) {
+			return ErrInvalid
+		}
+	case PaymentProtocol:
+		if (!strings.HasPrefix(m.ID, "payment.") || m.ID == "payment.disabled") || m.Payment == nil || m.Payment.Validate() != nil || !EqualCapabilities(m.Capabilities, PaymentCapabilities()) {
+			return ErrInvalid
+		}
+		// The protocol did not exist in earlier cores. A third-party manifest
+		// cannot declare compatibility into existence by lowering core_min.
+		actual, actualErr := CompareVersion(core, PaymentMinCoreVersion)
+		declared, declaredErr := CompareVersion(m.CoreMin, PaymentMinCoreVersion)
+		if actualErr != nil || declaredErr != nil || actual < 0 || declared < 0 {
+			return ErrInvalid
+		}
+	default:
 		return ErrInvalid
 	}
 	minimum, a := CompareVersion(core, m.CoreMin)
@@ -130,6 +157,21 @@ func (m Manifest) Validate(core string) error {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func PaymentCapabilities() []string {
+	return []string{PaymentCheckoutCapability, PaymentVerifyCapability}
+}
+func EqualCapabilities(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func Allowed(targets []Target, cfg smtpv1.Config) bool {
@@ -157,13 +199,26 @@ func DecodeStrict(raw []byte, limit int, destination any) error {
 	}
 	// A successful side-effect response must explicitly state its outcome. Go's
 	// zero values must not turn an incomplete envelope into an accepted result.
-	if _, response := destination.(*SendResponse); response {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil || len(fields) != 5 {
+	var required []string
+	var nested string
+	var nestedRequired []string
+	switch destination.(type) {
+	case *SendResponse:
+		required = []string{"protocol", "request_id", "status", "code", "delivery_uncertain"}
+	case *PaymentCreateResponse:
+		required = []string{"protocol", "request_id", "status", "code"}
+		nested, nestedRequired = "checkout", []string{"provider_id", "session_id", "checkout_url", "expires_at"}
+	case *PaymentVerifyResponse:
+		required = []string{"protocol", "request_id", "status", "code"}
+		nested, nestedRequired = "event", []string{"attempt_id", "provider_id", "event_id", "transaction_id", "merchant_account_id", "account_id", "order_id", "invoice_id", "amount_minor", "currency", "currency_decimal_places", "settled_at", "status"}
+	}
+	if len(required) > 0 {
+		fields, err := requireFields(raw, required)
+		if err != nil {
 			return ErrInvalid
 		}
-		for _, key := range []string{"protocol", "request_id", "status", "code", "delivery_uncertain"} {
-			if _, present := fields[key]; !present {
+		if value, present := fields[nested]; nested != "" && present {
+			if _, err := requireFields(value, nestedRequired); err != nil {
 				return ErrInvalid
 			}
 		}
@@ -174,6 +229,19 @@ func DecodeStrict(raw []byte, limit int, destination any) error {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func requireFields(raw []byte, required []string) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil, ErrInvalid
+	}
+	for _, key := range required {
+		if _, present := fields[key]; !present {
+			return nil, ErrInvalid
+		}
+	}
+	return fields, nil
 }
 
 func scanValue(decoder *json.Decoder, depth int) error {

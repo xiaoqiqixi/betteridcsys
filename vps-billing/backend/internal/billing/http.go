@@ -3,6 +3,7 @@ package billing
 import (
 	"aster/billing/internal/integrations"
 	"aster/billing/internal/runtimeplugins"
+	"aster/billing/pkg/pluginapi"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -26,6 +27,7 @@ type Config struct {
 	Updates           UpdateService
 	HostOperations    HostOperationSource
 	Plugins           *runtimeplugins.Manager
+	PaymentRuntime    PaymentRuntime
 	SMTPKey           *SMTPCipher
 	Demo              bool
 	Origin            string
@@ -58,6 +60,9 @@ func NewAppWithIntegrations(s Store, c Config, registry *integrations.Registry) 
 	}
 	h, _ := bcrypt.GenerateFromPassword([]byte(ID()), bcrypt.DefaultCost)
 	smtpService := newSMTPService(s, c.SMTPKey)
+	if c.PaymentRuntime == nil && c.Plugins != nil {
+		c.PaymentRuntime = c.Plugins
+	}
 	if c.Plugins != nil {
 		smtpService.runtime = c.Plugins
 		smtpService.sender = c.Plugins
@@ -206,6 +211,12 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
 		return
 	}
+	// Only the dedicated provider callback bypasses browser CSRF. It still
+	// requires canonical Host, bounded input and plugin signature verification.
+	if strings.HasPrefix(p, "/payment-callbacks/") {
+		a.paymentCallbackHTTP(w, r, strings.TrimPrefix(p, "/payment-callbacks/"))
+		return
+	}
 	if r.Method == "POST" {
 		t := a.token(r)
 		origin := r.Header.Get("Origin")
@@ -347,8 +358,8 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.updateHTTP(w, r, u, p)
 		return
 	}
-	if p == "/admin/plugins" || p == "/admin/plugins/check" {
-		if p == "/admin/plugins/check" {
+	if p == "/admin/plugins" || p == "/admin/plugins/check" || p == "/admin/plugins/payment/check" {
+		if p == "/admin/plugins/check" || p == "/admin/plugins/payment/check" {
 			if r.Method != "POST" {
 				fail(w, r, 405, "METHOD_NOT_ALLOWED", "不支持此请求方式")
 				return
@@ -357,7 +368,13 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			if !emailBody(w, r, &input) {
 				return
 			}
-			identity, err := a.Config.Plugins.Check(r.Context())
+			var identity pluginapi.Identity
+			var err error
+			if p == "/admin/plugins/payment/check" {
+				identity, err = a.Config.Plugins.PaymentCheck(r.Context())
+			} else {
+				identity, err = a.Config.Plugins.Check(r.Context())
+			}
 			if err != nil {
 				fail(w, r, 503, "PLUGIN_UNAVAILABLE", "插件不可用，请检查安装、启用状态及兼容版本")
 				return
@@ -374,7 +391,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			fail(w, r, 503, "PLUGIN_UNAVAILABLE", "插件不可用，请检查安装、启用状态及兼容版本")
 			return
 		}
-		jsonOut(w, 200, map[string]any{"items": items, "smtp": a.Config.Plugins.State()})
+		jsonOut(w, 200, map[string]any{"items": items, "smtp": a.Config.Plugins.State(), "payment": a.Config.Plugins.PaymentState()})
 		return
 	}
 	if strings.HasPrefix(p, "/invoices/") || strings.HasPrefix(p, "/admin/invoices/") {
@@ -401,7 +418,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if checkout {
-			a.checkout(w, r, invoice)
+			a.checkout(w, r, u, invoice)
 		} else {
 			jsonOut(w, 200, invoice)
 		}
@@ -651,41 +668,4 @@ func (a *App) overview(w http.ResponseWriter, r *http.Request, uid string, admin
 		os = os[:5]
 	}
 	jsonOut(w, 200, map[string]any{"currency_format": cur.CurrencyFormat, "active_services": s.ActiveServices, "pending_invoices": s.PendingInvoices, "monthly_total_minor": s.MonthlyTotal, "unpaid_total_minor": s.UnpaidTotal, "currency": currency, "count_scope": "currency", "recent_orders": os, "recent_orders_scope": "all"})
-}
-
-// Checkout reads authoritative invoice values and never settles invoices/orders.
-func (a *App) checkout(w http.ResponseWriter, r *http.Request, invoice Invoice) {
-	if invoice.Status != "unpaid" || !validAmount(invoice.AmountMinor) || !validCurrencyFormat(invoice.CurrencyFormat) || invoice.CurrencyFormat.Code != invoice.Currency || invoice.PaidAt != nil {
-		fail(w, r, 409, "INVOICE_NOT_PAYABLE", "当前账单不可支付")
-		return
-	}
-	config, err := a.Store.Currencies(r.Context(), false)
-	if err != nil {
-		a.internal(w, r, err)
-		return
-	}
-	registered, known := config.find(invoice.Currency)
-	if !known || !registered.Enabled || registered.DecimalPlaces != invoice.CurrencyFormat.DecimalPlaces {
-		fail(w, r, 409, "INVOICE_NOT_PAYABLE", "当前账单币种配置与历史精度不匹配")
-		return
-	}
-	out, err := a.Integrations.CreateCheckout(r.Context(), integrations.CheckoutRequest{
-		InvoiceID: invoice.ID, OrderID: invoice.OrderID, AccountID: invoice.UserID,
-		AmountMinor: invoice.AmountMinor, Currency: invoice.Currency, CurrencyDecimalPlaces: invoice.CurrencyFormat.DecimalPlaces,
-		IdempotencyKey: "invoice:" + invoice.ID,
-	})
-	if errors.Is(err, integrations.ErrUnsupportedCurrency) {
-		fail(w, r, 409, "PAYMENT_CURRENCY_UNSUPPORTED", "当前支付渠道不支持此账单币种")
-		return
-	}
-	if errors.Is(err, integrations.ErrUnavailable) {
-		fail(w, r, 503, "PAYMENT_NOT_CONFIGURED", "支付渠道尚未接入，不会产生扣款")
-		return
-	}
-	if err != nil {
-		// Do not expose provider errors, credentials, callback data or payment URLs.
-		fail(w, r, 502, "PAYMENT_PROVIDER_ERROR", "暂时无法创建支付会话，请稍后重试")
-		return
-	}
-	jsonOut(w, 200, out)
 }

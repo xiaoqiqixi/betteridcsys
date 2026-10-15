@@ -20,12 +20,17 @@ import (
 )
 
 type Manager struct {
-	root, policy string
-	rules        trust
-	mu           sync.Mutex
-	failures     int
-	blockedUntil time.Time
-	approvalKey  string
+	root, policy        string
+	rules               trust
+	mu                  sync.Mutex
+	failures            int
+	blockedUntil        time.Time
+	approvalKey         string
+	paymentMu           sync.Mutex
+	paymentFailures     int
+	paymentBlockedUntil time.Time
+	paymentApprovalKey  string
+	paymentSlots        chan struct{}
 }
 
 // New never executes a file or makes a network connection. A broken plugin
@@ -165,8 +170,8 @@ func handshake(ctx context.Context, a *Approval, rules trust) (*connection, plug
 		return nil, identity, ErrUnavailable
 	}
 	c := &connection{conn: conn, transport: transport, client: client, nonce: hex.EncodeToString(nonce[:])}
-	hello := pluginapi.Hello{Protocol: pluginapi.SMTPProtocol, CoreVersion: pluginapi.CoreVersion, Nonce: c.nonce}
-	if exchange(ctx, client, "/v1/handshake", hello, &identity) != nil || identity.Protocol != a.Manifest.Protocol || identity.ID != a.Manifest.ID || identity.Version != a.Manifest.Version || identity.SHA256 != a.Manifest.SHA256 || identity.Nonce != c.nonce || len(identity.Capabilities) != 1 || identity.Capabilities[0] != pluginapi.SMTPCapability {
+	hello := pluginapi.Hello{Protocol: a.Manifest.Protocol, CoreVersion: pluginapi.CoreVersion, Nonce: c.nonce}
+	if exchange(ctx, client, "/v1/handshake", hello, &identity) != nil || identity.Protocol != a.Manifest.Protocol || identity.ID != a.Manifest.ID || identity.Version != a.Manifest.Version || identity.SHA256 != a.Manifest.SHA256 || identity.Nonce != c.nonce || !pluginapi.EqualCapabilities(identity.Capabilities, a.Manifest.Capabilities) {
 		c.close()
 		return nil, pluginapi.Identity{}, ErrUnavailable
 	}

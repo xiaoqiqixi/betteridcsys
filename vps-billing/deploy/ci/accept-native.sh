@@ -65,10 +65,10 @@ export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 PYTHOND
 mkdir -m 700 -- "$evidence"
 scratch=$(mktemp -d "${RUNNER_TEMP:?}/aster-native-accept.XXXXXXXX")
 identity="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$$"
-api_user="astapi$$"; web_user="astweb$$"; smtp_user="astsmtp$$"; socket_group="astsock$$"
+api_user="astapi$$"; web_user="astweb$$"; smtp_user="astsmtp$$"; payment_user="astpay$$"; socket_group="astsock$$"
 opt="/opt/aster-ci-$identity"; config="/etc/aster-ci-$identity"
 logs="/var/log/aster-ci-$identity"; run="/run/aster-ci-$identity"
-api_unit="aster-ci-api-$identity.service"; web_unit="aster-ci-web-$identity.service"; smtp_unit="aster-ci-smtp-$identity.service"
+api_unit="aster-ci-api-$identity.service"; web_unit="aster-ci-web-$identity.service"; smtp_unit="aster-ci-smtp-$identity.service"; payment_unit="aster-ci-payment-$identity.service"
 db="aster_native_test_${GITHUB_RUN_ID}_$$"; restored="aster_restore_test_${GITHUB_RUN_ID}_$$"
 [[ ${#db} -le 64 && ${#restored} -le 64 ]] || fail 'Run identity exceeds safe database name length.'
 created_paths=(); created_units=(); created_users=(); created_groups=(); db_created=false
@@ -159,10 +159,10 @@ PYCORECLEAN
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-for user in "$api_user" "$web_user" "$smtp_user" "$socket_group"; do
+for user in "$api_user" "$web_user" "$smtp_user" "$payment_user" "$socket_group"; do
   if getent passwd "$user" >/dev/null || getent group "$user" >/dev/null; then fail 'Refusing to reuse an existing OS identity/group.'; fi
 done
-for path in "$opt" "$config" "$logs" "$run" "/etc/systemd/system/$api_unit" "/etc/systemd/system/$web_unit" "/etc/systemd/system/$smtp_unit"; do [[ ! -e $path && ! -L $path ]] || fail 'Refusing to reuse an existing privileged path.'; done
+for path in "$opt" "$config" "$logs" "$run" "/etc/systemd/system/$api_unit" "/etc/systemd/system/$web_unit" "/etc/systemd/system/$smtp_unit" "/etc/systemd/system/$payment_unit"; do [[ ! -e $path && ! -L $path ]] || fail 'Refusing to reuse an existing privileged path.'; done
 
 step 'Build actual raw release programs and resources from the selected source'
 core_version=$(python3 - "$project/backend/pkg/pluginapi/protocol.go" <<'PYVERSION'
@@ -189,7 +189,7 @@ install -m 755 "$scratch/core-distribution/aster-api-$core_version-linux-amd64" 
 install -m 755 "$scratch/core-distribution/aster-plugin-host-$core_version-linux-amd64" "$assembled/bin/aster-plugin-host"
 cp "$assembled/bin/aster-api" "$scratch/aster-api"
 cp "$assembled/bin/aster-plugin-host" "$scratch/aster-plugin-host"
-for user in "$api_user" "$web_user" "$smtp_user"; do
+for user in "$api_user" "$web_user" "$smtp_user" "$payment_user"; do
   sudo -n useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$user"
   created_users+=("$user")
 done
@@ -199,6 +199,7 @@ sudo -n usermod -a -G "$socket_group" "$api_user"
 # Match the worker's systemd Group for the direct descriptor canary. sudo -g
 # must name a group the target account may use; do not relax sudoers policy.
 sudo -n usermod -a -G "$socket_group" "$smtp_user"
+sudo -n usermod -a -G "$socket_group" "$payment_user"
 # This disposable negative-probe identity deliberately has socket DAC access,
 # so the later rejection proves peer-UID authorization, rather than a missing
 # directory permission. It never joins the API's private secret group.
@@ -254,6 +255,7 @@ sudo -n ln -s "$opt/releases/a" "$opt/current"
 sudo -n install -d -o root -g "$api_user" -m 750 "$config/secrets"
 sudo -n install -d -o root -g root -m 755 "$opt/plugins"
 sudo -n install -d -o "$smtp_user" -g "$socket_group" -m 750 "$run/smtp"
+sudo -n install -d -o "$payment_user" -g "$socket_group" -m 750 "$run/payment"
 
 step 'Create isolated roles, private fixture credentials and synthetic TLS trust'
 python3 - "$scratch" "$db" "$restored" "$mysql_socket" "$run" <<'PY'
@@ -329,7 +331,7 @@ emit_json_fact PREFLIGHT_EMPTY_JSON preflight-empty.json
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate > "$scratch/migrate.log" 2>&1
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate >> "$scratch/migrate.log" 2>&1
 migration_count=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM schema_migrations')
-[[ $migration_count == 7 ]] || fail 'The current source did not apply exactly seven reviewed migrations.'
+[[ $migration_count == 8 ]] || fail 'The current source did not apply exactly eight reviewed migrations.'
 [[ $("${mysql_cmd[@]}" "$db" --execute="SELECT COUNT(*) FROM plan_prices WHERE currency='USD'") == 0 ]] || fail 'Fresh migration installed unapproved USD prices.'
 for role in admin customer second; do
   account_role=customer; [[ $role != admin ]] || account_role=admin
@@ -344,7 +346,7 @@ report = json.loads(Path(sys.argv[1]).read_text())
 database = report['database']
 assert report['read_only'] is True and report['configuration_checked'] is True
 assert database['read_only'] is True and database['status'] == 'current'
-assert database['schema_version'] == 7 and len(database['migration_checksums']) == 7
+assert database['schema_version'] == 8 and len(database['migration_checksums']) == 8
 assert database['admin_count'] == 1 and database['pending_migrations'] == []
 assert database['table_visibility_verified'] is True
 PYCURRENT
@@ -457,12 +459,25 @@ ASTER_PLUGIN_API_USER="$api_user" ASTER_PLUGIN_WORKER_USER="$smtp_user" ASTER_PL
 ASTER_PLUGIN_SOCKET_GROUP="$socket_group" ASTER_PLUGIN_HTTPS_PORT="$tls_port" \
 bash "$project/deploy/ci/plugin-native.sh" --allow-isolated-runner "$source_root" "$evidence/plugin-native"
 
+step 'Independent synthetic payment worker and durable verified callback settlement'
+created_units+=("$payment_unit")
+ASTER_PLUGIN_OPT="$opt" ASTER_PLUGIN_CONFIG="$config" ASTER_PLUGIN_RUN="$run" \
+ASTER_PLUGIN_SCRATCH="$scratch" ASTER_PLUGIN_API_UNIT="$api_unit" ASTER_PLUGIN_WORKER_UNIT="$payment_unit" \
+ASTER_PLUGIN_API_USER="$api_user" ASTER_PLUGIN_WORKER_USER="$payment_user" ASTER_PLUGIN_WEB_USER="$web_user" \
+ASTER_PLUGIN_SMTP_USER="$smtp_user" ASTER_PLUGIN_DATABASE="$db" \
+ASTER_PLUGIN_SOCKET_GROUP="$socket_group" ASTER_PLUGIN_HTTPS_PORT="$tls_port" \
+bash "$project/deploy/ci/payment-native.sh" --allow-isolated-runner "$source_root" "$evidence/payment-native"
+
 step 'API restart and persistence before logical backup'
 count_before=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM orders')
 [[ $count_before =~ ^[0-9]+$ && $count_before -gt 0 ]] || fail 'Business suite did not persist orders.'
+payment_attempts_before=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM payment_attempts')
+payment_settlements_before=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM payment_settlements')
+[[ $payment_attempts_before =~ ^[0-9]+$ && $payment_attempts_before -ge 2 && $payment_settlements_before =~ ^[0-9]+$ && $payment_settlements_before -ge 1 ]] || fail 'Synthetic payment acceptance did not persist nonempty attempts and settlements.'
 sudo -n systemctl restart "$api_unit"
 wait_ready
 [[ $("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM orders') == "$count_before" ]] || fail 'Order persistence changed across API restart.'
+[[ $("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM payment_settlements') == "$payment_settlements_before" ]] || fail 'Payment settlement persistence changed across API restart.'
 
 step 'Real native logical backup, isolated empty-database restore and data comparison'
 sudo -n systemctl stop "$api_unit"
@@ -484,7 +499,8 @@ restore_finished=$(monotonic_ns)
 source_tables=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
 restored_tables=$("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
 [[ $source_tables =~ ^[0-9]+$ && $source_tables -gt 0 && $restored_tables == "$source_tables" ]] || fail 'Restored table count does not match the nonempty source schema.'
-[[ $source_tables == 14 ]] || fail 'The current schema is missing its expected fourteen tables.'
+[[ $source_tables == 16 ]] || fail 'The current schema is missing its expected sixteen tables.'
+[[ $("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM payment_attempts') == "$payment_attempts_before" && $("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM payment_settlements') == "$payment_settlements_before" ]] || fail 'Restore lost synthetic payment attempts or settlement replay records.'
 for target in "$db" "$restored"; do
   "$mysql_root/bin/mysqldump" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --single-transaction --no-tablespaces --set-gtid-purged=OFF --hex-blob --no-create-info --skip-comments --compact --skip-extended-insert --order-by-primary --skip-triggers "$target" 2> "$scratch/compare.log" | sha256sum | cut -d' ' -f1 > "$scratch/$target.sha256"
 done
@@ -498,12 +514,12 @@ ASTER_CORE_FIXTURE_OPT="$opt" ASTER_CORE_CANDIDATE_ASSETS="$scratch/core-distrib
 ASTER_CORE_CANDIDATE_RELEASE="$opt/releases/a" ASTER_CORE_BASELINE_RELEASE="$baseline_target" \
 ASTER_CORE_GITHUB_TOKEN_FILE="$config/public-read-token" \
 bash "$project/deploy/ci/core-native.sh" --allow-isolated-runner "$source_root" "$evidence/core-native"
-python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" "$migration_count" <<'PY'
+python3 - "$evidence" "$source_root" "$count_before" "$source_tables" "$restored_tables" "$backup_started" "$backup_finished" "$restore_started" "$restore_finished" "$migration_count" "$payment_attempts_before" "$payment_settlements_before" <<'PY'
 import json
 from pathlib import Path
 import subprocess
 import sys
-out, source, count, source_tables, restored_tables, backup_started, backup_finished, restore_started, restore_finished, migration_count = sys.argv[1:]
+out, source, count, source_tables, restored_tables, backup_started, backup_finished, restore_started, restore_finished, migration_count, payment_attempts, payment_settlements = sys.argv[1:]
 summary = {
     'source_commit': subprocess.check_output(['git','-C',source,'rev-parse','HEAD'],text=True).strip(),
     'environment': 'isolated Ubuntu 24.04 GitHub-hosted runner',
@@ -511,6 +527,11 @@ summary = {
     'runtime_dml_migrator_separation': True, 'native_backup_restore_equal_data': True,
     'smtp_encrypted_settings_restored': True, 'smtp_disabled_restore_check_no_send': True,
     'runtime_plugins_native_evidence': 'plugin-native/plugin-native.json',
+    'runtime_payment_native_evidence': 'payment-native/payment-native.json',
+    'payment_synthetic_hmac_https_mysql_settlement_and_replay': True,
+    'nonempty_payment_attempts_and_settlements_restored': True,
+    'restored_payment_attempt_count': int(payment_attempts),
+    'restored_payment_settlement_count': int(payment_settlements),
     'smtp_synthetic_loopback_only_no_external_delivery': True,
     'api_restart_persistence': True, 'persisted_orders_before_restart': int(count),
     'actual_core_executor_evidence': 'core-native/core-native.json',
