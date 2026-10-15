@@ -911,8 +911,8 @@ async function createOrder() {
     pendingOrder.value = undefined;
     orderDialog.value?.close();
     notice.value = tr(
-      `订单 ${order.number} 已创建。尚未付款，未开通真实服务器。`,
-      `Order ${order.number} was created. It is unpaid and no server has been provisioned.`,
+      `订单 ${order.number} 已创建。付款状态请以最新账单为准。`,
+      `Order ${order.number} was created. Check the latest invoice for payment status.`,
     );
     go("orders");
     await load();
@@ -1005,8 +1005,8 @@ async function checkout() {
     modalError.value =
       e instanceof ApiError && e.code === "PAYMENT_NOT_CONFIGURED"
         ? tr(
-            "支付通道尚未接入。未发生扣款，账单仍为待付款。",
-            "Payments are not connected. No charge was made; the invoice remains unpaid.",
+            "支付渠道当前不可用。请核对原渠道结果并刷新账单，勿重复支付。",
+            "The payment provider is currently unavailable. Check the original provider and refresh the invoice to confirm the result. Avoid duplicate payments.",
           )
         : explain(e);
   } finally {
@@ -1029,8 +1029,8 @@ function followCheckout(event: MouseEvent) {
     event.preventDefault();
     checkoutSession.value = undefined;
     modalError.value = tr(
-      "结账入口已失效，请重新检查支付可用性。账单状态未改变。",
-      "The checkout link has expired. Check payment availability again. The invoice status is unchanged.",
+      "结账入口已失效。请核对原渠道结果并刷新账单，勿重复支付。",
+      "The checkout link has expired. Check the original provider and refresh the invoice to confirm the result. Avoid duplicate payments.",
     );
   }
 }
@@ -2063,8 +2063,8 @@ onBeforeUnmount(() => {
                   <LockKeyhole :size="14" />
                   {{
                     tr(
-                      "支付通道尚未接入，无法收取真实款项。",
-                      "Payments are not connected. Real payments cannot be collected.",
+                      "付款以服务端确认的账单状态为准。",
+                      "Payment status follows server-confirmed invoices.",
                     )
                   }}
                 </p>
@@ -2386,12 +2386,14 @@ onBeforeUnmount(() => {
             </div>
             <p>
               <LockKeyhole :size="17" />
-              {{ tr("支付通道尚未接入", "Payments are not connected") }}
+              {{
+                tr("付款需由服务端确认", "Payments require server confirmation")
+              }}
               <br /><span>
                 {{
                   tr(
-                    "不会收集银行卡资料或发起真实扣款。",
-                    "No payment card data or real charges are processed.",
+                    "已有付款请核对原渠道并刷新账单，勿重复支付。",
+                    "For an existing payment, check the original provider and refresh the invoice. Avoid duplicate payments.",
                   )
                 }}
               </span>
@@ -2974,8 +2976,8 @@ onBeforeUnmount(() => {
                 "Read-only preview. Orders cannot be created.",
               )
             : tr(
-                "创建订单不代表付款。支付和自动开通尚未接入，不会扣款或交付真实服务器。",
-                "Creating an order does not make a payment. Payments and provisioning are not connected; no charges or real servers will be created.",
+                "创建订单本身不发起扣款，也不会自动开通服务。",
+                "Creating an order does not itself initiate a charge or automatically activate a service.",
               )
         }}</span>
       </div>
@@ -3298,8 +3300,8 @@ onBeforeUnmount(() => {
                 "The checkout link is ready. After paying with the provider, the invoice status still depends on server confirmation.",
               )
             : tr(
-                "如有可用支付适配器，可检查并获取结账入口。此处不收集银行卡信息，不会自动扣款。",
-                "Check for an available payment adapter to get a checkout link. No payment card data is collected here and no automatic charge is made.",
+                "可获取已接入服务商的支付入口。已有付款请核对原渠道并刷新账单，勿重复支付。",
+                "Prepare a checkout link from an available provider. For an existing payment, check the original provider and refresh the invoice. Avoid duplicate payments.",
               )
         }}</span>
       </div>
@@ -3324,8 +3326,8 @@ onBeforeUnmount(() => {
                   "Administrators cannot pay for customers",
                 )
               : saving
-                ? tr("正在检查…", "Checking…")
-                : tr("检查支付可用性", "Check payment availability")
+                ? tr("正在获取…", "Preparing…")
+                : tr("获取支付入口", "Prepare checkout")
         }}
       </button>
       <div v-if="checkoutSession" class="checkout-handoff">
@@ -3344,8 +3346,8 @@ onBeforeUnmount(() => {
           {{ checkoutHost }}
           {{
             tr(
-              "。此操作不代表已付款；链接过期后请重新检查。",
-              ". This does not confirm payment. Check again if the link expires.",
+              "。此操作不代表已付款；入口失效后请核对原渠道并刷新账单，勿重复支付。",
+              ". This does not confirm payment. If the link expires, check the original provider and refresh the invoice. Avoid duplicate payments.",
             )
           }}
         </p>

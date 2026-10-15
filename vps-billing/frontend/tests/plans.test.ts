@@ -29,6 +29,10 @@ describe("plan selection and order summary", () => {
     const plans = previewPlans("CNY");
     expect(wrapper.findAll(".region-options button")).toHaveLength(3);
     expect(wrapper.findAll(".catalog-plan")).toHaveLength(3);
+    expect(wrapper.find(".purchase-boundary").text()).toContain(
+      "创建订单本身不发起扣款，也不会自动开通服务。",
+    );
+    expect(wrapper.find(".purchase-boundary").text()).not.toContain("尚未接入");
     await wrapper.findAll(".plan-select")[1]!.trigger("click");
     expect(wrapper.find(".purchase-summary").text()).toContain(plans[1]!.name);
     expect(wrapper.find(".purchase-total").text()).toContain("CNY 79.00");
@@ -162,6 +166,12 @@ describe("plan selection and order summary", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("Choose a region");
     expect(wrapper.text()).toContain("Order summary");
+    expect(wrapper.find(".purchase-boundary").text()).toContain(
+      "Creating an order does not itself initiate a charge or automatically activate a service.",
+    );
+    expect(wrapper.find(".purchase-boundary").text()).not.toContain(
+      "not connected",
+    );
     expect(wrapper.text()).toContain("<b>Operator</b>");
     expect(wrapper.text()).toContain("原始产品说明");
     expect(wrapper.find(".catalog-plan h3 b").exists()).toBe(false);

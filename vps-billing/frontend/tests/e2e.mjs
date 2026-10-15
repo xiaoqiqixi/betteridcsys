@@ -277,7 +277,7 @@ async function cancelThroughUI(order, invoice, reason, admin = false) {
   );
   await expect(
     page.locator(".invoice-modal").getByRole("button", {
-      name: "检查支付可用性",
+      name: "获取支付入口",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -765,11 +765,11 @@ try {
     "aria-busy",
     "false",
   );
-  await page
-    .getByRole("button", { name: "检查支付可用性", exact: true })
-    .click();
+  await page.getByRole("button", { name: "获取支付入口", exact: true }).click();
   await expect(
-    page.locator("dialog[open]").getByText("未发生扣款", { exact: false }),
+    page
+      .locator("dialog[open]")
+      .getByText("支付渠道当前不可用", { exact: false }),
   ).toBeVisible();
   await shot("invoice-desktop");
   await page.getByRole("button", { name: "关闭", exact: true }).click();
@@ -817,7 +817,10 @@ try {
   await expect(navigation).toHaveAttribute("inert");
 
   await page.keyboard.press("Enter");
+  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "true");
+  await expect(currentInvoiceLink).toBeFocused();
   await navigationClose.focus();
+  await expect(navigationClose).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(navigationTrigger).toBeFocused();
   await page.keyboard.press("Enter");
@@ -834,11 +837,24 @@ try {
   const languageControl = page.getByLabel("语言", { exact: true });
   await languageControl.focus();
   await page.setViewportSize({ width: 720, height: 844 });
+  // Retained focus is already true before matchMedia dispatches its change.
+  // Wait for the application's mobile state before sending keyboard actions.
+  await expect(navigation).toHaveAttribute("inert");
+  await expect(navigation).toHaveAttribute("aria-hidden", "true");
+  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
   await expect(languageControl).toBeFocused();
   await navigationTrigger.focus();
   await page.keyboard.press("Enter");
-  await navigation.getByRole("link", { name: "工作台", exact: true }).focus();
+  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "true");
+  await expect(currentInvoiceLink).toBeFocused();
+  const overviewLink = navigation.getByRole("link", {
+    name: "工作台",
+    exact: true,
+  });
+  await overviewLink.focus();
+  await expect(overviewLink).toBeFocused();
   await page.keyboard.press("Enter");
+  await page.waitForURL("**/overview");
   await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
   await expect(navigation).toHaveAttribute("inert");
   await expect(page.locator("#main")).toBeFocused();

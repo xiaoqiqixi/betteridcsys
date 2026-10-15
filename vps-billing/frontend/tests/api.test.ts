@@ -153,27 +153,35 @@ describe("API integrity", () => {
 });
 
 describe("checkout session integrity", () => {
-  it("rejects incomplete and expired sessions without exposing their content", () => {
-    const valid = {
-      provider_id: "test",
-      session_id: "session",
-      checkout_url: "https://example.com/pay",
-      expires_at: new Date(Date.now() + 60000).toISOString(),
-    };
-    for (const value of [
-      null,
-      {},
-      { ...valid, provider_id: "" },
-      { ...valid, session_id: "" },
-      { ...valid, expires_at: "not-a-date" },
-      { ...valid, expires_at: "2020-01-01T00:00:00Z" },
-      { ...valid, checkout_url: "/relative" },
-      { ...valid, checkout_url: "secret-value" },
-    ]) {
-      expect(() => readCheckoutSession(value)).toThrow("账单仍为待付款");
-    }
-    expect(readCheckoutSession(valid)).toEqual(valid);
-  });
+  it.each(["zh-CN", "en"] as const)(
+    "rejects incomplete and expired sessions without claiming a payment outcome in %s",
+    (language) => {
+      setLocale(language);
+      const valid = {
+        provider_id: "test",
+        session_id: "session",
+        checkout_url: "https://example.com/pay",
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      };
+      for (const value of [
+        null,
+        {},
+        { ...valid, provider_id: "" },
+        { ...valid, session_id: "" },
+        { ...valid, expires_at: "not-a-date" },
+        { ...valid, expires_at: "2020-01-01T00:00:00Z" },
+        { ...valid, checkout_url: "/relative" },
+        { ...valid, checkout_url: "secret-value" },
+      ]) {
+        expect(() => readCheckoutSession(value)).toThrow(
+          language === "en"
+            ? "Check the original provider and refresh the invoice"
+            : "请核对原渠道结果并刷新账单，勿重复支付",
+        );
+      }
+      expect(readCheckoutSession(valid)).toEqual(valid);
+    },
+  );
 });
 
 describe("independent validated browser preferences", () => {

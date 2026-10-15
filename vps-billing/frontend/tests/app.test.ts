@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 import { defaultSiteSettings } from "../src/lib/settings";
-import { restorePreferences, locale, currency } from "../src/lib/i18n";
+import {
+  restorePreferences,
+  locale,
+  currency,
+  setLocale,
+} from "../src/lib/i18n";
 import App from "../src/App.vue";
 import { defaultCurrencyRegistry } from "../src/lib/currencies";
 const configuredCurrencies = () => ({
@@ -126,6 +131,7 @@ beforeEach(() => {
       else if (endpoint.endsWith("/checkout"))
         return {
           ok: false,
+          status: 503,
           json: async () => ({
             error: { code: "PAYMENT_NOT_CONFIGURED", message: "Unavailable" },
           }),
@@ -1555,7 +1561,7 @@ describe("billing workspace flows", () => {
       await flushPromises();
       await wrapper
         .findAll("button")
-        .find((b) => b.text() === "检查支付可用性")!
+        .find((b) => b.text() === "获取支付入口")!
         .trigger("click");
       await flushPromises();
       const link = wrapper.find(".checkout-handoff a");
@@ -1570,12 +1576,118 @@ describe("billing workspace flows", () => {
         );
       } else {
         expect(wrapper.find(".invoice-modal").text()).toContain(
-          "本次未完成付款",
+          "请核对原渠道结果并刷新账单，勿重复支付",
         );
       }
       expect(wrapper.find(".invoice-doc-top .badge").text()).toBe("待付款");
       expect(requests.filter((r) => r.method === "POST")).toHaveLength(1);
       wrapper.unmount();
+    },
+  );
+
+  it.each(["zh-CN", "en"] as const)(
+    "does not promise no charge after an existing checkout becomes unavailable in %s",
+    async (language) => {
+      setLocale(language);
+      activeUser = { ...fixtures.previewUser };
+      checkoutResponse = {
+        provider_id: "test-payment",
+        session_id: "existing-unconfirmed-session",
+        checkout_url: "https://checkout.example.com/session/existing",
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+      };
+      const { wrapper, router } = await mountApp();
+      await router.push("/invoices");
+      await flushPromises();
+      await wrapper.findAll(".table-action")[0]!.trigger("click");
+      await flushPromises();
+      const prepare = () =>
+        wrapper
+          .findAll("button")
+          .find(
+            (button) =>
+              button.text() ===
+              (language === "en" ? "Prepare checkout" : "获取支付入口"),
+          )!;
+      await prepare().trigger("click");
+      await flushPromises();
+      expect(wrapper.find(".checkout-handoff a").exists()).toBe(true);
+
+      // The channel can be disabled after accepting the original session. Its
+      // current 503 cannot establish what happened to that earlier payment.
+      checkoutResponse = undefined;
+      await prepare().trigger("click");
+      await flushPromises();
+      const message = wrapper.find(".invoice-modal [role=alert]").text();
+      expect(message).toContain(
+        language === "en"
+          ? "The payment provider is currently unavailable."
+          : "支付渠道当前不可用。",
+      );
+      expect(message).toContain(
+        language === "en"
+          ? "Check the original provider and refresh the invoice"
+          : "请核对原渠道结果并刷新账单",
+      );
+      expect(message).toContain(
+        language === "en" ? "Avoid duplicate payments." : "勿重复支付。",
+      );
+      expect(message).not.toMatch(
+        /未发生扣款|未完成付款|仍为待付款|状态未改变|No charge was made|No payment was completed|remains unpaid|status is unchanged/i,
+      );
+      expect(wrapper.find(".checkout-handoff a").exists()).toBe(false);
+      expect(
+        requests.filter((request) => request.method === "POST"),
+      ).toHaveLength(2);
+      wrapper.unmount();
+    },
+  );
+
+  it.each(["zh-CN", "en"] as const)(
+    "asks to reconcile an expired checkout without promising payment status in %s",
+    async (language) => {
+      setLocale(language);
+      activeUser = { ...fixtures.previewUser };
+      const expiry = Date.now() + 60_000;
+      checkoutResponse = {
+        provider_id: "test-payment",
+        session_id: "expiring-session",
+        checkout_url: "https://checkout.example.com/session/expired",
+        expires_at: new Date(expiry).toISOString(),
+      };
+      const { wrapper, router } = await mountApp();
+      await router.push("/invoices");
+      await flushPromises();
+      await wrapper.findAll(".table-action")[0]!.trigger("click");
+      await flushPromises();
+      await wrapper
+        .findAll("button")
+        .find(
+          (button) =>
+            button.text() ===
+            (language === "en" ? "Prepare checkout" : "获取支付入口"),
+        )!
+        .trigger("click");
+      await flushPromises();
+      const now = vi.spyOn(Date, "now").mockReturnValue(expiry + 1);
+      try {
+        await wrapper.find(".checkout-handoff a").trigger("click");
+        await flushPromises();
+        expect(wrapper.find(".checkout-handoff a").exists()).toBe(false);
+        const message = wrapper.find(".invoice-modal [role=alert]").text();
+        expect(message).toContain(
+          language === "en"
+            ? "Check the original provider and refresh the invoice"
+            : "请核对原渠道结果并刷新账单",
+        );
+        expect(message).not.toMatch(/状态未改变|status is unchanged/i);
+        expect(
+          requests.filter((request) => request.method === "POST"),
+        ).toHaveLength(1);
+      } finally {
+        now.mockRestore();
+        wrapper.unmount();
+      }
     },
   );
 
@@ -1615,7 +1727,7 @@ describe("billing workspace flows", () => {
     await wrapper.find("dialog form").trigger("submit");
     await flushPromises();
     expect(router.currentRoute.value.path).toBe("/orders");
-    expect(wrapper.text()).toContain("已创建。尚未付款");
+    expect(wrapper.text()).toContain("已创建。付款状态请以最新账单为准。");
     expect(
       JSON.parse(
         requests.find((r) => r.path === "/orders" && r.method === "POST")!
@@ -1637,10 +1749,12 @@ describe("billing workspace flows", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text() === "检查支付可用性")!
+      .find((b) => b.text() === "获取支付入口")!
       .trigger("click");
     await flushPromises();
-    expect(wrapper.text()).toContain("未发生扣款，账单仍为待付款");
+    expect(wrapper.text()).toContain(
+      "支付渠道当前不可用。请核对原渠道结果并刷新账单，勿重复支付。",
+    );
     wrapper.unmount();
   });
 });

@@ -10,7 +10,11 @@
 
 该提交的 [CI 38720882187](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38720882187) 已完成真实 MySQL 全量回归、前端检查、部署脚本回归、Go 漏洞检查和官方元数据检查。原生 API／Nginx HTTPS 以及 SMTP 独立进程的 9 项场景通过，但合成支付进程启用后的握手返回 503，完整 CI **失败**；支付结算、备份恢复和浏览器阶段不能据此记为通过。该轮自有资源清理成功。后续修复的实际结果须绑定其自己的精确提交与运行，不改写这次失败记录。
 
-随后源码复核发现合成插件对 systemd 凭据权限的兼容缺陷：[systemd v255](https://github.com/systemd/systemd/blob/v255/src/core/exec-credential.c) 通过专属用户 ACL 交付只读凭据，ACL mask 会影响 `stat` 的组权限位。修复须验证仅授予当前 worker 的只读 ACL，继续拒绝普通组可读或授予其他身份的文件，不能简单放宽为任意 `0440`。这项兼容修复仍须由真实 systemd 验收确认。
+随后源码复核发现合成插件对 systemd 凭据权限的兼容缺陷：[systemd v255](https://github.com/systemd/systemd/blob/v255/src/core/exec-credential.c) 通过专属用户 ACL 交付只读凭据，ACL mask 会影响 `stat` 的组权限位。修复验证仅授予当前 worker 的只读 ACL，继续拒绝普通组可读或授予其他身份的文件，没有简单放宽为任意 `0440`。
+
+修复提交 [`8a7e8ed`](https://github.com/xiaoqiqixi/betteridcsys/commit/8a7e8ed812fb043d0b991ffb0d64ce8772d32f4d) 的 [CI 38722990463](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38722990463) 已实际通过 ACL／打开 inode 测试，以及完整原生支付、历史数据库升级、备份与空库恢复。支付进程与 API、SMTP 使用不同 UID；HTTPS／MySQL 合成 HMAC 结算、金额核对、并发重放、交易 ID 冲突、取消互斥、插件升级回退、篡改拒绝和崩溃恢复均通过，Core PID 保持。恢复后的支付尝试与结算记录非空，完整数据摘要一致；原生资源清理成功。Go 836 PASS、0 FAIL、0 SKIP，前端 421 项及部署脚本回归通过。
+
+该轮完整 CI 最终仍**失败**：浏览器键盘脚本期望移动菜单关闭，实际仍展开，工作流语法检查尚未运行。复核发现断点切换后没有等待应用移动状态、打开菜单后没有等待自动聚焦完成；后续脚本修复保留原有关闭、焦点与路由断言，不关闭沙箱、不增加超时。支付提示另作文字修正，避免在渠道停用、响应丢失或链接过期时宣称“未扣款”或“账单状态未改变”。上述后续修改仍须绑定各自的新提交验收。
 
 [`4381287`](https://github.com/xiaoqiqixi/betteridcsys/commit/43812876eba53e9086fa7e5f5c8d73aaa4788c4c) 修复 Mac 反馈的页头高度、路由滚动、币种标签、按钮样式与财务副标题。自动测试和截图元数据均不能替代 Mac 人工视觉复验；正式 0.5.3 发布仍等待该结论。
 

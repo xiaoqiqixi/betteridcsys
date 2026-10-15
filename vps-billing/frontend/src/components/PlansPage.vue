@@ -359,8 +359,8 @@ function review() {
                     "You can preview sample configurations. Orders cannot be created.",
                   )
                 : tr(
-                    "支付与自动开通尚未接入，不会扣款或创建真实服务器。",
-                    "Payments and provisioning are not connected. No charge or real server will be created.",
+                    "创建订单本身不发起扣款，也不会自动开通服务。",
+                    "Creating an order does not itself initiate a charge or automatically activate a service.",
                   )
             }}
           </p>

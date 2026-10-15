@@ -314,8 +314,8 @@ export function readCheckoutSession(value: unknown): CheckoutSession {
     throw new ApiError(
       "INVALID_CHECKOUT",
       tr(
-        "支付服务未提供有效的结账入口。本次未完成付款，账单仍为待付款。",
-        "No valid checkout link was returned. No payment was completed; the invoice remains unpaid.",
+        "支付服务未提供有效的结账入口。请核对原渠道结果并刷新账单，勿重复支付。",
+        "No valid checkout link was returned. Check the original provider and refresh the invoice to confirm the result. Avoid duplicate payments.",
       ),
     );
   };
