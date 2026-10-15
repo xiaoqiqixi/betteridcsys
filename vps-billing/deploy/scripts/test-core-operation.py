@@ -4,9 +4,11 @@
 No subprocess, system identity, systemd unit, database or network is changed.
 Official release verification uses the immutable in-memory updater fixtures.
 The Python-only trust seam permits tests under an ordinary Unix account.
+ACL syscall outcomes are mocked; these tests do not establish host ACL support.
 """
 import contextlib
 import copy
+import errno
 import gzip
 import importlib.util
 import io
@@ -190,6 +192,12 @@ class ExecutorTests(unittest.TestCase):
         self.binary_patch = patch.object(operation, "binary", side_effect=mapped_system_binary)
         self.binary_patch.start()
         self.addCleanup(self.binary_patch.stop)
+        self.acl_remove_patch = patch.object(operation.os, "removexattr", side_effect=OSError(errno.ENODATA, "Mocked absent ACL"))
+        self.acl_get_patch = patch.object(operation.os, "getxattr", side_effect=OSError(errno.ENODATA, "Mocked absent ACL"))
+        self.acl_remove = self.acl_remove_patch.start()
+        self.acl_get = self.acl_get_patch.start()
+        self.addCleanup(self.acl_remove_patch.stop)
+        self.addCleanup(self.acl_get_patch.stop)
         self.instance = self.directory("instance", 0o755)
         self.directory("instance/releases", 0o755)
         self.config = self.directory("config", 0o755)
@@ -367,6 +375,11 @@ class ExecutorTests(unittest.TestCase):
             if not path.exists():
                 path.mkdir(mode=0o700)
         return self.state / self.spec["operation_id"] / "backups"
+
+    def assert_descriptor_closed(self, descriptor):
+        with self.assertRaises(OSError) as failure:
+            os.fstat(descriptor)
+        self.assertEqual(failure.exception.errno, errno.EBADF)
 
     def plugin_fixture(self, selected="1.1.0", enabled=False):
         root = self.directory("instance/plugins", 0o755)
@@ -1065,6 +1078,33 @@ class ExecutorTests(unittest.TestCase):
         self.assertFalse(evidence["isolated_restore_verified"])
         self.assertEqual(native.verify_backup(evidence, str(self.old)), evidence)
 
+    def test_completed_backup_requires_exact_private_mode_on_every_member(self):
+        output = self.backup_output()
+        folder = self.backup_files(output)
+        native = operation.Native(self.spec, self.trust)
+        members = ("database.sql.gz", "BACKUP.json", "BACKUP.txt", "SHA256SUMS")
+        self.assertTrue(all(stat.S_IMODE((folder / name).stat().st_mode) == 0o600 for name in members))
+        original = native.completed_backup(str(self.old), str(output))
+        for name in members:
+            path = folder / name
+            path.chmod(0o644)
+            try:
+                with self.subTest(member=name, mode="0644"), self.assertRaises(updater.Rejected) as failure:
+                    native.completed_backup(str(self.old), str(output))
+                self.assertEqual(str(failure.exception), "Private paths must use mode 0700 or 0600.")
+            finally:
+                path.chmod(0o600)
+        text = folder / "BACKUP.txt"
+        for mode in (0o666, 0o640, 0o755):
+            text.chmod(mode)
+            try:
+                with self.subTest(member="BACKUP.txt", mode=oct(mode)), self.assertRaises(updater.Rejected) as failure:
+                    native.completed_backup(str(self.old), str(output))
+                self.assertNotIn(CANARY, str(failure.exception))
+            finally:
+                text.chmod(0o600)
+        self.assertEqual(native.completed_backup(str(self.old), str(output)), original)
+
     def test_real_backup_corruption_missing_members_and_checksum_mutations_are_rejected(self):
         output = self.backup_output()
         native = operation.Native(self.spec, self.trust)
@@ -1334,6 +1374,180 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(snapshot(self.base), before)
         self.assertNotIn(str(self.base), json.dumps(value))
         self.assertNotIn(CANARY, json.dumps(value))
+
+    def test_new_backup_directory_uses_private_descriptor_and_ordered_acl_checks(self):
+        path = self.private / "new-backup-output"
+        events, captured = [], {}
+        actual_chmod, actual_sync = operation.os.fchmod, operation.os.fsync
+        def remove(descriptor, name):
+            self.assertIs(type(descriptor), int)
+            self.assertEqual(name, "system.posix_acl_default")
+            self.assertEqual(stat.S_IMODE(os.fstat(descriptor).st_mode), 0o700)
+            self.assertEqual(os.fstat(descriptor).st_ino, path.stat().st_ino)
+            captured["descriptor"] = descriptor
+            events.append("remove")
+        def read(descriptor, name):
+            self.assertEqual((descriptor, name), (captured["descriptor"], "system.posix_acl_default"))
+            events.append("read")
+            raise OSError(errno.ENODATA, "Mocked absent ACL")
+        def chmod(descriptor, mode):
+            if descriptor == captured.get("descriptor"):
+                self.assertEqual(mode, 0o700)
+                events.append("chmod")
+            return actual_chmod(descriptor, mode)
+        def sync(descriptor):
+            if descriptor == captured.get("descriptor"):
+                events.append("fsync")
+            return actual_sync(descriptor)
+        with patch.object(operation, "create_directory", wraps=operation.create_directory) as create, \
+                patch.object(operation.os, "removexattr", side_effect=remove), \
+                patch.object(operation.os, "getxattr", side_effect=read), \
+                patch.object(operation.os, "fchmod", side_effect=chmod), \
+                patch.object(operation.os, "fsync", side_effect=sync):
+            operation.create_backup_directory(str(path), self.trust)
+        create.assert_called_once_with(str(path), 0o700, self.trust)
+        self.assertEqual(events, ["remove", "read", "chmod", "fsync"])
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+        self.assertEqual(path.stat().st_uid, self.trust.owner)
+        self.assert_descriptor_closed(captured["descriptor"])
+
+    def test_backup_directory_accepts_only_mocked_absent_or_unsupported_acl_results(self):
+        for index, (remove_errno, read_errno) in enumerate((
+                (None, errno.ENODATA), (errno.ENODATA, errno.ENODATA),
+                (errno.EOPNOTSUPP, errno.EOPNOTSUPP), (errno.ENODATA, errno.EOPNOTSUPP))):
+            remove_failure = None if remove_errno is None else OSError(remove_errno, "Mocked ACL removal result")
+            path = self.private / ("acl-case-" + str(index))
+            with self.subTest(index=index), \
+                    patch.object(operation.os, "removexattr", side_effect=remove_failure, return_value=None) as remove, \
+                    patch.object(operation.os, "getxattr", side_effect=OSError(read_errno, "Mocked ACL read result")) as read:
+                operation.create_backup_directory(str(path), self.trust)
+            self.assertEqual(remove.call_args.args[0], read.call_args.args[0])
+            self.assertEqual(remove.call_args.args[1], "system.posix_acl_default")
+            self.assertEqual(read.call_args.args[1], "system.posix_acl_default")
+            self.assert_descriptor_closed(remove.call_args.args[0])
+
+    def test_backup_directory_never_changes_existing_output_or_calls_acl_syscalls(self):
+        path = self.directory("private/existing-backup", 0o750)
+        self.write("private/existing-backup/canary", CANARY.encode())
+        before = snapshot(self.base)
+        with patch.object(operation.os, "fchmod", wraps=operation.os.fchmod) as chmod, \
+                self.assertRaises(updater.Rejected):
+            operation.create_backup_directory(str(path), self.trust)
+        self.assertEqual(snapshot(self.base), before)
+        chmod.assert_not_called()
+        self.acl_remove.assert_not_called()
+        self.acl_get.assert_not_called()
+
+    def test_backup_directory_rejects_unexpected_io_errors_and_closes_descriptor(self):
+        actual_chmod, actual_sync = operation.os.fchmod, operation.os.fsync
+        for stage in ("remove", "read", "chmod", "fsync"):
+            path = self.private / ("failed-backup-" + stage)
+            captured = {}
+            def remove(descriptor, name):
+                captured["descriptor"] = descriptor
+                if stage == "remove":
+                    raise OSError(errno.EACCES, CANARY)
+                raise OSError(errno.ENODATA, "Mocked absent ACL")
+            def read(descriptor, name):
+                raise OSError(errno.EIO if stage == "read" else errno.ENODATA, CANARY)
+            def chmod(descriptor, mode):
+                if stage == "chmod" and descriptor == captured.get("descriptor"):
+                    raise OSError(errno.EPERM, CANARY)
+                return actual_chmod(descriptor, mode)
+            def sync(descriptor):
+                if stage == "fsync" and descriptor == captured.get("descriptor"):
+                    raise OSError(errno.EIO, CANARY)
+                return actual_sync(descriptor)
+            with self.subTest(stage=stage), \
+                    patch.object(operation.os, "removexattr", side_effect=remove), \
+                    patch.object(operation.os, "getxattr", side_effect=read), \
+                    patch.object(operation.os, "fchmod", side_effect=chmod), \
+                    patch.object(operation.os, "fsync", side_effect=sync), \
+                    self.assertRaises(updater.Rejected) as failure:
+                operation.create_backup_directory(str(path), self.trust)
+            self.assertEqual(str(failure.exception), "New private backup directory ACL could not be normalized.")
+            self.assertNotIn(CANARY, str(failure.exception))
+            self.assert_descriptor_closed(captured["descriptor"])
+        with patch.object(operation, "create_directory", side_effect=OSError(errno.EIO, CANARY)), \
+                self.assertRaises(updater.Rejected) as failure:
+            operation.create_backup_directory(str(self.private / "failed-creation"), self.trust)
+        self.assertNotIn(CANARY, str(failure.exception))
+
+    def test_backup_directory_refuses_any_persistent_default_acl(self):
+        for index, value in enumerate((b"", b"Mocked persistent default ACL")):
+            path = self.private / ("persistent-acl-" + str(index))
+            with patch.object(operation.os, "getxattr", return_value=value, side_effect=None) as read, \
+                    self.assertRaises(updater.Rejected):
+                operation.create_backup_directory(str(path), self.trust)
+            self.assert_descriptor_closed(read.call_args.args[0])
+
+    def test_backup_directory_refuses_unsafe_paths_before_acl_syscalls(self):
+        alias = self.private / "backup-link"
+        alias.symlink_to(self.private, target_is_directory=True)
+        ancestor = self.base / "backup-parent-link"
+        ancestor.symlink_to(self.private, target_is_directory=True)
+        for path in ("/", "relative-backup", str(alias), str(ancestor / "new-backup")):
+            with self.subTest(path=path), self.assertRaises(updater.Rejected):
+                operation.create_backup_directory(path, self.trust)
+        self.private.chmod(0o777)
+        try:
+            with self.assertRaises(updater.Rejected):
+                operation.create_backup_directory(str(self.private / "unsafe-parent-output"), self.trust)
+        finally:
+            self.private.chmod(0o700)
+        self.acl_remove.assert_not_called()
+        self.acl_get.assert_not_called()
+        self.assertTrue(alias.is_symlink())
+
+    def test_backup_directory_requires_private_mode_and_expected_owner_before_acl_access(self):
+        path = self.private / "wrong-mode-output"
+        def wrong_mode(output, mode, trust):
+            Path(output).mkdir(mode=0o700)
+            Path(output).chmod(0o755)
+        with patch.object(operation, "create_directory", side_effect=wrong_mode), \
+                self.assertRaises(updater.Rejected):
+            operation.create_backup_directory(str(path), self.trust)
+        actual_stat = operation.os.fstat
+        other = self.private / "wrong-owner-output"
+        def wrong_owner(descriptor):
+            info = actual_stat(descriptor)
+            if os.readlink("/proc/self/fd/" + str(descriptor)) == str(other):
+                values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                values["st_uid"] = self.trust.owner + 1
+                return types.SimpleNamespace(**values)
+            return info
+        with patch.object(operation.os, "fstat", side_effect=wrong_owner), self.assertRaises(updater.Rejected):
+            operation.create_backup_directory(str(other), self.trust)
+        self.acl_remove.assert_not_called()
+        self.acl_get.assert_not_called()
+
+    def test_backup_directory_detects_changed_metadata_and_closes_descriptor(self):
+        actual_stat = operation.os.fstat
+        for index, changed in enumerate(("st_dev", "st_ino", "st_uid", "st_gid", "st_nlink", "st_mode")):
+            captured = {}
+            def remove(descriptor, name):
+                captured["descriptor"] = descriptor
+                raise OSError(errno.ENODATA, "Mocked absent ACL")
+            def changed_metadata(descriptor):
+                info = actual_stat(descriptor)
+                if descriptor == captured.get("descriptor"):
+                    values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                    values[changed] = (info.st_mode & ~0o777) | 0o755 if changed == "st_mode" else values[changed] + 1
+                    return types.SimpleNamespace(**values)
+                return info
+            path = self.private / ("changed-metadata-" + str(index))
+            with self.subTest(changed=changed), patch.object(operation.os, "removexattr", side_effect=remove), \
+                    patch.object(operation.os, "fstat", side_effect=changed_metadata), \
+                    self.assertRaises(updater.Rejected):
+                operation.create_backup_directory(str(path), self.trust)
+            self.assert_descriptor_closed(captured["descriptor"])
+
+    def test_upgrade_backup_uses_acl_checked_private_output_helper(self):
+        with patch.object(operation, "create_backup_directory", wraps=operation.create_backup_directory) as create:
+            self.execute()
+        create.assert_called_once_with(str(self.state / self.spec["operation_id"] / "backups"), self.trust)
+        self.assertEqual(self.acl_remove.call_count, 1)
+        self.assertEqual(self.acl_get.call_count, 1)
 
     def test_cli_keeps_root_requirement_and_no_relaxed_trust_options(self):
         output = io.StringIO()

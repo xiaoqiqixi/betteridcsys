@@ -8,11 +8,13 @@ import os
 from pathlib import Path
 import re
 import ssl
+import struct
 import subprocess
 import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("accept-native.sh")
@@ -239,6 +241,41 @@ class NativePreparationSmokeGuardTests(unittest.TestCase):
 
 
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
+    def test_acl_wire_projection_excludes_ids_and_bounds_entries(self):
+        raw = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", tag, permissions, identity)
+            for tag, permissions, identity in ((1, 7, 0xffffffff), (2, 6, 123456789), (16, 7, 0xffffffff), (32, 7, 0xffffffff)))
+        observed = CORE.acl_wire_summary(raw)
+        self.assertTrue(observed["valid_wire_shape"])
+        self.assertEqual(observed["version"], 2)
+        self.assertEqual(observed["entry_count"], 4)
+        self.assertEqual(observed["entries"], [{"tag": 1, "permissions": 7}, {"tag": 2, "permissions": 6},
+            {"tag": 16, "permissions": 7}, {"tag": 32, "permissions": 7}])
+        self.assertNotIn("123456789", json.dumps(observed))
+        self.assertNotIn("4294967295", json.dumps(observed))
+        large = CORE.acl_wire_summary(struct.pack("<I", 2) + struct.pack("<HHI", 2, 6, 123456789) * 129)
+        self.assertEqual(len(large["entries"]), 128)
+        self.assertTrue(large["entries_truncated"])
+        self.assertFalse(CORE.acl_wire_summary(b"private-malformed-ACL")["valid_wire_shape"])
+
+    def test_owned_acl_diagnostics_uses_actual_nofollow_xattr_reads_without_mutation(self):
+        with tempfile.TemporaryDirectory(prefix="aster-acl-observation-") as directory:
+            root = Path(directory)
+            target = root / "private-file"
+            target.write_bytes(b"private-data")
+            link = root / "private-link"
+            link.symlink_to(target)
+            original = os.getxattr
+            before = target.stat()
+            with patch.object(CORE.os, "getxattr", wraps=original) as observed:
+                report = CORE.owned_acl_diagnostics(link)
+            self.assertEqual(observed.call_count, 2)
+            self.assertEqual([call.args[1] for call in observed.call_args_list], ["system.posix_acl_default", "system.posix_acl_access"])
+            self.assertTrue(all(call.kwargs == {"follow_symlinks": False} for call in observed.call_args_list))
+            self.assertEqual(target.read_bytes(), b"private-data")
+            self.assertEqual(target.stat().st_mode, before.st_mode)
+            self.assertEqual(set(report), {"default", "access"})
+            self.assertNotIn("private", json.dumps(report))
+
     def test_restore_component_projection_stops_at_links_and_exports_only_metadata(self):
         with tempfile.TemporaryDirectory(prefix="aster-restore-components-") as directory:
             root = Path(directory)
@@ -311,7 +348,7 @@ class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
     def test_prepared_verification_fixed_rejections_have_complete_safe_categories(self):
         scripts = SCRIPT.parent.parent / "scripts"
         targets = {
-            "core-operation.py": {"protected_path", "read_file", "sha_file", "sha_prepared_member", "_sha_protected_file", "prepared_release", "read_environment"},
+            "core-operation.py": {"protected_path", "read_file", "sha_file", "sha_prepared_member", "_sha_protected_file", "prepared_release", "read_environment", "create_backup_directory"},
             "update-manager.py": {"stable", "exact_path", "protected_open", "read_protected", "strict_json", "static_elf"},
         }
         fixed = set()

@@ -9,6 +9,7 @@ is irreversible here: recovery never imports a backup or drops database objects.
 import argparse
 import contextlib
 import datetime
+import errno
 import fcntl
 import grp
 import hashlib
@@ -624,6 +625,9 @@ class Native:
             require(set(os.listdir(descriptor)) == {"database.sql.gz", "BACKUP.json", "BACKUP.txt", "SHA256SUMS"}, "Completed backup inventory differs from its fixed format.")
         finally:
             os.close(descriptor)
+        for name in ("database.sql.gz", "BACKUP.json", "BACKUP.txt", "SHA256SUMS"):
+            descriptor = updater.protected_open(folder + "/" + name, trust=self.trust, private=True)
+            os.close(descriptor)
         checksums = updater.checksums(read_file(folder + "/SHA256SUMS", 2048, self.trust, True), {"database.sql.gz", "BACKUP.json", "BACKUP.txt"})
         for name, expected in checksums.items():
             require(sha_file(folder + "/" + name, self.trust, updater.MAX_BACKUP) == expected, "Completed backup file differs from its checksum inventory.")
@@ -660,6 +664,40 @@ def create_directory(path, mode, trust):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def create_backup_directory(path, trust):
+    """Create a private backup output without an inherited default POSIX ACL.
+
+    A default ACL can determine child file permissions instead of umask. Only
+    this newly created directory is changed; source-bound historical backup
+    scripts and existing administrator directories remain untouched.
+    """
+    descriptor = -1
+    try:
+        create_directory(path, 0o700, trust)
+        descriptor = updater.protected_open(path, True, trust, True)
+        before = os.fstat(descriptor)
+        absent = {errno.ENODATA, errno.EOPNOTSUPP}
+        try:
+            os.removexattr(descriptor, "system.posix_acl_default")
+        except OSError as failure:
+            require(failure.errno in absent, "New private backup directory ACL could not be normalized.")
+        try:
+            os.getxattr(descriptor, "system.posix_acl_default")
+        except OSError as failure:
+            require(failure.errno in absent, "New private backup directory ACL could not be normalized.")
+        else:
+            raise Rejected("New private backup directory ACL could not be normalized.")
+        os.fchmod(descriptor, 0o700)
+        after = os.fstat(descriptor)
+        require(all(getattr(before, key) == getattr(after, key) for key in ("st_dev", "st_ino", "st_uid", "st_gid", "st_nlink")) and after.st_uid == trust.owner and stat.S_ISDIR(after.st_mode) and stat.S_IMODE(after.st_mode) == 0o700, "New private backup directory metadata changed during creation.")
+        os.fsync(descriptor)
+    except OSError:
+        raise Rejected("New private backup directory ACL could not be normalized.") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def new_file(path, raw, mode=0o600, gid=None, trust=updater._Trust()):
@@ -1183,7 +1221,7 @@ class Operation:
         if spec["action"] == "upgrade":
             def backup():
                 path = self.operation_path + "/backups"
-                create_directory(path, 0o700, self.trust)
+                create_backup_directory(path, self.trust)
                 value = self.native.backup(self.planned["inputs"]["previous"]["release_directory"], path)
                 require(value["migration_checksums"] == self.planned["inputs"]["previous"]["migration_checksums"], "Backup schema does not match the old source.")
                 self.journal["backup"] = value

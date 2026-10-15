@@ -7,6 +7,7 @@ source-built; no official PREPARED receipt or PROVENANCE is manufactured.
 """
 import argparse
 import contextlib
+import errno
 import hashlib
 import grp
 import http.cookiejar
@@ -22,6 +23,7 @@ import signal
 import socket
 import ssl
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -85,6 +87,8 @@ SAFE_REJECTIONS = {
     "EnvironmentFile must use the supported literal non-secret settings only.": "runtime_environment_literal_rejected",
     "Only production local-socket deployment with disabled providers is supported.": "runtime_environment_mode_rejected",
     "Runtime secrets must use file references.": "runtime_environment_secret_reference_missing",
+    "New private backup directory ACL could not be normalized.": "new_backup_default_acl_rejected",
+    "New private backup directory metadata changed during creation.": "new_backup_directory_metadata_changed",
 }
 
 
@@ -302,6 +306,41 @@ def failure_diagnostics(resources, failure):
     return report
 
 
+def acl_wire_summary(raw):
+    """Project Linux ACL version/tags/permissions; never export identity fields."""
+    result = {"byte_count": min(len(raw), 65536)}
+    if len(raw) < 4 or len(raw) > 65536 or (len(raw) - 4) % 8:
+        result["valid_wire_shape"] = False
+        return result
+    version, = struct.unpack_from("<I", raw)
+    result.update(version=version if version == 2 else None, valid_wire_shape=version == 2,
+                  entry_count=(len(raw) - 4) // 8)
+    if version != 2:
+        return result
+    tags = {1, 2, 4, 8, 16, 32}
+    result["entries"] = []
+    for offset in range(4, min(len(raw), 4 + 128 * 8), 8):
+        tag, permissions = struct.unpack_from("<HH", raw, offset)
+        result["entries"].append({"tag": tag if tag in tags else None,
+                                  "permissions": permissions if permissions <= 7 else None})
+    result["entries_truncated"] = result["entry_count"] > 128
+    return result
+
+
+def owned_acl_diagnostics(path):
+    result = {}
+    for label, name in (("default", "system.posix_acl_default"), ("access", "system.posix_acl_access")):
+        try:
+            raw = os.getxattr(path, name, follow_symlinks=False)
+            result[label] = {"present": True, **acl_wire_summary(raw)}
+        except OSError as failure:
+            result[label] = {"present": False} if failure.errno == errno.ENODATA else {
+                "present": None, "unavailable": "unsupported" if failure.errno in {errno.ENOTSUP, errno.EOPNOTSUPP} else "read_failed"}
+        except AttributeError:
+            result[label] = {"present": None, "unavailable": "unsupported"}
+    return result
+
+
 def restore_path_diagnostics(paths):
     """Only owned restore-path metadata escapes; names and contents stay private."""
     selected = list(paths.items())
@@ -325,7 +364,8 @@ def restore_path_diagnostics(paths):
             info = path.lstat()
             result.append({"label": label, "uid": info.st_uid, "gid": info.st_gid,
                 "mode": oct(stat.S_IMODE(info.st_mode)), "nlink": info.st_nlink,
-                "directory": stat.S_ISDIR(info.st_mode), "regular_file": stat.S_ISREG(info.st_mode)})
+                "directory": stat.S_ISDIR(info.st_mode), "regular_file": stat.S_ISREG(info.st_mode),
+                "acl": owned_acl_diagnostics(path)})
         except OSError:
             result.append({"label": label, "unavailable": True})
     return result
@@ -764,7 +804,7 @@ class Fixture:
             "GRANT ALL PRIVILEGES ON `" + target + "`.* TO '" + account + "'@'localhost';")
         require(self.resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='" + target + "';") == "0", "Restore target was not empty")
         output = self.private / ("restore-backups-" + secrets.token_hex(4))
-        output.mkdir(mode=0o700)
+        self.executor.create_backup_directory(str(output), self.executor.updater._Trust())
         self.resources.restore_paths = {"private_parent": self.private, "backup_output": output,
             "backup_credentials": Path(self.spec["backup_client_config"])}
         native = self.executor.Native(self.spec)

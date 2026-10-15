@@ -63,12 +63,15 @@ printf 'PASS: authenticated Ubuntu libraries and isolated Nginx executable prepa
 # suites. These two root-owned fixtures are loaded for inspection, never started.
 # The source module is imported only by the ordinary runner Python interpreter.
 python3 -I - "$controller_dir/../scripts/core-operation.py" "$fixture_root" <<'PYHOOKSMOKE'
+import errno
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -93,6 +96,90 @@ spec = importlib.util.spec_from_file_location('native_prepare_hook_smoke', sourc
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+
+def private_backup_acl_smoke(module, fixture_root):
+    report = {'passed': False, 'phase': 'create-owned-private-root', 'acl_supported': False,
+              'legacy_file_mode': None, 'private_file_mode': None,
+              'new_directory_mode': None, 'new_default_acl_absent': None,
+              'plain_private_creation_passed': False, 'owned_paths_removed': False,
+              'global_acl_mutations': False, 'umask_restored': False}
+    root = None
+    root_identity = None
+    previous_umask = os.umask(0o077)
+    try:
+        root = Path(tempfile.mkdtemp(prefix='aster-backup-acl-', dir=fixture_root))
+        root_identity = root.lstat()
+        require(root_identity.st_uid == os.geteuid() and stat.S_ISDIR(root_identity.st_mode) and
+                stat.S_IMODE(root_identity.st_mode) == 0o700, 'private_acl_root_metadata_mismatch')
+        parent = root / 'parent'
+        parent.mkdir(mode=0o700)
+        parent.chmod(0o700)
+        default_acl = struct.pack('<I', 2) + b''.join(struct.pack('<HHI', tag, 7, 0xffffffff) for tag in (1, 4, 32))
+        report['phase'] = 'seed-owned-parent-default-acl'
+        try:
+            os.setxattr(parent, 'system.posix_acl_default', default_acl, follow_symlinks=False)
+            require(os.getxattr(parent, 'system.posix_acl_default', follow_symlinks=False) == default_acl,
+                    'private_acl_seed_not_observed')
+            report['acl_supported'] = True
+            report['acl_seed_byte_count'] = len(default_acl)
+            report['acl_seed_version'] = 2
+        except OSError as failure:
+            require(failure.errno in {errno.EOPNOTSUPP, errno.ENOTSUP}, 'private_acl_seed_failed')
+        parent.chmod(0o700)
+        def create_mode(path):
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666)
+            try:
+                return stat.S_IMODE(os.fstat(descriptor).st_mode)
+            finally:
+                os.close(descriptor)
+        if report['acl_supported']:
+            report['phase'] = 'observe-real-legacy-inheritance'
+            legacy = parent / 'legacy'
+            legacy.mkdir(mode=0o700)
+            legacy.chmod(0o700)
+            report['legacy_file_mode'] = oct(create_mode(legacy / 'probe'))
+            require(report['legacy_file_mode'] == '0o666', 'private_acl_legacy_inheritance_not_reproduced')
+        report['phase'] = 'verify-actual-private-backup-helper'
+        target = parent / 'private'
+        module.create_backup_directory(str(target), module.updater._Trust(owner=os.geteuid(), ancestor=0))
+        report['new_directory_mode'] = oct(stat.S_IMODE(target.lstat().st_mode))
+        try:
+            os.getxattr(target, 'system.posix_acl_default', follow_symlinks=False)
+            report['new_default_acl_absent'] = False
+        except OSError as failure:
+            if failure.errno == errno.ENODATA:
+                report['new_default_acl_absent'] = True
+            else:
+                require(not report['acl_supported'] and failure.errno in {errno.EOPNOTSUPP, errno.ENOTSUP},
+                        'private_acl_absence_not_verified')
+        report['private_file_mode'] = oct(create_mode(target / 'probe'))
+        report['plain_private_creation_passed'] = report['new_directory_mode'] == '0o700' and report['private_file_mode'] == '0o600'
+        require(report['plain_private_creation_passed'] and
+                (not report['acl_supported'] or report['new_default_acl_absent'] is True), 'private_acl_helper_not_private')
+        report['passed'] = True
+        report['phase'] = 'complete'
+    except Exception:
+        # The fixed phase and observed modes are public; exceptions stay private.
+        pass
+    finally:
+        current_umask = os.umask(previous_umask)
+        report['umask_restored'] = True
+        report['umask_unchanged_during_smoke'] = current_umask == 0o077
+        try:
+            if root is not None and root_identity is not None:
+                now = root.lstat()
+                require((now.st_dev, now.st_ino, now.st_uid) == (root_identity.st_dev, root_identity.st_ino, os.geteuid()) and
+                        stat.S_ISDIR(now.st_mode) and stat.S_IMODE(now.st_mode) == 0o700,
+                        'private_acl_cleanup_refuses_changed_root')
+                shutil.rmtree(root)
+                report['owned_paths_removed'] = not os.path.lexists(root)
+        except Exception:
+            report['owned_paths_removed'] = False
+        report['passed'] = report['passed'] and report['owned_paths_removed'] and report['umask_unchanged_during_smoke']
+        print('NATIVE_PRIVATE_BACKUP_ACL_SMOKE_JSON=' + json.dumps(report, sort_keys=True), flush=True)
+    require(report['passed'], 'actual_private_backup_acl_smoke_failed')
+
+private_backup_acl_smoke(module, sys.argv[2])
 diagnostics = {'calls': [], 'last_call': 'not-started', 'rejection': 'none'}
 def safe_reply_shape(raw, call, unit):
     report = {'json_valid': False}

@@ -109,6 +109,43 @@ cleanup() { [[ -z "$staging" ]] || rm -rf -- "$staging"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# A default ACL can override umask when files are created. Clear it only on
+# this new private staging directory before writing any backup contents.
+if ! python3 - "$staging" 2>/dev/null <<'PY'
+import errno
+import os
+import stat
+import sys
+
+try:
+    descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(descriptor)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise OSError("Unexpected private staging directory metadata")
+        absent = {errno.ENODATA, errno.EOPNOTSUPP}
+        try:
+            os.removexattr(descriptor, "system.posix_acl_default")
+        except OSError as failure:
+            if failure.errno not in absent:
+                raise
+        try:
+            os.getxattr(descriptor, "system.posix_acl_default")
+        except OSError as failure:
+            if failure.errno not in absent:
+                raise
+        else:
+            raise OSError("Private staging directory still has a default ACL")
+        os.fchmod(descriptor, 0o700)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+except OSError:
+    raise SystemExit(1) from None
+PY
+then
+  fail 'New backup staging directory could not be made private.'
+fi
 name=${staging##*/}
 final="$output_dir/${name#.}"
 final=${final%.partial}
