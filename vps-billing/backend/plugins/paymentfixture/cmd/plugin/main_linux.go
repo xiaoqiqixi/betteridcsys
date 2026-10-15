@@ -104,8 +104,11 @@ func fixtureKey(directory string) ([]byte, error) {
 	file := os.NewFile(uintptr(fd), "payment-fixture-key")
 	defer file.Close()
 	var info syscall.Stat_t
-	if syscall.Fstat(fd, &info) != nil || info.Mode&syscall.S_IFMT != syscall.S_IFREG || info.Mode&0077 != 0 ||
+	if syscall.Fstat(fd, &info) != nil || info.Mode&syscall.S_IFMT != syscall.S_IFREG ||
 		info.Nlink != 1 || info.Uid != 0 && info.Uid != uint32(os.Geteuid()) || info.Size < 32 || info.Size > 4096 {
+		return nil, pluginapi.ErrInvalid
+	}
+	if !fixtureKeyAccess(fd, info, uint32(os.Geteuid())) {
 		return nil, pluginapi.ErrInvalid
 	}
 	secret, err := io.ReadAll(io.LimitReader(file, 4097))

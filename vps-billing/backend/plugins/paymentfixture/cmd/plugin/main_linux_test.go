@@ -19,6 +19,12 @@ func TestFixtureKeyReadsOnlyPrivateCredential(t *testing.T) {
 	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("private credential rejected: length=%d err=%v", len(got), err)
 	}
+	if err = os.Chmod(path, 0400); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = fixtureKey(directory); err != nil || !bytes.Equal(got, want) {
+		t.Fatal("read-only private credential rejected", err)
+	}
 	for _, directory := range []string{"", ".", "/tmp/../tmp", "/tmp\n"} {
 		if got, err := fixtureKey(directory); err == nil || len(got) != 0 {
 			t.Fatalf("invalid credential directory accepted: %q", directory)
@@ -35,6 +41,12 @@ func TestFixtureKeyRejectsUnsafeFiles(t *testing.T) {
 				return err
 			}
 			return os.Chmod(path, 0644)
+		},
+		"group readable without worker ACL": func(path string) error {
+			if err := os.WriteFile(path, bytes.Repeat([]byte{'a'}, 32), 0600); err != nil {
+				return err
+			}
+			return os.Chmod(path, 0440)
 		},
 		"symlink": func(path string) error {
 			if err := os.WriteFile(path+"-target", bytes.Repeat([]byte{'a'}, 32), 0600); err != nil {

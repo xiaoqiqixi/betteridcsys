@@ -2,7 +2,21 @@
 
 各项结果绑定实际执行时的提交、日期和 GitHub run；后续源码或界面修改不沿用旧提交的通过结论。
 
-## Core 0.5.3：未发行的界面与文档迭代
+## Core 0.5.3：支付运行时接入与界面复验
+
+支付实现从 [`c9b86af`](https://github.com/xiaoqiqixi/betteridcsys/commit/c9b86af11a4c99531dd38c358b60ce371a67ef7f) 引入独立 `aster.payment/1` 插槽、受保护审批、商户身份与程序摘要、合成插件，以及持久化支付尝试和原子结算。Core 根据自身订单、账单、金额、币种精度和所有权核对已验签证据，事务内处理重放、交易唯一性、财务状态、审计和 outbox；取消与支付尝试互斥。渠道验签程序仍是经过管理员批准的信任边界，仓库没有真实第三方支付渠道。
+
+[`207e9da`](https://github.com/xiaoqiqixi/betteridcsys/commit/207e9dada4b1da518e4392ff31c7f3fe4dc5f98b) 进一步让审批读取、握手检查与支付 RPC 共用 8 个并发名额。程序哈希读取本身不可中途取消，12 秒期限约束 RPC。支付结果不确定或会话过期不会释放尝试，也不能据此取消订单；渠道查询、撤销、退款和特定渠道应答格式仍需后续明确设计，见[支付插件指南](PAYMENT_PLUGINS.md)。
+
+该提交的 [CI 38720882187](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38720882187) 已完成真实 MySQL 全量回归、前端检查、部署脚本回归、Go 漏洞检查和官方元数据检查。原生 API／Nginx HTTPS 以及 SMTP 独立进程的 9 项场景通过，但合成支付进程启用后的握手返回 503，完整 CI **失败**；支付结算、备份恢复和浏览器阶段不能据此记为通过。该轮自有资源清理成功。后续修复的实际结果须绑定其自己的精确提交与运行，不改写这次失败记录。
+
+随后源码复核发现合成插件对 systemd 凭据权限的兼容缺陷：[systemd v255](https://github.com/systemd/systemd/blob/v255/src/core/exec-credential.c) 通过专属用户 ACL 交付只读凭据，ACL mask 会影响 `stat` 的组权限位。修复须验证仅授予当前 worker 的只读 ACL，继续拒绝普通组可读或授予其他身份的文件，不能简单放宽为任意 `0440`。这项兼容修复仍须由真实 systemd 验收确认。
+
+[`4381287`](https://github.com/xiaoqiqixi/betteridcsys/commit/43812876eba53e9086fa7e5f5c8d73aaa4788c4c) 修复 Mac 反馈的页头高度、路由滚动、币种标签、按钮样式与财务副标题。自动测试和截图元数据均不能替代 Mac 人工视觉复验；正式 0.5.3 发布仍等待该结论。
+
+现有正式 Release 仅保留 [Core v0.5.2](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.2) 和 [SMTP smtp-v1.1.0](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/smtp-v1.1.0)，其资产未覆盖，Git 标签保留。下方旧记录中的“清理尚未执行”和编译期支付示例描述属于当时状态，不代表当前主干实现或当前 Release 集合。
+
+## Core 0.5.3：先前界面与文档迭代（历史记录）
 
 已发布 Core 0.5.2 的标签和六资产保持固定；主干版本进入尚未发行的 0.5.3。界面修复包括三主题颜色与焦点、移动导航键盘及滚动、财务表单名称和错误关联、SMTP UTF-8 校验反馈、账单刷新生命周期、准确的选购文案，以及五种列表的已载入／可见范围和筛选 CSV 提示。财务通用服务器拒绝不再声称存在字段标注。README 和安装升级说明按实际版本与操作结果重写；支付文档区分编译期接口、已有结账、回调校验谓词与仍须集成的持久化结算，不把 SMTP 运行时协议冒作支付接口。
 

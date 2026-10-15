@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 HERE = Path(__file__).resolve().parent
@@ -31,6 +32,48 @@ UPDATER = load("payment_native_updater", HERE.parent / "scripts/update-manager.p
 
 
 class PaymentNativeGuards(unittest.TestCase):
+    def test_failure_metadata_captures_live_worker_and_credential_modes_without_payloads(self):
+        fixture = NATIVE.NativePaymentAcceptance.__new__(NATIVE.NativePaymentAcceptance)
+        fixture.worker_unit = "aster-ci-payment-1-1-1.service"
+        fixture.socket = Path("/run/aster-ci-1-1-1/payment/plugin.sock")
+        fixture.config = Path("/etc/aster-ci-1-1-1")
+        marker = b"synthetic-sensitive-output-that-must-not-be-published"
+        digest = b"a" * 64
+        def response(arguments, **options):
+            self.assertEqual(arguments[:2], ["sudo", "-n"])
+            self.assertEqual(options["cwd"], "/")
+            self.assertLessEqual(options["timeout"], 5)
+            if arguments[2:4] == ["systemctl", "show"]:
+                raw = (b"LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nMainPID=1234\nNRestarts=0\n"
+                       b"ExecMainCode=0\nExecMainStatus=0\nStatusErrno=0\nUnknown=" + marker + b"\n")
+            elif arguments[2] == "stat":
+                raw = b"c1b0 2003 2004 660 1\n" if arguments[-1] == str(fixture.socket) else b"8120 0 0 440 1\n"
+            elif arguments[2] == "cat":
+                raw = b"Name:\t" + marker + b"\nUid:\t2003\t2003\t2003\t2003\n"
+            elif arguments[2] == "sha256sum":
+                raw = digest + b"  " + marker + b"\n"
+            else:
+                self.fail("Unexpected diagnostic command")
+            return subprocess.CompletedProcess(arguments, 0, raw, marker)
+        with patch.object(NATIVE.subprocess, "run", side_effect=response):
+            value = fixture.failure_diagnostics()
+        self.assertEqual(value["service"]["MainPID"], 1234)
+        self.assertEqual(value["process_uids"], [2003] * 4)
+        self.assertEqual(value["process_executable_sha256"], digest.decode())
+        self.assertEqual(value["socket"]["kind"], "socket")
+        self.assertEqual(value["credential_file"]["mode"], "440")
+        self.assertEqual(value["credential_file"]["links"], 1)
+        self.assertNotIn(marker.decode(), str(value))
+
+    def test_failed_metadata_probe_stays_bounded_and_does_not_require_created_credential(self):
+        fixture = NATIVE.NativePaymentAcceptance.__new__(NATIVE.NativePaymentAcceptance)
+        fixture.worker_unit = "aster-ci-payment-1-1-1.service"
+        fixture.socket = Path("/run/aster-ci-1-1-1/payment/plugin.sock")
+        fixture.config = Path("/etc/aster-ci-1-1-1")
+        with patch.object(NATIVE.subprocess, "run", side_effect=subprocess.TimeoutExpired("fixed-probe", 5)):
+            value = fixture.failure_diagnostics()
+        self.assertEqual(value, {"socket": {"status": "unavailable"}, "credential_source": {"status": "unavailable"}, "service": {}})
+
     def test_missing_opt_in_or_non_hosted_environment_reject_before_output_creation(self):
         with tempfile.TemporaryDirectory(prefix="aster-payment-guard-") as directory:
             output = Path(directory) / "evidence"

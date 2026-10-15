@@ -269,6 +269,68 @@ class NativePaymentAcceptance(shared.NativePluginAcceptance):
                    shared.WRONG_UID_PROBE, self.socket)
         self.checks.append("distinct_api_smtp_payment_uids_verified_fd_exec_private_credential_scrubbed_environment_wrong_peer_denied")
 
+    def failure_diagnostics(self):
+        """Collect fixed metadata before close stops the owned worker.
+
+        Neither process output nor environment/credential contents are published.
+        A failed probe must not hide the original acceptance failure or prevent
+        the parent's registered service/path cleanup.
+        """
+        def probe(*arguments):
+            try:
+                result = subprocess.run(["sudo", "-n", *map(str, arguments)], cwd="/", capture_output=True, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            return result.stdout if result.returncode == 0 and len(result.stdout) <= 65536 else None
+
+        def metadata(path):
+            raw = probe("stat", "--format=%f %u %g %a %h", "--", path)
+            if raw is None:
+                return {"status": "unavailable"}
+            fields = raw.decode("ascii", errors="replace").strip().split()
+            if len(fields) != 5 or not re.fullmatch(r"[a-f0-9]{1,8}", fields[0]) or not all(re.fullmatch(r"[0-9]{1,20}", item) for item in fields[1:]) or not re.fullmatch(r"[0-7]{3,4}", fields[3]):
+                return {"status": "unavailable"}
+            mode = int(fields[0], 16)
+            kind = "socket" if stat.S_ISSOCK(mode) else "regular" if stat.S_ISREG(mode) else "directory" if stat.S_ISDIR(mode) else "other"
+            return {"status": "available", "kind": kind, "uid": int(fields[1]), "gid": int(fields[2]),
+                    "mode": fields[3], "links": int(fields[4])}
+
+        result = {"socket": metadata(self.socket), "credential_source": metadata(getattr(self, "protected_key", self.config / "payment-fixture-key"))}
+        properties = ("LoadState", "ActiveState", "SubState", "Result", "MainPID", "NRestarts", "ExecMainCode", "ExecMainStatus", "StatusErrno")
+        arguments = ["systemctl", "show", self.worker_unit]
+        for name in properties:
+            arguments.extend(("-p", name))
+        raw = probe(*arguments)
+        service = {}
+        enums = {
+            "LoadState": {"loaded", "not-found", "bad-setting", "error", "masked"},
+            "ActiveState": {"active", "inactive", "activating", "deactivating", "failed", "reloading", "maintenance"},
+            "SubState": {"running", "dead", "failed", "start", "start-pre", "start-post", "exited", "auto-restart", "auto-restart-queued", "stop", "stop-sigterm", "stop-sigkill", "stop-post"},
+            "Result": {"success", "exit-code", "signal", "core-dump", "timeout", "watchdog", "resources", "protocol", "start-limit-hit", "oom-kill"},
+        }
+        if raw is not None:
+            for line in raw.decode("ascii", errors="replace").splitlines():
+                key, separator, value = line.partition("=")
+                if not separator or key not in properties:
+                    continue
+                if key in enums:
+                    service[key] = value if value in enums[key] else "other"
+                elif re.fullmatch(r"[0-9]{1,10}", value):
+                    service[key] = int(value)
+        result["service"] = service
+        pid = service.get("MainPID", 0)
+        if isinstance(pid, int) and 1 < pid < 1 << 31:
+            raw = probe("cat", "/proc/" + str(pid) + "/status")
+            uid = re.search(rb"(?m)^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", raw or b"")
+            if uid is not None:
+                result["process_uids"] = [int(item) for item in uid.groups()]
+            raw = probe("sha256sum", "/proc/" + str(pid) + "/exe")
+            digest = (raw or b"").split(maxsplit=1)
+            if digest and re.fullmatch(rb"[a-f0-9]{64}", digest[0]):
+                result["process_executable_sha256"] = digest[0].decode("ascii")
+            result["credential_file"] = metadata(Path("/proc") / str(pid) / "root/run/credentials" / self.worker_unit / "payment-fixture-key")
+        return result
+
     def durable_http(self):
         customer = CustomerAPI(self.port, str(self.scratch / "ca.pem"), self.accounts)
         order, invoice = customer.create_order()
@@ -415,6 +477,8 @@ def main():
                       "stage": shared.DIAGNOSTICS.stage, "error_class": type(failure).__name__,
                       "last_command": shared.DIAGNOSTICS.last_command, "last_api": shared.DIAGNOSTICS.last_api,
                       "external_payment_or_email": False, "production_deployment": False}
+        if acceptance is not None:
+            diagnostic["worker_before_stop"] = acceptance.failure_diagnostics()
         (args.evidence / "payment-native-failure.json").write_text(json.dumps(diagnostic, sort_keys=True, indent=2) + "\n")
         print("PAYMENT_NATIVE_FAILURE_JSON=" + json.dumps(diagnostic, sort_keys=True))
         return 1
