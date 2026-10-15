@@ -2,15 +2,113 @@
 
 各项结果绑定实际执行时的提交、日期和 GitHub run；后续源码或界面修改不沿用旧提交的通过结论。
 
-## Core 0.5.1：安装准备与未付取消
+## Core 0.5.1：安装准备、只读预检与未付取消
 
-本轮新增主机自动组装、只读预检、机器备份元数据及受限未付订单取消。实施范围见 [REFERENCE_SCOPE.md](REFERENCE_SCOPE.md)。首轮源码 `93f6d994f4b4fd9e8623ae2d81a655e005cecf05` 的 [CI 38668093106](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38668093106) 在 Go 数据库回归失败，没有放行发布：取消异常状态测试被先前损坏夹具的全量列表读取干扰，迁移前缀 3 的结构判定也未通过。后续修复必须以新提交完整运行证明，不把旧失败改为通过。实际构建另发现 GNU 长文件名与受限解包器的兼容问题，当前新增安全兼容与 ustar 分发修复。当前不填未来通过或发布状态，完成后以实际运行和资产核验补齐。历史 0.5.0 和更早结果保持下方原记录，不能代替本轮验收。
+[Core v0.5.1](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.1) 已于 **2026-10-15 02:57:17 UTC** 正常公开，Release ID **413373046**，非草稿、非预发布，latest 指向 `v0.5.1`。标签与发布来源均为 `91cc3c18e50b51f01ca0003e3d18de3ade69f25d`（下称 F）；[源码完整 CI 38672137982](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672137982)、[标签构建 38672929446](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672929446) 和[发布 38673669158](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38673669158) 均完成成功，相关全部 job/步骤通过。发布仅生成正常发行资产，没有执行部署。
 
-修正源码 `8a0ee4d34f76dd6495b595a8f7d7c38d2a040d98` 的 [CI 38669136092](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669136092) 通过了真实 MySQL 回归及 305 项前端测试，但随后两项未知插件配置验收因提前校验改变错误信息而失败，原生与浏览器验收未执行到。现恢复统一的 integration configuration 诊断，保留数据库操作前的拒绝检查；本地九项配置验收和 server 单元检查通过，仍须新提交完整 CI 放行。
+### 实施范围与边界
 
-源码 `54ec61a11ee104dbfcb8e8c2e4fb7fddec9123d3` 的 [CI 38669842637](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669842637) 完成 516 个 Go PASS、0 失败/跳过、305 项前端和 329 项 Python 检查，但原生公开准备测试在下载前被过窄的 GitHub 凭据格式限制阻断；自有资源清理成功，后续原生与浏览器结论仍未形成。现按 GitHub 官方变更说明改为有界不透明 Bearer 值，保留文件保护、固定目的地和重定向去凭据规则；不读取、记录或解析真实临时令牌。修正后的完整结果须由新提交重新证明。
+本轮复用既有系统，补齐明确版本的主机准备器 `core-manager.py prepare`、只读主机事实 `doctor`、生产 CLI 的 `-preflight` / `-schema-status`、自动机器备份元数据 `BACKUP.json`，以及权限和状态受限的未付订单取消。取消只在付款适配器禁用、订单/唯一配对账单和未处理创建事件一致、无未知服务或处理历史等条件下原子执行，同时作废配对账单并保留金额、历史快照和审计；不能用于退款、修改已付状态或撤销真实开通。
 
-源码 `e7ad7a5dde202f2fa96fc5150ee194c4a5714675` 的 [CI 38671113923](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38671113923) 通过 559 个 Go PASS、0 失败/跳过、305 项前端、333 项 Python 回归、22 项原生 HTTPS 和 9 项独立插件检查，运行中 API 摘要与该提交 raw 程序一致。原生备份因验收夹具将提取后的公共资源以 root 私有权限复制，阻断普通备份身份读取 BUILD/SQL 而失败，恢复与浏览器未执行；自有资源已清理。现按安装契约修正夹具完整公共目录权限，保留生产备份检查；每阶段脱敏事实及时记入日志，后续失败不抹掉已完成阶段的证据。最终完整验收仍待新提交。
+全新安装默认 CNY、运营者配置独立币种/价格、升级保留既有 USD 与历史快照的规则保持不变；没有汇率或自动换汇。当前仍为七项迁移、14 张基础表，本轮没有新增迁移或破坏性降级。
+
+`prepared` 只表示经官方来源/资产验证的新完整目录已准备。prepare 不执行包内程序、不切 `current`、不启停服务、不创建身份/秘密、数据库或首位管理员；`manifests/PREPARED.json` 是明确标记的本地准备回执，不冒充官方资源清单或独立发布者签名。首次使用须审阅新资源中的工具和摘要，旧 0.5.0 检查器的受信清单不会自行升级或放宽。`doctor` 只读主机事实，不运行程序、不连接数据库或占用端口；数据库预检只读且不等于服务、业务、完整授权或恢复已验证。系统/数据库身份、秘密、迁移、首次管理员、systemd/Nginx 与真实 HTTPS 切换仍由主机管理员明确执行。Web 更新入口继续只做版本检查与审计交接，主机 updater 继续只做 stage/status；没有 Web root 权限、完整安装/升级执行器、自动应用或数据库自动回滚。
+
+### F 的完整源码 CI：通过
+
+[主检查 116217489488](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672137982/job/116217489488)、[Go 扫描 116217489637](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672137982/job/116217489637) 和[官方元数据 116217489641](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672137982/job/116217489641) 均完成成功。下表只使用 F 的实际日志和脱敏 JSON，不沿用失败候选或历史版本的结果：
+
+| 检查 | F 的实际结果 |
+|---|---|
+| Go / MySQL | race 559 个 PASS、0 个 FAIL、0 个 SKIP，含 158 个顶层测试及子测试；真实隔离 MySQL、vet、静态 Linux amd64 构建与依赖边界检查通过 |
+| 前端 | 12 个测试文件、305 项通过；类型、生产构建及格式检查通过；曾单独运行的 97 项为该 305 项中的子集，不重复累加 |
+| Python / 工具 | 编排 200、清单 8、插件管理 39、updater 44、Core 准备器 20、生产配置 9、回环安全/HTTP 14 项，共 334 项 required regressions 全部通过；再加原生 HTTPS 22、恢复后 HTTPS 22，共 378 项全部通过 |
+| 语法与供应链检查 | Shell/Python/工作流检查、mock 备份回归通过；npm audit 报告 0 vulnerabilities；Go 扫描实际报告受影响代码 0、导入包 0、依赖模块 19 项漏洞；19 项未发现被本项目代码调用，不等于模块完全无漏洞 |
+| 实际公开 Core prepare | 选中正常公开 Core **0.5.0**，源码 **`6be81aaed4868adb3c60b30accbfd87d0bb899c5`**；真实官方 Release/成功构建/来源/六资产完整性核验后得到 `prepared`，未执行所下载程序、未切活动版本，数据库和服务动作均为 `none` |
+| 只读主机与空库预检 | `HOST_DOCTOR_JSON` 为 `read_only_host_facts`；`PREFLIGHT_EMPTY_JSON` 为 schema 0、`empty_target_scope=base_tables`、表可见性已验证；预检后另断言 `information_schema.TABLES` 中该库的表/视图计数仍为 0；该断言不覆盖存储过程、事件等其他对象 |
+| 当前库预检 | `PREFLIGHT_CURRENT_JSON` 为 schema 7、管理员数 1、待迁移为空；七项已应用迁移 checksum 均验证 |
+| 备份与恢复 | `BACKUP_METADATA_JSON` 绑定实际 F 源码 BUILD、schema 7 和七项匹配预检的 checksum；源库与恢复库均为 14 张表，完整数据比较一致，恢复后 22 项 HTTPS 回归通过 |
+| 服务持久化与目录切换 | 重启前六项订单持久化；API 重启和同 schema 的 A→B→A 受控目录切换通过，不证明跨版本数据库降级 |
+| 独立 SMTP 插件 | 9 项检查、0 失败、0 跳过；11 阶段磁盘/存活 Core API 摘要均与 F raw API 一致，PID 不变，插件安装/升级/回退/受控崩溃过程中未重编或重启 Core |
+| 原生清理 | `test_exit_code=0`、`exit_code=0`、`owned_resources_removed=true`；runner 自有临时资源清理成功 |
+| 浏览器 | Chrome `155.0.8059.39`、要求 sandbox、固定 F 源码的脚本执行成功且清理成功；16 项截图文件名/大小/SHA-256 元数据有效，未下载或查看图片，不冒充人工视觉审查 |
+
+F 的实际 raw、磁盘及存活 API SHA-256 均为 `98db08567ec86c0e1d0745e94c6ead3a8c5c1ffbcf2378ed74afd553a53a9d7b`。实际公开 prepare 的对象是旧公开 Core 0.5.0，原生服务/备份/恢复的对象则是 F 源码现场构建的 Core 0.5.1；二者各有来源绑定，不能把旧版本 `prepared` 写成新版本已经安装。公开 prepare 使用经护栏确认的一次性 GitHub-hosted runner 和最小只读 token，不使用伪造 `PROVENANCE.json`，不执行下载的二进制，不据来源/完整性检查宣称存在独立发布者签名。
+
+五类新证据 `HOST_DOCTOR_JSON`、`PUBLIC_CORE_PREPARE_JSON`、`PREFLIGHT_EMPTY_JSON`、`PREFLIGHT_CURRENT_JSON`、`BACKUP_METADATA_JSON` 均在 F 对应阶段完成后实际输出。备份绑定的迁移版本 1–7 checksum 分别为：
+
+| 版本 | SHA-256 |
+|---:|---|
+| 1 | `820c7dd58337da334097016a5278f2e31919766c76de896dafe199f2319a353c` |
+| 2 | `43713837a1d1649f6011e0b7210ea063a03e5b308b71c17cf01120bf96f85fa8` |
+| 3 | `a934b302afadb514de6e792d86d401d32185c974f93296889ca891709999b14e` |
+| 4 | `8299e2463116256c84340cc578c209cde4685fd1972f636f5788b1014d397feb` |
+| 5 | `38db56389f071bf9a81b8885128930a8039eb1908c61e32fd70d910678ceb083` |
+| 6 | `60531806ef1ac55ce38bad09e95a3c03789bc46e2db7869f7c212a606381feab` |
+| 7 | `a4e073da363299a5c0f6d231219a30003d57afa33c0fdae2bc38e244b06ba5bf` |
+
+SMTP 原生场景为 `1.1.0 → 测试 1.1.1 → 1.1.0`，只接受两封回环 TLS 合成消息，未转发到外部；DATA 后受控崩溃保持“投递不确定”且不自动重发。测试 1.1.1 不构成正式插件发行，SMTP 1.1.0 正式资产没有更新。
+
+浏览器摘要本身不逐项枚举取消场景。对固定 F 源码的 `frontend/tests/e2e.mjs` 成功执行和源码复核，确认其客户/管理员真实 UI 取消调用（第 897/917 行，共用 helper 第 130 行）包含对话框校验、一次 POST、订单取消/账单作废、概览金额、服务保持、单条审计与幂等重放断言。浏览器运行于回环内存 demo，外部请求被阻断；不能据此替代原生持久化数据库回归或真实付款测试。
+
+### 失败迭代与修复依据
+
+保留失败和取消记录，不将后续修复回填为旧 run 成功：
+
+| 源码 / 运行 | 实际终态、根因及修复范围 |
+|---|---|
+| A `93f6d994f4b4fd9e8623ae2d81a655e005cecf05` / [38668093106](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38668093106) | 失败；Go 498 PASS、15 FAIL、0 SKIP，包含父/子测试，两个顶层失败。取消异常夹具在同一所有者下留下损坏邻居快照，12 个后续子场景在建立夹具时被全量订单读取提前阻断；修复夹具隔离/读取，不接受损坏数据。schema 前缀检查误把迁移 4 才引入的 `services_currency` 约束要求于前缀 3；按真实迁移生命周期修复，SQL/checksum 未改。前端/Python/原生/浏览器未执行到 |
+| B `8a0ee4d34f76dd6495b595a8f7d7c38d2a040d98` / [38669136092](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669136092) | 失败于生产配置冒烟；Go 516/0/0（154 顶层）、前端 305/12、Python 199+8+39+40+20 及 mock 备份通过。9 项启动拒绝测试中 2 项因错误文案不符失败：未知 provider 已在 DB 前拒绝，但返回 `invalid integration provider selection`，旧断言要求 `integration configuration`。C 恢复既有通用消息，早期拒绝不变。原生/公开 prepare/浏览器未执行到 |
+| C `54ec61a11ee104dbfcb8e8c2e4fb7fddec9123d3` / [38669842637](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38669842637) | 主回归通过，原生失败；Go 516/0/0（154 顶层）、前端 305/12、Python 329 全通过。实际源码 raw 包构建后，旧 GitHub token 格式限制误拒临时只读凭据，未进入公开版本选择/doctor/prepare、原生 preflight/HTTPS/备份/插件/浏览器。清理为 1/1、owned resources 已移除 |
+| D `cf908205781ec4a87552152c92f066aee36e3293` / [38670909306](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38670909306) | 实际终态 cancelled，主检查第 6 步期间取消，没有观察到测试失败或取得完整通过；独立扫描/元数据和 runner 清理成功。不把取消写成路径故障 |
+| E `e7ad7a5dde202f2fa96fc5150ee194c4a5714675` / [38671113923](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38671113923) | 主回归通过、原生备份失败；Go 559/0/0（158 顶层）、前端 305/12、Python 333、原生 HTTPS 22、插件 9/0/0 通过，API 重启/同 schema A→B→A 完成。公开 prepare 与预检断言执行，但失败前未打印实际选择版本/来源及新 JSON 正文，不能补造为预期 0.5.0。实际备份报 metadata 不可读/无效，恢复未执行到；清理 1/1、owned resources 已移除；npm/浏览器/该 run 工作流检查未执行到 |
+
+本轮实际资源双构建还发现历史归档兼容缺口：101 字节 npm 许可证完整路径会让 GNU tar 产生 `././@LongLink` 的 `L` 名称记录。读取器仅接受严格限长 ASCII、单一末尾 NUL、零填充、固定 marker/头部、立即匹配普通成员的历史形式；继续拒绝链式扩展、链接、PAX、稀疏记录、穿越、重复及资源内 ELF。新生产者改用 ustar 前缀格式。实际 A 资源 176 文件和旧 0.5.0 资源 174 文件通过同一受限解析 helper；F 的实际公开 prepare 另证明旧公开版本的完整来源/资产核验。归档恶意头部回归及独立复核的 33 个畸形变体全部拒绝，不把辅助复核数量累加到主套件。
+
+C 的 token 故障修复依据为实际读取的 [GitHub 2026-04-24 官方通知](https://github.blog/changelog/2026-04-24-notice-about-upcoming-new-format-for-github-app-installation-tokens/)：安装 token（包括 Actions）转为长度可变、约 520 字符的不透明格式。Go/Python 读取器现接受 1–4096 字节 RFC 6750 ASCII token，可有一个末尾 LF/CRLF，原始受限文件上限 4098 字节；不假定前缀或内部声明，不解析 JWT。私密文件属主/权限/链接、固定官方来源、重定向凭据隔离检查保持严格，没有查看或打印实际凭据。最大长度正向用例曾因本地根目录 UID 65534 不满足原安全夹具而跳过 1 项；F 托管 Go 回归实际 0 SKIP，未放宽根目录信任。
+
+E 的固定 `/releases/latest` 读取路径缺口在 D 相关步骤执行前离线发现；只增加该固定官方仓库的只读动作并检验精确 URL/MAX_JSON。query、额外路径、列表或其他动作继续拒绝，生产 prepare 仍必须显式版本，不增加 latest 自动安装或任意 URL/执行器。
+
+E 的备份失败由实际资源权限确认：umask 077 加 `tar --no-same-permissions` 后得到 0700/0600，再由 sudo 复制使 BUILD/SQL 成为 root 私密文件，普通备份身份无法读取；实际 BUILD、七项 SQL、14 张表内容有效。F 只修正 CI 完整公开资源夹具的模式（目录 0755、文件 0644、六个批准程序/脚本 0755），以普通 runner 实测 BUILD/SQL 可读，并增加真实权限回归。生产备份保护不放宽；新 JSON 改为阶段完成即输出，避免后续失败掩盖已完成事实。F 完整恢复通过另有实际证据，不把 E 的失败改写为成功。
+
+较早本地全量 Go 曾为 366 PASS、121 DB SKIP、0 FAIL，只作辅助工作区记录；F 真实 MySQL 的 559/0/0 才是冻结源码门禁。四份部署指南曾检查 50 个本地链接/锚点和 24 个 shell 片段；本地静态检查不能替代用户主机部署。
+
+### F 的本地重复构建：已完成
+
+F 两次独立 Core 构建五项未封装输出对应字节一致；176 个资源文件的源码复制与该 Git 提交匹配，含七个 SQL，资源内 ELF 为 0。以下为本地实际摘要与大小；F 原生运行的磁盘/存活 API 摘要另经 CI 记录，与该 raw API 一致，与下方正式 Release 六资产核验分别记录：
+
+| F 的本地未封装产物 | 大小（字节） | 实际 SHA-256 |
+|---|---:|---|
+| `aster-api-0.5.1-linux-amd64` | 8921248 | `98db08567ec86c0e1d0745e94c6ead3a8c5c1ffbcf2378ed74afd553a53a9d7b` |
+| `aster-plugin-host-0.5.1-linux-amd64` | 4853920 | `446b763589036d2221ad309ac9c442127bb5e710b1fb90d21b3403ce3a4c6dd4` |
+| `aster-core-0.5.1-linux-amd64-resources.tar.gz` | 340898 | `23dd65a22503371d22050d96dca24258bc3e3bd119ab32d12c649047cf0c9ee4` |
+
+五项本地输出为 API、插件宿主、资源、BUILD 与本地 SHA256SUMS，没有真实 `PROVENANCE.json`。实际标签构建另完成两次干净构建、两次来源封装，封装前和封装后的递归字节比较均通过；正式封装绑定实际标签构建 run。两种环境各自的双构建字节一致，不声明跨环境资源归档/BUILD 字节一致，也不把来源证明写成独立发布者签名或用户主机安装证明。
+
+### 正式发行六资产与构建边界
+
+实际标签构建 [job 116219973662](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38672929446/job/116219973662) 重新完整通过 Go 559/0/0、前端 305/12、Python 378、插件 9/0/0、14/14 表数据一致恢复、sandbox 浏览器 16 项截图元数据及零退出清理；其公开 prepare 实际仍选发布前已公开的 Core 0.5.0。两次构建/封装比较及上传成功后，[发布 job 116222282969](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38673669158/job/116222282969) 校验策略和来源并成功公开 Release 413373046。发布后文档提交的验证状态以该提交的 GitHub commit status 与外部交接记录为准；源码/标签运行中的旧版 prepare 结果不冒充公开 0.5.1 的准备结果。
+
+以下为实际正常公开 Release 的六资产大小与 GitHub API SHA-256；安装核验以这些正式发行值及对应真实来源为准：
+
+| 正式资产 | 大小（字节） | 公开 SHA-256 |
+|---|---:|---|
+| `aster-api-0.5.1-linux-amd64` | 8921248 | `98db08567ec86c0e1d0745e94c6ead3a8c5c1ffbcf2378ed74afd553a53a9d7b` |
+| `aster-plugin-host-0.5.1-linux-amd64` | 4853920 | `446b763589036d2221ad309ac9c442127bb5e710b1fb90d21b3403ce3a4c6dd4` |
+| `aster-core-0.5.1-linux-amd64-resources.tar.gz` | 340896 | `899565236ac310c2a45c77f44e2bb7fff6e20a6529083e223a10f884e6725bcf` |
+| `BUILD.json` | 6980 | `7cf46cfee6e424c632ecd90afc092454da8f6f6cc626ef73c48db480d04b33d9` |
+| `PROVENANCE.json` | 3480 | `69f21c8f3ec97399fdb0fc1e1a4ad36214264f1d2b0cbb381d1b506b236736c2` |
+| `SHA256SUMS` | 467 | `880769cc47e4a135b0888262a4835524f6b30945d0fd7b4da811b30b99d909fe` |
+
+两个 raw ELF 的公开摘要与本地核验字节一致；其中 API 摘要还与原生验收的磁盘及存活程序一致。公开资源为 `899565236ac310c2a45c77f44e2bb7fff6e20a6529083e223a10f884e6725bcf` / 340896 字节，和本地资源 `23dd65a22503371d22050d96dca24258bc3e3bd119ab32d12c649047cf0c9ee4` / 340898 字节不同；BUILD 也不同。本地 BUILD 记录 npm `11.9.0`，实际标签构建日志记录 npm `11.17.0`，工具元数据环境不同，因此只声明各环境内部的重复构建一致，不声称跨环境资源或 BUILD 完全相同。
+
+本轮仅发布 Core `v0.5.1`，仍为原始 API、插件宿主、资源归档及三项元数据共六资产；SMTP `smtp-v1.1.0` 仍为五资产，没有重发或修改。独立公开库存核验确认六个既有 Release（`v0.3.0-rc.3`、`v0.3.0-rc.4`、`v0.4.0`、`v0.5.0`、`smtp-v1.0.0`、`smtp-v1.1.0`）及全部原附件保持不变。Git 源码和 LICENSE 保留，没有手动附加新源码包，也没有下载被拒绝的 Actions 候选 ZIP 或截图。
+
+### 参考阅读与未验证范围
+
+实际参考范围见 [REFERENCE_SCOPE.md](REFERENCE_SCOPE.md)。用户指定的 `https://www.idcsmart.com/wiki_list/479.html` 没有读到内容：浏览器工具不可访问，之后一次普通请求遇到网络隧道 403，已停止且没有重试绕过。官方安装、下载、升级、迁移恢复、订单、账单章节已分别实际读取；相关章节不能写成已读取原 479 页面，也不据产品页面推导对方内部安全实现或本项目验收结论。
+
+全部验证限 GitHub-hosted Ubuntu 24.04 隔离环境和合成数据，浏览器为回环内存 demo。没有用户服务器或宝塔实际面板部署，没有 Mac、真实付款/退款、外部邮件、VPS/控制器动作、生产容量或人工截图视觉验收。私有 CA 的 localhost HTTPS 不证明公共证书签发/续期；API 重启和同 schema A→B→A 不证明数据库进程/整机重启、真实跨版本降级、独立实例/异地恢复、PITR、断电持久性或生产 RPO/RTO。预检只证明其限定配置、可见基础表和已知迁移前缀，不能证明完整业务/授权/运行时就绪。BACKUP.json、prepare 回执、文件摘要和 schema 结果均不构成运营认证。既有 Contributors/下载拒绝未重试绕过，未下载被拒绝的 Actions 归档或截图。
 
 ## 历史 Core 0.5.0 / SMTP 1.1.0 的验证与来源
 
