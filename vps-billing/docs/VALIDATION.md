@@ -4,9 +4,75 @@
 
 ## Core 0.5.2：原生安装与升级执行
 
-本轮新增管理员明确启动的主机执行器及后台只读回执，准备完整隔离验收：真实全新实例、正式 0.5.1 起点升级、独立 6→7 迁移、进程中断续跑、端口故障后的兼容程序回退、未知物理 schema 保持维护及空库恢复。发布前的新程序使用明确标记的源码构建候选，不伪造正式 PREPARED/PROVENANCE。
+实现冻结源码 **`f1d1e01e707bfb7b2576c77a3bbb1c897632bdfb`**（A12）的[完整源码 CI 38699726947](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947) 已于 2026-10-15 UTC 成功，三个 job 均完成通过。新增激活后未知 schema 的停写、人工修复及目标重新激活场景已经真实隔离执行；不会把较早 A11 的通过记录冒作该修复的证据。源码验收完成，正式标签构建和 Release 尚待完成，不据主干 CI 声称已发布。
 
-此开发提交尚未完成新增执行器的 hosted systemd 实跑，不能据旧 0.5.1 记录或本地单元测试声称安装升级验收通过。对应 CI、构建与 Release 来源完成后在此补录实际结果。支付、外部邮件、用户主机、Mac、公共 CA、整机重启及生产负载均不属于本轮隔离检查。
+### 实施范围
+
+管理员在受保护目录明确运行 root CLI，以只读 `plan` 的摘要确认 `apply`，中断后使用同一计划 `resume`。执行器检查专用原生布局、身份、配置和程序来源，建立独立非 root API 身份及数据库角色，执行迁移、首位管理员、systemd/Nginx 和 HTTPS 验证；开机启用必须在计划中显式选择。Web/API 仅读取严格公开回执，运行身份不能写回执及其祖先目录；没有 Web root 命令入口。秘密从私密文件读取，不写命令参数或公开回执。
+
+生产入口只接受源码绑定、完整核验的正式 prepared 包；隔离验收使用明确标记的源码构建候选，经验证入口注入，不伪造正式 PREPARED/PROVENANCE。正式 0.5.1 基线独立取得并验证。服务验证检查 unit 字节、生效配置、确定对象路径的 typed `Unit.Id`、六个空 Exec hook 数组，以及实际非 root PID、程序摘要和 HTTPS。仅有通用 readyz 或空文本属性不构成通过。
+
+升级在实例锁、持久化计划/步骤日志和输入重验下执行，维护开启且 API 确认停止后才备份和迁移。备份须核验元数据、gzip/摘要、旧源码及迁移前缀，续跑时重新读取；迁移结果不明时不盲目重跑。未知 schema 保持维护并要求人工修复；程序回退须先证明迁移结果已知、旧程序兼容当前 schema，并重新验证旧进程和 HTTPS，**绝不自动导入旧数据库备份**。成功回执仍要求运营者验证业务。
+
+全新安装仅初始化 CNY；既有 USD 独立价格和历史快照保留，没有汇率或自动换汇。0.5.1 与 0.5.2 均为七项 SQL、14 张基础表，SQL/checksum 未改；版本升级是 7→7，另设独立旧 schema 6→7、13→14 表夹具。
+
+### A12 的完整隔离证据：通过
+
+A12 的[主检查 116304709500](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947/job/116304709500)、[Go 扫描 116304709883](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947/job/116304709883) 和[官方元数据 116304709763](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947/job/116304709763) 均为 `completed/success`。以下只使用 A12 的实际日志和脱敏事实；截图文件元数据不等于查看过图片。
+
+| 检查 | A12 实际结果 |
+|---|---|
+| Go / MySQL | race 643 个 PASS、0 FAIL、0 SKIP，含 168 个顶层测试及子测试；真实隔离 MySQL、vet、静态 Linux amd64 构建与依赖边界检查通过 |
+| 前端 | 13 文件、358 项全部通过；类型、生产构建及格式检查通过 |
+| Python / 工具 | 234、8、39、44、22、80、9、14 项 required regressions 共 450 项；再加基础原生 HTTPS 22 与恢复后 HTTPS 22，共 494 项全部通过；局部或重复运行不额外累加 |
+| 语法及供应链 | Shell/Python/工作流检查与 mock 备份回归通过；npm audit 为 0 vulnerabilities；独立 Go 扫描为受影响代码 0、导入包 0、依赖模块漏洞 19，不能写成模块完全无漏洞 |
+| 真实 OS 冒烟 | typed `Unit.Id` 身份匹配，六个 Exec hook 为真实空 typed 数组，实际非空 hook 被拒绝；自有 unit 未启动且已清理。默认 ACL 实际受支持，旧式创建得到 `0666`，新辅助函数得到 `0600`、目录 `0700` 且新默认 ACL 不存在；umask 已恢复，自有路径已清理，未改全局 ACL |
+| 全新候选执行器安装 | 通过隔离 Python API 的明确候选校验入口执行真实 root 安装逻辑，未伪造正式来源；`succeeded/complete`，恰一位管理员、仅 CNY 初始价格、实际 HTTPS 登录、非 root API、三个数据库角色及含下划线库名的字面授权验证；运行角色可读 CNY、不能写回执/祖先，管理员 GET 与回执精确一致；显式开机启用和终态幂等续跑通过 |
+| 正式 0.5.1 → 候选 | 实际公开基线 `v0.5.1` / `91cc3c18e50b51f01ca0003e3d18de3ade69f25d`，Release 413373046、构建 38672929446、六资产来源完整核验；先由未经修改的本轮执行器 CLI 安装正式旧版程序，再完成 7→7 升级、实际候选进程/HTTPS/只读回执及幂等续跑验证 |
+| 独立旧 schema | 真实候选 migrate 完成 6→7、13→14 表；正式旧程序在迁移后 preflight 为 `current`，历史 USD 价格保留，重复 migrate 的全表数据摘要不变 |
+| 备份与实际恢复 | 基础原生备份/空库恢复为 14/14 表、全表数据一致、恢复后 22 项 HTTPS 通过；另将正式 0.5.1 源码绑定脚本生成的备份实际导入同一 MySQL 的独立空库，全表摘要一致、实际旧程序预检为 `current`。未在独立服务器恢复 |
+| 中断与兼容回退 | 真实服务停止后 SIGKILL 执行器，同一 operation ID 续跑到迁移及候选启动；实际占用 API 端口造成就绪故障后，仅经旧程序当前 schema 兼容验证而回退程序，维护保持开启，没有数据库自动恢复 |
+| 激活前未知 schema | 真实修改必需列类型后，续跑持续拒绝，未核实的旧程序回退被阻止，维护开启、API 停止、迁移命令仅一次；人工恢复列类型后成功续跑，严格回执、实际候选进程/HTTPS及终态 PID 幂等均验证。激活后的独立场景另列于下一行 |
+| 激活后未知 schema 与目标重新激活 | 完成真实目标激活后，将本夹具必需列改为 SMALLINT；失败和未修复续跑均保持目标链接、停止 API、HTTPS 503、数据不变，旧正式程序预检实际为 `incompatible`。私密 checkpoint 明确记录已停机待重新激活，迁移仅一次、目标启动尝试仍为一次。人工恢复 INT 后，同一 ID 成功重新激活目标：总启动尝试两次、迁移仍一次，全表数据摘要与故障前一致；严格 journal/管理员回执、非 root 存活 PID 和终态幂等均通过，无自动数据库恢复 |
+| 原有业务及插件 | API 重启保留六项订单；独立 SMTP 插件 9 项、0 失败/跳过，11 阶段 Core 摘要一致且 PID 不变；合成 TLS 回环仅接收两封、未外投，DATA 后受控崩溃不自动重发；测试 1.1.1 不是正式插件发行 |
+| 浏览器与清理 | sandbox Chrome `155.0.8059.39` 的固定源码回环 demo 功能脚本及清理成功，未报告数值功能测试计数；16 份截图元数据字段完整、唯一且格式有效，未下载或查看图片，未进行人工视觉验收。原生验收内层 `test_completed=true`，外层 `test_exit_code=0/exit_code=0`，两层自有资源清理均成功 |
+
+A12 raw、磁盘及存活 API SHA-256 为 `6f68210b80f96eccd058d52b9c2b7a356ce4cf01a25c2d1de3f2dc2de888fb81`。此处运行事实绑定 A12；静态页面检查仅核对 `index.html` 摘要，不证明完整前端资源或视觉效果。保存的解码主检查日志 SHA-256 为 `797785e10d2bde1cb6cd8e536e4b058e18545e69e7f3fe793947a4ae695a8f63`。
+
+### 迭代记录与修复依据
+
+A–A10 的实际验收终态均为失败；A11 后来成功不改写它们。A9/A10 各有一次 job 初始化基础设施失败，未执行项目代码，另列于表尾。诊断尚不充分的旧运行保留其不确定性。
+
+| 候选 / 实际运行 | 实际失败、修复依据与范围 |
+|---|---|
+| A [`f79a409`](https://github.com/xiaoqiqixi/betteridcsys/commit/f79a40978607376bf08be9288e71b3cebdb66dc4) / [38678767929](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38678767929) | `fresh-install` 固定 `Rejected`；原日志无私密异常正文。后续本地复现为夹具受 umask 077 影响，使预期公开目录变成 0700；只修正夹具模式，未放宽生产保护 |
+| A2 [`b8763ff`](https://github.com/xiaoqiqixi/betteridcsys/commit/b8763fffa2d32969b8dc9723687a681e9929235e) / [38679763384](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38679763384) | 到达激活，迁移和活动目录切换完成，API 停止、维护开启、HTTPS 未就绪；当次未取得细分原因，不倒填后续诊断 |
+| A3 [`b11f6bf`](https://github.com/xiaoqiqixi/betteridcsys/commit/b11f6bfd3ff72a4c40c89ccfd300e417210a6e5a) / [38680814585](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38680814585)；A4 [`b7fbc8c`](https://github.com/xiaoqiqixi/betteridcsys/commit/b7fbc8cf6db35c42f2a85048cf13a2c1fbb508bd) / [38681785020](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38681785020) | 生效配置验证严格拒绝四个缺失的空 Exec hook 文本属性；A4 证明 `systemctl show --all` 仍会省略它们，其他有值属性匹配。改为 typed D-Bus 验证，未把缺失当作空数组 |
+| A5 [`01a132e`](https://github.com/xiaoqiqixi/betteridcsys/commit/01a132ef604f9313bffd32feb99495286e32d4a9) / [38683356692](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38683356692) | 早期空 typed hook 冒烟失败，验证属性数为 0；没有调用形状诊断，不声称已定位 GetUnit 具体失败，主原生场景未启动 |
+| A6 [`4398af9`](https://github.com/xiaoqiqixi/betteridcsys/commit/4398af98d78425300b4280554d97bf52a5c24ad1) / [38684075551](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38684075551) | 首个 GetUnit 退出 1、无有效 JSON，busctl 元数据正确；未公开原始错误。源码复核后改用固定对象路径读取 typed `Unit.Id` 及六个 hook，不把生命周期解释写作当次原始错误 |
+| A7 [`918075c`](https://github.com/xiaoqiqixi/betteridcsys/commit/918075c496bcad459c962ae999d0f6960167169a) / [38684274992](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38684274992) | typed 冒烟和新安装通过；独立旧 schema 场景固定 `Rejected`，无子阶段证据，不能判定具体调用；后续升级/故障/浏览器未执行 |
+| A8 [`c216876`](https://github.com/xiaoqiqixi/betteridcsys/commit/c216876c781dbef58774d940cbb1216414a90ee8) / [38685312437](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38685312437) | 候选 6→7 migrate 和 current 预检已成功，正式旧程序 preflight 在实际程序执行前被拒绝。后续本地实际许可证路径复现 `@` 与哈希入口语法冲突；仅修正受校验资源成员路径，管理员配置路径和保护不变 |
+| A9 [`2e531f3`](https://github.com/xiaoqiqixi/betteridcsys/commit/2e531f37f2a79092992da32b3cddea6e27e86970) / [38686503846 attempt 2](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38686503846/job/116262796445) | 新安装、独立 6→7/旧程序预检/重复迁移及由未修改执行器 CLI 安装正式 0.5.1 通过；upgrade plan 返回且 API 已停止，随后在新 journal 产生前 `protected_mode_rejected`。阶段标签仍为旧 `upgrade-plan`，不能据此写成计划失败；当次没有被拒路径 |
+| A10 [`f08a0c6`](https://github.com/xiaoqiqixi/betteridcsys/commit/f08a0c6001dff106b36b64899146f893536657f3) / [38687662294 attempt 2](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38687662294/job/116266567767) | 只增诊断，实际定位到恢复前 `backup_checksums/SHA256SUMS` 的保护拒绝；四个备份成员均 root 所有、单链接普通文件、0666，三层私密目录均 0700。未执行导入及后续升级/故障/浏览器；当次未读取 ACL，不能追认其实际 ACL |
+| A11 [`0a59b69`](https://github.com/xiaoqiqixi/betteridcsys/commit/0a59b69283f9e9f2ad0f70e23c1ec83222bfe2fe) / [38689586746](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38689586746) | 描述符绑定地清除/复核本次新建私密目录的默认 ACL，完成成员必须 0600；真实旧版备份脚本字节不变，不修改既有备份、全局 ACL 或 SQL。真实 OS 冒烟复现旧 0666/新 0600，完整验收成功；仍不覆盖其后发现的激活后就绪恢复缺口 |
+| A12 [`f1d1e01`](https://github.com/xiaoqiqixi/betteridcsys/commit/f1d1e01e707bfb7b2576c77a3bbb1c897632bdfb) / [38699726947](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38699726947) | A11 后的离线对照确认：已完成激活随后因未知 schema 停机，修复后续跑会跳过激活、回退旧程序。A12 只在实际停机后持久记录待重新激活，并严格重验维护/服务/schema；80 项离线执行器回归及独立真实激活后故障、未修复拒绝、人工修复和同 ID 幂等恢复通过。迁移和首位管理员步骤不重放 |
+| A9 / A10 初始化重跑 | [A9 attempt 1，116262448835](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38686503846/job/116262448835) 与 [A10 attempt 1，116266115275](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/38687662294/job/116266115275) 均在 Set up job 下载固定 SHA 的 `actions/setup-go` 归档失败；项目未执行、fixture 未创建。只重跑失败 job，源码、workflow 和 pin 未变；attempt 2 的实际项目失败分别如上，不把初始化网络故障算作项目代码失败 |
+
+A–A4、A7–A10 已执行主场景的失败运行均保留 `test_completed=false`、内外层自有资源移除成功及外层测试/总退出码 1；退出码 1 表示验收失败，不改写为清理失败。A5/A6 仅有早期冒烟：自有 unit 文件已删除、服务从未启动，不套用尚未启动的主场景清理指标。A11 和 A12 各自完整执行浏览器脚本，不借其结果补齐旧失败运行。
+
+### 本地验证与发行进度
+
+A12 提交前，本地完整编排 234 项和执行器 80 项实际通过；35 项验收护栏属于编排套件，不能重复相加。另以 A11 精确已提交源码和修复后源码做离线对照：独立修复夹具 schema 后，旧代码续跑为 `rolled_back`，新代码为 `succeeded`；迁移均一次、未重建管理员。该对照使用 Python 主机/数据库替身，不能冒充实际 systemd/MySQL；上方 A12 托管证据另行完成了真实场景。
+
+正式标签构建、最终精确发行源码的本地重复构建、公开六资产及历史库存核验尚未完成，后续按实际结果补录。初始候选的本地构建不能替代最终发行源码，未封装本地输出不冒作带真实 Actions PROVENANCE 的正式资产。既有七个 Release / 37 资产、SMTP 1.1.0 和全部历史标签须保留；不移动已发布标签或覆盖资产。
+
+### 验证边界
+
+支持范围是经计划确认的专用原生布局；旧手工安装不能未经审阅自动接管。隔离运行采用 GitHub-hosted Ubuntu 24.04、MySQL 8.4、私密本地 Unix socket 与 `skip_networking=1`，不改变数据库全局安全设置。真实公开仓库元数据已确认 `private=false`，此记录不假定私有仓库。
+
+没有用户或生产主机部署、任意宝塔面板接管、Mac、Docker、真实支付/退款、外部邮件、VPS/控制器动作、生产容量/RPO/RTO、公共 CA 签发/续期、数据库进程或整机重启、独立服务器/异地恢复、PITR 或断电持久性验证。开机启用状态不等于实际重启；程序兼容回退不等于数据库降级；同一 MySQL 的独立空库恢复不等于独立服务器恢复。浏览器为外部请求受限的回环内存 demo，功能执行和截图元数据不等于人工视觉审查。摘要、回执、schema 及来源验证不构成运营认证或独立发布者签名。
+
+未进行 Contributors 验证，未重试被拒绝的 Actions artifact、截图或相关下载，也未向 Support 发送消息。历史标签、发行资产及 LICENSE 保留；0.5.1 及更早验证正文原样保留。
 
 ## Core 0.5.1：安装准备、只读预检与未付取消
 
