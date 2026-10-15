@@ -58,3 +58,117 @@ nginx_binary="$fixture_root/nginx/usr/sbin/nginx"
 sha256sum "$package"
 printf 'ASTER_ACCEPT_NGINX_BIN=%s\n' "$nginx_binary" >>"$GITHUB_ENV"
 printf 'PASS: authenticated Ubuntu libraries and isolated Nginx executable prepared.\n'
+
+# Exercise the actual host's typed systemd properties before the long database
+# suites. These two root-owned fixtures are loaded for inspection, never started.
+# The source module is imported only by the ordinary runner Python interpreter.
+python3 -I - "$controller_dir/../scripts/core-operation.py" "$fixture_root" <<'PYHOOKSMOKE'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+def require(ok, reason):
+    if not ok:
+        raise RuntimeError(reason)
+
+def run(arguments, allowed=(0,)):
+    result = subprocess.run(arguments, cwd='/', stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
+    require(result.returncode in allowed and len(result.stdout) <= 16384, 'fixed_smoke_command_failed')
+    return result.stdout
+
+require(os.geteuid() != 0 and os.environ.get('GITHUB_ACTIONS') == 'true' and
+        os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
+        os.environ.get('GITHUB_REPOSITORY') == 'xiaoqiqixi/betteridcsys', 'isolated_runner_required')
+identity = os.environ.get('GITHUB_RUN_ID', '') + '-' + os.environ.get('GITHUB_RUN_ATTEMPT', '')
+require(re.fullmatch(r'[0-9]+-[0-9]+', identity) is not None, 'run_identity_required')
+source = Path(sys.argv[1]).resolve()
+spec = importlib.util.spec_from_file_location('native_prepare_hook_smoke', source)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+units = [Path('/run/systemd/system') / ('aster-property-ci-' + identity + suffix + '.service')
+         for suffix in ('-empty', '-hook')]
+require(all(not os.path.lexists(path) for path in units), 'refuse_existing_smoke_units')
+created = []
+passed = False
+cleanup_ok = False
+phase = 'install-owned-units'
+try:
+    with tempfile.TemporaryDirectory(prefix='aster-property-', dir=sys.argv[2]) as scratch:
+        for number, target in enumerate(units):
+            text = '[Unit]\nDescription=Aster isolated property inspection\n[Service]\nType=oneshot\n'
+            if number:
+                text += 'ExecStartPre=/usr/bin/true\n'
+            text += 'ExecStart=/usr/bin/true\n'
+            local = Path(scratch) / target.name
+            local.write_text(text)
+            created.append((target, text.encode()))
+            run(['sudo', '-n', '/usr/bin/install', '-o', 'root', '-g', 'root', '-m', '644', str(local), str(target)])
+            info = target.lstat()
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0 and
+                    stat.S_IMODE(info.st_mode) == 0o644 and info.st_nlink == 1 and target.read_bytes() == text.encode(),
+                    'smoke_unit_metadata_mismatch')
+        run(['sudo', '-n', '/usr/bin/systemctl', 'daemon-reload'])
+        def inactive(target):
+            # show loads the unit for GetUnit without starting it.
+            raw = run(['/usr/bin/systemctl', 'show', '--all', target.name,
+                       '--property=LoadState', '--property=ActiveState', '--property=MainPID'])
+            values = dict(line.split('=', 1) for line in raw.decode('ascii').splitlines() if '=' in line)
+            require(values == {'LoadState': 'loaded', 'ActiveState': 'inactive', 'MainPID': '0'},
+                    'smoke_fixture_not_inactive')
+        for target in units:
+            inactive(target)
+        expected = {'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecReload'}
+        phase = 'verify-empty-typed-hooks'
+        observed = module.Native({'api_unit': units[0].name}).verify_empty_service_hooks()
+        require(isinstance(observed, dict) and set(observed) == expected and all(value is True for value in observed.values()),
+                'actual_empty_typed_hook_properties_not_verified')
+        rejected = False
+        phase = 'reject-nonempty-typed-hook'
+        try:
+            module.Native({'api_unit': units[1].name}).verify_empty_service_hooks()
+        except module.Rejected:
+            rejected = True
+        require(rejected, 'actual_nonempty_typed_hook_was_accepted')
+        for target in units:
+            inactive(target)
+        passed = True
+        phase = 'complete'
+except Exception:
+    # Only the bounded phase/result below is public, never exception bodies.
+    pass
+finally:
+    # Only the two newly installed fixed-text paths are eligible for removal.
+    cleanup_failures = 0
+    for target, expected in created:
+        try:
+            if os.path.lexists(target):
+                info = target.lstat()
+                require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0 and
+                        stat.S_IMODE(info.st_mode) == 0o644 and info.st_nlink == 1 and
+                        info.st_size == len(expected) and target.read_bytes() == expected,
+                        'smoke_cleanup_refuses_changed_unit')
+                run(['sudo', '-n', '/usr/bin/rm', '--', str(target)])
+        except Exception:
+            cleanup_failures += 1
+    if created:
+        try:
+            run(['sudo', '-n', '/usr/bin/systemctl', 'daemon-reload'])
+        except Exception:
+            cleanup_failures += 1
+    cleanup_ok = cleanup_failures == 0 and all(not os.path.lexists(target) for target, _ in created)
+    print('NATIVE_SERVICE_HOOK_SMOKE_JSON=' + json.dumps({
+        'passed': passed and cleanup_ok, 'phase': phase,
+        'typed_empty_hook_properties_verified': 4 if passed else 0,
+        'nonempty_hook_rejected': passed, 'fixture_services_started': False,
+        'owned_unit_files_removed': cleanup_ok}, sort_keys=True), flush=True)
+    require(cleanup_ok, 'owned_smoke_fixture_cleanup_failed')
+require(passed, 'actual_service_hook_smoke_failed')
+PYHOOKSMOKE

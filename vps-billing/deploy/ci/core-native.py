@@ -148,6 +148,16 @@ def diagnostic_native(executor):
             parent = super()
             return self.traced("validate-service", lambda: parent.validate_service(release))
 
+        def verify_empty_service_hooks(self):
+            parent = super()
+            trace = NATIVE_TRACES.setdefault(self.spec["operation_id"], {"calls": []})
+            trace["typed_service_hooks"] = {"source": "systemd-dbus-json", "verified": False}
+            value = self.traced("typed-service-hooks", parent.verify_empty_service_hooks)
+            trace["typed_service_hooks"] = {"source": "systemd-dbus-json", "verified":
+                isinstance(value, dict) and set(value) == {"ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"} and
+                all(flag is True for flag in value.values())}
+            return value
+
         def service(self, verb, unit=None):
             require(verb in {"start", "stop", "restart", "daemon-reload", "show", "enable", "is-enabled"}, "Unexpected diagnostic service verb")
             selected = "api" if unit == self.spec["api_unit"] else "edge" if unit == executor.edge_unit(self.spec) else "manager"
@@ -180,8 +190,6 @@ def selected_unit_diagnostics(spec, role, values):
             "exec_start_path_expected": parsed is not None and parsed[1] == executable,
             "exec_start_argv_expected": parsed is not None and parsed[2].strip() == executable,
             "environment_files_expected": values.get("EnvironmentFiles") == spec["config_root"] + "/api.env (ignore_errors=no)"})
-        for key in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
-            checks[key + "_empty"] = values.get(key) == ""
     known = {
         "LoadState": {"loaded", "not-found", "error", "bad-setting", "masked", "stub", "merged"},
         "ActiveState": {"active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance", "refreshing"},
@@ -189,7 +197,10 @@ def selected_unit_diagnostics(spec, role, values):
         "Result": {"success", "exit-code", "signal", "core-dump", "watchdog", "timeout", "start-limit-hit", "resources", "protocol", "oom-kill", "exec-condition", "condition", "skipped"},
     }
     report = {"role": role, "checks": checks, "properties_present": {key: key in values for key in
-        ("LoadState", "ActiveState", "SubState", "Result", "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")}}
+        ("LoadState", "ActiveState", "SubState", "Result", "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles")}}
+    if api:
+        report["hook_verification_source"] = "systemd-dbus-json"
+        report["cli_hook_serialization_ignored"] = True
     for key, allowed in known.items():
         report[key] = values.get(key) if values.get(key) in allowed else "other_or_absent"
     for key in ("ExecMainCode", "ExecMainStatus", "StatusErrno"):
@@ -200,8 +211,7 @@ def selected_unit_diagnostics(spec, role, values):
 
 def actual_unit_diagnostics(spec):
     properties = ("LoadState", "ActiveState", "SubState", "Result", "ExecMainCode", "ExecMainStatus", "StatusErrno",
-                  "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles",
-                  "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
+                  "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles")
     output = []
     for role, unit in (("api", spec["api_unit"]), ("edge", spec["api_unit"][:-8] + "-edge.service")):
         result = subprocess.run(["/usr/bin/systemctl", "show", "--all", unit, *["--property=" + key for key in properties]],

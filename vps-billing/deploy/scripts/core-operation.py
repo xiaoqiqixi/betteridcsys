@@ -85,6 +85,8 @@ INSTALL_KEYS = {"dba_client_config", "bootstrap_email", "bootstrap_name", "boots
 UPGRADE_KEYS = {"migrator_dsn_file", "backup_client_config", "acknowledge_backup_restore_limits"}
 TERMINAL = {"succeeded", "rolled_back"}
 UNIT_DIRECTORY = "/etc/systemd/system"
+SYSTEM_BUSCTL = "/usr/bin/busctl"
+SERVICE_HOOKS = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
 
 
 def require(ok, text):
@@ -368,6 +370,7 @@ def plan(spec_path, trust=updater._Trust()):
             require(previous_export.get("schema") == 1 and previous_export.get("status") in {"succeeded", "rolled_back", "failed"}, "Public status already records an unfinished operation.")
     release = prepared_release(spec["release_directory"], trust)
     inputs = {"spec_sha256": updater.digest(raw), "target": release, "tools": {}}
+    inputs["tools"]["busctl"] = binary(SYSTEM_BUSCTL, "busctl")
     if spec["edge_mode"] == "managed":
         web = pwd.getpwnam("www-data")
         require(web.pw_uid != 0 and web.pw_gid != 0, "Managed Nginx requires the existing non-root www-data identity.")
@@ -478,21 +481,46 @@ class Native:
         require(result.stdout.decode("ascii").strip() == "not-found", "Fresh install refuses any existing loaded service unit.")
         return True
 
+    def verify_empty_service_hooks(self):
+        """Read the four typed D-Bus arrays; CLI omission never proves empty.
+
+        The v255 systemd D-Bus XML defines a(sasbttttuii). busctl get-property
+        unwraps a variant, giving data:[]; a method reply wraps its arguments,
+        so GetUnit returns type:o and data:[object_path]. See upstream v255
+        man/org.freedesktop.systemd1.xml and src/busctl/busctl.c.
+        """
+        unit = self.spec["api_unit"]
+        require(isinstance(unit, str) and UNIT.fullmatch(unit), "Unsupported service unit for typed hook inspection.")
+        binary(SYSTEM_BUSCTL, "busctl")
+        base = [SYSTEM_BUSCTL, "--system", "--json=short", "--no-pager", "--auto-start=no", "--allow-interactive-authorization=no", "--timeout=10"]
+        service = "org.freedesktop.systemd1"
+        raw = self.run(base + ["call", service, "/org/freedesktop/systemd1", service + ".Manager", "GetUnit", "s", unit], timeout=15).stdout
+        reply = updater.strict_json(raw, 8192)
+        encoded = "".join(character if character.isascii() and character.isalnum() else "_" + format(ord(character), "02x") for character in unit)
+        expected = "/org/freedesktop/systemd1/unit/" + encoded
+        require(isinstance(reply, dict) and set(reply) == {"type", "data"} and reply["type"] == "o" and reply["data"] == [expected], "Typed systemd unit object does not match the reviewed service.")
+        result = {}
+        for hook in SERVICE_HOOKS:
+            raw = self.run(base + ["get-property", service, expected, service + ".Service", hook], timeout=15).stdout
+            value = updater.strict_json(raw, 8192)
+            require(isinstance(value, dict) and set(value) == {"type", "data"} and value["type"] == "a(sasbttttuii)" and value["data"] == [], "Typed systemd service hooks are missing, nonempty or malformed.")
+            result[hook] = True
+        return result
+
     def validate_service(self, release):
         account = pwd.getpwnam(self.spec["runtime_user"])
         require(account.pw_uid != 0 and account.pw_gid != 0, "Existing runtime identity must be non-root.")
         if self.spec["edge_mode"] == "managed":
             web = pwd.getpwnam("www-data")
             require(web.pw_uid != 0 and web.pw_gid != 0 and web.pw_uid != account.pw_uid and web.pw_gid != account.pw_gid, "API and Nginx worker must have separate non-root identities.")
-        properties = ("LoadState", "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
-        # Ubuntu systemd can omit empty command arrays without --all. Require
-        # explicit empty values so absence never becomes proof of no hooks.
+        properties = ("LoadState", "FragmentPath", "DropInPaths", "User", "Group", "WorkingDirectory", "ExecStart", "EnvironmentFiles")
         argv = ["/usr/bin/systemctl", "show", "--all", self.spec["api_unit"]] + ["--property=" + name for name in properties]
         values = dict(line.split("=", 1) for line in self.run(argv).stdout.decode("utf-8").splitlines() if "=" in line)
         current = self.spec["instance_root"] + "/current"
         executable = current + "/bin/aster-api"
         command = re.search(r"(?:^|[ {])path=([^ ;]+) ; argv\[\]=([^;]+?) ;", values.get("ExecStart", ""))
-        require(values.get("LoadState") == "loaded" and values.get("FragmentPath") == UNIT_DIRECTORY + "/" + self.spec["api_unit"] and values.get("DropInPaths") == "" and values.get("User") == values.get("Group") == self.spec["runtime_user"] and values.get("WorkingDirectory") == current and command is not None and command[1] == executable and command[2].strip() == executable and values.get("EnvironmentFiles") == self.spec["config_root"] + "/api.env (ignore_errors=no)" and all(values.get(name) == "" for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")), "Effective systemd API service differs from the reviewed dedicated instance.")
+        require(values.get("LoadState") == "loaded" and values.get("FragmentPath") == UNIT_DIRECTORY + "/" + self.spec["api_unit"] and values.get("DropInPaths") == "" and values.get("User") == values.get("Group") == self.spec["runtime_user"] and values.get("WorkingDirectory") == current and command is not None and command[1] == executable and command[2].strip() == executable and values.get("EnvironmentFiles") == self.spec["config_root"] + "/api.env (ignore_errors=no)", "Effective systemd API service differs from the reviewed dedicated instance.")
+        self.verify_empty_service_hooks()
         if self.spec["edge_mode"] == "managed":
             argv = ["/usr/bin/systemctl", "show", "--all", edge_unit(self.spec), "--property=FragmentPath", "--property=DropInPaths"]
             edge = dict(line.split("=", 1) for line in self.run(argv).stdout.decode("utf-8").splitlines() if "=" in line)
@@ -1194,6 +1222,7 @@ def execute(spec_path, confirm_plan_sha256, resume=False, trust=updater._Trust()
                     require(prepared_release(previous["release_directory"], trust) == {k: v for k, v in previous.items() if k != "release_directory"}, "Previous prepared files changed before resume.")
                 for key, name in (("mysql_binary", "mysql"), ("mysqldump_binary", "mysqldump"), ("nginx_binary", "nginx")):
                     require(binary(spec[key], name, trust) == planned["inputs"]["tools"][key], "A confirmed native tool changed before resume.")
+                require(binary(SYSTEM_BUSCTL, "busctl") == planned["inputs"]["tools"]["busctl"], "The confirmed typed service-inspection tool changed before resume.")
                 if spec["edge_mode"] == "managed":
                     web = pwd.getpwnam("www-data")
                     require({"uid": web.pw_uid, "gid": web.pw_gid} == planned["inputs"]["nginx_worker"], "Managed Nginx identity changed before resume.")

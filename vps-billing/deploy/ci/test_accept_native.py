@@ -17,6 +17,7 @@ import unittest
 SCRIPT = Path(__file__).with_name("accept-native.sh")
 HTTP_SCRIPT = Path(__file__).with_name("accept-native-http.py")
 CORE_SCRIPT = Path(__file__).with_name("core-native.sh")
+PREPARE_SCRIPT = Path(__file__).with_name("prepare-native-runner.sh")
 CORE_SPEC = importlib.util.spec_from_file_location("core_native_acceptance", CORE_SCRIPT.with_suffix(".py"))
 CORE = importlib.util.module_from_spec(CORE_SPEC)
 CORE_SPEC.loader.exec_module(CORE)
@@ -187,6 +188,28 @@ class CoreExecutorAcceptanceGuardTests(NativeAcceptanceGuardTests):
     script = CORE_SCRIPT
 
 
+class NativePreparationSmokeGuardTests(unittest.TestCase):
+    def test_actual_inline_smoke_rejects_unowned_context_before_import_or_privilege(self):
+        source = PREPARE_SCRIPT.read_text().split("<<'PYHOOKSMOKE'\n", 1)[1].split("\nPYHOOKSMOKE", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="aster-hook-smoke-guard-") as directory:
+            root = Path(directory)
+            marker = root / "privileged-command-ran"
+            sudo = root / "sudo"
+            sudo.write_text("#!/bin/sh\n: > '" + str(marker) + "'\nexit 99\n")
+            sudo.chmod(0o755)
+            for settings, reason in (({}, "isolated_runner_required"),
+                ({"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted", "GITHUB_REPOSITORY": "xiaoqiqixi/betteridcsys"}, "isolated_runner_required"),
+                ({"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REPOSITORY": "another/project"}, "isolated_runner_required"),
+                ({"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REPOSITORY": "xiaoqiqixi/betteridcsys", "GITHUB_RUN_ID": "../other", "GITHUB_RUN_ATTEMPT": "1"}, "run_identity_required")):
+                with self.subTest(settings=settings):
+                    result = subprocess.run(["python3", "-I", "-", "/nonexistent/source.py", str(root)], input=source,
+                        env={"PATH": str(root) + ":" + os.environ["PATH"], **settings}, capture_output=True, text=True, timeout=5)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(reason, result.stderr)
+                    self.assertFalse(marker.exists())
+                    self.assertEqual(set(path.name for path in root.iterdir()), {"sudo"})
+
+
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
     def test_selected_unit_diagnostics_only_emit_expected_checks_and_bounded_categories(self):
         spec = {"api_unit": "aster-fixture.service", "instance_root": "/opt/aster-fixture",
@@ -206,8 +229,11 @@ class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
             values.pop(key)
         missing = CORE.selected_unit_diagnostics(spec, "api", values)
         for key in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
-            self.assertFalse(missing["properties_present"][key])
-            self.assertFalse(missing["checks"][key + "_empty"])
+            self.assertNotIn(key, missing["properties_present"])
+            self.assertNotIn(key + "_empty", missing["checks"])
+        self.assertEqual(missing["checks"], report["checks"])
+        self.assertTrue(missing["cli_hook_serialization_ignored"])
+        self.assertEqual(missing["hook_verification_source"], "systemd-dbus-json")
         values.update(ExecStart="private-command-with-secret", EnvironmentFiles="private-credentials",
                       ActiveState="private-provider-reply", ExecMainStatus="private-password")
         report = CORE.selected_unit_diagnostics(spec, "api", values)
@@ -226,15 +252,19 @@ class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
                 return "private-native-result"
             def validate_service(self, release):
                 raise RuntimeError("private-command-DSN-password")
+            def verify_empty_service_hooks(self):
+                return {name: True for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")}
         executor = SimpleNamespace(Native=Native, edge_unit=lambda spec: "aster-fixture-edge.service")
         spec = {"operation_id": "d" * 32, "api_unit": "aster-fixture.service"}
         CORE.NATIVE_TRACES.pop(spec["operation_id"], None)
         native = CORE.diagnostic_native(executor)(spec)
         self.assertEqual(native.service("start", spec["api_unit"]), "private-native-result")
+        self.assertTrue(all(native.verify_empty_service_hooks().values()))
         with self.assertRaisesRegex(RuntimeError, "private-command"):
             native.validate_service("/private-release")
         trace = CORE.NATIVE_TRACES.pop(spec["operation_id"])
         self.assertEqual(trace["first_failure"], {"substep": "validate-service", "event": "failed", "reason": "failure_details_suppressed"})
+        self.assertEqual(trace["typed_service_hooks"], {"source": "systemd-dbus-json", "verified": True})
         self.assertNotIn("private-", json.dumps(trace))
 
     def test_real_umask_077_keeps_new_public_ancestors_traversable_and_secrets_private(self):

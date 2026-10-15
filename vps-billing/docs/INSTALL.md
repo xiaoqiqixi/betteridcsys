@@ -8,6 +8,8 @@ Core 0.5.2 提供由主机管理员明确启动的原生安装/升级执行器�
 
 目标为 **Ubuntu Server 24.04 LTS / amd64**，已有 Python 3、Bash/GNU 工具、systemd、Nginx，以及可通过本机 Unix socket 使用的 Oracle MySQL **8.4 LTS** 和兼容的 `mysql`/`mysqldump`。运行 API 不需要 Go 或 Node.js。管理员先审查容量、现有服务、端口和目录，提供真实 HTTPS 域名及受信任证书。系统软件与 MySQL 实例本身须按 [Ubuntu Nginx 指引](https://ubuntu.com/server/docs/how-to/web-services/install-nginx/)及 [MySQL 官方 APT 指引](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/)独立安装、核验；不要在旧库主机上执行新装数据库步骤。
 
+systemd 须包含 root 管理的 `/usr/bin/busctl` 及 JSON 输出支持。执行器只读查询系统 D-Bus，核对实际 unit 与四个执行钩子的类型和空数组；缺失、非空或异常响应均停止操作，不开启交互授权或激活额外服务。只读计划记录该工具摘要，续跑时重新核对，不能通过忽略查询失败放行服务。
+
 通过受控的数据库管理会话确认实际 `VERSION()`、`@@socket`、`@@datadir` 与 `@@skip_networking`。全新安装要求受支持的 MySQL 8.4 且 TCP 已关闭，使用专用新数据库名；数据库以及同名前缀的三个应用账号必须尚不存在。不要修改共享实例的 root 密码、删除旧库或放宽远程访问来通过检查。
 
 路径、工具、证书和输入文件须为规范绝对路径，祖先由 root 保护，无软链接、可共享写入目录或配置元字符。常见证书管理器的 `live/` 链接不能直接作为执行器输入：经管理员核验后提供受保护的普通证书/私钥文件，另行管理续期、同步和重载。真实域名、DNS、公共 CA、入口防火墙及证书续期不由执行器配置，也不从隔离测试 CA 的成功推导已完成。

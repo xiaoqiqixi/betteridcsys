@@ -179,6 +179,17 @@ class ExecutorTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="aster-core-operation-test-")
         self.base = Path(self.temporary.name)
         self.trust = updater._Trust(os.geteuid(), os.stat("/").st_uid)
+        original_binary = operation.binary
+        mapped_root = os.stat("/").st_uid
+        def mapped_system_binary(path, expected_name, trust=updater._Trust(), expected_sha256=None):
+            # Some offline containers map the whole root filesystem to nobody.
+            # Preserve the real fixed-binary checks while modeling that mapping.
+            if path == operation.SYSTEM_BUSCTL and expected_name == "busctl" and trust == updater._Trust():
+                trust = updater._Trust(mapped_root, mapped_root)
+            return original_binary(path, expected_name, trust, expected_sha256)
+        self.binary_patch = patch.object(operation, "binary", side_effect=mapped_system_binary)
+        self.binary_patch.start()
+        self.addCleanup(self.binary_patch.stop)
         self.instance = self.directory("instance", 0o755)
         self.directory("instance/releases", 0o755)
         self.config = self.directory("config", 0o755)
@@ -382,6 +393,17 @@ class ExecutorTests(unittest.TestCase):
                                             for key, value in sorted(environment.items())).encode(), 0o640)
         return environment, root, policy_path, manifests
 
+    def typed_bus_response(self, argv):
+        unit = self.spec["api_unit"]
+        encoded = unit.replace("_", "_5f").replace("-", "_2d").replace(".", "_2e")
+        expected = "/org/freedesktop/systemd1/unit/" + encoded
+        if "call" in argv:
+            value = {"type": "o", "data": [expected]}
+        else:
+            self.assertIn("get-property", argv)
+            value = {"type": "a(sasbttttuii)", "data": []}
+        return subprocess.CompletedProcess(argv, 0, stdout=updater.json_bytes(value))
+
     def test_plan_is_read_only_stable_and_canonical(self):
         before = snapshot(self.base)
         with patch("subprocess.run", side_effect=AssertionError("Plan executed a program")), \
@@ -555,47 +577,113 @@ class ExecutorTests(unittest.TestCase):
             "WorkingDirectory": current,
             "ExecStart": "{ path=" + executable + " ; argv[]=" + executable + " ; ignore_errors=no ; }",
             "EnvironmentFiles": str(self.config / "api.env") + " (ignore_errors=no)",
-            "ExecStartPre": "", "ExecStartPost": "", "ExecStop": "", "ExecReload": "",
         }
         account = types.SimpleNamespace(pw_uid=11001, pw_gid=11001)
-        hooks = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
         def service_account(name):
             return types.SimpleNamespace(pw_uid=33, pw_gid=33) if name == "www-data" else account
         def completed(argv, values):
+            if argv[0] == operation.SYSTEM_BUSCTL:
+                return self.typed_bus_response(argv)
             selected = dict(values) if self.spec["api_unit"] in argv else {
                 "FragmentPath": str(self.units / operation.edge_unit(self.spec)), "DropInPaths": ""}
-            # Ubuntu 255 omits empty command arrays without an explicit --all,
-            # even when each requested property has its own --property option.
-            if "--all" not in argv:
-                for hook in hooks:
-                    if selected.get(hook) == "":
-                        selected.pop(hook)
+            # Real Ubuntu 255 omits the empty hook arrays even with --all;
+            # their typed D-Bus values provide the independent proof below.
             return subprocess.CompletedProcess(argv, 0, stdout="".join(k + "=" + v + "\n" for k, v in selected.items()).encode())
         with patch.object(operation.pwd, "getpwnam", side_effect=service_account), \
-                patch.object(native, "run", side_effect=lambda argv: completed(argv, valid)) as run:
+                patch.object(native, "run", side_effect=lambda argv, **kwargs: completed(argv, valid)) as run:
             self.assertTrue(native.validate_service(str(self.old))["service_configuration_verified"])
-        self.assertEqual(len(run.call_args_list), 2)
-        self.assertTrue(all("--all" in call.args[0] for call in run.call_args_list))
+        systemctl_calls = [call for call in run.call_args_list if call.args[0][0] == "/usr/bin/systemctl"]
+        self.assertEqual(len(systemctl_calls), 2)
+        self.assertTrue(all("--all" in call.args[0] for call in systemctl_calls))
+        self.assertEqual(len([call for call in run.call_args_list if call.args[0][0] == operation.SYSTEM_BUSCTL]), 5)
         invalid = (("DropInPaths", "/etc/override.conf"), ("User", "root"),
-                   ("EnvironmentFiles", "/unrelated/api.env")) + tuple((hook, CANARY) for hook in hooks)
+                   ("EnvironmentFiles", "/unrelated/api.env"))
         for key, value in invalid:
             changed = dict(valid, **{key: value})
             with self.subTest(key=key), patch.object(operation.pwd, "getpwnam", side_effect=service_account), \
-                    patch.object(native, "run", side_effect=lambda argv: completed(argv, changed)), \
+                    patch.object(native, "run", side_effect=lambda argv, **kwargs: completed(argv, changed)), \
                     self.assertRaises(updater.Rejected) as failure:
                 native.validate_service(str(self.old))
             self.assertNotIn(CANARY, str(failure.exception))
-        for hook in hooks:
-            missing = {key: value for key, value in valid.items() if key != hook}
-            with self.subTest(missing_hook=hook), patch.object(operation.pwd, "getpwnam", side_effect=service_account), \
-                    patch.object(native, "run", side_effect=lambda argv: completed(argv, missing)) as run, \
-                    self.assertRaises(updater.Rejected):
-                native.validate_service(str(self.old))
-            self.assertIn("--all", run.call_args.args[0])
         with patch.object(operation.pwd, "getpwnam", return_value=types.SimpleNamespace(pw_uid=0, pw_gid=0)), \
                 patch.object(native, "run") as run, self.assertRaises(updater.Rejected):
             native.validate_service(str(self.old))
         run.assert_not_called()
+
+    def test_typed_service_hooks_follow_v255_get_unit_and_property_json_contract(self):
+        native = operation.Native(self.spec, self.trust)
+        hooks = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
+        with patch.object(native, "run", side_effect=lambda argv, **kwargs: self.typed_bus_response(argv)) as run:
+            self.assertEqual(native.verify_empty_service_hooks(), {hook: True for hook in hooks})
+        base = ["/usr/bin/busctl", "--system", "--json=short", "--no-pager", "--auto-start=no",
+                "--allow-interactive-authorization=no", "--timeout=10"]
+        self.assertEqual(run.call_args_list[0].args[0], base + [
+            "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager", "GetUnit", "s", self.spec["api_unit"]])
+        self.assertEqual(len(run.call_args_list), 5)
+        for call, hook in zip(run.call_args_list[1:], hooks):
+            self.assertEqual(call.args[0], base + [
+                "get-property", "org.freedesktop.systemd1",
+                "/org/freedesktop/systemd1/unit/aster_2dtest_2eservice",
+                "org.freedesktop.systemd1.Service", hook])
+        self.assertTrue(all(call.kwargs == {"timeout": 15} for call in run.call_args_list))
+
+    def test_typed_service_get_unit_rejects_wrong_object_signature_and_malformed_json(self):
+        native = operation.Native(self.spec, self.trust)
+        expected = "/org/freedesktop/systemd1/unit/aster_2dtest_2eservice"
+        invalid = [
+            {"type": "s", "data": [expected]}, {"type": "o", "data": expected},
+            {"type": "o", "data": []}, {"type": "o", "data": [expected, expected]},
+            {"type": "o", "data": ["/org/freedesktop/systemd1/unit/aster_2dother_2eservice"]},
+            {"type": "o", "data": [False]}, {"type": "o"},
+            {"type": "o", "data": [expected], "unrecognized": CANARY},
+            b'{"type":"o","type":"o","data":[]}', b'{"type":',
+        ]
+        for index, value in enumerate(invalid):
+            raw = value if isinstance(value, bytes) else updater.json_bytes(value)
+            with self.subTest(index=index), \
+                    patch.object(native, "run", return_value=subprocess.CompletedProcess([], 0, stdout=raw)) as run, \
+                    self.assertRaises(updater.Rejected) as failure:
+                native.verify_empty_service_hooks()
+            self.assertEqual(run.call_count, 1)
+            self.assertNotIn(CANARY, str(failure.exception))
+
+    def test_typed_service_hooks_reject_each_nonempty_missing_mixed_or_malformed_property(self):
+        native = operation.Native(self.spec, self.trust)
+        hooks = ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload")
+        command = ["/usr/bin/false", ["/usr/bin/false"], False, 0, 0, 0, 0, 0, 0, 0]
+        invalid = [
+            {"type": "a(sasbttttuii)", "data": [command]},
+            {"type": "a(sasbttttuii)", "data": [[], False, 0, CANARY]},
+            {"type": "a(sasbttttuii)", "data": [[]]},
+            {"type": "a(sasbttttuii)", "data": False},
+            {"type": "a(sasbttttuii)", "data": {}},
+            {"type": "as", "data": []}, {"type": "a(sasbttttuii)"},
+            {"data": []}, {"type": "a(sasbttttuii)", "data": [], "extra": CANARY},
+            b'{"type":"a(sasbttttuii)","data":[],"data":[]}', b'not-json',
+        ]
+        for hook in hooks:
+            for index, value in enumerate(invalid):
+                raw = value if isinstance(value, bytes) else updater.json_bytes(value)
+                def response(argv, **kwargs):
+                    if "get-property" in argv and argv[-1] == hook:
+                        return subprocess.CompletedProcess(argv, 0, stdout=raw)
+                    return self.typed_bus_response(argv)
+                with self.subTest(hook=hook, index=index), patch.object(native, "run", side_effect=response), \
+                        self.assertRaises(updater.Rejected) as failure:
+                    native.verify_empty_service_hooks()
+                self.assertNotIn(CANARY, str(failure.exception))
+
+    def test_typed_service_hooks_require_successful_get_unit_and_every_property_command(self):
+        native = operation.Native(self.spec, self.trust)
+        for missing in ("GetUnit", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecReload"):
+            def response(argv, **kwargs):
+                if (missing == "GetUnit" and "call" in argv) or argv[-1] == missing:
+                    raise updater.Rejected("A fixed native operation failed; raw diagnostics were suppressed.")
+                return self.typed_bus_response(argv)
+            with self.subTest(missing=missing), patch.object(native, "run", side_effect=response), \
+                    self.assertRaises(updater.Rejected):
+                native.verify_empty_service_hooks()
 
     def test_healthy_old_listener_cannot_satisfy_candidate_process_identity(self):
         native = operation.Native(self.spec, self.trust)
