@@ -615,7 +615,7 @@ onBeforeUnmount(() => {
       </p>
       <button
         v-if="!registry"
-        class="btn secondary"
+        class="button secondary"
         type="button"
         :disabled="busy"
         @click="loadRegistry"
@@ -812,7 +812,7 @@ onBeforeUnmount(() => {
             </article>
           </div>
           <button
-            class="btn secondary"
+            class="button secondary"
             type="button"
             data-testid="add-currency"
             :disabled="registryBlocked || registryDraft.currencies.length >= 32"
@@ -823,7 +823,7 @@ onBeforeUnmount(() => {
         </fieldset>
         <div class="financial-actions">
           <button
-            class="btn primary"
+            class="button primary"
             type="submit"
             :disabled="
               preview || busy || registryBlocked || priceDirty || !registryDirty
@@ -835,7 +835,7 @@ onBeforeUnmount(() => {
                 : tr("保存币种配置", "Save currencies")
             }}</button
           ><button
-            class="btn secondary"
+            class="button secondary"
             type="button"
             data-testid="reload-currencies"
             :disabled="busy || priceDirty"
@@ -932,7 +932,7 @@ onBeforeUnmount(() => {
           <p>{{ errorText(priceError, priceIssues) }}</p>
           <button
             v-if="!priceDraft"
-            class="btn secondary"
+            class="button secondary"
             type="button"
             :disabled="busy || registryDirty"
             @click="loadPrices"
@@ -1046,7 +1046,7 @@ onBeforeUnmount(() => {
           </fieldset>
           <div class="financial-actions">
             <button
-              class="btn primary"
+              class="button primary"
               type="submit"
               :disabled="
                 preview || busy || priceBlocked || registryDirty || !priceDirty
@@ -1058,7 +1058,7 @@ onBeforeUnmount(() => {
                   : tr("保存此币种价格", "Save prices for this currency")
               }}</button
             ><button
-              class="btn secondary"
+              class="button secondary"
               type="button"
               data-testid="reload-prices"
               :disabled="busy || registryDirty"
@@ -1251,7 +1251,7 @@ select[aria-invalid="true"] {
   background: #fff4f2;
   border: 1px solid #ffd9d3;
 }
-.financial-error .btn {
+.financial-error .button {
   margin-top: 10px;
 }
 .financial-field-error {
@@ -1283,11 +1283,13 @@ select[aria-invalid="true"] {
   min-width: 0;
 }
 .price-input input {
-  min-width: 60px;
+  flex: 1;
+  min-width: 0;
   font-variant-numeric: tabular-nums;
 }
 .price-input span {
-  overflow-wrap: anywhere;
+  flex-shrink: 0;
+  white-space: nowrap;
   font-weight: 400;
 }
 .price-switches {
@@ -1317,7 +1319,7 @@ select[aria-invalid="true"] {
   .price-card {
     padding: 14px;
   }
-  .financial-actions .btn {
+  .financial-actions .button {
     width: 100%;
     justify-content: center;
   }

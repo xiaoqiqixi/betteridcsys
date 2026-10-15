@@ -66,8 +66,16 @@ const page = await context.newPage();
 page.setDefaultTimeout(15000);
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
+const navigationShots = new Set([
+  "dashboard-desktop",
+  "admin-desktop",
+  "financial-navigation-top",
+]);
 const shot = async (name) => {
   await mkdir(output, { recursive: true });
+  // Assert before the screenshot reset so it cannot conceal a navigation bug.
+  if (navigationShots.has(name))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await page.evaluate(() => window.scrollTo(0, 0));
   if (page.viewportSize().width <= 720) {
     await expect
@@ -476,6 +484,97 @@ try {
   await page.getByRole("link", { name: "财务设置", exact: true }).click();
   await financialReady();
   await expect(currencyForm.locator(".currency-card")).toHaveCount(1);
+
+  await expect(page.locator(".page-heading > div > p").last()).toHaveText(
+    "管理币种、金额格式和套餐独立价格。",
+  );
+  for (const language of ["zh-CN", "en"]) {
+    await page
+      .locator(".topbar .preference-controls select")
+      .first()
+      .selectOption(language);
+    await financialReady();
+    const brand = page.locator(".sidebar .brand strong");
+    const originalBrand = await brand.textContent();
+    await brand.evaluate(
+      (element, value) => {
+        element.textContent = value;
+      },
+      language === "en"
+        ? "AsterCloudLongBrandNameForResponsiveLayout"
+        : "星屿云长品牌名称用于响应式界面核对",
+    );
+    for (const width of [720, 721, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const header = document
+              .querySelector(".topbar")
+              .getBoundingClientRect();
+            const banner = document
+              .querySelector(".demo-banner")
+              .getBoundingClientRect();
+            return (
+              banner.top >= header.bottom - 1 &&
+              [
+                ...document.querySelectorAll(
+                  ".topbar .preference-controls label > span, .topbar .preference-controls select",
+                ),
+              ].every((element) => {
+                const box = element.getBoundingClientRect();
+                return box.top >= header.top && box.bottom <= header.bottom;
+              }) &&
+              document.documentElement.scrollWidth <= innerWidth
+            );
+          }),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          page
+            .locator(".price-input")
+            .first()
+            .evaluate((element) => {
+              const code = element.querySelector("span:last-child");
+              const input = element.querySelector("input");
+              const range = document.createRange();
+              range.selectNodeContents(code);
+              return (
+                range.getClientRects().length === 1 &&
+                code.getBoundingClientRect().width > 20 &&
+                input.getBoundingClientRect().width > 30 &&
+                code.getBoundingClientRect().right <=
+                  element.getBoundingClientRect().right + 1
+              );
+            }),
+        )
+        .toBe(true);
+      if (language === "zh-CN") {
+        if (width === 720) await shot("financial-width-720");
+        if (width === 721) await shot("financial-width-721");
+        if (width === 768) await shot("financial-width-768");
+      }
+    }
+    await brand.evaluate((element, value) => {
+      element.textContent = value;
+    }, originalBrand);
+    await page.setViewportSize({ width: 1440, height: 1100 });
+  }
+  await expect(page.locator(".page-heading > div > p").last()).toHaveText(
+    "Manage currencies, amount formats and independent plan prices.",
+  );
+  await page
+    .locator(".topbar .preference-controls select")
+    .first()
+    .selectOption("zh-CN");
+  await financialReady();
+  await expect(financialPage.locator("button.btn")).toHaveCount(0);
+  await expect(financialPage.locator("button.button").first()).toHaveCSS(
+    "display",
+    "inline-flex",
+  );
+
   for (const [offset, definition] of fixtureCurrencies.entries()) {
     const index = beforeRegistry.currencies.length + offset;
     await page.getByTestId("add-currency").click();
@@ -825,6 +924,38 @@ try {
     smtp.locator('[data-testid="smtp-test-form"] button[type="submit"]'),
   ).toBeDisabled();
   await shot("smtp-disabled-desktop");
+
+  await page.getByRole("button", { name: "配置 SMTP", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(100);
+  const smtpScrollY = await page.evaluate(async () => {
+    let previous = window.scrollY,
+      stableFrames = 0;
+    for (let frame = 0; frame < 120; frame++) {
+      await new Promise(requestAnimationFrame);
+      const current = window.scrollY;
+      stableFrames = Math.abs(current - previous) < 0.5 ? stableFrames + 1 : 0;
+      if (stableFrames >= 4) return current;
+      previous = current;
+    }
+    throw new Error("SMTP panel scroll did not settle");
+  });
+  await page.getByRole("link", { name: "财务设置", exact: true }).click();
+  await financialReady();
+  await expect(page.locator("#main")).toBeFocused();
+  await shot("financial-navigation-top");
+  await page.goBack();
+  await expect(page.locator("h1")).toHaveText("扩展中心");
+  await expect
+    .poll(() =>
+      page.evaluate((saved) => Math.abs(window.scrollY - saved), smtpScrollY),
+    )
+    .toBeLessThan(2);
+  await page.goForward();
+  await financialReady();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+
   await page.getByRole("link", { name: "版本更新", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("版本更新");
   const updateStatus = await json("/admin/updates");

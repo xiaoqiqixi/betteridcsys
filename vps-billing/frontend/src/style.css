@@ -419,7 +419,7 @@ strong {
   margin-left: var(--sidebar);
 }
 .topbar {
-  height: 70px;
+  min-height: 70px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3345,6 +3345,10 @@ dd {
   white-space: pre-wrap;
 }
 @media (max-width: 1100px) {
+  .topbar {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
   .topbar-right {
     gap: 9px;
   }

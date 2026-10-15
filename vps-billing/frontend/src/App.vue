@@ -414,7 +414,8 @@ async function go(path: string) {
   query.value = "";
   await router.push("/" + path);
   await nextTick();
-  if (generation === navigationFocusGeneration) mainContent.value?.focus();
+  if (generation === navigationFocusGeneration)
+    mainContent.value?.focus({ preventScroll: true });
 }
 function explain(e: unknown) {
   return e instanceof ApiError
@@ -1146,7 +1147,8 @@ watch(page, async () => {
     const generation = ++navigationFocusGeneration;
     menuOpen.value = false;
     await nextTick();
-    if (generation === navigationFocusGeneration) mainContent.value?.focus();
+    if (generation === navigationFocusGeneration)
+      mainContent.value?.focus({ preventScroll: true });
   }
 });
 onMounted(() => {
@@ -1681,20 +1683,25 @@ onBeforeUnmount(() => {
                                     "查看支付与邮件服务配置。",
                                     "View registered payment and email adapters.",
                                   )
-                                : page === "settings"
+                                : page === "finance"
                                   ? tr(
-                                      "设置站点品牌、联系方式和默认偏好。",
-                                      "Manage site branding, contact details and defaults.",
+                                      "管理币种、金额格式和套餐独立价格。",
+                                      "Manage currencies, amount formats and independent plan prices.",
                                     )
-                                  : page === "updates"
+                                  : page === "settings"
                                     ? tr(
-                                        "检查核心与插件版本，生成可审计的主机更新交接。",
-                                        "Check core and plugin versions and request an audited host handoff.",
+                                        "设置站点品牌、联系方式和默认偏好。",
+                                        "Manage site branding, contact details and defaults.",
                                       )
-                                    : tr(
-                                        "你的身份、会话与安全信息。",
-                                        "Your profile, session and security information.",
-                                      )
+                                    : page === "updates"
+                                      ? tr(
+                                          "检查核心与插件版本，生成可审计的主机更新交接。",
+                                          "Check core and plugin versions and request an audited host handoff.",
+                                        )
+                                      : tr(
+                                          "你的身份、会话与安全信息。",
+                                          "Your profile, session and security information.",
+                                        )
               }}
             </p>
           </div>
