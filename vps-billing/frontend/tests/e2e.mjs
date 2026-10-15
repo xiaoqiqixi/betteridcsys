@@ -96,8 +96,8 @@ const shot = async (name) => {
     animations: "disabled",
   });
 };
-// Separate diagnostic screenshots never bypass or change shot()'s existing
-// navigation assertions. The wrapper validates and labels probe JSON separately.
+// Boundary screenshots retain evidence before the wrapper enforces the complete
+// required matrix. Existing shot() navigation assertions remain independent.
 const boundaryShot = async (name) => {
   await mkdir(output, { recursive: true });
   await page.screenshot({
@@ -544,7 +544,7 @@ try {
         ? "AsterCloudLongBrandNameForResponsiveLayout"
         : "星屿云长品牌名称用于响应式界面核对",
     );
-    for (const width of [720, 721, 768]) {
+    for (const width of [320, 375, 720, 721, 768]) {
       await page.setViewportSize({ width, height: 900 });
       await expect
         .poll(() =>
@@ -576,14 +576,29 @@ try {
             .locator(".price-input")
             .first()
             .evaluate((element) => {
+              const prefix = element.querySelector("span:first-child");
               const code = element.querySelector("span:last-child");
               const input = element.querySelector("input");
+              const prefixRange = document.createRange();
+              prefixRange.selectNodeContents(prefix);
               const range = document.createRange();
               range.selectNodeContents(code);
+              const boxes = [prefix, input, code].map((node) =>
+                node.getBoundingClientRect(),
+              );
+              const center = (box) => box.top + box.height / 2;
               return (
+                prefixRange.getClientRects().length === 1 &&
                 range.getClientRects().length === 1 &&
                 code.getBoundingClientRect().width > 20 &&
                 input.getBoundingClientRect().width > 30 &&
+                input.scrollWidth <= input.clientWidth + 1 &&
+                boxes.every(
+                  (box) => Math.abs(center(box) - center(boxes[1])) <= 1,
+                ) &&
+                boxes[0].right <= boxes[1].left + 1 &&
+                boxes[1].right <= boxes[2].left + 1 &&
+                boxes[0].left >= element.getBoundingClientRect().left - 1 &&
                 code.getBoundingClientRect().right <=
                   element.getBoundingClientRect().right + 1
               );

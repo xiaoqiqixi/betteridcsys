@@ -29,7 +29,7 @@ def boundary_cases():
                 for width in ((721,) if surface == "breadcrumb" else browser_demo.BOUNDARY_WIDTHS):
                     box = {"x": 0, "y": 0, "width": 100, "height": 20}
                     cases.append({
-                        "schema": "aster-responsive-boundaries-v1", "mode": "diagnostic",
+                        "schema": "aster-responsive-boundaries-v1", "mode": "assertion",
                         "surface": surface, "fixture": fixture, "locale": locale,
                         "viewport": {"width": width, "height": 900},
                         "document": {"viewport_width": width, "scroll_width": width},
@@ -403,22 +403,51 @@ class BrowserDemoTest(unittest.TestCase):
             poll.return_value.poll.return_value=[(17,browser_demo.select.POLLIN)]
             self.assertFalse(supervisor.live())
 
-    def test_validated_diagnostic_failure_is_separate_from_functional_result_and_private_logs(self):
+    def test_required_boundary_failure_retains_geometry_screenshots_and_cleanup_before_failing(self):
         cases = boundary_cases()
         cases[0]["document"]["scroll_width"] += 40
         cases[0]["checks"][0]["passed"] = False
         cases[0]["passed"] = False
         (self.root / "boundary-output.log").write_text("private arbitrary response must stay private\n" + boundary_lines(cases))
         result, summary = self.run_helper()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(summary["passed"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(summary["passed"])
+        self.assertTrue(summary["functional_passed"])
+        self.assertEqual(summary["stage"], "boundary-assertions")
+        self.assertIn("Required responsive boundary assertions failed", summary["reason"])
+        self.assertEqual(summary["boundary_probe"]["mode"], "assertion")
+        self.assertTrue(summary["boundary_probe"]["required"])
         self.assertFalse(summary["boundary_probe"]["passed"])
         self.assertEqual(summary["boundary_probe"]["case_count"], 50)
         self.assertEqual(summary["boundary_probe"]["failed_cases"], 1)
         lines = [line for line in result.stdout.splitlines() if line.startswith("BOUNDARY_PROBE_JSON ")]
         self.assertEqual(len(lines), 50)
         self.assertEqual([json.loads(line.split(" ", 1)[1]) for line in lines], cases)
+        self.assertEqual((self.output / "screenshots/fixture.png").read_bytes(), PNG)
         self.assertNotIn("private arbitrary response", result.stdout + result.stderr + json.dumps(summary))
+
+    def test_required_boundary_success_and_original_functional_checks_must_both_pass(self):
+        (self.root / "boundary-output.log").write_text(boundary_lines(boundary_cases()))
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(summary["passed"])
+        self.assertTrue(summary["functional_passed"])
+        self.assertTrue(summary["boundary_probe"]["passed"])
+        self.assertTrue(summary["boundary_probe"]["required"])
+        self.assertEqual(summary["boundary_probe"]["case_count"], 50)
+
+    def test_required_boundary_evidence_cannot_replace_a_missing_original_screenshot(self):
+        (self.root / "boundary-output.log").write_text(boundary_lines(boundary_cases()))
+        # The original screenshot inventory remains exact, even when every
+        # boundary assertion claims success.
+        test = self.repo / "vps-billing/frontend/tests/e2e.mjs"
+        test.write_text(test.read_text() + '\nawait shot("missing-original");\n')
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(summary["passed"])
+        self.assertFalse(summary["functional_passed"])
+        self.assertTrue(summary["boundary_probe"]["passed"])
+        self.assertIn("Screenshot evidence is incomplete", summary["reason"])
 
     def test_required_probe_matrix_cannot_disappear_without_failing_acceptance(self):
         test = self.repo / "vps-billing/frontend/tests/e2e.mjs"
@@ -453,9 +482,36 @@ class BoundaryEvidenceTest(unittest.TestCase):
     def test_complete_numeric_matrix_is_retained(self):
         result = self.parse()
         self.assertTrue(result["passed"])
+        self.assertEqual(result["mode"], "assertion")
+        self.assertTrue(result["required"])
         self.assertEqual(result["case_count"], 50)
         self.assertEqual(result["failed_cases"], 0)
         self.assertEqual(result["cases"], boundary_cases())
+
+    def test_document_width_may_exclude_a_classic_vertical_scrollbar(self):
+        cases = boundary_cases()
+        cases[0]["document"]["scroll_width"] = cases[0]["viewport"]["width"] - 15
+        result = self.parse(cases)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["case_count"], 50)
+
+    def test_native_input_scroll_metrics_determine_full_value_assertion_not_canvas(self):
+        cases = boundary_cases()
+        row = next(item for item in cases if item["surface"] == "financial")
+        field = next(item for item in row["measurements"] if item["id"] == "price-input")
+        field["text_width"] = 999_999  # Canvas estimate alone is not a clipping verdict.
+        self.assertTrue(self.parse(cases)["passed"])
+        field["scroll_width"] = field["client_width"] + 1
+        self.assertTrue(self.parse(cases)["passed"])
+        field["scroll_width"] += 1
+        with self.assertRaisesRegex(browser_demo.Failure, "exact synthetic schema"):
+            self.parse(cases)  # A claimed pass cannot contradict native metrics.
+        check = next(item for item in row["checks"] if item["id"] == "price-input-full-value-width")
+        check["passed"] = False
+        row["passed"] = False
+        result = self.parse(cases)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["failed_cases"], 1)
 
     def test_optional_absence_only_for_existing_nonprobe_source(self):
         self.assertIsNone(self.parse(raw="private non-diagnostic log\n", required=False))
@@ -482,7 +538,7 @@ class BoundaryEvidenceTest(unittest.TestCase):
     def test_schema_rejects_text_urls_extra_fields_and_arbitrary_identifiers(self):
         for field, value in (("url", "https://private.invalid"), ("text", "private text"),
                              ("fixture", "arbitrary"), ("locale", "other"),
-                             ("surface", "other"), ("mode", "assert")):
+                             ("surface", "other"), ("mode", "diagnostic")):
             cases = boundary_cases()
             cases[0][field] = value
             with self.subTest(field=field), self.assertRaises(browser_demo.Failure):

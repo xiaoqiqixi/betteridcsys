@@ -1,4 +1,5 @@
-// Diagnostic reproduction only: these measurements do not replace e2e gates.
+// Required responsive assertions, enforced by the sandboxed browser supervisor
+// after all cases, screenshots and existing functional assertions are collected.
 // Fixtures stay in the DOM; no input/change/submit event or API write is sent.
 const widths = [320, 375, 720, 721, 768, 1440];
 const locales = ["zh-CN", "en"];
@@ -237,6 +238,7 @@ async function record(page, surface, fixture, locale, measured) {
     const intentionallyHidden =
       surface === "login" &&
       page.viewportSize().width <= 720 &&
+      !item.visible &&
       ["login-eyebrow", "login-footnote"].includes(item.id);
     checks.push({
       id: item.id + "-visible",
@@ -258,7 +260,8 @@ async function record(page, surface, fixture, locale, measured) {
         id: item.id + "-fully-readable",
         passed:
           item.visible &&
-          item.line_count === 1 &&
+          item.line_count >= 1 &&
+          (item.id !== "price-code" || item.line_count === 1) &&
           item.visible_width + 1 >= item.text_width,
       });
     if (item.id === "price-input") {
@@ -268,13 +271,15 @@ async function record(page, surface, fixture, locale, measured) {
       });
       checks.push({
         id: "price-input-full-value-width",
-        passed: item.visible && item.content_width + 1 >= item.text_width,
+        // Native input scrolling is authoritative. Canvas text_width remains
+        // auxiliary evidence and cannot by itself establish clipping.
+        passed: item.visible && item.scroll_width <= item.client_width + 1,
       });
     }
   }
   const entry = {
     schema: "aster-responsive-boundaries-v1",
-    mode: "diagnostic",
+    mode: "assertion",
     surface,
     fixture,
     locale,

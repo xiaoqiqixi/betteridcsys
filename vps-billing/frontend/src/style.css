@@ -269,6 +269,14 @@ strong {
 .workspace-switch:hover {
   background: var(--page-background);
 }
+.workspace-switch > span:not(.workspace-icon) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-switch > .workspace-icon,
+.workspace-switch > svg {
+  flex-shrink: 0;
+}
 .workspace-icon {
   display: grid;
   place-items: center;
@@ -429,10 +437,14 @@ strong {
 }
 .breadcrumbs {
   display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 14px;
   font-size: 13px;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 .breadcrumbs b {
   font-weight: 450;
@@ -864,6 +876,7 @@ tr:last-child td {
 }
 .main-footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 15px;
   margin: 32px 0 0;
@@ -872,6 +885,10 @@ tr:last-child td {
   font-size: 11px;
   color: var(--text-secondary);
   line-height: 1.8;
+}
+.main-footer > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .main-footer i {
   font-style: normal;
@@ -1631,11 +1648,13 @@ dd {
   max-width: 1200px;
   margin: 60px auto 0;
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
   gap: 9vw;
   align-items: center;
 }
 .login-story {
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding-top: 13px;
 }
 .login-story h1 {
@@ -1654,6 +1673,7 @@ dd {
   color: var(--text-secondary);
 }
 .login-panel {
+  min-width: 0;
   max-width: 425px;
   justify-self: end;
   width: 100%;
@@ -1666,6 +1686,7 @@ dd {
   box-shadow: 0 7px 35px #2b436008;
 }
 .small-brand {
+  overflow-wrap: anywhere;
   font-size: 11px;
   letter-spacing: 2px;
   color: var(--text-secondary);
@@ -3346,6 +3367,8 @@ dd {
 }
 @media (max-width: 1100px) {
   .topbar {
+    flex-wrap: wrap;
+    gap: 12px 16px;
     padding-top: 12px;
     padding-bottom: 12px;
   }

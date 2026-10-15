@@ -1278,18 +1278,20 @@ select[aria-invalid="true"] {
 }
 .price-input {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 .price-input input {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 calc(17ch + 30px);
+  min-width: min(100%, calc(17ch + 30px));
   font-variant-numeric: tabular-nums;
 }
 .price-input span {
   flex-shrink: 0;
-  white-space: nowrap;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   font-weight: 400;
 }
 .price-switches {
@@ -1301,6 +1303,9 @@ select[aria-invalid="true"] {
 @media (max-width: 900px) {
   .currency-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .price-card {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 600px) {

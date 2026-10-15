@@ -1,6 +1,8 @@
 package billing
 
 import (
+	"aster/billing/internal/integrations"
+	"aster/billing/pkg/pluginapi/paymentv1"
 	"bytes"
 	"context"
 	"database/sql"
@@ -214,6 +216,85 @@ func TestPaymentMySQLReserveCommitAcknowledgementLost(t *testing.T) {
 	}
 	if count := cancellationSQLCount(t, f, "SELECT COUNT(*) FROM payment_settlements WHERE attempt_id=?", attempt.ID); count != 0 {
 		t.Fatal("ambiguous checkout created a settlement", count)
+	}
+}
+
+func TestPaymentMySQLCheckoutCommitAcknowledgementLost(t *testing.T) {
+	f := newCancellationSQLFixture(t)
+	order, invoice, _ := f.order(t)
+	wrapped, fault := storePaymentAckDatabase(t, f)
+	runtime := newPaymentHTTPRuntime(t)
+	runtime.duringCreate = func(context.Context, paymentv1.Config, paymentv1.Intent) {
+		// Reservation has already committed before the worker is called. Arm
+		// only its subsequent checkout-result transaction, never reservation.
+		if fault.committed.Load() != 1 || fault.injected.Load() != 0 {
+			t.Fatal("checkout reached worker without one acknowledged reservation")
+		}
+		fault.armed.Store(true)
+	}
+	app := NewApp(wrapped, Config{Demo: true, Origin: "http://localhost", Secret: ID() + ID(), PaymentRuntime: runtime})
+	first := storePaymentAckCheckout(app, f.owner, invoice)
+	if first.Code != 503 || storePaymentAckErrorCode(t, first) != "PAYMENT_STORAGE_UNAVAILABLE" || fault.injected.Load() != 1 || fault.committed.Load() != 2 {
+		t.Fatal("lost checkout-result acknowledgement was not reported as ambiguous storage failure", first.Code)
+	}
+	if calls, _ := runtime.counts(); calls != 1 {
+		t.Fatal("checkout-result fault did not follow exactly one worker call", calls)
+	}
+	// The original, independent pool must observe the real committed result,
+	// although the caller received an error instead of its checkout URL.
+	attempt, err := f.m.PaymentAttempt(f.ctx, f.owner, runtime.event(t, 0).AttemptID)
+	if err != nil || attempt.State != "checkout" || attempt.Checkout == nil || attempt.Expectation != paymentExpectation(order, invoice, runtime.selection.ID, runtime.selection.MerchantID) {
+		t.Fatal("lost acknowledgement discarded the committed checkout or expectation", attempt, err)
+	}
+	assertCancellationSQLState(t, f, order.ID, "pending_payment", "unpaid")
+	if _, err := f.m.CancelOrder(f.ctx, f.owner, order.ID, "synthetic checkout-result acknowledgement lost"); !errors.Is(err, ErrCancellationState) {
+		t.Fatal("committed checkout with lost acknowledgement allowed cancellation", err)
+	}
+	if count := cancellationSQLCount(t, f, "SELECT COUNT(*) FROM payment_settlements WHERE attempt_id=?", attempt.ID); count != 0 {
+		t.Fatal("lost checkout acknowledgement created a settlement", count)
+	}
+	second := storePaymentAckCheckout(app, f.owner, invoice)
+	var resumed struct {
+		Data integrations.Checkout `json:"data"`
+	}
+	if second.Code != 200 || json.Unmarshal(second.Body.Bytes(), &resumed) != nil || resumed.Data != *attempt.Checkout {
+		t.Fatal("retry did not return the original committed checkout", second.Code)
+	}
+	stored, err := f.m.PaymentAttempt(f.ctx, f.owner, attempt.ID)
+	if err != nil || !reflect.DeepEqual(stored, attempt) || fault.injected.Load() != 1 {
+		t.Fatal("checkout retry rewrote the durable attempt or repeated the fault", stored, err)
+	}
+	if count := cancellationSQLCount(t, f, "SELECT COUNT(*) FROM payment_attempts WHERE invoice_id=?", invoice.ID); count != 1 {
+		t.Fatal("checkout retry created another payment attempt", count)
+	}
+	event := runtime.event(t, 0)
+	raw, signature := runtime.signed(t, event)
+	for range 2 {
+		response := storePaymentAckNotify(app, raw, signature)
+		var received struct {
+			Data struct {
+				Received bool `json:"received"`
+			} `json:"data"`
+		}
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &received) != nil || !received.Data.Received {
+			t.Fatal("verified settlement or exact replay failed after checkout acknowledgement loss", response.Code)
+		}
+	}
+	assertCancellationSQLState(t, f, order.ID, "paid", "paid")
+	for _, check := range []struct {
+		query string
+		id    string
+	}{
+		{"SELECT COUNT(*) FROM payment_settlements WHERE attempt_id=?", attempt.ID},
+		{"SELECT COUNT(*) FROM audit_events WHERE target=? AND action='payment.settled'", order.ID},
+		{"SELECT COUNT(*) FROM outbox_events WHERE aggregate_id=? AND event_type='payment.settled'", order.ID},
+	} {
+		if count := cancellationSQLCount(t, f, check.query, check.id); count != 1 {
+			t.Fatal("checkout acknowledgement loss or notification replay duplicated financial records", count)
+		}
+	}
+	if calls, _ := runtime.counts(); calls != 1 || fault.injected.Load() != 1 {
+		t.Fatal("checkout retry or callback replay dispatched another worker checkout", calls)
 	}
 }
 

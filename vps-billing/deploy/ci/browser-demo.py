@@ -76,7 +76,7 @@ def validate_boundary_case(value):
     if type(value) is not dict or set(value) != fields:
         return False
     surface = value["surface"]
-    if (value["schema"] != "aster-responsive-boundaries-v1" or value["mode"] != "diagnostic"
+    if (value["schema"] != "aster-responsive-boundaries-v1" or value["mode"] != "assertion"
             or type(surface) is not str or surface not in BOUNDARY_TARGETS
             or value["fixture"] not in (("default",) if surface == "breadcrumb" else ("ascii", "cjk"))
             or value["locale"] not in ("zh-CN", "en") or type(value["passed"]) is not bool):
@@ -90,7 +90,7 @@ def validate_boundary_case(value):
             or type(document["viewport_width"]) is not int
             or document["viewport_width"] != viewport["width"]
             or type(document["scroll_width"]) is not int
-            or not boundary_number(document["scroll_width"], viewport["width"])):
+            or not boundary_number(document["scroll_width"], 1)):
         return False
     checks, measurements = value["checks"], value["measurements"]
     expected_checks = boundary_check_ids(surface)
@@ -115,6 +115,12 @@ def validate_boundary_case(value):
                 or type(item["line_count"]) is not int or not 0 <= item["line_count"] <= 512
                 or any(not boundary_number(item[key]) for key in numeric_fields)):
             return False
+        if name == "price-input":
+            native_value_fits = item["visible"] and item["scroll_width"] <= item["client_width"] + 1
+            reported = next(check["passed"] for check in checks
+                            if check["id"] == "price-input-full-value-width")
+            if reported != native_value_fits:
+                return False
     return True
 
 
@@ -165,7 +171,7 @@ def read_boundary_probes(log, required=False):
     expected.update(("breadcrumb", "default", locale, 721) for locale in ("zh-CN", "en"))
     if identities != expected:
         raise Failure("Boundary diagnostic matrix is incomplete")
-    return {"mode": "diagnostic", "passed": all(item["passed"] for item in cases),
+    return {"mode": "assertion", "required": True, "passed": all(item["passed"] for item in cases),
             "case_count": len(cases), "failed_cases": sum(not item["passed"] for item in cases),
             "cases": cases}
 
@@ -485,7 +491,7 @@ def run(repo, chromium, output):
     processes = None
     scratch = None
     listeners = []
-    summary = {"passed": False, "stage": "setup", "cleanup": False,
+    summary = {"passed": False, "functional_passed": False, "stage": "setup", "cleanup": False,
                "sandbox_required": True, "demo_mode": True, "real_email": False,
                "screenshots": []}
     prior = {}
@@ -568,8 +574,9 @@ def run(repo, chromium, output):
         probes_required = 'from "./responsive-boundaries.mjs"' in (frontend / "tests/e2e.mjs").read_text(encoding="utf-8")
         probes = read_boundary_probes(browser_log, required=probes_required)
         if probes is not None:
-            # A diagnostic failure is retained as such; it never replaces or
-            # relaxes the existing functional assertions and screenshot checks.
+            # Forward only strictly validated synthetic geometry. Defer the
+            # required boundary gate until the original screenshot inventory is
+            # retained, so a layout failure cannot discard its evidence.
             summary["boundary_probe"] = probes
             for item in probes["cases"]:
                 print("BOUNDARY_PROBE_JSON " + json.dumps(item, sort_keys=True, separators=(",", ":")))
@@ -582,8 +589,13 @@ def run(repo, chromium, output):
             raise Failure("Tracked or nonignored source inputs changed during browser acceptance")
         summary["stage"] = "evidence"
         summary["screenshots"] = retain_screenshots(screenshots, output / "screenshots", expected)
-        summary["passed"] = True
-        summary["stage"] = "complete"
+        summary["functional_passed"] = True
+        if probes is not None and not probes["passed"]:
+            summary["stage"] = "boundary-assertions"
+            summary["reason"] = "Required responsive boundary assertions failed"
+        else:
+            summary["passed"] = True
+            summary["stage"] = "complete"
     except Failure as error:
         summary["reason"] = str(error)
     except (OSError, ValueError, subprocess.SubprocessError):
