@@ -89,6 +89,26 @@ SAFE_REJECTIONS = {
     "Runtime secrets must use file references.": "runtime_environment_secret_reference_missing",
     "New private backup directory ACL could not be normalized.": "new_backup_default_acl_rejected",
     "New private backup directory metadata changed during creation.": "new_backup_directory_metadata_changed",
+    "Invalid operation journal structure.": "operation_journal_structure_rejected",
+    "Invalid target source in operation journal.": "operation_journal_target_source_rejected",
+    "Invalid operation journal state.": "operation_journal_state_rejected",
+    "Invalid database migration checkpoint.": "operation_journal_migration_rejected",
+    "Invalid operation receipt category.": "operation_receipt_category_rejected",
+    "Only completed target activation can claim HTTPS readiness.": "operation_receipt_readiness_rejected",
+    "Fresh install journal cannot describe a previous release.": "operation_journal_install_previous_rejected",
+    "Upgrade journal requires previous source identity.": "operation_journal_previous_source_rejected",
+    "Invalid operation journal timestamp.": "operation_journal_timestamp_rejected",
+    "Invalid operation checkpoint.": "operation_checkpoint_rejected",
+    "Invalid operation journal flag.": "operation_journal_flag_rejected",
+    "Invalid activation checkpoint result.": "activation_checkpoint_result_rejected",
+    "Successful operation journal is incomplete or inconsistent.": "operation_success_receipt_inconsistent",
+    "Rollback receipt is inconsistent.": "operation_rollback_receipt_inconsistent",
+    "Invalid stopped target activation checkpoint.": "stopped_target_checkpoint_rejected",
+    "Stopped target activation checkpoint is inconsistent.": "stopped_target_checkpoint_inconsistent",
+    "Stopped target activation found an unexpected current release.": "stopped_target_current_release_changed",
+    "Stopped target recovery requires verified HTTPS maintenance.": "stopped_target_maintenance_unverified",
+    "Stopped target recovery refuses an active service.": "stopped_target_service_not_stopped",
+    "Confirmed service or plugin inputs changed before stopped target recovery.": "stopped_target_service_or_plugin_changed",
 }
 
 
@@ -712,6 +732,11 @@ class Fixture:
     def status(self):
         return self.executor.status(str(self.state), self.spec["operation_id"])
 
+    def checked_journal(self):
+        raw = self.executor.read_file(str(self.state / self.spec["operation_id"] / "JOURNAL.json"),
+                                      self.executor.updater.MAX_JSON, private=True)
+        return self.executor.validate_journal(self.executor.updater.strict_json(raw))
+
     def login(self):
         return HTTPSClient(self.spec["origin"], self.resources.control / "ca.pem").login("admin@executor-ci.invalid", self.password)
 
@@ -987,6 +1012,115 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
             "repeat_migration_data_unchanged": True, "scope": "separate-legacy-schema-fixture-not-version-upgrade"}
 
 
+def late_schema_native(executor, fixture):
+    """Change only this fixture after actual target activation, exactly once."""
+    class LateSchema(executor.Native):
+        def __init__(self, spec):
+            super().__init__(spec)
+            self.injected = False
+            self.activation_was_done = False
+            self.migration_calls = 0
+            self.target_starts = 0
+            self.data_before_fault = None
+
+        def api(self, release, environment, command_name, allow_failure=False):
+            if command_name == "-migrate" and release == fixture.candidate:
+                self.migration_calls += 1
+            return super().api(release, environment, command_name, allow_failure)
+
+        def service(self, verb, unit=None):
+            if verb == "start" and unit == self.spec["api_unit"] and os.readlink(fixture.root / "current") == fixture.candidate:
+                self.target_starts += 1
+            return super().service(verb, unit)
+
+        def preflight(self, release, environment):
+            if not self.injected and release == fixture.candidate and environment.get("MYSQL_DSN_FILE") == str(fixture.config / "secrets/mysql_runtime_dsn"):
+                journal = fixture.checked_journal()
+                require(journal["steps"].get("activate", {}).get("status") == "done" and
+                        journal["database_migration"] == {"started": True, "completed": True} and
+                        self.target_starts == 1, "Late schema fixture did not reach completed candidate activation")
+                fixture.confirm_current(fixture.candidate)
+                require(super().service("show", self.spec["api_unit"]) == "active", "Late schema fixture candidate was not active")
+                self.activation_was_done = True
+                self.data_before_fault = fixture.full_data_hash()
+                fixture.resources.sql("ALTER TABLE plans MODIFY COLUMN cpu SMALLINT NOT NULL;", database=self.spec["database"])
+                self.injected = True
+            return super().preflight(release, environment)
+    return LateSchema(fixture.spec)
+
+
+def late_schema_recovery(args, resources, executor, candidate, baseline, overrides):
+    stage("late-schema-official-baseline-install")
+    late = Fixture(resources, executor, "late", candidate, baseline, overrides)
+    token = executor.updater.load_protected_token(str(args.github_token_file), executor.updater._Trust())
+    prepared = executor.manager.prepare("0.5.1", late.baseline, api=executor.updater.Official(token))
+    require(prepared["status"] == "prepared", "Late-schema actual official baseline preparation failed")
+    verify_published_baseline(late.baseline)
+    late.spec["release_directory"] = late.baseline
+    late.plan()
+    require(late.execute()["status"] == "succeeded", "Late-schema fixture baseline install failed")
+    late.upgrade()
+    fault = late_schema_native(executor, late)
+    for resume in (False, True):
+        stage("late-schema-failed-resume" if resume else "late-schema-fault-after-activation")
+        try:
+            late.execute(native=fault, resume=resume)
+            raise AcceptanceFailure("Late incompatible physical schema unexpectedly passed recovery")
+        except executor.Rejected:
+            pass
+        hold = late.status()
+        journal = late.checked_journal()
+        activation = journal["steps"].get("activate", {})
+        require(fault.injected and fault.activation_was_done and fault.migration_calls == 1 and fault.target_starts == 1,
+                "Late-schema held retry repeated migration or target startup")
+        require(hold["status"] == "needs_manual_recovery" and hold["maintenance"] is True and
+                hold["program_rollback"] == "blocked_schema_or_readiness" and
+                hold["service_action"] == "stopped" and hold["https_ready"] is False and
+                hold["active_release_changed"] is True and
+                hold["database_migration"] == {"started": True, "completed": True},
+                "Late incompatible schema did not retain completed migration under maintenance")
+        require(activation.get("status") == "started" and activation.get("result", {}).get("recovery_stopped") is True,
+                "Late-schema hold lacks the explicit stopped-activation recovery checkpoint")
+        require(os.readlink(late.root / "current") == late.candidate and
+                executor.Native(late.spec).service("show", late.spec["api_unit"]) in {"inactive", "failed"} and
+                fault.https("/api/v1/session")[0] == 503,
+                "Late-schema hold did not preserve target selection with stopped writes and HTTPS maintenance")
+        require(resources.sql("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='plans' AND COLUMN_NAME='cpu';",
+                              database=late.spec["database"]) == "smallint" and late.full_data_hash() == fault.data_before_fault,
+                "Late-schema failure changed fixture data or blindly restored database state")
+        environment = executor.read_environment(str(late.config / "api.env"))[0]
+        environment["MYSQL_DSN_FILE"] = late.spec["migrator_dsn_file"]
+        old = fault.preflight(late.baseline, environment)
+        require(old["exit_code"] != 0 and old["database"]["status"] == "incompatible",
+                "Actual published old program accepted the late incompatible schema")
+    fact(args.evidence, "late-schema-hold", dict(hold,
+         fixture_fault="real-required-cpu-column-changed-to-smallint-after-completed-activation",
+         activation_was_done_at_injection=True, stopped_activation_recovery_checkpoint=True,
+         failed_resume_did_not_restart_target=True, migration_command_count=1, target_start_attempts=1,
+         actual_published_old_schema_guard="incompatible", retained_database_data_unchanged=True,
+         failed_resume_retained_incompatible_column_type=True, full_table_data_sha256=fault.data_before_fault,
+         automatic_database_restore=False))
+    stage("late-schema-reviewed-manual-repair")
+    resources.sql("ALTER TABLE plans MODIFY COLUMN cpu INT NOT NULL;", database=late.spec["database"])
+    repaired = late.execute(native=fault, resume=True)
+    require(repaired["status"] == "succeeded" and repaired["program_rollback"] == "none" and
+            repaired["operation_id"] == hold["operation_id"] and
+            fault.migration_calls == 1 and fault.target_starts == 2,
+            "Late-schema manual repair did not reactivate the target without repeating migration")
+    require(late.status() == repaired, "Late-schema repaired journal failed independent status validation")
+    require(late.full_data_hash() == fault.data_before_fault, "Late-schema repaired recovery changed fixture data")
+    live = late.confirm_current(late.candidate)
+    receipt = late.verify_status_api(repaired)
+    require(late.execute(native=fault, resume=True) == repaired and fault.migration_calls == 1 and fault.target_starts == 2 and
+            late.confirm_current(late.candidate)["api_pid"] == live["api_pid"],
+            "Late-schema repaired terminal retry changed the receipt or restarted the target")
+    return dict(repaired, **live, **receipt, activation_was_done_at_injection=True,
+                stopped_activation_recovery_checkpoint=True, migration_command_count=1,
+                target_start_attempts=2, independently_validated_journal=True, terminal_resume_idempotent=True,
+                repaired_database_data_unchanged=True, full_table_data_sha256=fault.data_before_fault,
+                manual_fixture_repair="required-cpu-column-restored-to-int", automatic_database_restore=False)
+
+
 def run_scenarios(args, candidate, baseline):
     executor = module("core_acceptance_executor", "core-operation.py")
     executor.Native = diagnostic_native(executor)
@@ -1211,11 +1345,13 @@ def run_scenarios(args, candidate, baseline):
         fact(args.evidence, "unknown-schema-recovered", dict(repaired, **repaired_live, **repaired_api,
              independently_validated_journal=True, terminal_resume_idempotent=True,
              manual_fixture_repair="required-cpu-column-restored-to-int", automatic_database_restore=False))
+        fact(args.evidence, "late-schema-recovered", late_schema_recovery(args, resources, executor, candidate, baseline, overrides))
         fact(args.evidence, "core-native", {"status": "passed", "candidate_source_commit": candidate["source_commit"],
              "candidate_version": candidate["version"], "published_baseline": "0.5.1", "actual_native_executor": True,
              "fresh_install": True, "published_to_candidate_upgrade": True, "interrupt_resume": True,
              "compatible_program_rollback": True, "unknown_schema_manual_recovery": True,
              "manual_recovery_receipt_and_terminal_resume_verified": True,
+             "late_readiness_schema_hold_and_reactivation_verified": True,
              "separate_actual_legacy_schema_6_to_7_migration": True,
              "separate_empty_database_restore": True, "new_release_schema_delta": False,
              "production_deployment": False, "real_mail_or_payment": False})

@@ -990,6 +990,247 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual([event for event in self.native.events if event[:2] == ("service", "start")], [])
         self.assertEqual(self.native.active, "inactive")
 
+    def hold_activated_target(self, failure_point="readiness"):
+        """Offline physical-schema fault after the activation receipt is done."""
+        digest = self.plan()["plan_sha256"]
+        fault = {"armed": True, "schema_unknown": False}
+        original_preflight = self.native.preflight
+        original_https = self.native.https
+        original_identity = self.native.process_identity
+
+        def preflight(release, environment):
+            report = original_preflight(release, environment)
+            journal = self.read_journal()
+            activated = journal["steps"].get("activate", {}).get("status") == "done"
+            ready = journal["steps"].get("readiness", {}).get("status")
+            if fault["armed"] and activated and (
+                    failure_point == "readiness" and ready == "started" or
+                    failure_point == "finish" and ready == "done"):
+                fault.update(armed=False, schema_unknown=True)
+            if fault["schema_unknown"]:
+                # Keep the complete migration ledger: it cannot prove that
+                # physical tables still match either verified program.
+                report["exit_code"] = 1
+                report["database"]["status"] = "incompatible"
+            return report
+
+        def https(path):
+            if failure_point == "static" and fault["armed"] and path == "/index.html":
+                self.assertEqual(self.read_journal()["steps"]["readiness"]["status"], "done")
+                self.assertFalse((self.config / "maintenance").exists())
+                fault.update(armed=False, schema_unknown=True)
+                return 200, b"Unexpected offline static entry\n"
+            return original_https(path)
+
+        def process_identity(release):
+            # Unlike a permissive host double, a stopped API cannot supply a
+            # verifiable PID. This is the original late-resume failure trigger.
+            updater.require(self.native.active == "active", "Offline API is stopped.")
+            return original_identity(release)
+
+        self.native.preflight = preflight
+        self.native.https = https
+        self.native.process_identity = process_identity
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest)
+        self.assertFalse(fault["armed"])
+        self.assert_activated_target_held()
+        ready = self.read_journal()["steps"]["readiness"]["status"]
+        self.assertEqual(ready, "started" if failure_point == "readiness" else "done")
+        return digest, fault
+
+    def assert_activated_target_held(self):
+        journal = self.read_journal()
+        operation.validate_journal(journal)
+        self.assertEqual(journal["status"], "recovery_required")
+        self.assertEqual(journal["program_rollback"], "blocked_schema_or_readiness")
+        self.assertEqual(journal["database_migration"], {"started": True, "completed": True})
+        self.assertEqual(journal["steps"]["migrate"]["status"], "done")
+        self.assertEqual(journal["steps"]["activate"], {"status": "started", "result": {"recovery_stopped": True}})
+        self.assertTrue(journal["maintenance"])
+        self.assertFalse(journal["https_ready"])
+        self.assertEqual((self.config / "maintenance").read_bytes(), b"Aster maintenance\n")
+        self.assertEqual(os.readlink(self.current), str(self.target))
+        self.assertEqual(self.native.active, "inactive")
+        self.assertEqual([event[1] for event in self.native.events if event[0] == "api"], ["-migrate"])
+        self.assertEqual(len([event for event in self.native.events if event[0] == "backup"]), 1)
+        self.assertEqual(self.native.admin_count, 1)
+
+    def repair_activated_target(self, failure_point):
+        digest, fault = self.hold_activated_target(failure_point)
+        starts = [event for event in self.native.events if event[:2] == ("service", "start")]
+        self.assertEqual(len(starts), 1)
+        # A completed migration receipt never authorizes restarting an unknown
+        # physical schema, even on another exact-plan resume.
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest, resume=True)
+        self.assert_activated_target_held()
+        self.assertEqual([event for event in self.native.events if event[:2] == ("service", "start")], starts)
+        fault["schema_unknown"] = False  # Independent operator repair only.
+        before_resume = len(self.native.events)
+        result = self.execute(digest, resume=True)
+        resumed = self.native.events[before_resume:]
+        start = next(i for i, event in enumerate(resumed) if event[:2] == ("service", "start"))
+        schema_checks = [event for event in resumed[:start] if event[0] == "preflight"]
+        self.assertTrue(schema_checks)
+        self.assertEqual(schema_checks[-1][1], str(self.target))
+        self.assertEqual(schema_checks[-1][2]["MYSQL_DSN_FILE"], self.spec["migrator_dsn_file"])
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["program_rollback"], "none")
+        self.assertTrue(result["https_ready"])
+        self.assertFalse(result["maintenance"])
+        self.assertEqual(os.readlink(self.current), str(self.target))
+        self.assertEqual(self.native.active, "active")
+        self.assertEqual([event[1] for event in self.native.events if event[0] == "api"], ["-migrate"])
+        self.assertEqual(len([event for event in self.native.events if event[:2] == ("service", "start")]), 2)
+        operation.validate_journal(self.read_journal())
+        self.assertEqual(operation.status(str(self.state), self.spec["operation_id"], self.trust), result)
+        self.assertNotIn("recovery_stopped", json.dumps(result))
+        self.assertNotIn(CANARY, self.journal().read_text())
+        before_terminal = list(self.native.events)
+        self.assertEqual(self.execute(digest, resume=True), result)
+        self.assertEqual(self.native.events, before_terminal)
+
+    def test_completed_activation_unknown_readiness_stays_stopped_until_schema_repair(self):
+        self.repair_activated_target("readiness")
+
+    def test_completed_readiness_finish_failure_can_resume_target_after_schema_repair(self):
+        self.repair_activated_target("finish")
+
+    def test_completed_readiness_static_failure_restores_maintenance_and_can_resume_target(self):
+        self.repair_activated_target("static")
+
+    def test_stopped_target_recovery_requires_exact_marker_and_actual_https_maintenance(self):
+        digest, _ = self.hold_activated_target()
+        starts = [event for event in self.native.events if event[:2] == ("service", "start")]
+        (self.config / "maintenance").write_bytes(b"Unknown maintenance marker\n")
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest, resume=True)
+        self.assertEqual((self.config / "maintenance").read_bytes(), b"Unknown maintenance marker\n")
+        self.assertEqual([event for event in self.native.events if event[:2] == ("service", "start")], starts)
+        (self.config / "maintenance").write_bytes(b"Aster maintenance\n")
+        original_https = self.native.https
+        def bypassed_maintenance(path):
+            return (200, b"Unexpected bypass") if path.startswith("/api/") else original_https(path)
+        self.native.https = bypassed_maintenance
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest, resume=True)
+        self.assert_activated_target_held()
+        self.assertEqual([event for event in self.native.events if event[:2] == ("service", "start")], starts)
+
+    def test_stopped_target_recovery_refuses_unexpected_current_or_running_service(self):
+        digest, _ = self.hold_activated_target()
+        starts = [event for event in self.native.events if event[:2] == ("service", "start")]
+        self.current.unlink()
+        self.current.symlink_to(self.old)
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest, resume=True)
+        self.assertEqual(os.readlink(self.current), str(self.old))
+        self.assertEqual([event for event in self.native.events if event[:2] == ("service", "start")], starts)
+        self.current.unlink()
+        self.current.symlink_to(self.target)
+        self.native.active = "active"  # Model an unapproved external restart.
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest, resume=True)
+        self.assert_activated_target_held()
+        self.assertEqual([event for event in self.native.events if event[:2] == ("service", "start")], starts)
+
+    def test_stopped_target_private_marker_validation_precedes_all_host_effects(self):
+        digest, _ = self.hold_activated_target()
+        journal = self.read_journal()
+        malformed = [dict(status="started", result=value) for value in (None, [], True)]
+        malformed += [dict(status="started", result={"recovery_stopped": value})
+                      for value in (False, 1, "true", None)]
+        malformed += [{"status": "done", "result": {"recovery_stopped": True}},
+                      {"status": "started", "result": {"recovery_stopped": True, "extra": True}}]
+        before = list(self.native.events)
+        for record in malformed:
+            changed = copy.deepcopy(journal)
+            changed["steps"]["activate"] = record
+            self.journal().write_bytes(updater.json_bytes(changed))
+            with self.subTest(record=record), self.assertRaises(updater.Rejected):
+                self.execute(digest, resume=True)
+            self.assertEqual(self.native.events, before)
+            self.assertEqual(self.native.active, "inactive")
+            self.assertEqual(os.readlink(self.current), str(self.target))
+
+    def test_recovery_stop_checkpoint_is_saved_before_old_schema_probe(self):
+        original_preflight = self.native.preflight
+        observed = []
+        def preflight(release, environment):
+            report = original_preflight(release, environment)
+            journal = self.read_journal()
+            if journal["steps"].get("activate", {}).get("status") == "done":
+                report["exit_code"] = 1
+                report["database"]["status"] = "incompatible"
+            if release == str(self.old) and journal["database_migration"]["completed"]:
+                self.assertEqual(journal["steps"]["activate"], {"status": "started", "result": {"recovery_stopped": True}})
+                self.assertEqual(journal["service_action"], "stopped")
+                self.assertEqual(self.native.active, "inactive")
+                observed.append(True)
+                report["exit_code"] = 1
+                report["database"]["status"] = "incompatible"
+            return report
+        self.native.preflight = preflight
+        with self.assertRaises(updater.Rejected):
+            self.execute()
+        self.assertEqual(observed, [True])
+        self.assert_activated_target_held()
+
+    def test_late_failure_still_rolls_back_when_old_schema_and_readiness_are_verified(self):
+        digest = self.plan()["plan_sha256"]
+        original_https = self.native.https
+        def https(path):
+            if path == "/readyz" and os.readlink(self.current) == str(self.target):
+                raise updater.Rejected("Offline target readiness failure")
+            return original_https(path)
+        self.native.https = https
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest)
+        journal = self.read_journal()
+        operation.validate_journal(journal)
+        self.assertEqual(journal["status"], "rolled_back")
+        self.assertEqual(journal["program_rollback"], "verified_old_schema")
+        self.assertEqual(journal["service_action"], "previous_started")
+        self.assertEqual(journal["steps"]["activate"], {"status": "started", "result": {"recovery_stopped": True}})
+        self.assertEqual(os.readlink(self.current), str(self.old))
+        self.assertEqual(self.native.active, "active")
+        self.assertTrue((self.config / "maintenance").exists())
+        self.assertEqual([event[1] for event in self.native.events if event[0] == "api"], ["-migrate"])
+        before = list(self.native.events)
+        self.assertEqual(self.execute(digest, resume=True)["status"], "rolled_back")
+        self.assertEqual(self.native.events, before)
+
+    def test_ordinary_started_activation_reconciles_without_stopped_target_marker(self):
+        digest = self.plan()["plan_sha256"]
+        original_edge = self.native.edge
+        original_preflight = self.native.preflight
+        interrupted = []
+        def edge(action):
+            if action == "reload" and not interrupted:
+                interrupted.append(True)
+                raise updater.Rejected("Offline activation interruption")
+            return original_edge(action)
+        def preflight(release, environment):
+            report = original_preflight(release, environment)
+            if release == str(self.old) and self.native.migrated:
+                report["exit_code"] = 1
+                report["database"]["status"] = "incompatible"
+            return report
+        self.native.edge = edge
+        self.native.preflight = preflight
+        with self.assertRaises(updater.Rejected):
+            self.execute(digest)
+        journal = self.read_journal()
+        self.assertEqual(journal["status"], "recovery_required")
+        self.assertEqual(journal["steps"]["activate"], {"status": "started"})
+        self.assertEqual(self.native.active, "inactive")
+        result = self.execute(digest, resume=True)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual([event[1] for event in self.native.events if event[0] == "api"], ["-migrate"])
+        self.assertEqual(os.readlink(self.current), str(self.target))
+        operation.validate_journal(self.read_journal())
+
     def test_manual_schema_repair_then_verified_resume_clears_stale_rollback_hold(self):
         digest = self.plan()["plan_sha256"]
         original_api = self.native.api

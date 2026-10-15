@@ -883,6 +883,12 @@ def validate_journal(value):
         require(type(value[key]) is bool, "Invalid operation journal flag.")
     migration = value["database_migration"]
     require(isinstance(migration, dict) and set(migration) == {"started", "completed"} and all(type(flag) is bool for flag in migration.values()) and (not migration["completed"] or migration["started"]), "Invalid database migration checkpoint.")
+    activation = value["steps"].get("activate", {})
+    if "result" in activation:
+        result = activation["result"]
+        require(isinstance(result, dict), "Invalid activation checkpoint result.")
+        if "recovery_stopped" in result:
+            require(set(result) == {"recovery_stopped"} and result["recovery_stopped"] is True and activation["status"] == "started" and value["action"] == "upgrade" and migration["completed"], "Invalid stopped target activation checkpoint.")
     require(value["service_action"] in {"none", "stopped", "started", "previous_started"} and value["program_rollback"] in {"none", "verified_old_schema", "blocked_schema_or_readiness"} and value["error_code"] in {"none", "operation_failed", "interrupted_requires_recovery"}, "Invalid operation receipt category.")
     if value["status"] == "succeeded":
         finished = {"maintenance", "migrate", "activate", "readiness"} | ({"install_preflight", "provision", "first_admin", "configure", "boot_enablement"} if value["action"] == "install" else {"old_schema_preflight", "backup"})
@@ -1125,6 +1131,21 @@ class Operation:
         self.journal["service_action"] = "started"
         return {"active_release": spec["release_directory"]}
 
+    def reconcile_activation(self):
+        record = self.journal["steps"]["activate"]
+        if "recovery_stopped" in record.get("result", {}):
+            # A later failure stopped an already activated target. Reconcile
+            # only that durable fact, after independent operator schema repair;
+            # never infer that a completed migration makes the current DB safe.
+            require(self.journal["maintenance"] and self.journal["service_action"] == "stopped" and self.journal["database_migration"]["completed"], "Stopped target activation checkpoint is inconsistent.")
+            require(current_release(self.spec["instance_root"], self.trust) == self.spec["release_directory"], "Stopped target activation found an unexpected current release.")
+            require(read_file(self.spec["config_root"] + "/maintenance", 128, self.trust) == b"Aster maintenance\n" and self.native.https("/api/__aster_maintenance_probe")[0] == 503, "Stopped target recovery requires verified HTTPS maintenance.")
+            require(self.native.service("show", self.spec["api_unit"]) in {"inactive", "failed"}, "Stopped target recovery refuses an active service.")
+            require(unit_inputs(self.spec, self.planned["inputs"]["previous"], self.trust) == self.planned["inputs"]["units"] and plugin_facts(self.environment(), self.planned["inputs"]["target"]["version"], self.trust) == self.planned["inputs"]["plugins"], "Confirmed service or plugin inputs changed before stopped target recovery.")
+            self.native.validate_service(self.spec["release_directory"])
+            self.observe(self.spec["release_directory"], {"current"})
+        return self.activate()
+
     def readiness(self, static=False):
         for attempt in range(15):
             try:
@@ -1194,6 +1215,10 @@ class Operation:
                 require(target in {spec["release_directory"], previous["release_directory"]}, "Unexpected recovery link target.")
                 self.native.service("stop", spec["api_unit"])
                 require(self.native.service("show", spec["api_unit"]) in {"inactive", "failed"}, "New service did not stop.")
+                if target == spec["release_directory"] and self.journal["database_migration"]["completed"] and self.journal["steps"].get("activate", {}).get("status") == "done":
+                    self.journal["steps"]["activate"] = {"status": "started", "result": {"recovery_stopped": True}}
+                    self.journal["service_action"] = "stopped"
+                    self.save()
                 schema(self.native.preflight(previous["release_directory"], self.migrator()), previous, spec["database"], {"current"})
                 target = current_release(spec["instance_root"], self.trust)
                 require(target in {spec["release_directory"], previous["release_directory"]}, "Unexpected recovery link target.")
@@ -1235,7 +1260,7 @@ class Operation:
         if spec["action"] == "install":
             self.step("first_admin", self.bootstrap, self.reconcile_bootstrap)
             self.step("configure", self.configure, lambda: self.configure(reconcile=True))
-        self.step("activate", self.activate, self.activate)
+        self.step("activate", self.activate, self.reconcile_activation)
         self.step("readiness", self.readiness, self.readiness)
         if spec["action"] == "install":
             self.step("boot_enablement", self.enable_boot, self.enable_boot)

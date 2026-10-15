@@ -240,6 +240,121 @@ class NativePreparationSmokeGuardTests(unittest.TestCase):
                     self.assertEqual(set(path.name for path in root.iterdir()), {"sudo"})
 
 
+class LateSchemaFaultGuardTests(unittest.TestCase):
+    """Exercise the fault adapter only; these doubles are not native evidence."""
+    def adapter(self, journal=None, active="active"):
+        calls = []
+        result = object()
+
+        class Native:
+            def __init__(self, spec):
+                self.spec = spec
+
+            def api(self, release, environment, command_name, allow_failure=False):
+                calls.append(("api", release, environment, command_name, allow_failure))
+                if getattr(self, "api_failure", None) is not None:
+                    raise self.api_failure
+                return result
+
+            def service(self, verb, unit=None):
+                calls.append(("service", verb, unit))
+                if getattr(self, "service_failure", None) is not None:
+                    raise self.service_failure
+                return active
+
+            def preflight(self, release, environment):
+                calls.append(("preflight", release, environment))
+                return result
+
+        def checked_journal():
+            calls.append(("checked_journal",))
+            return journal if journal is not None else {
+                "steps": {"activate": {"status": "done"}},
+                "database_migration": {"started": True, "completed": True},
+            }
+
+        fixture = SimpleNamespace(root=Path("/owned-fixture"), candidate="/owned-fixture/releases/0.5.2",
+            config=Path("/owned-config"), spec={"api_unit": "owned-fixture.service", "database": "owned_database"},
+            checked_journal=checked_journal,
+            confirm_current=lambda release: calls.append(("confirm_current", release)),
+            full_data_hash=lambda: calls.append(("data_hash",)) or "synthetic-data-digest",
+            resources=SimpleNamespace(sql=lambda query, *, database: calls.append(("sql", query, database))))
+        return CORE.late_schema_native(SimpleNamespace(Native=Native), fixture), fixture, calls, result
+
+    def test_non_target_and_non_runtime_preflights_are_forwarded_without_fault(self):
+        native, fixture, calls, result = self.adapter()
+        runtime = {"MYSQL_DSN_FILE": str(fixture.config / "secrets/mysql_runtime_dsn")}
+        for release, environment in (("/owned-fixture/releases/0.5.1", runtime),
+                (fixture.candidate, {"MYSQL_DSN_FILE": "/owned-private/migrator_dsn"}),
+                (fixture.candidate, {})):
+            with self.subTest(release=release, environment=environment):
+                self.assertIs(native.preflight(release, environment), result)
+                self.assertEqual(calls[-1], ("preflight", release, environment))
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(native.injected)
+
+    def test_fault_refuses_earlier_or_uncertain_activation_before_schema_mutation(self):
+        for activation, migration, starts in (("started", {"started": True, "completed": True}, 1),
+                ("done", {"started": True, "completed": False}, 1),
+                ("done", {"started": False, "completed": False}, 1),
+                ("done", {"started": True, "completed": True}, 0),
+                ("done", {"started": True, "completed": True}, 2)):
+            with self.subTest(activation=activation, migration=migration, starts=starts):
+                native, fixture, calls, _ = self.adapter({"steps": {"activate": {"status": activation}},
+                    "database_migration": migration})
+                native.target_starts = starts
+                with self.assertRaises(CORE.AcceptanceFailure):
+                    native.preflight(fixture.candidate, {"MYSQL_DSN_FILE": str(fixture.config / "secrets/mysql_runtime_dsn")})
+                self.assertEqual(calls, [("checked_journal",)])
+                self.assertFalse(native.injected)
+
+    def test_fault_requires_live_target_then_mutates_only_owned_database_once(self):
+        native, fixture, calls, result = self.adapter()
+        environment = {"MYSQL_DSN_FILE": str(fixture.config / "secrets/mysql_runtime_dsn")}
+        with patch.object(CORE.os, "readlink", return_value=fixture.candidate):
+            native.service("start", fixture.spec["api_unit"])
+        self.assertIs(native.preflight(fixture.candidate, environment), result)
+        self.assertIs(native.preflight(fixture.candidate, environment), result)
+        self.assertEqual(calls, [
+            ("service", "start", fixture.spec["api_unit"]), ("checked_journal",),
+            ("confirm_current", fixture.candidate), ("service", "show", fixture.spec["api_unit"]),
+            ("data_hash",), ("sql", "ALTER TABLE plans MODIFY COLUMN cpu SMALLINT NOT NULL;", "owned_database"),
+            ("preflight", fixture.candidate, environment), ("preflight", fixture.candidate, environment),
+        ])
+        self.assertTrue(native.injected)
+        self.assertTrue(native.activation_was_done)
+        self.assertEqual(native.data_before_fault, "synthetic-data-digest")
+
+    def test_inactive_target_refuses_fault_before_hash_or_sql(self):
+        native, fixture, calls, _ = self.adapter(active="inactive")
+        native.target_starts = 1
+        with self.assertRaises(CORE.AcceptanceFailure):
+            native.preflight(fixture.candidate, {"MYSQL_DSN_FILE": str(fixture.config / "secrets/mysql_runtime_dsn")})
+        self.assertEqual([call[0] for call in calls], ["checked_journal", "confirm_current", "service"])
+        self.assertFalse(native.injected)
+
+    def test_attempt_counters_include_failed_forwarded_actions(self):
+        native, fixture, calls, result = self.adapter()
+        environment = {"MYSQL_DSN_FILE": "/owned-private/migrator_dsn"}
+        self.assertIs(native.api(fixture.candidate, environment, "-preflight", True), result)
+        self.assertIs(native.api("/owned-fixture/releases/0.5.1", environment, "-migrate"), result)
+        self.assertEqual(native.migration_calls, 0)
+        failure = RuntimeError("private-native-diagnostic")
+        native.api_failure = failure
+        for expected in (1, 2):
+            with self.assertRaises(RuntimeError) as caught:
+                native.api(fixture.candidate, environment, "-migrate", True)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(native.migration_calls, expected)
+        native.service_failure = failure
+        with patch.object(CORE.os, "readlink", return_value=fixture.candidate):
+            with self.assertRaises(RuntimeError) as caught:
+                native.service("start", fixture.spec["api_unit"])
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(native.target_starts, 1)
+        self.assertEqual(calls[-1], ("service", "start", fixture.spec["api_unit"]))
+
+
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
     def test_acl_wire_projection_excludes_ids_and_bounds_entries(self):
         raw = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", tag, permissions, identity)
@@ -345,16 +460,16 @@ class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
             self.assertNotIn("private", json.dumps(observed))
             self.assertNotIn(str(root), json.dumps(observed))
 
-    def test_prepared_verification_fixed_rejections_have_complete_safe_categories(self):
+    def test_checked_native_input_fixed_rejections_have_complete_safe_categories(self):
         scripts = SCRIPT.parent.parent / "scripts"
         targets = {
-            "core-operation.py": {"protected_path", "read_file", "sha_file", "sha_prepared_member", "_sha_protected_file", "prepared_release", "read_environment", "create_backup_directory"},
+            "core-operation.py": {"protected_path", "read_file", "sha_file", "sha_prepared_member", "_sha_protected_file", "prepared_release", "read_environment", "create_backup_directory", "validate_journal", "reconcile_activation"},
             "update-manager.py": {"stable", "exact_path", "protected_open", "read_protected", "strict_json", "static_elf"},
         }
         fixed = set()
         for filename, names in targets.items():
             parsed = ast.parse((scripts / filename).read_text())
-            found = {node.name: node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name in names}
+            found = {node.name: node for node in ast.walk(parsed) if isinstance(node, ast.FunctionDef) and node.name in names}
             self.assertEqual(set(found), names)
             for function in found.values():
                 for node in ast.walk(function):
@@ -368,6 +483,9 @@ class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
         for message in fixed:
             self.assertRegex(CORE.SAFE_REJECTIONS[message], r"^[a-z][a-z0-9_]{1,63}$")
             self.assertNotEqual(CORE.SAFE_REJECTIONS[message], message)
+            observed = CORE.failure_diagnostics(SimpleNamespace(fixtures=[]), RuntimeError(message))
+            self.assertEqual(observed["reason"], CORE.SAFE_REJECTIONS[message])
+            self.assertNotIn(message, json.dumps(observed))
 
     def test_legacy_api_report_projection_never_echoes_arbitrary_values(self):
         raw = json.dumps({"schema": 1, "read_only": True, "configuration_checked": True,
