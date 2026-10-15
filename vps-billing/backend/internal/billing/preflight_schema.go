@@ -74,12 +74,15 @@ func preflightChecks(version int) map[string]map[string]string {
 		checks["plan_prices"] = map[string]string{"plan_prices_chk_1": "amount_minor > 0"}
 		if version < 7 {
 			checks["plan_prices"]["plan_prices_chk_2"] = "currency IN ('CNY','USD')"
-			for _, table := range []string{"orders", "invoices", "services"} {
+			for _, table := range []string{"orders", "invoices"} {
 				checks[table][table+"_currency"] = "currency IN ('CNY','USD')"
 			}
 		}
 	}
 	if version >= 4 {
+		if version < 7 {
+			checks["services"]["services_currency"] = "currency IN ('CNY','USD')"
+		}
 		for table, column := range map[string]string{"plan_prices": "amount_minor", "orders": "total_minor", "invoices": "amount_minor", "services": "price_minor"} {
 			checks[table][table+"_exact_minor"] = column + " <= 9007199254740991"
 		}

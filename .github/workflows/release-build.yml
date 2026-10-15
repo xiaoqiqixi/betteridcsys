@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing reviewed raw runtime tag: v0.5.0 or smtp-v1.1.0; dispatch from main'
+        description: 'Existing reviewed raw runtime tag: v0.5.1 or smtp-v1.1.0; dispatch from main'
         required: true
         type: string
 
@@ -25,6 +25,9 @@ jobs:
     if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
     runs-on: ubuntu-24.04
     timeout-minutes: 55
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Read-only workflow controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,6 +59,8 @@ jobs:
       - name: Required regressions with native MySQL
         run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE/source"
       - name: Native systemd, TLS, business, backup and rollback acceptance
+        env:
+          ASTER_ACCEPT_GITHUB_TOKEN: ${{ github.token }}
         run: |
           acceptance_evidence="$RUNNER_TEMP/native-acceptance-evidence"
           RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/accept-native.sh --allow-isolated-runner "$GITHUB_WORKSPACE/source" "$acceptance_evidence"
@@ -106,6 +111,11 @@ jobs:
           name: native-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/native-acceptance-evidence/native-acceptance.json
+            ${{ runner.temp }}/native-acceptance-evidence/preflight-empty.json
+            ${{ runner.temp }}/native-acceptance-evidence/preflight-current.json
+            ${{ runner.temp }}/native-acceptance-evidence/public-core-prepare.json
+            ${{ runner.temp }}/native-acceptance-evidence/host-doctor.json
+            ${{ runner.temp }}/native-acceptance-evidence/backup-metadata.json
             ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json
             ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native-failure.json
             ${{ runner.temp }}/native-acceptance-evidence/cleanup.json

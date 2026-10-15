@@ -338,28 +338,42 @@ def unpack_archive(compressed, root):
         require(len(raw) <= MAX_EXPANDED and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail, "Invalid gzip framing or archive expansion.")
     except zlib.error as exc:
         raise Rejected("Invalid release gzip archive.") from exc
-    files, directories, offset = {}, set(), 0
+    files, directories, offset, long_name = {}, set(), 0, None
     while offset + 512 <= len(raw):
         block = raw[offset:offset + 512]
         if not any(block):
-            require(len(raw) - offset >= 1024 and not any(raw[offset:]), "Invalid tar terminal records.")
+            require(long_name is None and len(raw) - offset >= 1024 and not any(raw[offset:]), "Invalid tar terminal records.")
             break
         require(len(files) + len(directories) < 20000 and block[257:263] in (b"ustar\0", b"ustar "), "Unsupported or oversized tar archive.")
         require(octal(block[148:156]) == sum(block[:148]) + 8 * 32 + sum(block[156:]), "Tar header checksum mismatch.")
+        kind, size, mode = block[156:157], octal(block[124:136]), octal(block[100:108])
+        start = offset + 512
+        offset = start + (size + 511) // 512 * 512
+        require(offset <= len(raw), "Archive member exceeds its bounds.")
+        if kind == b"L":
+            # Historical GNU-produced Core resources contain long license paths.
+            # Accept only this one bounded name record, never generic extensions,
+            # chained overrides, long links, PAX, sparse files or extraction.
+            require(long_name is None and block[:100] == b"././@LongLink".ljust(100, b"\0") and block[257:265] == b"ustar  \0" and mode == 0o644 and octal(block[108:116]) == 0 and octal(block[116:124]) == 0 and not any(block[157:257]) and not any(block[265:]) and 102 <= size <= 1025 and not any(raw[start + size:offset]), "Unsupported GNU long-name record.")
+            octal(block[136:148])
+            payload = raw[start:start + size]
+            require(payload.endswith(b"\0") and b"\0" not in payload[:-1], "GNU long-name payload requires one terminal NUL.")
+            long_name = payload[:-1]
+            require(all(32 < value < 127 for value in long_name), "GNU long-name paths must be bounded ASCII.")
+            continue
         name_raw = block[:100].split(b"\0", 1)[0]
         prefix = block[345:500].split(b"\0", 1)[0] if block[257:263] == b"ustar\0" else b""
-        if prefix:
+        if long_name is not None:
+            require(kind in (b"0", b"\0", b"5") and block[257:265] == b"ustar  \0" and block[:100] == long_name[:100] and not any(block[345:]), "GNU long-name must immediately name its matching regular member.")
+            name_raw, long_name = long_name, None
+        elif prefix:
             name_raw = prefix + b"/" + name_raw
         try:
             name = name_raw.decode("ascii")
         except UnicodeError as exc:
             raise Rejected("Archive paths must be ASCII.") from exc
-        kind, size, mode = block[156:157], octal(block[124:136]), octal(block[100:108])
         parts = name.rstrip("/").split("/")
         require(parts[0] == root and all(re.fullmatch(r"[A-Za-z0-9@_.+-]+", part) and part not in {".", ".."} for part in parts) and kind in (b"0", b"\0", b"5") and not any(block[157:257]) and octal(block[108:116]) == 0 and octal(block[116:124]) == 0, "Archive contains unsafe paths, links or extension records.")
-        start = offset + 512
-        offset = start + (size + 511) // 512 * 512
-        require(offset <= len(raw), "Archive member exceeds its bounds.")
         relative = "/".join(parts[1:])
         if kind == b"5":
             require(size == 0 and mode == 0o755 and relative not in directories and relative not in files, "Invalid archive directory.")

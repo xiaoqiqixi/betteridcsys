@@ -179,6 +179,44 @@ for version in a b; do
   sudo -n install -m 644 "$scratch/release-id" "$opt/releases/$version/web/release-id.txt"
 done
 sudo -n install -m 755 "$ASTER_ACCEPT_NGINX_BIN" "$opt/tools/nginx"
+step 'Run the real host preparer against a normal published Core release'
+[[ -n ${ASTER_ACCEPT_GITHUB_TOKEN:-} ]] || fail 'A temporary read-only CI token is required for the public prepare smoke.'
+printf '%s' "$ASTER_ACCEPT_GITHUB_TOKEN" > "$scratch/public-read-token"
+unset ASTER_ACCEPT_GITHUB_TOKEN
+sudo -n install -o root -g root -m 600 "$scratch/public-read-token" "$config/public-read-token"
+for tool in core-manager.py update-manager.py; do
+  sudo -n install -o root -g root -m 755 "$project/deploy/scripts/$tool" "$opt/tools/$tool"
+done
+public_version=$(python3 - "$project/deploy/scripts/update-manager.py" "$scratch/public-read-token" "$core_version" <<'PYPUBLIC'
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location('public_prepare_metadata', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+release = module.Official(Path(sys.argv[2]).read_text()).json('/releases/latest')
+tag = release.get('tag_name', '')
+module.require(isinstance(tag, str) and tag.startswith('v'), 'Latest must be a normal Core release.')
+version = tag[1:]
+module.require((0, 5, 0) <= module.stable(version) <= module.stable(sys.argv[3]), 'Public prepare fixture version is outside this source compatibility.')
+print(version)
+PYPUBLIC
+)
+public_target="$opt/public-prepared-$public_version"
+sudo -n python3 -I "$opt/tools/core-manager.py" doctor --release-directory "$public_target" --socket "$mysql_socket" --listen-address 127.0.0.1:18080 > "$evidence/host-doctor.json"
+[[ ! -e $public_target && ! -L $public_target ]] || fail 'Read-only host doctor changed the target.'
+sudo -n python3 -I "$opt/tools/core-manager.py" prepare --version "$public_version" --release-directory "$public_target" --github-token-file "$config/public-read-token" > "$evidence/public-core-prepare.json"
+python3 - "$evidence/public-core-prepare.json" "$public_version" <<'PYPREPARED'
+import json
+from pathlib import Path
+import sys
+report = json.loads(Path(sys.argv[1]).read_text())
+assert report['status'] == 'prepared' and report['version'] == sys.argv[2]
+assert report['source_and_integrity_verified'] is True and report['program_executed'] is False
+assert report['active_release_changed'] is False and report['service_action'] == report['database_action'] == 'none'
+PYPREPARED
+[[ ! -e $opt/current && ! -L $opt/current ]] || fail 'Preparation unexpectedly activated a release.'
 sudo -n ln -s "$opt/releases/a" "$opt/current"
 sudo -n install -d -o root -g "$api_user" -m 750 "$config/secrets"
 sudo -n install -d -o root -g root -m 755 "$opt/plugins"
@@ -408,6 +446,7 @@ mapfile -t archives < <(find "$scratch/backups" -type f -name database.sql.gz)
 [[ ${#archives[@]} == 1 ]] || fail 'Backup did not publish exactly one complete archive.'
 backup_dir=$(dirname -- "${archives[0]}")
 (cd "$backup_dir" && sha256sum --check --status SHA256SUMS && gzip -t database.sql.gz)
+cp "$backup_dir/BACKUP.json" "$evidence/backup-metadata.json"
 backup_finished=$(monotonic_ns)
 [[ $("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()') == 0 ]] || fail 'Restore target is not empty.'
 restore_started=$(monotonic_ns)
@@ -455,4 +494,12 @@ summary = {
 Path(out,'native-acceptance.json').write_text(json.dumps(summary,ensure_ascii=False,sort_keys=True,indent=2)+'\n')
 print('NATIVE_ACCEPTANCE_JSON=' + json.dumps(summary, ensure_ascii=False, sort_keys=True))
 PY
+python3 - "$evidence" <<'PYFACTS'
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+for marker, name in [('PREFLIGHT_EMPTY_JSON', 'preflight-empty.json'), ('PREFLIGHT_CURRENT_JSON', 'preflight-current.json'), ('HOST_DOCTOR_JSON', 'host-doctor.json'), ('PUBLIC_CORE_PREPARE_JSON', 'public-core-prepare.json'), ('BACKUP_METADATA_JSON', 'backup-metadata.json')]:
+    print(marker + '=' + json.dumps(json.loads((root / name).read_text()), sort_keys=True))
+PYFACTS
 step 'Passed; cleaning only owned test services, accounts, databases and paths'

@@ -44,27 +44,22 @@ func (f cancellationSQLFixture) order(t *testing.T) (Order, Invoice, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orders, err := f.m.Orders(f.ctx, f.owner.ID)
+	// Unsafe-state cases deliberately retain malformed neighboring records.
+	// Reload only this pair to normalize MySQL timestamp precision without
+	// decoding unrelated history through the owner-wide list endpoints.
+	order, err = scanOrder(f.m.DB.QueryRowContext(f.ctx, "SELECT "+orderColumns+" FROM orders WHERE id=? AND user_id=?", order.ID, f.owner.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, persisted := range orders {
-		if persisted.ID == order.ID {
-			order = persisted
-			break
-		}
+	var invoiceID string
+	if err = f.m.DB.QueryRowContext(f.ctx, "SELECT id FROM invoices WHERE order_id=? AND user_id=?", order.ID, f.owner.ID).Scan(&invoiceID); err != nil {
+		t.Fatal(err)
 	}
-	invoices, err := f.m.Invoices(f.ctx, f.owner.ID)
+	invoice, err := f.m.Invoice(f.ctx, f.owner.ID, invoiceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, invoice := range invoices {
-		if invoice.OrderID == order.ID {
-			return order, invoice, key
-		}
-	}
-	t.Fatal("created order has no invoice")
-	return Order{}, Invoice{}, ""
+	return order, invoice, key
 }
 
 // Compare persisted history, including raw snapshots and the complete creation
@@ -333,6 +328,28 @@ func TestMySQLCancellationAuthorizationAndUnsafeStates(t *testing.T) {
 			assertNoCancellationSQLEffects(t, f, o.ID)
 		})
 	}
+}
+
+func TestMySQLCancellationIgnoresUnrelatedMalformedHistory(t *testing.T) {
+	f := newCancellationSQLFixture(t)
+	malformed, invoice, _ := f.order(t)
+	migrationExec(t, f.ctx, f.m.DB, "UPDATE orders SET currency_snapshot=NULL WHERE id=?", malformed.ID)
+	migrationExec(t, f.ctx, f.m.DB, "UPDATE invoices SET currency_snapshot=NULL WHERE id=?", invoice.ID)
+	before := cancellationSQLRecords(t, f, malformed.ID)
+	// Constructing and cancelling a healthy pair must not decode or repair the
+	// malformed neighbor. Its own cancellation must still fail closed.
+	healthy, healthyInvoice, _ := f.order(t)
+	out, err := f.m.CancelOrder(f.ctx, f.owner, healthy.ID, "Healthy order is no longer needed")
+	if err != nil || out.Order.ID != healthy.ID || out.Invoice.ID != healthyInvoice.ID || out.Order.Status != "cancelled" || out.Invoice.Status != "void" {
+		t.Fatal("unrelated malformed history blocked healthy cancellation", out, err)
+	}
+	if _, err = f.m.CancelOrder(f.ctx, f.owner, malformed.ID, "Malformed history requires review"); !errors.Is(err, ErrCancellationState) {
+		t.Fatal("malformed pair did not fail closed", err)
+	}
+	if after := cancellationSQLRecords(t, f, malformed.ID); !reflect.DeepEqual(before, after) {
+		t.Fatal("unrelated malformed history was changed", before, after)
+	}
+	assertNoCancellationSQLEffects(t, f, malformed.ID)
 }
 
 func TestMySQLCancellationConcurrentRetries(t *testing.T) {

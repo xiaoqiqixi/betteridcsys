@@ -107,7 +107,7 @@ if [[ $kind == core ]]; then
 else
   cp "$binary_root/plugin" "$publish/aster-smtp-${version}-linux-amd64"
 fi
-tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --format=gnu -C "$tmp" -cf - "$bundle_name" | gzip -n > "$publish/$bundle_name.tar.gz"
+tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --format=ustar -C "$tmp" -cf - "$bundle_name" | gzip -n > "$publish/$bundle_name.tar.gz"
 cp "$tmp/BUILD.json" "$publish/BUILD.json"
 (
   cd "$publish"

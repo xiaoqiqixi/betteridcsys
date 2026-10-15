@@ -165,6 +165,117 @@ class Fixture:
         return self.files[asset["name"]]
 
 
+class LongNameArchiveTest(unittest.TestCase):
+    """The historical producer uses exactly GNU's bounded LongLink marker."""
+    root = "aster-core-0.5.0-linux-amd64-resources"
+    relative = "licenses/npm/@babel_helper-validator-identifier@7.29.7/LICENSE"
+
+    @staticmethod
+    def checksum(raw, offset):
+        raw[offset + 148:offset + 156] = b" " * 8
+        value = sum(raw[offset:offset + 512])
+        raw[offset + 148:offset + 156] = ("%06o\0 " % value).encode()
+
+    def legal_archive(self, relative=None, extras=()):
+        # Python's fixture writer uses mode 0000 for generated extension records;
+        # the actual GNU tar producer uses 0644. Model its exact historical form.
+        compressed = archive({relative or self.relative: (b"Original license text\n", 0o644)}, "core", "0.5.0", extras=extras, distribution_format="raw-binaries-v1")
+        raw, offset = bytearray(gzip.decompress(compressed)), 0
+        while offset + 512 <= len(raw) and any(raw[offset:offset + 512]):
+            size = manager.octal(raw[offset + 124:offset + 136])
+            if raw[offset + 156:offset + 157] == b"L":
+                raw[offset + 100:offset + 108] = b"0000644\0"
+                self.checksum(raw, offset)
+            offset += 512 + (size + 511) // 512 * 512
+        return raw
+
+    def setUp(self):
+        self.raw = self.legal_archive()
+        offset = 0
+        while self.raw[offset + 156:offset + 157] != b"L":
+            offset += 512 + (manager.octal(self.raw[offset + 124:offset + 136]) + 511) // 512 * 512
+        self.extension = offset
+        self.size = manager.octal(self.raw[offset + 124:offset + 136])
+        self.payload = offset + 512
+        self.follower = self.payload + (self.size + 511) // 512 * 512
+
+    def parsed(self, raw):
+        return manager.unpack_archive(gzip.compress(raw, mtime=0), self.root)
+
+    def test_actual_gnu_long_name_shape_and_ustar_prefix_are_accepted(self):
+        self.assertEqual(self.size, 102)
+        self.assertEqual(self.raw[self.payload:self.payload + self.size], (self.root + "/" + self.relative).encode() + b"\0")
+        self.assertEqual(self.parsed(self.raw), {self.relative: (b"Original license text\n", 0o644)})
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode="w:gz", format=tarfile.USTAR_FORMAT) as stream:
+            directories = [self.root, self.root + "/licenses", self.root + "/licenses/npm", self.root + "/licenses/npm/" + self.relative.split("/")[2]]
+            for name in directories:
+                item = tarfile.TarInfo(name); item.type, item.mode = tarfile.DIRTYPE, 0o755
+                stream.addfile(item)
+            item = tarfile.TarInfo(self.root + "/" + self.relative)
+            item.mode, item.size = 0o644, 1
+            stream.addfile(item, io.BytesIO(b"x"))
+        self.assertEqual(manager.unpack_archive(output.getvalue(), self.root)[self.relative], (b"x", 0o644))
+
+    def test_long_name_bound_including_long_directories(self):
+        prefix = self.root + "/licenses/" + "/".join(["a" * 90] * 9) + "/"
+        full = prefix + "z" * (1024 - len(prefix))
+        self.assertEqual(len(full), 1024)
+        relative = full[len(self.root) + 1:]
+        self.assertIn(relative, self.parsed(self.legal_archive(relative)))
+        with self.assertRaises(manager.Rejected):
+            self.parsed(self.legal_archive(relative + "z"))
+
+    def test_marker_header_metadata_size_and_checksum_mutations_rejected(self):
+        for position, replacement in ((0, b"wrong-marker"), (20, b"x"), (100, b"0000755\0"), (108, b"0000001\0"), (116, b"0000001\0"), (124, b"00000000145\0"), (124, b"00000002002\0"), (124, b"\x80"), (136, b"\x80"), (157, b"x"), (257, b"ustar\0"), (263, b"00"), (265, b"x"), (297, b"x"), (329, b"x"), (345, b"x")):
+            raw = bytearray(self.raw)
+            raw[self.extension + position:self.extension + position + len(replacement)] = replacement
+            self.checksum(raw, self.extension)
+            with self.subTest(position=position, replacement=replacement), self.assertRaises(manager.Rejected):
+                self.parsed(raw)
+        raw = bytearray(self.raw); raw[self.extension + 148] ^= 1
+        with self.assertRaises(manager.Rejected):
+            self.parsed(raw)
+
+    def test_long_name_nul_ascii_and_block_padding_mutations_rejected(self):
+        for position, replacement in ((self.size - 1, b"x"), (10, b"\0"), (self.size - 2, b"\0"), (10, b"\xff"), (10, b"\x1f"), (self.size, b"x")):
+            raw = bytearray(self.raw)
+            raw[self.payload + position:self.payload + position + len(replacement)] = replacement
+            with self.subTest(position=position, replacement=replacement), self.assertRaises(manager.Rejected):
+                self.parsed(raw)
+
+    def test_pending_name_requires_one_matching_regular_follower(self):
+        for kind in (b"L", b"K", b"x", b"g", b"S", b"1", b"2", b"3", b"6"):
+            raw = bytearray(self.raw); raw[self.follower + 156:self.follower + 157] = kind
+            self.checksum(raw, self.follower)
+            with self.subTest(kind=kind), self.assertRaises(manager.Rejected):
+                self.parsed(raw)
+        for position, replacement in ((0, b"mismatch"), (257, b"ustar\0"), (263, b"00"), (345, b"prefix"), (157, b"link-target")):
+            raw = bytearray(self.raw)
+            raw[self.follower + position:self.follower + position + len(replacement)] = replacement
+            self.checksum(raw, self.follower)
+            with self.subTest(position=position), self.assertRaises(manager.Rejected):
+                self.parsed(raw)
+        for raw in (self.raw[:self.follower], self.raw[:self.follower] + b"\0" * 1024, self.raw[:self.follower] + self.raw[self.extension:self.follower] + self.raw[self.follower:]):
+            with self.assertRaises(manager.Rejected):
+                self.parsed(raw)
+
+    def test_effective_long_name_paths_and_duplicates_are_checked(self):
+        for prefix in (b"/", (self.root + "/../").encode(), b"wrong-root/"):
+            replacement = prefix + b"a" * (self.size - 1 - len(prefix))
+            self.assertEqual(len(replacement), self.size - 1)
+            raw = bytearray(self.raw)
+            raw[self.payload:self.payload + self.size] = replacement + b"\0"
+            raw[self.follower:self.follower + 100] = replacement[:100]
+            self.checksum(raw, self.follower)
+            with self.subTest(path=replacement), self.assertRaises(manager.Rejected):
+                self.parsed(raw)
+        duplicate = tarfile.TarInfo(self.root + "/" + self.relative)
+        duplicate.mode, duplicate.size = 0o644, 1
+        with self.assertRaises(manager.Rejected):
+            self.parsed(self.legal_archive(extras=[(duplicate, b"x")]))
+
+
 class HandoffTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="aster-update-test-")
@@ -255,6 +366,26 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(journal["status"], "rejected")
         self.assertEqual(journal["history"], ["staged", "rejected"])
         self.assertFalse(journal["installation_changed"])
+
+    def test_gnu_long_name_does_not_hide_resource_elf(self):
+        self.fixture = Fixture("core", raw=True)
+        self.fixture.bundle[LongNameArchiveTest.relative] = (elf(), 0o644)
+        self.fixture.refresh()
+        name = manager.archive_name("core", self.fixture.version, self.fixture.format)
+        raw, offset = bytearray(gzip.decompress(self.fixture.files[name])), 0
+        while offset + 512 <= len(raw) and any(raw[offset:offset + 512]):
+            size = manager.octal(raw[offset + 124:offset + 136])
+            if raw[offset + 156:offset + 157] == b"L":
+                raw[offset + 100:offset + 108] = b"0000644\0"
+                LongNameArchiveTest.checksum(raw, offset)
+            offset += 512 + (size + 511) // 512 * 512
+        self.fixture.files[name] = gzip.compress(raw, mtime=0)
+        self.fixture.provenance["assets"][name] = {"size": len(self.fixture.files[name]), "sha256": manager.digest(self.fixture.files[name])}
+        self.fixture.reseal()
+        self.save_handoff()
+        with self.assertRaisesRegex(manager.Rejected, "Resource archives cannot contain ELF"):
+            self.run_stage()
+        self.assertEqual(manager.status(str(self.state), "a" * 32, self.trust)["status"], "rejected")
 
     def test_core_without_backup_does_not_claim_ready_or_apply(self):
         self.fixture = Fixture("core")

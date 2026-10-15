@@ -150,6 +150,23 @@ func TestPreflightRequiresReviewedMySQLVendor(t *testing.T) {
 	}
 }
 
+func TestPreflightServiceCurrencyCheckStartsAtMigration4(t *testing.T) {
+	statement := "ALTER TABLE services ADD CONSTRAINT services_currency CHECK(currency IN ('CNY','USD'))"
+	if strings.Contains(schemaVersions[2], statement) || !strings.Contains(schemaVersions[3], statement) {
+		t.Fatal("service currency check introduction differs from the immutable migration sources")
+	}
+	for version := 1; version <= len(schemaVersions); version++ {
+		expected := preflightChecks(version)["services"]["services_currency"]
+		if version >= 4 && version < 7 {
+			if expected != "currency IN ('CNY','USD')" {
+				t.Fatalf("schema %d must require services_currency", version)
+			}
+		} else if expected != "" {
+			t.Fatalf("schema %d must not require services_currency", version)
+		}
+	}
+}
+
 func TestMySQLPreflightFreshAndPrefixes(t *testing.T) {
 	for _, version := range []int{0, 1, 2, 3, 4, 5, 6, 7} {
 		t.Run(string(rune('0'+version)), func(t *testing.T) {
@@ -233,6 +250,14 @@ func TestMySQLPreflightRejectsIncompatibleSchema(t *testing.T) {
 		migrationExec(t, ctx, m.DB, "ALTER TABLE orders ADD CONSTRAINT orders_currency_exact CHECK(CAST(currency AS BINARY) IN ('CNY','USD'))")
 		if _, err := m.SchemaStatus(ctx); err == nil {
 			t.Fatal("accepted partial check-only migration 5")
+		}
+	})
+	t.Run("partial_service_currency_migration", func(t *testing.T) {
+		m, ctx := migrationTestDatabase(t)
+		migrationHistoricalPrefix(t, ctx, m, 3)
+		migrationExec(t, ctx, m.DB, "ALTER TABLE services ADD CONSTRAINT services_currency CHECK(currency IN ('CNY','USD'))")
+		if _, err := m.SchemaStatus(ctx); err == nil {
+			t.Fatal("accepted migration 4 service check under schema 3 history")
 		}
 	})
 }
