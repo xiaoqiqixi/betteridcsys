@@ -194,6 +194,7 @@ type httpPerfFixture struct {
 	name, dsn           string
 	customer, adminID   string
 	cookie, adminCookie string
+	seed                string
 	closed              bool
 }
 
@@ -372,7 +373,11 @@ func httpPerfSeed(ctx context.Context, f *httpPerfFixture, seed string, p httpPe
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	f.seed = seed
+	return nil
 }
 
 func httpPerfDatasetHash(ctx context.Context, db *sql.DB) (httpPerfDataset, error) {
@@ -762,18 +767,20 @@ func httpPerfProbe(client *http.Client, address, path, cookie string, f *httpPer
 		}
 	case "/api/v1/admin/orders":
 		// A successful admin-only response with this fixture's admin cookie,
-		// plus orders from every expected customer, rules out measuring the
-		// smaller owner-filtered customer list by mistake.
+		// plus the exact seeded order IDs, rules out measuring the smaller
+		// owner-filtered customer list. Order JSON intentionally omits UserID;
+		// unique fixture timestamps determine each expected order and its owner.
 		var orders []Order
-		if cookie != f.adminCookie || cookie == f.cookie || json.Unmarshal(envelope.Data, &orders) != nil || len(orders) != min(1000, p.Orders) {
+		if cookie != f.adminCookie || cookie == f.cookie || f.seed == "" || p.Users < 1 || p.Orders < 1 || json.Unmarshal(envelope.Data, &orders) != nil || len(orders) != min(1000, p.Orders) {
 			return errors.New("performance admin order response does not match fixture")
 		}
-		owners := map[string]struct{}{}
+		owners := map[int]struct{}{}
 		for index, order := range orders {
-			if order.UserID == "" || order.UserID == f.adminID || (index > 0 && order.CreatedAt.After(orders[index-1].CreatedAt)) {
+			ordinal := p.Orders - 1 - index
+			if order.ID != httpPerfID(f.seed, fmt.Sprintf("order-%d", ordinal)) || (index > 0 && order.CreatedAt.After(orders[index-1].CreatedAt)) {
 				return errors.New("performance admin order scope or ordering does not match fixture")
 			}
-			owners[order.UserID] = struct{}{}
+			owners[ordinal%p.Users] = struct{}{}
 		}
 		if len(owners) != min(p.Users, len(orders)) {
 			return errors.New("performance admin order customer coverage does not match fixture")
