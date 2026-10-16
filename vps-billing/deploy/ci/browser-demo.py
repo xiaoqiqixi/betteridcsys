@@ -199,6 +199,14 @@ def clean_environment(source, scratch):
     return env
 
 
+def valid_browser_version_text(value):
+    """Recognize bounded version output; capabilities are checked by the browser suite."""
+    return bool(
+        re.fullmatch(r"(?:Google Chrome|Chromium) [0-9]{1,8}(?:\.[0-9]{1,8}){3}(?: (?:unknown|extended|beta|dev|canary))?", value)
+        or re.fullmatch(r"Chromium [0-9]{1,8}(?:\.[0-9]{1,8}){3} built on Debian GNU/Linux [0-9]{1,3}(?:\.[0-9]{1,3})? \([a-z][a-z0-9-]{0,31}\)", value)
+    )
+
+
 def validate_inputs(repo, chromium, output):
     if sys.platform != "linux" or os.uname().machine != "x86_64":
         raise Failure("Linux amd64 is required")
@@ -537,7 +545,10 @@ def run(repo, chromium, output):
         # Upstream HandleVersionSwitches prints GetChannelName after the version.
         # Direct execution without the wrapper's CHROME_VERSION_EXTRA reports
         # 'unknown'; preserve that honest channel label instead of inventing one.
-        if not re.fullmatch(r"(?:Google Chrome|Chromium) [0-9]{1,8}(?:\.[0-9]{1,8}){3}(?: (?:unknown|extended|beta|dev|canary))?", chrome_version):
+        # Debian's installed Chromium wrapper supplies its bounded build annotation.
+        # Keep the original output; parsing it neither authenticates the package nor
+        # replaces the later sandbox, functional, evidence and cleanup checks.
+        if not valid_browser_version_text(chrome_version):
             raise Failure("The validated Chrome executable reported an unexpected version: " + ascii(chrome_version[:160]))
         summary["browser_version"] = chrome_version
         summary["stage"] = "build-api"

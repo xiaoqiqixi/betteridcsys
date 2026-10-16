@@ -67,6 +67,39 @@ def wait_for(path, process, timeout=12):
     raise AssertionError("Fixture readiness timed out")
 
 
+class BrowserVersionTextTests(unittest.TestCase):
+    def test_upstream_formats_and_debian_build_annotation_are_recognized(self):
+        values = ["Google Chrome 1.0.0.0", "Google Chrome 154.0.8037.97",
+                  "Chromium 154.0.8037.57",
+                  "Chromium 154.0.8037.57 built on Debian GNU/Linux 13 (trixie)"]
+        values += [f"{brand} 155.0.8059.39 {channel}"
+                   for brand in ("Google Chrome", "Chromium")
+                   for channel in ("unknown", "extended", "beta", "dev", "canary")]
+        for value in values:
+            with self.subTest(value=value):
+                self.assertTrue(browser_demo.valid_browser_version_text(value))
+
+    def test_unrecognized_or_unbounded_version_text_is_rejected(self):
+        debian = "Chromium 154.0.8037.57 built on Debian GNU/Linux 13 (trixie)"
+        values = ["Firefox 154.0.8037.57", "HeadlessChrome 154.0.8037.57",
+                  "Google Chrome 154.0.8037", "Google Chrome 154.0.8037.57.1",
+                  "Chromium 123456789.0.8037.57", "Chromium 154.-1.8037.57",
+                  "Chromium 154.0.x.57", "Chromium １５４.0.8037.57",
+                  "Google Chrome 154.0.8037.57 stable", "Chromium 154.0.8037.57 nightly",
+                  debian.replace("Chromium", "Google Chrome", 1),
+                  debian.replace(" built on", " unknown built on", 1),
+                  debian.replace("Linux 13", "Linux 1000"),
+                  debian.replace("Linux 13", "Linux 13.1.2"),
+                  debian.replace("(trixie)", "()"), debian.replace("(trixie)", "(Trixie)"),
+                  debian.replace("(trixie)", "(trixie extra)"),
+                  debian.replace("(trixie)", "(" + "a" * 33 + ")"),
+                  debian + " forged", debian + " built on Debian GNU/Linux 13 (trixie)",
+                  debian + "\nextra line", debian.replace("trixie", "tri\x00xie")]
+        for value in values:
+            with self.subTest(value=value):
+                self.assertFalse(browser_demo.valid_browser_version_text(value))
+
+
 class BrowserDemoTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="aster-browser-helper-test-")
@@ -232,6 +265,31 @@ class BrowserDemoTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(summary["browser_version"], "Google Chrome 155.0.8059.39 unknown")
         self.assertTrue(summary["sandbox_required"])
+
+    def test_debian_version_continues_the_normal_fake_lifecycle_and_keeps_raw_output(self):
+        version = "Chromium 154.0.8037.57 built on Debian GNU/Linux 13 (trixie)"
+        executable(self.chrome, "#!/bin/sh\nprintf '" + version + "\\n'\n")
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(summary["browser_version"], version)
+        self.assertTrue(summary["sandbox_required"])
+        self.assertTrue(summary["functional_passed"])
+        self.assertTrue(summary["passed"])
+        self.assertEqual(summary["stage"], "complete")
+        for marker in (self.api_pid, self.preview_pid, self.browser_pid):
+            self.assertTrue(marker.exists(), marker.name)
+
+    def test_debian_version_does_not_bypass_a_sandbox_failure(self):
+        executable(self.chrome, "#!/bin/sh\nprintf 'Chromium 154.0.8037.57 built on Debian GNU/Linux 13 (trixie)\\n'\n")
+        self.mode.write_text("sandbox-fail")
+        result, summary = self.run_helper()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(summary["passed"])
+        self.assertFalse(summary["functional_passed"])
+        self.assertEqual(summary["stage"], "browser")
+        self.assertTrue(summary["sandbox_required"])
+        self.assertIn("no sandbox bypass", summary["reason"])
+        self.assertFalse((self.output / "screenshots").exists())
 
     def test_malformed_version_is_rejected_before_demo_services_start(self):
         executable(self.chrome, "#!/bin/sh\nprintf 'Google Chrome 155.0.8059.39 unknown\\nextra line\\n'\n")
