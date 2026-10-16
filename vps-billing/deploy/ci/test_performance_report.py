@@ -26,6 +26,7 @@ CANARY = "secretcanary-password@unix(/private/customer.sock)/customer_data"
 PATHS = (
     "/api/v1/session", "/api/v1/orders", "/api/v1/overview?currency=CNY",
     "/api/v1/admin/overview?currency=CNY",
+    "/api/v1/admin/orders",
 )
 
 
@@ -58,7 +59,7 @@ def epoch(label, source, binary):
 def fixture(baseline=False):
     plan_tables = {
         "session_lookup": "sessions", "user_lookup": "users",
-        "currency_configuration": "currency_settings", "customer_orders": "orders",
+        "currency_configuration": "currency_settings", "customer_orders": "orders", "admin_orders": "orders",
         "customer_recent_orders": "orders",
         "customer_services_summary": "services", "customer_invoices_summary": "invoices",
         "admin_services_summary": "services", "admin_invoices_summary": "invoices",
@@ -66,7 +67,7 @@ def fixture(baseline=False):
     }
     candidate = epoch("candidate", SOURCE, "e" * 64)
     return {
-        "schema": "aster.http-performance/1", "source_sha": SOURCE,
+        "schema": "aster.http-performance/2", "source_sha": SOURCE,
         "harness_sha256": HARNESS, "seed": "aster-http-performance-v1",
         "parameters": {
             "users": 100, "orders": 10000, "services": 1000,
@@ -147,7 +148,7 @@ class PerformanceReportTest(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         lines = result.stdout.splitlines()
         self.assertEqual(len(lines), 2)
-        self.assertEqual(lines[1], "PERFORMANCE_REPORT_EPOCH index=0 measurements=24 requests=2400 errors=0")
+        self.assertEqual(lines[1], "PERFORMANCE_REPORT_EPOCH index=0 measurements=30 requests=3000 errors=0")
         self.assertTrue(lines[0].startswith("PERFORMANCE_REPORT_JSON "))
         public = json.loads(lines[0].removeprefix("PERFORMANCE_REPORT_JSON "))
         self.assertEqual(public, value)
@@ -170,10 +171,26 @@ class PerformanceReportTest(unittest.TestCase):
         result = self.run_cli(baseline=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(result.stdout.splitlines()), 4)
-        self.assertTrue(all(re.fullmatch(r"PERFORMANCE_REPORT_EPOCH index=[012] measurements=24 requests=2400 errors=0", line)
+        self.assertTrue(all(re.fullmatch(r"PERFORMANCE_REPORT_EPOCH index=[012] measurements=30 requests=3000 errors=0", line)
                             for line in result.stdout.splitlines()[1:]))
         self.assertEqual(json.loads(result.stdout.splitlines()[0].removeprefix("PERFORMANCE_REPORT_JSON ")), value)
         self.assertEqual(json.loads(self.output.read_text()), value)
+
+    def test_v2_requires_admin_order_measurements_in_every_epoch(self):
+        value = fixture(baseline=True)
+        self.assertEqual([len(item["measurements"]) for item in value["epochs"]], [30, 30, 30])
+        for index in range(3):
+            with self.subTest(epoch=index):
+                changed = copy.deepcopy(value)
+                changed["epochs"][index]["measurements"] = [
+                    item for item in changed["epochs"][index]["measurements"]
+                    if item["path"] != "/api/v1/admin/orders"
+                ]
+                self.write(changed)
+                self.assert_rejected(self.run_cli(baseline=True), "EPOCHS")
+        value["schema"] = "aster.http-performance/1"
+        self.write(value)
+        self.assert_rejected(self.run_cli(baseline=True), "SCHEMA")
 
     def test_valid_error_counts_remain_visible(self):
         value = fixture()
@@ -301,9 +318,19 @@ class PerformanceReportTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         public = json.loads(result.stdout.splitlines()[0].removeprefix("PERFORMANCE_REPORT_JSON "))
         plans = {item["name"]: item for item in public["explain"]}
-        self.assertEqual(len(plans), 10)
+        self.assertEqual(len(plans), 11)
         self.assertEqual(plans["customer_orders"]["sql"], legacy)
         self.assertEqual(plans["customer_recent_orders"]["sql"], recent)
+
+    def test_admin_order_plan_has_global_scope_and_original_limit(self):
+        columns = "id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot,currency_snapshot,plan_snapshot"
+        expected = "SELECT " + columns + " FROM orders ORDER BY created_at DESC LIMIT 1000"
+        self.assertEqual(REPORT.EXPLAIN_SQL["admin_orders"], expected)
+        self.assertEqual(REPORT.EXPLAIN_TABLES["admin_orders"], "orders")
+        value = fixture()
+        value["explain"] = [item for item in value["explain"] if item["name"] != "admin_orders"]
+        self.write(value)
+        self.assert_rejected(self.run_cli(), "EXPLAIN")
 
     def test_order_explain_templates_reject_changed_limit_or_tie_break_order(self):
         mutations = (
@@ -313,6 +340,9 @@ class PerformanceReportTest(unittest.TestCase):
             ("customer_recent_orders", lambda sql: sql.replace("DESC,id DESC", "DESC")),
             ("customer_recent_orders", lambda sql: sql.replace("id DESC LIMIT", "id ASC LIMIT")),
             ("customer_recent_orders", lambda sql: sql.replace("user_id=?", "user_id='" + CANARY + "'")),
+            ("admin_orders", lambda sql: sql.replace("FROM orders ORDER", "FROM orders WHERE user_id=? ORDER")),
+            ("admin_orders", lambda sql: sql.replace("LIMIT 1000", "LIMIT 1001")),
+            ("admin_orders", lambda sql: sql.replace("created_at DESC", "created_at ASC")),
         )
         for index, (name, mutate) in enumerate(mutations):
             with self.subTest(name=name, mutation=index):

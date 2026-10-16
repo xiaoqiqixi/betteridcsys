@@ -30,7 +30,7 @@ import (
 	"time"
 )
 
-const httpPerfSchema = "aster.http-performance/1"
+const httpPerfSchema = "aster.http-performance/2"
 const httpPerfSamplePeriod = 25 * time.Millisecond
 
 var httpPerfCurrentStage string
@@ -760,6 +760,24 @@ func httpPerfProbe(client *http.Client, address, path, cookie string, f *httpPer
 		if json.Unmarshal(envelope.Data, &orders) != nil || len(orders) != min(1000, (p.Orders+p.Users-1)/p.Users) {
 			return errors.New("performance order response does not match fixture")
 		}
+	case "/api/v1/admin/orders":
+		// A successful admin-only response with this fixture's admin cookie,
+		// plus orders from every expected customer, rules out measuring the
+		// smaller owner-filtered customer list by mistake.
+		var orders []Order
+		if cookie != f.adminCookie || cookie == f.cookie || json.Unmarshal(envelope.Data, &orders) != nil || len(orders) != min(1000, p.Orders) {
+			return errors.New("performance admin order response does not match fixture")
+		}
+		owners := map[string]struct{}{}
+		for index, order := range orders {
+			if order.UserID == "" || order.UserID == f.adminID || (index > 0 && order.CreatedAt.After(orders[index-1].CreatedAt)) {
+				return errors.New("performance admin order scope or ordering does not match fixture")
+			}
+			owners[order.UserID] = struct{}{}
+		}
+		if len(owners) != min(p.Users, len(orders)) {
+			return errors.New("performance admin order customer coverage does not match fixture")
+		}
 	case "/api/v1/overview?currency=CNY":
 		var data struct {
 			Currency string  `json:"currency"`
@@ -948,6 +966,7 @@ func httpPerfPlans(ctx context.Context, f *httpPerfFixture) ([]httpPerfExplain, 
 		{"user_lookup", "SELECT id,email,name,role,password_hash FROM users WHERE id=?", []any{f.customer}},
 		{"currency_configuration", "SELECT document,prices_revision FROM currency_settings WHERE id=1", nil},
 		{"customer_orders", "SELECT " + orderColumns + " FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 1000", []any{f.customer}},
+		{"admin_orders", "SELECT " + orderColumns + " FROM orders ORDER BY created_at DESC LIMIT 1000", nil},
 		{"customer_recent_orders", "SELECT " + orderColumns + " FROM orders WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 5", []any{f.customer}},
 		{"customer_services_summary", service + " AND user_id=?", []any{"CNY", f.customer}},
 		{"customer_invoices_summary", invoice + " AND user_id=?", []any{"CNY", f.customer}},
@@ -1086,7 +1105,7 @@ func BenchmarkHTTPPerformance(b *testing.B) {
 	if err != nil {
 		b.Fatal("collect reviewed read-only SQL plans")
 	}
-	paths := []string{"/api/v1/session", "/api/v1/orders", "/api/v1/overview?currency=CNY", "/api/v1/admin/overview?currency=CNY"}
+	paths := []string{"/api/v1/session", "/api/v1/orders", "/api/v1/overview?currency=CNY", "/api/v1/admin/overview?currency=CNY", "/api/v1/admin/orders"}
 	hadErrors := false
 	for _, spec := range specs {
 		httpPerfStage("hash")

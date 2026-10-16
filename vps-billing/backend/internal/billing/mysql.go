@@ -2,6 +2,7 @@ package billing
 
 import (
 	"aster/billing/migrations"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -337,7 +338,33 @@ func (m *MySQL) Plans(c context.Context, currency string) ([]Plan, error) {
 
 const orderColumns = "id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot,currency_snapshot,plan_snapshot"
 
+// A memo belongs to one Orders call and retains only its last successful
+// currency decode. Snapshot bytes and the record's currency both identify it.
+type currencySnapshotMemo struct {
+	hasValid bool
+	code     string
+	raw      []byte
+	format   CurrencyFormat
+}
+
+func (m *currencySnapshotMemo) decode(raw []byte, code string) (CurrencyFormat, error) {
+	if m.hasValid && m.code == code && bytes.Equal(m.raw, raw) {
+		return m.format, nil
+	}
+	format, err := decodeCurrencySnapshot(raw, code)
+	if err != nil {
+		return format, err
+	}
+	m.raw = append(m.raw[:0], raw...)
+	m.hasValid, m.code, m.format = true, code, format
+	return format, nil
+}
+
 func scanOrder(s interface{ Scan(...any) error }) (Order, error) {
+	return scanOrderWithCurrencyMemo(s, nil)
+}
+
+func scanOrderWithCurrencyMemo(s interface{ Scan(...any) error }, memo *currencySnapshotMemo) (Order, error) {
 	var o Order
 	var raw, currencyRaw, planRaw []byte
 	e := s.Scan(&o.ID, &o.Number, &o.UserID, &o.PlanName, &o.Status, &o.TotalMinor, &o.Currency, &o.CreatedAt, &o.Hostname, &raw, &currencyRaw, &planRaw)
@@ -345,7 +372,11 @@ func scanOrder(s interface{ Scan(...any) error }) (Order, error) {
 		e = json.Unmarshal(raw, &o.Issuer)
 	}
 	if e == nil {
-		o.CurrencyFormat, e = decodeCurrencySnapshot(currencyRaw, o.Currency)
+		if memo == nil {
+			o.CurrencyFormat, e = decodeCurrencySnapshot(currencyRaw, o.Currency)
+		} else {
+			o.CurrencyFormat, e = memo.decode(currencyRaw, o.Currency)
+		}
 	}
 	if e == nil && len(planRaw) > 0 {
 		e = json.Unmarshal(planRaw, &o.PlanSnapshot)
@@ -366,8 +397,9 @@ func (m *MySQL) Orders(c context.Context, uid string) ([]Order, error) {
 	}
 	defer r.Close()
 	out := []Order{}
+	var memo currencySnapshotMemo
 	for r.Next() {
-		o, e := scanOrder(r)
+		o, e := scanOrderWithCurrencyMemo(r, &memo)
 		if e != nil {
 			return nil, e
 		}

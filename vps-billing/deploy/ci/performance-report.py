@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate and publish bounded, synthetic native HTTP performance evidence.
 
-No process, database, network, or benchmark is started by this helper. The first
+No process, database, network, or benchmark is started by this helper. The
 reviewed profile is intentionally fixed; changing it requires a source change.
 """
 import argparse
@@ -16,7 +16,7 @@ import sys
 
 MAX_INPUT_BYTES = 2 * 1024 * 1024
 MAX_STDOUT_BYTES = 512 * 1024
-SCHEMA = "aster.http-performance/1"
+SCHEMA = "aster.http-performance/2"
 SEED = "aster-http-performance-v1"
 CONCURRENCY = [1, 8, 32]
 PATHS = (
@@ -24,6 +24,7 @@ PATHS = (
     "/api/v1/orders",
     "/api/v1/overview?currency=CNY",
     "/api/v1/admin/overview?currency=CNY",
+    "/api/v1/admin/orders",
 )
 PARAMETERS = {
     "users": 100, "orders": 10000, "services": 1000,
@@ -74,6 +75,7 @@ EXPLAIN_SQL = {
     "user_lookup": "SELECT id,email,name,role,password_hash FROM users WHERE id=?",
     "currency_configuration": "SELECT document,prices_revision FROM currency_settings WHERE id=1",
     "customer_orders": "SELECT id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot,currency_snapshot,plan_snapshot FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 1000",
+    "admin_orders": "SELECT id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot,currency_snapshot,plan_snapshot FROM orders ORDER BY created_at DESC LIMIT 1000",
     "customer_recent_orders": "SELECT id,number,user_id,plan_name,status,total_minor,currency,created_at,hostname,issuer_snapshot,currency_snapshot,plan_snapshot FROM orders WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 5",
     "customer_services_summary": SERVICE_SQL + " AND user_id=?",
     "customer_invoices_summary": INVOICE_SQL + " AND user_id=?",
@@ -83,7 +85,7 @@ EXPLAIN_SQL = {
 }
 EXPLAIN_TABLES = {
     "session_lookup": "sessions", "user_lookup": "users",
-    "currency_configuration": "currency_settings", "customer_orders": "orders",
+    "currency_configuration": "currency_settings", "customer_orders": "orders", "admin_orders": "orders",
     "customer_recent_orders": "orders",
     "customer_services_summary": "services", "customer_invoices_summary": "invoices",
     "admin_services_summary": "services", "admin_invoices_summary": "invoices",
