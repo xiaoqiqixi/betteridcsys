@@ -866,6 +866,25 @@ class PatchReleaseNotesTest(unittest.TestCase):
         runtime_pipeline.publish(api, runtime_pipeline.prepare_publish(api, env, event), artifact)
         return api, api.mutations[0][2]["body"]
 
+    def test_055_notes_describe_only_the_ui_patch_without_claiming_release_completion(self):
+        api, body = self.published_notes("core", "0.5.5")
+        self.assertIn("Core 0.5.4 之后的界面维护补丁", body)
+        for text in ("客户首页", "规格比较和订单摘要", "桌面侧栏独立滚动", "1024px", "键盘焦点",
+                     "账单在窄屏", "不新增业务功能", "金额精度、安全或多币种历史格式", "不自动换汇",
+                     "人工视觉复验、自动化检查和原生安装验收分别记录", "不表示正常 Release 已完成发布"):
+            self.assertIn(text, body)
+        self.assertRegex(body, r"支付运行时自 Core 0\.5\.3.*aster\.payment/1")
+        self.assertNotIn("支付扩展新增独立运行时插槽", body)
+        self.assertNotIn("已有错误随当前语言显示", body)
+        self.assertNotIn("本版本通过该构建的", body)
+        for document in ("VALIDATION.md", "INSTALL.md", "BAOTA.md", "UPGRADE.md", "PLUGINS.md"):
+            self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/blob/{SHA}/vps-billing/docs/{document}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/commit/{SHA}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/actions/runs/{RUN_ID}", body)
+        self.assertEqual(len(api.uploads), 6)
+        self.assertEqual([call[0] for call in api.mutations], ["POST", "PATCH"])
+        self.assertEqual(api.mutations[-1][2], {"draft": False, "prerelease": False, "make_latest": "true"})
+
     def test_054_notes_describe_a_bounded_maintenance_patch(self):
         api, body = self.published_notes("core", "0.5.4")
         self.assertIn("维护补丁", body)

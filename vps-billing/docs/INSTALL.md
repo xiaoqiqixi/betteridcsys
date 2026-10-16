@@ -1,6 +1,6 @@
 # Ubuntu 24.04 原生单机安装
 
-本文以 Core 0.5.4 的原生安装/升级执行器为目标，由主机管理员明确启动。先核验官方资产并准备完整版本目录，再审查私密实例规格与只读计划，最后用计划 SHA-256 确认实际操作。全新安装会创建专用数据库及账号、系统运行身份、秘密文件、配置、schema、首位管理员和原生服务，切换版本并检查 HTTPS。它不安装操作系统组件、申请证书或修改 DNS。已有实例使用 [升级流程](UPGRADE.md)，不能重跑全新安装覆盖。
+本文按目标 Core 0.5.5 准备原生安装/升级示例，该版本尚未发布，发布门禁状态见 [VALIDATION.md](VALIDATION.md)；当前正式基线仍为 0.5.4。以下步骤须待 0.5.5 正常 Release 发布且来源核验完成后，由主机管理员明确启动。先核验官方资产并准备完整版本目录，再审查私密实例规格与只读计划，最后用计划 SHA-256 确认实际操作。全新安装会创建专用数据库及账号、系统运行身份、秘密文件、配置、schema、首位管理员和原生服务，切换版本并检查 HTTPS。它不安装操作系统组件、申请证书或修改 DNS。已有实例使用 [升级流程](UPGRADE.md)，不能重跑全新安装覆盖。
 
 独立运行时支付插槽 `aster.payment/1` 自 Core 0.5.3 起提供，第三方渠道由运营者和开发者按[支付插件接入指南](PAYMENT_PLUGINS.md)完成适配、独立构建与验收，无需重编 Core。支付默认关闭，本文安装流程不会安装渠道或执行收款。当前未提供官方真实渠道、渠道交易查询、撤销、退款及特定渠道要求的回调应答（ACK）；VPS 开通也需另行接入。SMTP 1.1.0 独立安装、默认关闭，仅支持管理员配置和主动测试。`APP_MODE=production` 表示持久化及严格配置检查，不是生产认证。原生检查的准确提交、运行和限制见 [VALIDATION.md](VALIDATION.md)。宝塔共享环境另见 [BAOTA.md](BAOTA.md)。
 
@@ -18,27 +18,27 @@ systemd 须包含 root 管理的 `/usr/bin/busctl` 及 JSON 输出支持。执�
 
 ## 1. 核对来源与归档
 
-从固定官方仓库的正常 [Release](https://github.com/xiaoqiqixi/betteridcsys/releases)选择 `v0.5.4`，取得同一 Release 的六资产：
+待固定官方仓库的正常 [Release](https://github.com/xiaoqiqixi/betteridcsys/releases)实际提供 `v0.5.5` 后，取得同一 Release 的六资产：
 
-- `aster-api-0.5.4-linux-amd64`
-- `aster-plugin-host-0.5.4-linux-amd64`
-- `aster-core-0.5.4-linux-amd64-resources.tar.gz`
+- `aster-api-0.5.5-linux-amd64`
+- `aster-plugin-host-0.5.5-linux-amd64`
+- `aster-core-0.5.5-linux-amd64-resources.tar.gz`
 - `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`
 
-核对源码提交、构建 run、版本和全部资产摘要。BUILD 为 schema 3、`raw-binaries-v1`、`linux/amd64`；资源只有 `aster-core-0.5.4-linux-amd64-resources/` 一个根目录，不含链接、绝对路径、`..` 或额外 ELF。校验和与未签名来源记录依赖可信官方渠道，不是独立发行签名。历史 Core/SMTP 资产保持原样。
+核对源码提交、构建 run、版本和全部资产摘要。BUILD 为 schema 3、`raw-binaries-v1`、`linux/amd64`；资源只有 `aster-core-0.5.5-linux-amd64-resources/` 一个根目录，不含链接、绝对路径、`..` 或额外 ELF。校验和与未签名来源记录依赖可信官方渠道，不是独立发行签名。历史 Core/SMTP 资产保持原样。
 
 ```sh
 cd /path/to/downloads
 sha256sum -c SHA256SUMS
-file aster-api-0.5.4-linux-amd64 aster-plugin-host-0.5.4-linux-amd64
-tar -tvzf aster-core-0.5.4-linux-amd64-resources.tar.gz
+file aster-api-0.5.5-linux-amd64 aster-plugin-host-0.5.5-linux-amd64
+tar -tvzf aster-core-0.5.5-linux-amd64-resources.tar.gz
 ```
 
 确认来源和归档清单后，以普通用户在空目录解压以审查工具，不执行尚未核验的文件：
 
 ```sh
 set -euo pipefail
-aster_version=0.5.4
+aster_version=0.5.5
 aster_stage=$(mktemp -d)
 tar -xzf "aster-core-$aster_version-linux-amd64-resources.tar.gz" \
   --directory "$aster_stage" --no-same-owner --no-same-permissions
@@ -49,23 +49,23 @@ aster_bootstrap_input="$aster_stage/aster-core-$aster_version-linux-amd64-resour
 
 ```sh
 set -euo pipefail
-[[ ! -e /var/lib/aster-bootstrap/0.5.4 && ! -L /var/lib/aster-bootstrap/0.5.4 ]]
-sudo install -d -o root -g root -m 0755 /var/lib/aster-bootstrap/0.5.4
+[[ ! -e /var/lib/aster-bootstrap/0.5.5 && ! -L /var/lib/aster-bootstrap/0.5.5 ]]
+sudo install -d -o root -g root -m 0755 /var/lib/aster-bootstrap/0.5.5
 sudo install -o root -g root -m 0644 \
   "$aster_bootstrap_input/deploy/scripts/core-manager.py" \
   "$aster_bootstrap_input/deploy/scripts/core-operation.py" \
   "$aster_bootstrap_input/deploy/scripts/update-manager.py" \
   "$aster_bootstrap_input/deploy/scripts/plugin-manager.py" \
-  /var/lib/aster-bootstrap/0.5.4/
+  /var/lib/aster-bootstrap/0.5.5/
 ```
 
-所有祖先须 root 控制且不可组/其他用户写入。不要从上传目录执行 root 工具，不使用下载后直接交给 shell 的命令。旧版工具的完整受信清单不会自动认识后续工具；首次使用 0.5.4 须核验新版资源，不能删减清单或改版本绕过。
+所有祖先须 root 控制且不可组/其他用户写入。不要从上传目录执行 root 工具，不使用下载后直接交给 shell 的命令。旧版工具的完整受信清单不会自动认识后续工具；0.5.4 的首次引导要求仍然适用，本次须核验 0.5.5 资源及工具，不能删减清单或改版本绕过。
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.4/core-manager.py doctor \
-  --release-directory /opt/aster/releases/0.5.4 \
+sudo python3 /var/lib/aster-bootstrap/0.5.5/core-manager.py doctor \
+  --release-directory /opt/aster/releases/0.5.5 \
   --socket /run/mysqld/mysqld.sock --listen-address 127.0.0.1:18080
-sudo python3 /var/lib/aster-bootstrap/0.5.4/core-manager.py prepare --version 0.5.4
+sudo python3 /var/lib/aster-bootstrap/0.5.5/core-manager.py prepare --version 0.5.5
 ```
 
 `doctor` 只读主机事实，不执行程序或连接数据库。`prepare` 独立核验固定官方 Release、标签/提交、六资产、BUILD/PROVENANCE、成功构建及完整源码映射，然后不可覆盖地组装 API、插件宿主、网页和资源；不激活服务。可用 `--release-directory` 指定另一个受保护新目录，或用 `--assets-directory` 指向恰含六个 root 保护普通资产的目录；后者仍查询官方来源。确需独立只读凭据时，用 `--github-token-file` 引用 root 所有的 0600 普通文件，不把 token 值放进参数或环境。
@@ -103,7 +103,7 @@ sudo install -d -o root -g root -m 0700 /root/aster-install
   "schema": 1,
   "action": "install",
   "operation_id": "REPLACE_WITH_NEW_32_HEX_OPERATION_ID",
-  "release_directory": "/opt/aster/releases/0.5.4",
+  "release_directory": "/opt/aster/releases/0.5.5",
   "instance_root": "/opt/aster",
   "config_root": "/etc/aster",
   "state_directory": "/var/lib/aster-operations",
@@ -134,9 +134,9 @@ sudo install -d -o root -g root -m 0700 /root/aster-install
 只读计划检查准备目录、工具摘要、TLS、规格与秘密输入，输出 `plan_sha256`。管理员逐项核对实例、域名/端口、数据库、身份、待执行动作及权限；计划不代表数据库已经创建或站点已可用。计划输出用于核对实例和动作，完整固定输入和摘要在实际操作的私密 `PLAN.json` 留存；规格与计划资料均应私密保管。审核后手工复制 **本次计划的实际 SHA-256** 进行明确确认，不用流水线自动接受输出：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.4/core-operation.py plan \
+sudo python3 /var/lib/aster-bootstrap/0.5.5/core-operation.py plan \
   --spec /root/aster-install/install.json
-sudo python3 /var/lib/aster-bootstrap/0.5.4/core-operation.py apply \
+sudo python3 /var/lib/aster-bootstrap/0.5.5/core-operation.py apply \
   --spec /root/aster-install/install.json \
   --confirm-plan-sha256 REVIEWED_PLAN_SHA256
 ```
@@ -152,9 +152,9 @@ sudo python3 /var/lib/aster-bootstrap/0.5.4/core-operation.py apply \
 失败或终端返回不确定时，先读取真实检查点：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.4/core-operation.py status \
+sudo python3 /var/lib/aster-bootstrap/0.5.5/core-operation.py status \
   --state-directory /var/lib/aster-operations --operation-id ACTUAL_OPERATION_ID
-sudo python3 /var/lib/aster-bootstrap/0.5.4/core-operation.py resume \
+sudo python3 /var/lib/aster-bootstrap/0.5.5/core-operation.py resume \
   --spec /root/aster-install/install.json \
   --confirm-plan-sha256 ORIGINAL_REVIEWED_PLAN_SHA256
 ```

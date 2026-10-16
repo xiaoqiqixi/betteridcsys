@@ -39,7 +39,7 @@ BOUNDARY_PREFIX = b"BOUNDARY_PROBE_JSON "
 BOUNDARY_WIDTHS = (320, 375, 720, 721, 768, 1440)
 BOUNDARY_TARGETS = {
     "login": ("login-brand", "login-small-brand", "login-eyebrow", "login-footnote"),
-    "financial": ("sidebar-brand", "workspace-company", "footer-company", "price-prefix",
+    "financial": ("sidebar-brand", "workspace-context", "footer-company", "price-prefix",
                   "price-input", "price-suffix", "price-code"),
     "breadcrumb": ("breadcrumb-root", "breadcrumb-current"),
 }

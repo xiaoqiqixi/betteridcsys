@@ -1,6 +1,7 @@
 // Required responsive assertions, enforced by the sandboxed browser supervisor
 // after all cases, screenshots and existing functional assertions are collected.
 // Fixtures stay in the DOM; no input/change/submit event or API write is sent.
+// Keep the 720/721 content boundary; navigation separately changes at 1024/1025.
 const widths = [320, 375, 720, 721, 768, 1440];
 const locales = ["zh-CN", "en"];
 const fixtures = {
@@ -11,10 +12,10 @@ const fixtures = {
 async function settle(page) {
   await page.evaluate(async () => {
     await document.fonts.ready;
-    // Finish only current CSS transitions, including the owned mobile drawer.
+    // Finish only current CSS transitions, including the owned compact drawer.
     for (const animation of document
-      .querySelector(".sidebar")
-      ?.getAnimations() || [])
+      .querySelector(".navigation-rail")
+      ?.getAnimations({ subtree: true }) || [])
       if (Number.isFinite(animation.effect?.getComputedTiming().endTime))
         animation.finish();
     await new Promise((resolve) =>
@@ -57,7 +58,6 @@ async function installFixture(page, surface, fixture) {
         );
       } else {
         replace(".sidebar .brand strong", fixture.site);
-        replace(".workspace-switch small", fixture.company);
         replace(".main-footer > span:first-child", fixture.company);
         const group = document.querySelector(".price-input");
         const input = group?.querySelector("input");
@@ -204,7 +204,7 @@ const loginTargets = [
 ];
 const sidebarTargets = [
   ["sidebar-brand", ".sidebar .brand strong", ".sidebar"],
-  ["workspace-company", ".workspace-switch small", ".workspace-switch"],
+  ["workspace-context", ".workspace-context", ".sidebar"],
 ];
 const priceTargets = [
   ["footer-company", ".main-footer > span:first-child", ".main-footer"],
@@ -346,12 +346,12 @@ export async function probeFinancialBoundaries(page, screenshot) {
           await settle(page);
           try {
             await installFixture(page, "financial", fixture);
-            if (width <= 720) {
+            if (width <= 1024) {
               await trigger.click();
               await settle(page);
             }
             const sidebar = await measurements(page, targets(sidebarTargets));
-            if (width <= 720) {
+            if (width <= 1024) {
               await page.keyboard.press("Escape");
               await settle(page);
             }

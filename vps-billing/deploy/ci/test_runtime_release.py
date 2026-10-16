@@ -305,7 +305,7 @@ class RuntimeReleaseTests(unittest.TestCase):
             self.assertTrue(all(name in files for name in pipeline.binary_assets(version, kind).values()))
 
     def test_current_core_publication_describes_payment_boundaries_and_six_assets(self):
-        for version in ('0.5.3', '0.5.4'):
+        for version in ('0.5.3', '0.5.4', '0.5.5'):
             with self.subTest(version=version):
                 api, env, event, files, artifact, _, _ = normal_flow(raw=True, version=version)
                 policy = pipeline.prepare_publish(api, env, event)

@@ -27,7 +27,6 @@
   --status-neutral: #5f6b7a;
   --muted: var(--text-secondary);
   --border: #e9ebef;
-  --sidebar: 232px;
 }
 * {
   box-sizing: border-box;
@@ -245,15 +244,17 @@ strong {
   color: var(--text-secondary);
 }
 .sidebar {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: var(--sidebar);
-  background: #fff;
-  border-right: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  min-height: 0;
+  background: transparent;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+  scroll-padding-block: 20px;
   z-index: 30;
 }
 .workspace-switch {
@@ -424,7 +425,7 @@ strong {
   padding: 7px;
 }
 .main-shell {
-  margin-left: var(--sidebar);
+  min-width: 0;
 }
 .topbar {
   min-height: 70px;
@@ -825,6 +826,7 @@ main {
   padding-bottom: 19px;
 }
 .table-wrap {
+  position: relative;
   width: 100%;
   overflow-x: auto;
 }
@@ -1928,9 +1930,6 @@ dd {
   top: 15px;
 }
 @media (min-width: 1500px) {
-  :root {
-    --sidebar: 250px;
-  }
   main {
     padding: 46px 58px 0;
   }
@@ -1965,9 +1964,6 @@ dd {
   }
 }
 @media (max-width: 1150px) {
-  :root {
-    --sidebar: 210px;
-  }
   .brand {
     margin-left: 19px;
   }
@@ -2123,25 +2119,12 @@ dd {
   }
 }
 @media (max-width: 720px) {
-  :root {
-    --sidebar: 232px;
-  }
-  .sidebar {
-    transform: translateX(-100%);
-    transition: transform 0.2s;
-  }
-  .sidebar-open .sidebar {
-    transform: translateX(0);
-  }
   .sidebar-scrim {
     position: fixed;
     inset: 0;
     background: #26344955;
     backdrop-filter: blur(2px);
     z-index: 29;
-  }
-  .main-shell {
-    margin-left: 0;
   }
   .sidebar-close {
     display: inline-grid;
@@ -3460,4 +3443,440 @@ th,
 }
 .data-panel > .list-scope-note {
   padding: 0 23px;
+}
+
+/* Shared console composition: quiet navigation, one working surface, readable data. */
+.app-shell {
+  --sidebar: clamp(216px, 16vw, 248px);
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  background: var(--surface);
+  min-height: 100dvh;
+}
+html:has(.app-shell) {
+  scroll-padding-top: 92px;
+}
+.navigation-rail {
+  min-width: 0;
+  background: var(--page-background);
+  border-right: 1px solid var(--border);
+}
+.sidebar > * {
+  flex-shrink: 0;
+}
+.sidebar nav a > span:not(.nav-count),
+.user-menu > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sidebar nav a > svg,
+.sidebar nav .nav-count,
+.user-menu > button {
+  flex-shrink: 0;
+}
+.user-menu > div {
+  flex: 1;
+}
+.app-shell .brand {
+  margin: 30px 24px 12px;
+  align-items: flex-start;
+  gap: 10px;
+}
+.app-shell .brand strong {
+  font-size: 21px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.app-shell .brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.workspace-context {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0 24px 36px;
+}
+.app-shell .nav-label {
+  margin: 0 24px 12px;
+  font-size: 12px;
+  letter-spacing: normal;
+}
+.app-shell .sidebar nav {
+  padding: 0 12px;
+}
+.app-shell .sidebar nav a {
+  min-height: 46px;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  gap: 12px;
+  font-size: 14px;
+}
+.app-shell .sidebar-bottom {
+  padding-top: 28px;
+}
+.app-shell .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 76px;
+  padding: 12px 40px;
+  background: var(--surface);
+  gap: 20px;
+}
+.app-shell .breadcrumbs {
+  font-size: 14px;
+  gap: 10px;
+  white-space: normal;
+}
+.app-shell .breadcrumbs b {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.app-shell .topbar-right {
+  gap: 16px;
+}
+.app-shell .topbar .icon-button {
+  width: 44px;
+  height: 44px;
+}
+.app-shell .topbar .preference-controls label {
+  flex-direction: row;
+  align-items: center;
+  font-size: 13px;
+}
+.app-shell .preference-controls select {
+  min-height: 38px;
+  max-width: 148px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+.app-shell main {
+  max-width: 1360px;
+  padding: 40px 40px 0;
+}
+.app-shell .page-heading {
+  align-items: flex-start;
+  margin-bottom: 32px;
+  gap: 24px;
+}
+.app-shell .page-heading h1 {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.app-shell .page-heading > div > p:last-child {
+  font-size: 15px;
+  line-height: 1.7;
+}
+.app-shell .page-heading > .button {
+  margin-top: 4px;
+  min-height: 44px;
+}
+.app-shell .panel {
+  border-radius: 12px;
+  box-shadow: none;
+}
+.app-shell .panel-heading h2 {
+  font-size: 18px;
+}
+.app-shell .panel-heading p,
+.app-shell .panel-footer {
+  font-size: 14px;
+}
+.app-shell .badge {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+}
+.app-shell th {
+  font-size: 14px;
+  background: var(--surface-subtle);
+}
+.app-shell td {
+  font-size: 14px;
+}
+.app-shell td.numeric {
+  color: var(--text-primary);
+}
+.app-shell .table-action {
+  min-height: 44px;
+  font-size: 14px;
+}
+.app-shell .invoice-summary {
+  background: var(--surface-subtle);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.app-shell .main-footer {
+  margin-top: 40px;
+  padding: 24px 0;
+  font-size: 13px;
+}
+.app-shell .demo-banner {
+  padding: 9px 40px;
+  background: var(--surface-subtle);
+  font-size: 13px;
+}
+@media (max-width: 1150px) {
+  .app-shell main {
+    padding: 32px 28px 0;
+  }
+  .app-shell .topbar {
+    padding: 12px 28px;
+  }
+  .app-shell .demo-banner {
+    padding: 9px 28px;
+  }
+}
+@media (max-width: 1024px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .navigation-rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(320px, calc(100vw - 48px));
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 0.2s;
+    z-index: 30;
+  }
+  .sidebar-open .navigation-rail {
+    transform: translateX(0);
+  }
+  .app-shell .sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    background: #26344955;
+    backdrop-filter: blur(2px);
+  }
+  .app-shell .sidebar-close {
+    display: inline-grid;
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 2;
+    width: 44px;
+    height: 44px;
+    background: var(--page-background);
+  }
+  .app-shell .sidebar {
+    scroll-padding-top: 72px;
+  }
+  .app-shell .mobile-menu {
+    display: inline-grid;
+    min-width: 44px;
+    min-height: 44px;
+    margin-left: -8px;
+  }
+  .app-shell .sidebar .brand {
+    margin-right: 68px;
+  }
+  body:has(.app-shell.sidebar-open) {
+    overflow: hidden;
+  }
+}
+@media (max-width: 720px) {
+  .app-shell .brand {
+    margin-top: 30px;
+    margin-right: 60px;
+  }
+  .app-shell .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    gap: 8px 12px;
+    padding: 8px 20px 12px;
+    min-height: 112px;
+  }
+  .app-shell .breadcrumbs {
+    flex: initial;
+    font-size: 14px;
+    gap: 8px;
+  }
+  .app-shell .topbar-right {
+    display: contents;
+  }
+  .app-shell .topbar .preference-controls {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-right: 0;
+    gap: 16px;
+  }
+  .app-shell .topbar .preference-controls label {
+    flex-direction: row;
+    gap: 8px;
+  }
+  .app-shell .topbar .preference-controls label > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  html:has(.app-shell) {
+    scroll-padding-top: 128px;
+  }
+  .app-shell .preference-controls select {
+    min-height: 44px;
+    max-width: 128px;
+    font-size: 14px;
+  }
+  .app-shell .topbar-right > .icon-button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .app-shell .topbar-right > .avatar {
+    display: none;
+  }
+  .app-shell main {
+    padding: 28px 20px 0;
+  }
+  .app-shell .page-heading {
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 28px;
+  }
+  .app-shell .page-heading h1 {
+    font-size: 28px;
+    margin-bottom: 8px;
+  }
+  .app-shell .page-heading > div > p:last-child {
+    font-size: 14px;
+  }
+  .app-shell .page-heading > .button {
+    margin-top: 0;
+    font-size: 14px;
+    min-height: 44px;
+    max-width: none;
+    padding: 0 16px;
+  }
+  .app-shell .demo-banner {
+    padding: 10px 20px;
+    font-size: 12px;
+  }
+  .app-shell .demo-banner > button {
+    font-size: 12px;
+  }
+  .app-shell .text-button {
+    font-size: 14px;
+  }
+  .app-shell .main-footer {
+    font-size: 12px;
+  }
+}
+@media (max-width: 380px) {
+  .app-shell main {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .app-shell .topbar {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .app-shell .topbar .preference-controls {
+    gap: 12px;
+  }
+  .app-shell .topbar .preference-controls label > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell main:has(.purchase-page) .main-footer {
+    padding-bottom: 160px;
+  }
+  html:has(.purchase-page) {
+    scroll-padding-bottom: 160px;
+  }
+}
+
+/* The same invoice records reflow into readable rows on a phone. */
+@media (max-width: 720px) {
+  .app-shell .data-panel .invoice-table {
+    min-width: 0;
+    white-space: normal;
+  }
+  .invoice-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .invoice-table tbody {
+    display: block;
+  }
+  .invoice-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px 16px;
+    padding: 20px;
+    border-top: 1px solid var(--border);
+  }
+  .app-shell .invoice-table td {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+  .invoice-table td:nth-child(1) {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .invoice-table td:nth-child(5) {
+    grid-column: 2;
+    grid-row: 1;
+    text-align: right;
+  }
+  .app-shell .invoice-table td:nth-child(4) {
+    grid-column: 1;
+    grid-row: 2;
+    font-size: 21px;
+    align-self: center;
+  }
+  .invoice-table td:nth-child(6) {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+  }
+  .invoice-table td:nth-child(2),
+  .invoice-table td:nth-child(3) {
+    grid-row: 3;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .invoice-table td:nth-child(3) {
+    text-align: right;
+  }
+  .invoice-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+  }
+  .invoice-table .table-empty {
+    grid-column: 1 / -1;
+  }
+  .invoice-table .table-action {
+    text-align: right;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell .invoice-table .long-invoice td:nth-child(4) {
+    grid-column: 1 / -1;
+    font-size: 20px;
+  }
+  .invoice-table .long-invoice td:nth-child(6) {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
 }

@@ -38,7 +38,7 @@ function mockNavigationMedia(initial = false) {
     get matches() {
       return matches;
     },
-    media: "(max-width: 720px)",
+    media: "(max-width: 1024px)",
     addEventListener: vi.fn(
       (_: string, listener: (event: MediaQueryListEvent) => void) =>
         listeners.add(listener),
@@ -483,7 +483,7 @@ describe("billing workspace flows", () => {
     activeUser = { ...fixtures.previewUser };
     const media = mockNavigationMedia();
     const { wrapper } = await mountApp();
-    expect(vi.mocked(matchMedia)).toHaveBeenCalledWith("(max-width: 720px)");
+    expect(vi.mocked(matchMedia)).toHaveBeenCalledWith("(max-width: 1024px)");
     const sidebar = wrapper.get(".sidebar");
     const trigger = wrapper.get<HTMLButtonElement>(".mobile-menu");
     const overviewLink = sidebar.get<HTMLAnchorElement>(

@@ -82,27 +82,10 @@ function review() {
     :aria-label="tr('选购云服务器', 'Choose a cloud server')"
     :aria-busy="loading"
   >
-    <div class="purchase-intro">
-      <p>
-        {{
-          tr(
-            "选择区域与配置，核对后再创建订单。",
-            "Choose a region and plan, then review your order.",
-          )
-        }}
-      </p>
-      <span class="purchase-billing"
-        >{{ tr("按月计费", "Monthly billing") }} · {{ currency
-        }}<template v-if="demo">
-          · {{ tr("演示定价", "Demo prices") }}</template
-        ></span
-      >
-    </div>
     <div class="purchase-layout">
       <div class="purchase-catalog">
         <section class="region-panel" aria-labelledby="region-title">
           <div class="purchase-section-heading">
-            <span class="purchase-step">1</span>
             <h2 id="region-title">{{ tr("选择区域", "Choose a region") }}</h2>
           </div>
           <div
@@ -129,11 +112,16 @@ function review() {
               <Globe2 :size="15" aria-hidden="true" />{{ item }}
             </button>
           </div>
+          <span class="purchase-billing">
+            {{ tr("按月计费", "Monthly billing") }} · {{ currency }}
+            <template v-if="demo">
+              · {{ tr("演示定价", "Demo prices") }}</template
+            >
+          </span>
         </section>
 
         <section aria-labelledby="plan-title">
           <div class="purchase-section-heading purchase-plan-heading">
-            <span class="purchase-step">2</span>
             <h2 id="plan-title">{{ tr("选择套餐", "Choose a plan") }}</h2>
             <span v-if="!loading" class="catalog-count">{{
               tr(
@@ -179,20 +167,14 @@ function review() {
                   <p class="catalog-region">
                     <Globe2 :size="13" aria-hidden="true" />{{ plan.region }}
                   </p>
+                  <p v-if="plan.description" class="catalog-description">
+                    {{ plan.description }}
+                  </p>
+                  <span v-if="!available(plan)" class="catalog-availability">{{
+                    tr("暂不可售", "Unavailable")
+                  }}</span>
                 </div>
-                <span
-                  class="catalog-availability"
-                  :class="{ available: available(plan) }"
-                  >{{
-                    available(plan)
-                      ? tr("可选", "Available")
-                      : tr("暂不可售", "Unavailable")
-                  }}</span
-                >
               </div>
-              <p v-if="plan.description" class="catalog-description">
-                {{ plan.description }}
-              </p>
               <dl class="catalog-specs">
                 <div>
                   <dt>{{ tr("计算核心", "CPU cores") }}</dt>
@@ -298,16 +280,6 @@ function review() {
                 <dd>{{ tr("每月", "Monthly") }}</dd>
               </div>
             </dl>
-            <div class="purchase-total">
-              <span>{{ tr("首期订单金额", "Initial order amount") }}</span
-              ><strong>{{
-                money(
-                  summary.price_minor,
-                  summary.currency,
-                  summary.currency_format,
-                )
-              }}</strong>
-            </div>
           </template>
           <p v-else class="summary-empty">
             {{
@@ -323,20 +295,42 @@ function review() {
             }}
           </p>
         </div>
-        <button
-          type="button"
-          class="button primary full purchase-review"
-          :disabled="blocked || !summary"
-          @click="review"
-        >
-          {{
-            pendingPlan
-              ? tr("核对原订单", "Review original order")
-              : preview
-                ? tr("预览订单配置", "Preview order details")
-                : tr("确认配置", "Review order")
-          }}<ArrowRight :size="17" aria-hidden="true" />
-        </button>
+        <div class="purchase-checkout">
+          <div v-if="summary" class="purchase-total" aria-live="polite">
+            <span>{{ tr("首期订单金额", "Initial order amount") }}</span>
+            <strong
+              :class="{
+                'long-total':
+                  money(
+                    summary.price_minor,
+                    summary.currency,
+                    summary.currency_format,
+                  ).length > 16,
+              }"
+              >{{
+                money(
+                  summary.price_minor,
+                  summary.currency,
+                  summary.currency_format,
+                )
+              }}</strong
+            >
+          </div>
+          <button
+            type="button"
+            class="button primary full purchase-review"
+            :disabled="blocked || !summary"
+            @click="review"
+          >
+            {{
+              pendingPlan
+                ? tr("核对原订单", "Review original order")
+                : preview
+                  ? tr("预览订单配置", "Preview order details")
+                  : tr("确认配置", "Review order")
+            }}<ArrowRight :size="17" aria-hidden="true" />
+          </button>
+        </div>
         <p class="purchase-price-note">
           {{
             tr(
@@ -371,78 +365,68 @@ function review() {
 </template>
 
 <style scoped>
-.purchase-page {
+.purchase-page,
+.purchase-catalog {
   min-width: 0;
 }
-.purchase-intro {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  color: #657182;
-  font-size: 13px;
-  line-height: 1.7;
-  margin: 0 0 24px;
-}
 .purchase-billing {
-  font-size: 12px;
-  color: #657182;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 .purchase-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns: minmax(0, 1fr) 280px;
   align-items: start;
-  gap: 24px;
-}
-.purchase-catalog {
-  min-width: 0;
+  gap: 32px;
 }
 .purchase-section-heading {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .purchase-section-heading h2 {
-  font-size: 16px;
-}
-.purchase-step {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border-radius: 7px;
-  color: var(--brand-ink);
-  background: var(--theme-soft);
-  font-size: 12px;
+  font-size: 18px;
   font-weight: 600;
 }
 .region-panel {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 22px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding-bottom: 24px;
   margin-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+}
+.region-panel h2 {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 .region-options {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 9px;
-  margin-top: 18px;
+  gap: 8px;
+  min-width: 0;
 }
 .region-options button {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 6px;
   max-width: 100%;
-  min-height: 42px;
-  padding: 9px 13px;
-  border: 1px solid var(--border);
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 1.5;
   text-align: left;
   overflow-wrap: anywhere;
+}
+.region-options button:hover:not(:disabled) {
+  background: var(--surface-subtle);
 }
 .region-options button[aria-pressed="true"] {
   background: var(--theme-soft);
@@ -450,119 +434,145 @@ function review() {
   border-color: var(--blue);
 }
 .purchase-plan-heading {
-  margin: 0 0 16px;
+  justify-content: space-between;
+  margin-bottom: 16px;
 }
 .catalog-count {
-  margin-left: auto;
-  font-size: 12px;
-  color: #657182;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 .catalog-plans {
-  display: grid;
-  gap: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
 }
 .catalog-plan {
-  padding: 22px;
-  border: 1px solid var(--border);
-  background: #fff;
-  border-radius: 14px;
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(200px, 1.4fr) minmax(
+      132px,
+      0.9fr
+    );
+  align-items: center;
+  gap: 20px;
   min-width: 0;
+  padding: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.catalog-plan:last-child {
+  border-bottom: 0;
 }
 .catalog-plan.selected {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 1px var(--blue);
-}
-.catalog-plan-heading {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 12px;
+  background: var(--theme-soft);
+  box-shadow: inset 3px 0 var(--blue);
 }
 .catalog-plan h3 {
-  font-size: 18px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.5;
   overflow-wrap: anywhere;
+}
+.catalog-plan-heading {
+  min-width: 0;
 }
 .catalog-region,
 .summary-region {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 7px;
-  font-size: 12px;
-  color: #657182;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .catalog-region svg,
 .summary-region svg {
   flex-shrink: 0;
 }
-.catalog-availability {
-  flex-shrink: 0;
-  font-size: 11px;
-  line-height: 1.5;
-  padding: 4px 8px;
-  border-radius: 5px;
-  background: #f1f3f5;
-  color: #657182;
-}
-.catalog-availability.available {
-  color: #21734b;
-  background: #eff8f1;
-}
 .catalog-description {
-  color: #657182;
-  line-height: 1.7;
-  font-size: 12px;
-  margin-top: 13px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
   overflow-wrap: anywhere;
+}
+.catalog-availability {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 .catalog-specs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  margin: 20px 0;
+  margin: 0;
+  align-items: stretch;
+}
+.catalog-specs > div {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-width: 0;
 }
 .catalog-specs dt {
-  color: #657182;
-  font-size: 11px;
-  line-height: 1.5;
-  margin-bottom: 6px;
+  min-height: 20px;
+  margin-bottom: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .catalog-specs dd {
   margin: 0;
-  font-size: 19px;
-  font-weight: 550;
+  color: var(--text-primary);
+  font-size: 18px;
+  line-height: 1.6;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .catalog-specs small {
-  font-size: 11px;
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
   font-weight: 400;
-  color: #657182;
 }
 .catalog-plan-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
+  display: grid;
+  justify-items: stretch;
   gap: 12px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
+  min-width: 0;
 }
 .catalog-plan .plan-price {
-  font-size: 23px;
-  letter-spacing: -0.6px;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0 6px;
   margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .catalog-plan .plan-price span {
-  display: inline-block;
-  font-size: 11px;
-  color: #657182;
-  margin-left: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: normal;
 }
 .plan-select {
-  min-height: 42px;
-  font-size: 12px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: normal;
+  scroll-margin-block: 24px 160px;
 }
 .plan-select[aria-pressed="true"] {
   color: var(--brand-ink);
@@ -571,164 +581,352 @@ function review() {
 }
 .purchase-summary {
   position: sticky;
-  top: 96px;
+  top: 32px;
   min-width: 0;
   padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: #fff;
+  border-radius: 12px;
+  background: var(--surface-subtle);
 }
 .purchase-summary > .purchase-section-heading {
-  padding-bottom: 21px;
+  padding-bottom: 20px;
   border-bottom: 1px solid var(--border);
 }
 .purchase-summary > .purchase-section-heading svg {
-  color: var(--blue);
+  color: var(--text-secondary);
 }
 .purchase-summary-content {
-  margin-top: 22px;
+  margin-top: 24px;
 }
 .purchase-summary h3 {
   font-size: 19px;
+  line-height: 1.5;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 .purchase-summary-specs {
-  margin: 22px 0;
   display: grid;
-  gap: 13px;
+  gap: 12px;
+  margin: 24px 0;
 }
 .purchase-summary-specs > div {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 1.6;
 }
 .purchase-summary-specs dt {
-  color: #657182;
+  color: var(--text-secondary);
 }
 .purchase-summary-specs dd {
   margin: 0;
+  color: var(--text-primary);
   text-align: right;
   overflow-wrap: anywhere;
 }
-.purchase-total {
-  display: grid;
-  gap: 9px;
-  padding: 20px 0;
+.purchase-checkout {
+  padding-top: 20px;
   border-top: 1px solid var(--border);
 }
+.purchase-total {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 20px;
+}
 .purchase-total span {
-  color: #657182;
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
 }
 .purchase-total strong {
-  font-size: 28px;
-  color: var(--blue);
-  letter-spacing: -0.7px;
+  min-width: 0;
+  font-size: 29px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .purchase-review {
   min-height: 46px;
+  font-size: 14px;
 }
 .purchase-price-note {
-  font-size: 11px;
-  line-height: 1.8;
   margin-top: 12px;
-  color: #657182;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
 }
 .purchase-boundary {
+  margin-top: 24px;
+  padding-top: 20px;
   border-top: 1px solid var(--border);
-  margin-top: 22px;
-  padding-top: 18px;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.7;
 }
 .purchase-boundary span {
-  font-weight: 550;
+  font-weight: 600;
 }
 .purchase-boundary p {
-  font-size: 11px;
-  line-height: 1.8;
-  color: #657182;
-  margin-top: 7px;
+  margin-top: 6px;
+  color: var(--text-secondary);
 }
 .purchase-pending {
   padding: 12px;
   margin-bottom: 20px;
-  background: var(--theme-soft);
-  color: #45546a;
+  border: 1px solid var(--blue);
   border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.8;
+  background: var(--theme-soft);
+  color: var(--brand-ink);
+  font-size: 14px;
+  line-height: 1.7;
 }
 .summary-empty {
-  color: #657182;
-  padding: 12px 0 25px;
-  font-size: 13px;
-  line-height: 1.8;
+  padding-bottom: 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
 }
 .catalog-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  padding: 48px 22px;
+  padding: 56px 24px;
   border: 1px solid var(--border);
-  background: #fff;
-  border-radius: 14px;
+  border-radius: 12px;
+  background: var(--surface);
   text-align: center;
-  color: #657182;
-  font-size: 13px;
-  line-height: 1.8;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
 }
-@media (max-width: 1100px) {
+@media (max-width: 1320px) and (min-width: 901px) {
   .purchase-layout {
-    grid-template-columns: minmax(0, 1fr) 270px;
-    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: 24px;
   }
-  .catalog-plan,
-  .region-panel,
+  .catalog-plan {
+    grid-template-columns: minmax(110px, 1fr) minmax(115px, 0.8fr);
+    gap: 16px 24px;
+    padding: 20px;
+  }
+  .catalog-plan-heading {
+    align-self: start;
+  }
+  .catalog-specs {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .catalog-specs small {
+    display: inline;
+  }
+  .catalog-plan-footer {
+    grid-column: 2;
+    grid-row: 1;
+  }
   .purchase-summary {
     padding: 20px;
+  }
+}
+@media (max-width: 900px) {
+  .purchase-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+  .catalog-plan {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    padding: 20px;
+  }
+  .catalog-specs small {
+    display: inline;
+  }
+  .catalog-plan-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .purchase-summary {
+    position: static;
+  }
+  .purchase-summary-specs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px 32px;
+  }
+}
+@media (max-width: 720px) {
+  .purchase-page {
+    padding-bottom: 160px;
+  }
+  .purchase-checkout {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 24px calc(14px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: 0 -4px 24px rgb(0 0 0 / 0.04);
+  }
+  .purchase-total {
+    gap: 2px;
+    margin: 0;
+  }
+  .purchase-total strong {
+    font-size: 25px;
+  }
+  .purchase-total strong.long-total {
+    font-size: 17px;
+    letter-spacing: -0.2px;
+  }
+  .purchase-review {
+    width: auto;
+  }
+  .purchase-checkout:not(:has(.purchase-total)) .purchase-review {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 650px) {
+  .region-panel {
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+  }
+  .region-options {
+    order: 1;
+    flex-basis: 100%;
+    gap: 8px;
+  }
+  .region-options button {
+    padding: 8px 10px;
+  }
+  .catalog-plans {
+    display: grid;
+    gap: 12px;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .catalog-plan,
+  .catalog-plan:last-child {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .catalog-plan.selected {
+    border-color: var(--blue);
+    box-shadow: none;
+  }
+  .catalog-plan h3 {
+    font-size: 18px;
+  }
+  .catalog-region,
+  .summary-region,
+  .catalog-description,
+  .catalog-availability {
+    font-size: 14px;
+  }
+  .catalog-specs {
+    gap: 8px;
+  }
+  .catalog-specs dt {
+    min-height: 0;
+    margin-bottom: 4px;
+    font-size: 14px;
+  }
+  .catalog-specs dd {
+    font-size: 20px;
+  }
+  .catalog-specs small {
+    display: block;
+    font-size: 14px;
+  }
+  .catalog-plan-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .catalog-plan .plan-price {
+    justify-content: flex-start;
+    font-size: 23px;
+  }
+  .catalog-plan .plan-price span {
+    font-size: 14px;
+  }
+  .purchase-summary {
+    padding: 20px;
+  }
+  .purchase-summary-specs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 24px;
+  }
+  .purchase-price-note,
+  .purchase-boundary,
+  .purchase-total span {
+    font-size: 14px;
+  }
+  .purchase-checkout {
+    gap: 12px;
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+  .purchase-total strong {
+    font-size: clamp(19px, 5.4vw, 25px);
+  }
+  .purchase-review {
+    gap: 6px;
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+}
+@media (max-width: 380px) {
+  .purchase-checkout:has(.long-total) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .purchase-checkout:has(.long-total) .purchase-review {
+    width: 100%;
+  }
+}
+@media (max-width: 360px) {
+  .purchase-summary-specs {
+    grid-template-columns: minmax(0, 1fr);
   }
   .catalog-specs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px;
   }
-}
-@media (max-width: 850px) {
-  .purchase-layout {
-    grid-template-columns: minmax(0, 1fr);
+  .catalog-specs small {
+    display: inline;
   }
-  .purchase-summary {
-    position: static;
+  .purchase-checkout {
+    gap: 8px;
+    padding-right: 16px;
+    padding-left: 16px;
   }
-  .catalog-specs {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-@media (max-width: 520px) {
-  .purchase-intro {
-    margin-bottom: 18px;
-  }
-  .catalog-plan,
-  .region-panel,
-  .purchase-summary {
-    padding: 18px;
-  }
-  .catalog-specs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .catalog-plan .plan-price {
-    font-size: 22px;
-  }
-  .catalog-plan-heading {
-    flex-wrap: wrap;
-  }
-  .region-options button {
-    min-height: 44px;
-  }
-  .purchase-summary {
-    margin-top: 4px;
+  .purchase-review {
+    padding-right: 10px;
+    padding-left: 10px;
   }
 }
 </style>

@@ -23,7 +23,6 @@ import {
   Activity,
   Search,
   ChevronRight,
-  ChevronDown,
   Plus,
   RefreshCw,
   LogOut,
@@ -70,6 +69,7 @@ import type {
 import SettingsPage from "./components/SettingsPage.vue";
 import UpdatesPage from "./components/UpdatesPage.vue";
 import PlansPage from "./components/PlansPage.vue";
+import CustomerOverview from "./components/CustomerOverview.vue";
 import FinancialSettingsPage from "./components/FinancialSettingsPage.vue";
 import { readCurrencyRegistry, type CurrencyRegistry } from "./lib/currencies";
 import {
@@ -134,7 +134,7 @@ const error = ref(""),
   modalError = ref(""),
   query = ref(""),
   menuOpen = ref(false);
-const navigationMedia = window.matchMedia("(max-width: 720px)");
+const navigationMedia = window.matchMedia("(max-width: 1024px)");
 const mobileNavigation = ref(navigationMedia.matches);
 const navigationSidebar = ref<HTMLElement>(),
   navigationTrigger = ref<HTMLButtonElement>(),
@@ -354,12 +354,26 @@ const maxCost = computed(() =>
 const invoiceOrder = computed(() =>
   orders.value.find((o) => o.id === selectedInvoice.value?.order_id),
 );
+function focusNavigationControl(control?: HTMLElement) {
+  if (!control) return;
+  control.focus({ preventScroll: true });
+  const sidebar = navigationSidebar.value;
+  if (!sidebar?.clientHeight || control.matches(".sidebar-close")) return;
+  const bounds = sidebar.getBoundingClientRect();
+  const target = control.getBoundingClientRect();
+  const top = bounds.top + (mobileNavigation.value ? 72 : 20);
+  const bottom = bounds.bottom - 20;
+  if (target.top < top) sidebar.scrollTop += target.top - top;
+  else if (target.bottom > bottom) sidebar.scrollTop += target.bottom - bottom;
+}
 function focusNavigation() {
-  (
+  focusNavigationControl(
     navigationSidebar.value?.querySelector<HTMLElement>(
       'nav a[aria-current="page"]',
-    ) || navigationSidebar.value?.querySelector<HTMLElement>("nav a")
-  )?.focus();
+    ) ||
+      navigationSidebar.value?.querySelector<HTMLElement>("nav a") ||
+      undefined,
+  );
 }
 async function openNavigation() {
   if (!mobileNavigation.value) return;
@@ -374,7 +388,7 @@ async function closeNavigation() {
   menuOpen.value = false;
   await nextTick();
   if (generation === navigationFocusGeneration && mobileNavigation.value)
-    navigationTrigger.value?.focus();
+    navigationTrigger.value?.focus({ preventScroll: true });
 }
 function handleNavigationKeydown(event: KeyboardEvent) {
   if (!navigationModal.value) return;
@@ -391,10 +405,10 @@ function handleNavigationKeydown(event: KeyboardEvent) {
       last = controls.at(-1);
     if (event.shiftKey && document.activeElement === first) {
       event.preventDefault();
-      last?.focus();
+      focusNavigationControl(last);
     } else if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
-      first?.focus();
+      focusNavigationControl(first);
     }
   }
 }
@@ -409,7 +423,7 @@ async function syncNavigationBreakpoint(event: MediaQueryListEvent) {
   menuOpen.value = false;
   await nextTick();
   if (generation !== navigationFocusGeneration || !hidesFocusedControl) return;
-  if (event.matches) navigationTrigger.value?.focus();
+  if (event.matches) navigationTrigger.value?.focus({ preventScroll: true });
   else focusNavigation();
 }
 async function go(path: string) {
@@ -1426,111 +1440,110 @@ onBeforeUnmount(() => {
       :aria-label="tr('关闭导航', 'Close navigation')"
       @click="closeNavigation"
     />
-    <aside
-      id="primary-navigation"
-      ref="navigationSidebar"
-      class="sidebar"
-      :aria-label="tr('主导航', 'Main navigation')"
-      :role="navigationModal ? 'dialog' : undefined"
-      :aria-modal="navigationModal ? true : undefined"
-      :aria-hidden="navigationHidden ? true : undefined"
-      :inert="navigationHidden ? true : undefined"
-    >
-      <button
-        class="sidebar-close icon-button"
-        :aria-label="tr('关闭导航', 'Close navigation')"
-        @click="closeNavigation"
+    <div class="navigation-rail">
+      <aside
+        id="primary-navigation"
+        ref="navigationSidebar"
+        class="sidebar"
+        :aria-label="tr('主导航', 'Main navigation')"
+        :role="navigationModal ? 'dialog' : undefined"
+        :aria-modal="navigationModal ? true : undefined"
+        :aria-hidden="navigationHidden ? true : undefined"
+        :inert="navigationHidden ? true : undefined"
       >
-        <X :size="21" />
-      </button>
-      <a class="brand" href="/overview" @click.prevent="go('overview')"
-        ><div class="brand-mark">
-          <component :is="brandIcon" :size="25" aria-hidden="true" />
-        </div>
-        <strong>{{ branding.site_name }}</strong></a
-      ><button class="workspace-switch" @click="helpDialog?.showModal()">
-        <span class="workspace-icon">{{ isAdmin ? "A" : "P" }}</span
-        ><span
-          ><b>{{
+        <button
+          class="sidebar-close icon-button"
+          :aria-label="tr('关闭导航', 'Close navigation')"
+          @click="closeNavigation"
+        >
+          <X :size="21" />
+        </button>
+        <a class="brand" href="/overview" @click.prevent="go('overview')"
+          ><div class="brand-mark">
+            <component :is="brandIcon" :size="25" aria-hidden="true" />
+          </div>
+          <strong>{{ branding.site_name }}</strong></a
+        >
+        <div class="workspace-context">
+          {{
             isAdmin
               ? tr("管理控制台", "Admin console")
-              : tr("个人工作空间", "Personal workspace")
-          }}</b
-          ><small>{{
-            branding.company_name || branding.site_name
-          }}</small></span
-        ><ChevronDown :size="14" />
-      </button>
-      <div class="nav-label">
-        {{
-          isAdmin
-            ? tr("运营管理", "Administration")
-            : tr("工作空间", "Workspace")
-        }}
-      </div>
-      <nav>
-        <a
-          v-for="item in nav"
-          :key="item.id"
-          :href="'/' + item.id"
-          :class="{ active: page === item.id }"
-          :aria-current="page === item.id ? 'page' : undefined"
-          @click.prevent="go(item.id)"
-          ><component :is="item.icon" :size="19" :stroke-width="1.7" /><span>{{
-            item.label
-          }}</span
-          ><span
-            v-if="item.id === 'invoices' && unpaid.length"
-            class="nav-count"
-            >{{ unpaid.length }}</span
-          ></a
-        >
-      </nav>
-      <div class="sidebar-bottom">
-        <div class="sidebar-note">
-          <span class="status-dot" /><span>{{
-            preview
-              ? tr("只读预览模式", "Read-only preview")
-              : session.demo_mode
-                ? tr("本地演示环境", "Local demo")
-                : tr("已连接", "Connected")
-          }}</span>
+              : tr("客户中心", "Customer center")
+          }}
         </div>
-        <button
-          class="side-action"
-          :class="{ active: page === 'account' }"
-          @click="go('account')"
-        >
-          <ShieldCheck :size="18" />
-          {{ tr("账户与安全", "Account and security") }}</button
-        ><button class="side-action" @click="helpDialog?.showModal()">
-          <CircleHelp :size="18" />
-          {{ tr("帮助与说明", "Help and information") }}
-          <ArrowUpRight :size="14" />
-        </button>
-        <div class="user-menu">
-          <span class="avatar">{{
-            session.user.name?.slice(0, 1).toUpperCase() || "A"
-          }}</span>
-          <div>
-            <b>{{ session.user.name }}</b
-            ><small>{{
-              isAdmin
-                ? tr("管理员", "Administrator")
-                : tr("个人账户", "Personal account")
-            }}</small>
+        <div class="nav-label">
+          {{
+            isAdmin
+              ? tr("运营管理", "Administration")
+              : tr("服务与账务", "Services and billing")
+          }}
+        </div>
+        <nav>
+          <a
+            v-for="item in nav"
+            :key="item.id"
+            :href="'/' + item.id"
+            :class="{ active: page === item.id }"
+            :aria-current="page === item.id ? 'page' : undefined"
+            @click.prevent="go(item.id)"
+            ><component
+              :is="item.icon"
+              :size="19"
+              :stroke-width="1.7"
+            /><span>{{ item.label }}</span
+            ><span
+              v-if="item.id === 'invoices' && unpaid.length"
+              class="nav-count"
+              >{{ unpaid.length }}</span
+            ></a
+          >
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="sidebar-note">
+            <span class="status-dot" /><span>{{
+              preview
+                ? tr("只读预览模式", "Read-only preview")
+                : session.demo_mode
+                  ? tr("本地演示环境", "Local demo")
+                  : tr("已连接", "Connected")
+            }}</span>
           </div>
           <button
-            :aria-label="tr('退出登录', 'Sign out')"
-            :title="tr('退出登录', 'Sign out')"
-            @click="logout"
-            :disabled="saving"
+            class="side-action"
+            :class="{ active: page === 'account' }"
+            @click="go('account')"
           >
-            <LogOut :size="17" />
+            <ShieldCheck :size="18" />
+            {{ tr("账户与安全", "Account and security") }}</button
+          ><button class="side-action" @click="helpDialog?.showModal()">
+            <CircleHelp :size="18" />
+            {{ tr("帮助与说明", "Help and information") }}
+            <ArrowUpRight :size="14" />
           </button>
+          <div class="user-menu">
+            <span class="avatar">{{
+              session.user.name?.slice(0, 1).toUpperCase() || "A"
+            }}</span>
+            <div>
+              <b>{{ session.user.name }}</b
+              ><small>{{
+                isAdmin
+                  ? tr("管理员", "Administrator")
+                  : tr("个人账户", "Personal account")
+              }}</small>
+            </div>
+            <button
+              :aria-label="tr('退出登录', 'Sign out')"
+              :title="tr('退出登录', 'Sign out')"
+              @click="logout"
+              :disabled="saving"
+            >
+              <LogOut :size="17" />
+            </button>
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </div>
     <div class="main-shell" :inert="navigationModal ? true : undefined">
       <header class="topbar">
         <div class="breadcrumbs">
@@ -1584,14 +1597,7 @@ onBeforeUnmount(() => {
               </select></label
             >
           </div>
-          <span class="environment-chip">{{
-            preview
-              ? tr("只读预览", "Read-only preview")
-              : session.demo_mode
-                ? "DEMO"
-                : "CONNECTED"
-          }}</span
-          ><button
+          <button
             class="icon-button"
             :aria-label="tr('刷新数据', 'Refresh data')"
             :title="tr('刷新数据', 'Refresh data')"
@@ -1599,7 +1605,7 @@ onBeforeUnmount(() => {
             @click="load"
           >
             <RefreshCw :size="17" :class="{ spin: loading }" /></button
-          ><span class="topbar-divider" /><button
+          ><button
             class="avatar small"
             :aria-label="tr('打开账户与安全', 'Open account and security')"
             @click="go('account')"
@@ -1682,9 +1688,6 @@ onBeforeUnmount(() => {
         </div>
         <div class="page-heading">
           <div>
-            <p class="eyebrow">
-              {{ branding.site_name }}
-            </p>
             <h1>
               {{
                 page === "overview"
@@ -1693,7 +1696,9 @@ onBeforeUnmount(() => {
                     : tr("你好，", "Hello, ") +
                       session.user.name +
                       tr("。", ".")
-                  : pageTitle
+                  : page === "plans"
+                    ? tr("选购云服务器", "Choose a cloud server")
+                    : pageTitle
               }}
             </h1>
             <p>
@@ -1705,8 +1710,8 @@ onBeforeUnmount(() => {
                         "View account and billing activity.",
                       )
                     : tr(
-                        "查看服务、订单和待付账单。",
-                        "View your services, orders and unpaid invoices.",
+                        "管理云服务器，核对账单与续费。",
+                        "Manage your cloud servers, invoices and renewals.",
                       )
                   : page === "services"
                     ? tr(
@@ -1715,8 +1720,8 @@ onBeforeUnmount(() => {
                       )
                     : page === "plans"
                       ? tr(
-                          "选择配置并确认独立币种价格。",
-                          "Choose a plan and review prices for each currency.",
+                          "选择区域和配置，核对月费后继续。",
+                          "Choose a region and configuration, then review the monthly price.",
                         )
                       : page === "invoices"
                         ? tr(
@@ -1791,7 +1796,17 @@ onBeforeUnmount(() => {
         >
           <div v-for="n in 3" :key="n" class="skeleton" />
         </div>
-        <template v-else-if="page === 'overview'">
+        <CustomerOverview
+          v-else-if="page === 'overview' && !isAdmin"
+          :overview="overview"
+          :services="services"
+          :orders="orders"
+          :unpaid="unpaid"
+          :currency="displayCurrency"
+          @navigate="go"
+          @invoice="openInvoice"
+        />
+        <template v-else-if="page === 'overview' && isAdmin">
           <p class="page-note">
             {{
               tr(
@@ -2602,7 +2617,11 @@ onBeforeUnmount(() => {
                   </tr>
                 </tbody>
               </table>
-              <table v-else-if="page === 'invoices'">
+              <table
+                v-else-if="page === 'invoices'"
+                class="invoice-table"
+                :aria-label="tr('账单列表', 'Invoice list')"
+              >
                 <thead>
                   <tr>
                     <th>{{ tr("账单编号", "Invoice number") }}</th>
@@ -2616,10 +2635,25 @@ onBeforeUnmount(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="invoice in filteredInvoices" :key="invoice.id">
+                  <tr
+                    v-for="invoice in filteredInvoices"
+                    :key="invoice.id"
+                    :class="{
+                      'long-invoice':
+                        money(
+                          invoice.amount_minor,
+                          invoice.currency,
+                          invoice.currency_format,
+                        ).length > 16,
+                    }"
+                  >
                     <td class="mono strong">{{ invoice.number }}</td>
-                    <td class="muted">{{ date(invoice.issued_at) }}</td>
-                    <td class="muted">{{ date(invoice.due_at) }}</td>
+                    <td class="muted" :data-label="tr('出账日期', 'Issued on')">
+                      {{ date(invoice.issued_at) }}
+                    </td>
+                    <td class="muted" :data-label="tr('到期日期', 'Due on')">
+                      {{ date(invoice.due_at) }}
+                    </td>
                     <td class="numeric">
                       {{
                         money(
@@ -2642,7 +2676,8 @@ onBeforeUnmount(() => {
                         "
                         @click="openInvoice(invoice)"
                       >
-                        {{ tr("查看", "View") }} <ChevronRight :size="15" />
+                        {{ tr("查看账单", "View invoice") }}
+                        <ChevronRight :size="15" />
                       </button>
                     </td>
                   </tr>

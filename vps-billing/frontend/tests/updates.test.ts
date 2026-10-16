@@ -17,6 +17,14 @@ import {
   type UpdateStatus,
 } from "../src/lib/updates";
 
+const dialogMethods = ["showModal", "close"] as const;
+const originalDialogDescriptors = new Map(
+  dialogMethods.map((method) => [
+    method,
+    Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, method),
+  ]),
+);
+
 const candidate = (
   overrides: Partial<UpdateCandidate> = {},
 ): UpdateCandidate => ({
@@ -123,6 +131,12 @@ const choose = async (wrapper: ReturnType<typeof mount>) => {
   await wrapper.get('[name="acknowledge_manual_handoff"]').setValue(true);
 };
 beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({
@@ -137,6 +151,12 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  for (const method of dialogMethods) {
+    const original = originalDialogDescriptors.get(method);
+    if (original)
+      Object.defineProperty(HTMLDialogElement.prototype, method, original);
+    else Reflect.deleteProperty(HTMLDialogElement.prototype, method);
+  }
   document.body.innerHTML = "";
 });
 

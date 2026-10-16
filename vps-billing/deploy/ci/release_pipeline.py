@@ -1113,6 +1113,27 @@ def publish(api, policy, archive_bytes):
                 + inherited
                 + f"\n\n[宝塔部署]({source_docs}BAOTA.md) · [插件安装与回退]({source_docs}PLUGINS.md)。"
             )
+        if kind == "core" and provenance["version"] == "0.5.5":
+            heading, inherited = fields["body"].split("\n\n", 1)
+            inherited = inherited.replace("支付扩展新增独立运行时插槽", "支付运行时自 Core 0.5.3 已提供独立插槽", 1)
+            inherited = inherited.replace(
+                "界面修复了页头高度、路由切换滚动、币种标签、按钮样式和财务副标题。",
+                "既有的页头高度、路由切换滚动、币种标签、按钮样式和财务副标题修复继续保留。", 1)
+            inherited = inherited.replace(
+                "本版本通过该构建的回归、原生 systemd/HTTPS、备份恢复、独立插件生命周期、浏览器与依赖扫描门槛；",
+                "各项门禁的实际执行范围和结果以对应构建及验证记录为准；", 1)
+            fields["body"] = (
+                heading + "\n\n"
+                "这是 Core 0.5.4 之后的界面维护补丁。客户首页重新组织服务、订单与待处理账单，"
+                "套餐页统一区域筛选、规格比较和订单摘要。导航轨道贯穿页面，桌面侧栏独立滚动，"
+                "1024px 及以下使用抽屉导航，保留键盘焦点、关闭和返回行为。"
+                "账单在窄屏重新排布，中文、英文、长名称和长金额沿用统一的层级与排版规则。\n\n"
+                "本次不新增业务功能，不改变订单与付款校验、金额精度、安全或多币种历史格式，不自动换汇。"
+                "客户与后台沿用同一设计体系。人工视觉复验、自动化检查和原生安装验收分别记录，"
+                "本地预览或单项检查不能代替其他门禁，也不表示正常 Release 已完成发布。\n\n"
+                + inherited
+                + f"\n\n[宝塔部署]({source_docs}BAOTA.md) · [插件安装与回退]({source_docs}PLUGINS.md)。"
+            )
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

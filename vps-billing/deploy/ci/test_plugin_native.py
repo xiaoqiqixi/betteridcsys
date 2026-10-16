@@ -97,21 +97,43 @@ class IsolatedCanaryBootstrapTests(unittest.TestCase):
     def test_peer_probe_accepts_real_connection_closure_and_rejects_any_response(self):
         import socket
         import threading
+        import time
+        expected_headers = (b"POST /handshake HTTP/1.1\r\nHost: plugin.local\r\n"
+                            b"Content-Type: application/json\r\nContent-Length: 0\r\n\r\n")
         for payload in (b"", b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"):
             with self.subTest(payload=bool(payload)), tempfile.TemporaryDirectory(prefix="aster-peer-probe-") as directory:
                 endpoint = str(Path(directory) / "probe.sock")
+                received_headers, fixture_errors = [], []
                 with socket.socket(socket.AF_UNIX) as listener:
                     listener.bind(endpoint)
                     listener.listen(1)
                     listener.settimeout(3)
 
                     def reject():
-                        connection, _ = listener.accept()
-                        with connection:
-                            if payload:
-                                connection.sendall(payload)
-                            else:
-                                connection.shutdown(socket.SHUT_RDWR)
+                        try:
+                            connection, _ = listener.accept()
+                            with connection:
+                                headers = bytearray()
+                                deadline = time.monotonic() + 2
+                                while b"\r\n\r\n" not in headers:
+                                    remaining = deadline - time.monotonic()
+                                    if remaining <= 0 or len(headers) >= 4096:
+                                        raise TimeoutError("Peer-probe fixture headers exceeded bounds")
+                                    connection.settimeout(remaining)
+                                    chunk = connection.recv(4096 - len(headers))
+                                    if not chunk:
+                                        raise EOFError("Peer-probe fixture request ended before headers")
+                                    headers.extend(chunk)
+                                received_headers.append(bytes(headers))
+                                if bytes(headers) != expected_headers:
+                                    raise ValueError("Peer-probe fixture request headers differ")
+                                if payload:
+                                    connection.sendall(payload)
+                                    connection.shutdown(socket.SHUT_WR)
+                                else:
+                                    connection.shutdown(socket.SHUT_RDWR)
+                        except Exception as error:
+                            fixture_errors.append(type(error).__name__)
 
                     thread = threading.Thread(target=reject)
                     thread.start()
@@ -119,6 +141,8 @@ class IsolatedCanaryBootstrapTests(unittest.TestCase):
                                             cwd="/", capture_output=True, timeout=5)
                     thread.join(3)
                     self.assertFalse(thread.is_alive())
+                    self.assertEqual(fixture_errors, [])
+                    self.assertEqual(received_headers, [expected_headers])
                     self.assertEqual(result.returncode, 3 if payload else 0, result.stderr.decode())
 
     def test_real_nonroot_isolated_exec_preserves_canary_descriptor_before_host_cleanup(self):

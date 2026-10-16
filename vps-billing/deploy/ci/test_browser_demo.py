@@ -327,6 +327,21 @@ class BrowserDemoTest(unittest.TestCase):
         test.write_text('chromiumSandbox: true; await shot("fixture");')
         with self.assertRaises(browser_demo.Failure):browser_demo.validate_inputs(self.repo,self.chrome,self.repo/'evidence')
 
+    def test_shipped_e2e_screenshot_inventory_fits_the_release_guard(self):
+        source = SCRIPT.parents[2] / "frontend/tests/e2e.mjs"
+        (self.repo / "vps-billing/frontend/tests/e2e.mjs").write_text(source.read_text())
+        _, _, _, screenshots = browser_demo.validate_inputs(self.repo, self.chrome, self.output)
+        self.assertIn("dashboard-desktop.png", screenshots)
+        self.assertIn("plans-mobile.png", screenshots)
+        self.assertLessEqual(len(screenshots), 30)
+
+    def test_screenshot_inventory_still_rejects_more_than_thirty_names(self):
+        source = "chromiumSandbox: true;\n" + "\n".join(
+            f'await shot("fixture-{index}");' for index in range(31))
+        (self.repo / "vps-billing/frontend/tests/e2e.mjs").write_text(source)
+        with self.assertRaisesRegex(browser_demo.Failure, "bounded set"):
+            browser_demo.validate_inputs(self.repo, self.chrome, self.output)
+
     def test_exact_screenshots_reject_links_extra_files_and_missing_files(self):
         source=self.root/'screens';source.mkdir();target=self.root/'retained'
         with self.assertRaises(browser_demo.Failure):browser_demo.retain_screenshots(source,target,{'fixture.png'})

@@ -81,7 +81,7 @@ const shot = async (name) => {
   if (navigationShots.has(name))
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await page.evaluate(() => window.scrollTo(0, 0));
-  if (page.viewportSize().width <= 720) {
+  if (page.viewportSize().width <= 1024) {
     await expect
       .poll(() =>
         page
@@ -544,7 +544,7 @@ try {
         ? "AsterCloudLongBrandNameForResponsiveLayout"
         : "星屿云长品牌名称用于响应式界面核对",
     );
-    for (const width of [320, 375, 720, 721, 768]) {
+    for (const width of [320, 375, 720, 721, 768, 1024, 1025]) {
       await page.setViewportSize({ width, height: 900 });
       await expect
         .poll(() =>
@@ -839,7 +839,7 @@ try {
   const navigationTrigger = page.locator(".mobile-menu");
   const navigationClose = navigation.locator(".sidebar-close");
   const currentInvoiceLink = navigation.locator('nav a[aria-current="page"]');
-  await page.setViewportSize({ width: 720, height: 844 });
+  await page.setViewportSize({ width: 1024, height: 844 });
   await expect(navigation).toHaveAttribute("inert");
   await expect(navigation).toHaveAttribute("aria-hidden", "true");
   await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
@@ -880,7 +880,7 @@ try {
   await expect(navigationTrigger).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(currentInvoiceLink).toBeFocused();
-  await page.setViewportSize({ width: 721, height: 844 });
+  await page.setViewportSize({ width: 1025, height: 844 });
   await expect(navigation).not.toHaveAttribute("inert");
   await expect(navigation).not.toHaveAttribute("aria-hidden");
   await expect(navigation).not.toHaveAttribute("role");
@@ -891,7 +891,7 @@ try {
   await expect(currentInvoiceLink).toBeFocused();
   const languageControl = page.getByLabel("语言", { exact: true });
   await languageControl.focus();
-  await page.setViewportSize({ width: 720, height: 844 });
+  await page.setViewportSize({ width: 1024, height: 844 });
   // Retained focus is already true before matchMedia dispatches its change.
   // Wait for the application's mobile state before sending keyboard actions.
   await expect(navigation).toHaveAttribute("inert");
@@ -1202,9 +1202,9 @@ try {
   const customerOverview = await json("/overview?currency=CNY");
   await expect(
     page
-      .locator(".stat-card")
+      .locator(".account-facts > div")
       .filter({ hasText: "待付款账单" })
-      .locator(".stat-value"),
+      .locator("p"),
   ).toHaveText(new RegExp(`^${customerOverview.pending_invoices}\\s*笔$`));
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await page.getByRole("button", { name: "体验管理后台", exact: true }).click();

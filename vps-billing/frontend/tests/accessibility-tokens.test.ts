@@ -156,7 +156,6 @@ describe.each(["blue", "teal", "violet"])(
       for (const selector of [
         "[data-theme] .sidebar nav a.active",
         ".settings-choice:has(input:checked)",
-        ".purchase-step",
         '.region-options button[aria-pressed="true"]',
         '.plan-select[aria-pressed="true"]',
       ]) {
