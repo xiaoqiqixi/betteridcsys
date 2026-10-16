@@ -1,6 +1,6 @@
 # 版本、构建与发布
 
-Core 与运行时插件分别采用语义化版本、构建包和 Release。本页描述 Core `0.5.3` 与官方 SMTP `1.1.0` 的交付，正式资产以 Release 实际清单为准；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
+Core 与运行时插件分别采用语义化版本、构建包和 Release。本页描述 Core `0.5.4` 与官方 SMTP `1.1.0` 的交付，正式资产以 Release 实际清单为准；SMTP 的 `aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。支付运行时协议保持 `aster.payment/1`，最低要求 Core `0.5.3`；0.5.4 沿用既有支付数据库结构，较早版本的回退边界见 [UPGRADE.md](UPGRADE.md)。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
 
 本项目在 `main` 维护。正常发布采用公开、非草稿、非预发布的 Release；这是版本交付状态，不宣称支付、主控/被控、商业运营或安全认证已完成。发布流程不部署服务器、不操作真实付款、不发送外部邮件。root `LICENSE` 和第三方版权材料保留；根 README 可随产品变化更新。
 
@@ -8,12 +8,12 @@ Core 与运行时插件分别采用语义化版本、构建包和 Release。本�
 
 | 项目 | 标签          | 原始 Linux amd64 程序                                                | 单独资源包                                      |
 | ---- | ------------- | -------------------------------------------------------------------- | ----------------------------------------------- |
-| Core | `v0.5.3`      | `aster-api-0.5.3-linux-amd64`、`aster-plugin-host-0.5.3-linux-amd64` | `aster-core-0.5.3-linux-amd64-resources.tar.gz` |
+| Core | `v0.5.4`      | `aster-api-0.5.4-linux-amd64`、`aster-plugin-host-0.5.4-linux-amd64` | `aster-core-0.5.4-linux-amd64-resources.tar.gz` |
 | SMTP | `smtp-v1.1.0` | `aster-smtp-1.1.0-linux-amd64`                                       | `aster-smtp-1.1.0-linux-amd64-resources.tar.gz` |
 
 每个 Release 另含 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`：Core 共 6 个手工发布资产，SMTP 共 5 个。程序为未压缩的静态 ELF 可执行文件；下载后须按固定目标名安装和赋予执行权限。资源包不含 ELF，不能把它当作已经带程序的旧运行包。
 
-Core 资源根目录为 `aster-core-0.5.3-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。资源内 `core-manager.py prepare` 核验同版本资产并自动组装 `bin/aster-api`、`bin/aster-plugin-host`；管理员再审查私密规格和计划摘要，明确确认 `core-operation.py apply` 完成专用实例的初始化、迁移、配置和激活。MySQL 系统服务、Nginx 程序、TLS 证书和宿主环境须先准备；网页没有执行权限。单个 API 程序不能替代网页、配置、数据库或插件宿主。
+Core 资源根目录为 `aster-core-0.5.4-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。资源内 `core-manager.py prepare` 核验同版本资产并自动组装 `bin/aster-api`、`bin/aster-plugin-host`；管理员再审查私密规格和计划摘要，明确确认 `core-operation.py apply` 完成专用实例的初始化、迁移、配置和激活。MySQL 系统服务、Nginx 程序、TLS 证书和宿主环境须先准备；网页没有执行权限。单个 API 程序不能替代网页、配置、数据库或插件宿主。
 
 SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。管理工具同时核验资源与原始程序，再组装为不可覆盖的六文件版本目录；安装不批准、不启动。两种 Release 分别记录来源，不能用 Core 校验和证明 SMTP 程序。
 
@@ -35,9 +35,9 @@ SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `mani
 
 ```sh
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.3 --output /workspace/core-a
+  --commit COMMIT_SHA --kind core --version 0.5.4 --output /workspace/core-a
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.3 --output /workspace/core-b
+  --commit COMMIT_SHA --kind core --version 0.5.4 --output /workspace/core-b
 diff -r /workspace/core-a /workspace/core-b
 
 vps-billing/deploy/scripts/package-release.sh \
@@ -60,7 +60,7 @@ diff -r /workspace/smtp-a /workspace/smtp-b
 5. Core、SMTP 各自双构建一致；原始 ELF 与资源分别校验，资源不含 ELF，组装后完整清单、权限、来源、版本和校验和通过。发布资产来自已验证提交，不能以工作区文件或历史候选冒充。
 6. npm/Go 扫描及系统依赖检查分别报告范围。扫描网络或工具失败即为未完成；模块级告警不能被“可达函数 0”掩盖。
 
-真正的公共 CA/域名/续期、数据库进程与整机重启、跨 schema 降级、独立实例/异地恢复、负载、真实服务商邮件和支付不在上述自动化结论内。单次 CI 通过也不替代这些项目。本文是放行要求；完成情况必须查实际运行记录。
+真正的公共 CA/域名/续期、数据库进程与整机重启、跨 schema 降级、独立实例/异地恢复、生产容量、真实服务商邮件和支付不在上述自动化结论内。单次 CI 通过也不替代这些项目。本文是放行要求；完成情况必须查实际运行记录。
 
 ## 发布流程与失败处理
 

@@ -21,16 +21,16 @@ MySQL 必须确认为 8.4 LTS；软件列表可选版本不等于现有实例已
 
 ## 2. 准备同版本程序与网页
 
-Core 0.5.3 的正常 Release 提供六资产：原始 API、插件宿主、资源归档及 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`。资源包含编译好的网页和主机工具，服务器无需 Go/Node.js。按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对官方来源、资产摘要、构建提交/run，并将已核验且审查过的 `core-manager.py`、`core-operation.py`、`update-manager.py`、`plugin-manager.py` 引导到 root 保护目录。旧正式工具不会自动认识后续的完整策略清单，不能直接代替此次引导。
+本文以 Core 0.5.4 为目标，同版本正常 Release 应包含六项资产：原始 API、插件宿主、资源归档及 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`。资源包含编译好的网页和主机工具，服务器无需 Go/Node.js。按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对官方来源、资产摘要、构建提交/run，并将已核验且审查过的 `core-manager.py`、`core-operation.py`、`update-manager.py`、`plugin-manager.py` 引导到 root 保护目录。旧正式工具不会自动认识后续的完整策略清单，不能直接代替此次引导。
 
 使用普通受控上传途径时，把六资产放在网站目录以外，再由管理员核对为 root 所有、不可共享写入、无链接的独立输入目录；不要让面板 Web 身份执行 root 工具。以下 socket 是宿主机实际路径，须替换：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.3/core-manager.py doctor \
-  --release-directory /opt/aster/releases/0.5.3 \
+sudo python3 /var/lib/aster-bootstrap/0.5.4/core-manager.py doctor \
+  --release-directory /opt/aster/releases/0.5.4 \
   --socket /actual/mysql.sock --listen-address 127.0.0.1:18080
-sudo python3 /var/lib/aster-bootstrap/0.5.3/core-manager.py prepare \
-  --version 0.5.3 --assets-directory /var/lib/aster-install/core-0.5.3
+sudo python3 /var/lib/aster-bootstrap/0.5.4/core-manager.py prepare \
+  --version 0.5.4 --assets-directory /var/lib/aster-install/core-0.5.4
 ```
 
 省略 `--assets-directory` 时工具自行从固定官方来源下载六资产；两种方式都独立校验当前官方 Release、源码/构建来源和完整文件树，再自动组装为新的完整版本目录，不需要手工复制 API、插件宿主或前端。`doctor` 只读主机事实；面板工具不在标准 PATH 时可能提示缺失，须独立核对其真实路径。它不运行 Nginx/MySQL、不连接数据库、不验证面板兼容性。
@@ -60,7 +60,7 @@ sudo python3 /var/lib/aster-bootstrap/0.5.3/core-manager.py prepare \
 
 复用已核实的 MySQL 8.4 实例和实际 Unix socket，不安装第二套数据库。全新安装要求本应用数据库及三个同名前缀账号不存在，由执行器在确认后创建独立 runtime/migrator/backup 身份；运行账号仅本库 DML。不要预先通过面板创建一个全权限用户再冒充全新安装，也不要更改共享实例 root 密码或开放远程访问。已有库/账号/配置转入 [升级](UPGRADE.md)，不能删除后重新安装。
 
-按 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)准备 root 私密 DBA client 文件、管理员密码文件和已核验 TLS 文件。秘密不进入 argv、shell history、面板网站上传目录或普通日志。规格设置实际 `origin`、回环 `listen_address`、数据库/socket、root 保护的真实 MySQL/Nginx 程序路径；本机 socket 明确使用 `MYSQL_ALLOW_INSECURE=true`，不扩展到明文 TCP。支付与 SMTP 均默认关闭。Core 0.5.3 提供独立运行时支付插槽，第三方渠道按[支付插件接入指南](PAYMENT_PLUGINS.md)完成适配、独立构建与验收，无需重编 Core。启用前须核验程序及 manifest、明确批准商户和身份，再运行专用 service；不通过面板上传或只改环境变量安装。
+按 [安装手册第 2 节](INSTALL.md#2-数据库与秘密)准备 root 私密 DBA client 文件、管理员密码文件和已核验 TLS 文件。秘密不进入 argv、shell history、面板网站上传目录或普通日志。规格设置实际 `origin`、回环 `listen_address`、数据库/socket、root 保护的真实 MySQL/Nginx 程序路径；本机 socket 明确使用 `MYSQL_ALLOW_INSECURE=true`，不扩展到明文 TCP。支付与 SMTP 均默认关闭。独立运行时支付插槽 `aster.payment/1` 自 Core 0.5.3 起提供，第三方渠道按[支付插件接入指南](PAYMENT_PLUGINS.md)完成适配、独立构建与验收，无需重编 Core。启用前须核验程序及 manifest、明确批准商户和身份，再运行专用 service；不通过面板上传或只改环境变量安装。
 
 API 仅由专用 systemd unit 管理，不添加面板进程守护、定时重启或第二份启动命令。执行器确认后生成受支持的 unit/配置、迁移并引导管理员；不接管任意自定义 unit/drop-in。已有 0.5.1 实例须通过回执、unit、配置/权限、schema 和插件门禁才可接纳。
 
@@ -173,16 +173,16 @@ curl --fail --show-error --head https://billing.example.com/
 新安装按 [INSTALL.md](INSTALL.md)创建 `action=install` 私密规格；已有实例按 [UPGRADE.md](UPGRADE.md)使用 `action=upgrade`，提供独立迁移 DSN、备份 client 文件并明确承认备份/恢复限制。两者均使用 external 配置并先审查计划，确认实际摘要后执行：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.3/core-operation.py plan \
+sudo python3 /var/lib/aster-bootstrap/0.5.4/core-operation.py plan \
   --spec /root/aster-operation/spec.json
-sudo python3 /var/lib/aster-bootstrap/0.5.3/core-operation.py apply \
+sudo python3 /var/lib/aster-bootstrap/0.5.4/core-operation.py apply \
   --spec /root/aster-operation/spec.json \
   --confirm-plan-sha256 REVIEWED_PLAN_SHA256
 ```
 
 在明确维护窗口内，升级先启用并检查本站门禁、停止 API，创建并验证与旧版本匹配的新私密备份，然后检查/迁移、同提交 Core/网页切换、服务/HTTPS/静态入口核验。不在线覆盖 `current/web` 或正在运行的程序，不手写 BACKUP metadata。工具不证明公共证书续期或实际面板组合已验收，成功后仍需管理员登录和业务检查。
 
-失败先保留私密 journal/备份、读实际 `status`，仅以原规格、ID、确认摘要执行 `resume`。实际旧 schema 兼容且旧程序就绪通过才允许程序回退，维护状态保留；不兼容或不明确时停止。Core 0.5.3 完成支付数据库升级后，Core 0.5.2 不能直接接回运行，应保持维护并按已核实的故障向前修复。没有自动数据库回滚，必要恢复须在隔离空库验证后单独批准停写/DSN 切换，不能只切旧二进制、手改迁移记录或向运行库导入 SQL。面板“网站备份”不能代替本库一致性、账号/秘密恢复与隔离演练。
+失败先保留私密 journal/备份、读实际 `status`，仅以原规格、ID、确认摘要执行 `resume`。实际旧 schema 兼容且旧程序就绪通过才允许程序回退，维护状态保留；不兼容或不明确时停止。自 Core 0.5.3 引入支付数据库结构后，Core 0.5.2 不能直接接回运行；升级到 0.5.4 也保留这一边界，应保持维护并按已核实的故障向前修复。没有自动数据库回滚，必要恢复须在隔离空库验证后单独批准停写/DSN 切换，不能只切旧二进制、手改迁移记录或向运行库导入 SQL。面板“网站备份”不能代替本库一致性、账号/秘密恢复与隔离演练。
 
 SMTP 单独更新不上传新前端、不切换 `/opt/aster/current`，只安装独立兼容版本、按 revision 更新策略并重启 SMTP 服务，Core 文件和进程保持原样。失败按 [插件回退](PLUGINS.md#3-独立更新与回退)选择已有旧版本；不要删除凭据、重生成密钥或打开插件原始日志排障。
 
@@ -190,4 +190,4 @@ SMTP 单独更新不上传新前端、不切换 `/opt/aster/current`，只安装
 
 ## 可选支付插件
 
-Core 0.5.3 的支付插槽与 SMTP 分开审批、独立进程运行，部署方式见[支付插件接入](PAYMENT_PLUGINS.md)。使用专用非登录用户和 `aster-payment.service`，不读取 API 环境或数据库秘密。宝塔自定义 MySQL、备份、网站和凭据路径须纳入不可达规则，并核对共享组权限及实际出口；模板不能自动识别所有面板路径。先在隔离合成环境验证身份、故障、重复回调和恢复，再安排实际渠道测试。停用插件不解除在途交易，升级和备份须包含支付状态。当前没有官方真实渠道，也未提供渠道交易查询、撤销、退款及特定渠道要求的回调应答（ACK）；勿把合成示例配置为营业收款。
+支付插槽 `aster.payment/1` 最低要求 Core 0.5.3，与 SMTP 分开审批、独立进程运行，部署方式见[支付插件接入](PAYMENT_PLUGINS.md)。使用专用非登录用户和 `aster-payment.service`，不读取 API 环境或数据库秘密。宝塔自定义 MySQL、备份、网站和凭据路径须纳入不可达规则，并核对共享组权限及实际出口；模板不能自动识别所有面板路径。先在隔离合成环境验证身份、故障、重复回调和恢复，再安排实际渠道测试。停用插件不解除在途交易，升级和备份须包含支付状态。当前没有官方真实渠道，也未提供渠道交易查询、撤销、退款及特定渠道要求的回调应答（ACK）；勿把合成示例配置为营业收款。

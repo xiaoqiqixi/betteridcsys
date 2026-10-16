@@ -1094,6 +1094,25 @@ def publish(api, policy, archive_bytes):
                 f"尝试 {policy['run_attempt']}。本版本通过该构建的回归、原生 systemd/HTTPS、备份恢复、独立插件生命周期、浏览器与依赖扫描门槛；"
                 "支付结算和邮件测试均使用隔离的合成环境，不代表真实渠道或生产部署验收。"
             )
+        if kind == "core" and provenance["version"] == "0.5.4":
+            heading, inherited = fields["body"].split("\n\n", 1)
+            inherited = inherited.replace("支付扩展新增独立运行时插槽", "支付运行时自 Core 0.5.3 已提供独立插槽", 1)
+            inherited = inherited.replace(
+                "界面修复了页头高度、路由切换滚动、币种标签、按钮样式和财务副标题。",
+                "Core 0.5.3 的页头高度、路由切换滚动、币种标签、按钮样式和财务副标题修复继续保留。", 1)
+            fields["body"] = (
+                heading + "\n\n"
+                "这是 Core 0.5.3 之后的维护补丁。登录页已有错误随当前语言显示，保留加载与重试行为。"
+                "本次一并交付主干积累的 721px 面包屑、长品牌与公司名称、金额输入可见性边界修复，"
+                "以及支付超时的保守提示和熔断隔离修复。客户概览减少无用订单读取，"
+                "订单列表在单次调用内复用经严格校验的币种快照解码结果，不放宽逐行历史数据校验。\n\n"
+                "人工视觉复验仅覆盖此前固定提交的静态布局及移动导航、焦点和滚动；"
+                "支付异常仅检查静态文案布局，不代表真实付款或真实超时测试。"
+                "此次登录语言修复由组件行为回归验证，没有布局改动，未重新查看截图。"
+                "性能结果仅来自隔离的合成只读负载，不承诺生产容量或响应时间。\n\n"
+                + inherited
+                + f"\n\n[宝塔部署]({source_docs}BAOTA.md) · [插件安装与回退]({source_docs}PLUGINS.md)。"
+            )
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

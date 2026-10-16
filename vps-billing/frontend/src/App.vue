@@ -5,6 +5,7 @@ import {
   onBeforeUnmount,
   onMounted,
   ref,
+  shallowRef,
   watch,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -146,8 +147,11 @@ const navigationModal = computed(
 );
 let navigationFocusGeneration = 0;
 const email = ref(""),
-  password = ref(""),
-  loginError = ref("");
+  password = ref("");
+const loginFailure = shallowRef<{ cause: unknown }>();
+const loginError = computed(() =>
+  loginFailure.value ? explainLogin(loginFailure.value.cause) : "",
+);
 const plans = ref<Plan[]>([]),
   services = ref<Service[]>([]),
   orders = ref<Order[]>([]),
@@ -425,9 +429,52 @@ function explain(e: unknown) {
         "Cannot connect to the server. Check your connection and try again.",
       );
 }
+function explainLogin(e: unknown) {
+  if (!(e instanceof ApiError)) return explain(e);
+  // Server messages retain the request's language. Translate stable codes at
+  // display time without repeating a login or initialization request.
+  const labels: Record<string, [string, string]> = {
+    INVALID_CREDENTIALS: [
+      "邮箱或密码不正确",
+      "The email address or password is incorrect.",
+    ],
+    RATE_LIMITED: [
+      "尝试次数过多，请稍后再试",
+      "Too many attempts. Please try again later.",
+    ],
+    CSRF_INVALID: [
+      "安全令牌无效，请刷新页面后重试",
+      "Your security token is invalid. Refresh the page and try again.",
+    ],
+    INTERNAL_ERROR: [
+      "暂时无法完成请求，请稍后重试",
+      "Unable to complete the request. Please try again later.",
+    ],
+    INVALID_HOST: [
+      "请求主机不匹配",
+      "The request host does not match this site.",
+    ],
+    INVALID_RESPONSE: [
+      "服务响应格式不正确，请稍后重试。",
+      "The server returned an invalid response. Please try again.",
+    ],
+    REQUEST_FAILED: [
+      "请求未完成，请重试。",
+      "The request did not complete. Please try again.",
+    ],
+  };
+  const label = Object.hasOwn(labels, e.code) ? labels[e.code] : undefined;
+  const message = label
+    ? tr(...label)
+    : tr(
+        "暂时无法完成请求，请稍后重试；如果仍有问题，请联系服务提供方。",
+        "Unable to complete the request. Try again later; contact your provider if the problem continues.",
+      );
+  return `${message}${e.requestId ? tr(" · 请求编号 ", " · Request ID ") + e.requestId : ""}`;
+}
 async function init() {
   booting.value = true;
-  loginError.value = "";
+  loginFailure.value = undefined;
   try {
     const [site, currentSession, registry] = await Promise.all([
       api<unknown>("/site-settings"),
@@ -442,7 +489,7 @@ async function init() {
     if (session.value.user) await load();
   } catch (e) {
     disconnected.value = true;
-    loginError.value = explain(e);
+    loginFailure.value = { cause: e };
   } finally {
     booting.value = false;
   }
@@ -454,7 +501,7 @@ async function login(role?: "customer" | "admin") {
     password.value = role === "admin" ? "DemoAdmin!2026" : "DemoCustomer!2026";
   }
   saving.value = true;
-  loginError.value = "";
+  loginFailure.value = undefined;
   try {
     await api("/auth/login", "POST", {
       email: email.value,
@@ -467,7 +514,7 @@ async function login(role?: "customer" | "admin") {
     go("overview");
     await load();
   } catch (e) {
-    loginError.value = explain(e);
+    loginFailure.value = { cause: e };
   } finally {
     saving.value = false;
   }

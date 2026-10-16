@@ -859,5 +859,51 @@ class TransportBoundaryTest(unittest.TestCase):
             self.assertIn("uncertain", str(raised.exception))
 
 
+class PatchReleaseNotesTest(unittest.TestCase):
+    def published_notes(self, kind, version):
+        from test_runtime_release import normal_flow, pipeline as runtime_pipeline
+        api, env, event, _, artifact, _, _ = normal_flow(kind, raw=True, version=version)
+        runtime_pipeline.publish(api, runtime_pipeline.prepare_publish(api, env, event), artifact)
+        return api, api.mutations[0][2]["body"]
+
+    def test_054_notes_describe_a_bounded_maintenance_patch(self):
+        api, body = self.published_notes("core", "0.5.4")
+        self.assertIn("维护补丁", body)
+        self.assertRegex(body, r"登录页.*当前语言.*加载与重试")
+        self.assertRegex(body, r"支付运行时自 Core 0\.5\.3.*aster\.payment/1")
+        self.assertRegex(body, r"人工视觉复验仅覆盖此前固定提交[\s\S]*组件行为回归验证[\s\S]*未重新查看截图")
+        self.assertIn("合成只读负载", body)
+        self.assertIn("不承诺生产容量", body)
+        for document in ("VALIDATION.md", "INSTALL.md", "BAOTA.md", "UPGRADE.md", "PLUGINS.md"):
+            self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/blob/{SHA}/vps-billing/docs/{document}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/commit/{SHA}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/actions/runs/{RUN_ID}", body)
+        self.assertNotIn("支付扩展新增独立运行时插槽", body)
+        self.assertEqual(len(api.uploads), 6)
+        self.assertEqual([call[0] for call in api.mutations], ["POST", "PATCH"])
+        self.assertEqual(api.mutations[-1][2], {"draft": False, "prerelease": False, "make_latest": "true"})
+
+    def test_053_notes_keep_the_existing_description(self):
+        api, body = self.published_notes("core", "0.5.3")
+        self.assertIn("Aster Core 0.5.3", body)
+        self.assertIn("支付扩展新增独立运行时插槽", body)
+        self.assertIn("界面修复了页头高度", body)
+        self.assertNotIn("维护补丁", body)
+        self.assertNotIn("已有错误随当前语言显示", body)
+        self.assertEqual(len(api.uploads), 6)
+        self.assertEqual(api.mutations[-1][2]["make_latest"], "true")
+
+    def test_smtp_notes_keep_the_existing_independent_description(self):
+        api, body = self.published_notes("smtp", "1.1.0")
+        self.assertIn("Aster official SMTP plugin 1.1.0", body)
+        self.assertIn("aster.smtp/1", body)
+        self.assertIn(">=0.4.0,<0.6.0", body)
+        self.assertIn("共五项", body)
+        self.assertNotIn("维护补丁", body)
+        self.assertNotIn("aster.payment/1", body)
+        self.assertEqual(len(api.uploads), 5)
+        self.assertEqual(api.mutations[-1][2]["make_latest"], "false")
+
+
 if __name__ == "__main__":
     unittest.main()
