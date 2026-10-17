@@ -913,9 +913,14 @@ try {
   await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
   await expect(navigation).toHaveAttribute("inert");
   await expect(page.locator("#main")).toBeFocused();
-  await expect(
-    page.getByRole("button", { name: "选购套餐", exact: true }),
-  ).toBeVisible();
+  const overviewPlanAction = page
+    .locator(".page-heading")
+    .getByRole("button", { name: "选购套餐", exact: true });
+  const emptyPlanAction = page
+    .locator(".customer-empty")
+    .getByRole("button", { name: "选购套餐", exact: true });
+  await expect(overviewPlanAction).toBeVisible();
+  await expect(emptyPlanAction).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator("#main")).toBeFocused();
   await expect
@@ -924,6 +929,13 @@ try {
     )
     .toBe(true);
   await shot("dashboard-mobile");
+  await emptyPlanAction.click();
+  await page.waitForURL("**/plans");
+  await expect(summary).toBeVisible();
+  await page.goBack();
+  await page.waitForURL("**/overview");
+  await expect(overviewPlanAction).toBeVisible();
+  await expect(navigation).toHaveAttribute("inert");
   await page.getByRole("button", { name: "打开导航", exact: true }).click();
   await page.getByRole("link", { name: "选购服务", exact: true }).click();
   await page
