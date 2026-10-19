@@ -3791,10 +3791,14 @@ html:has(.app-shell) {
 
 @media (max-width: 720px) {
   .app-shell main:has(.purchase-page) .main-footer {
-    padding-bottom: 160px;
+    padding-bottom: var(--aster-checkout-clearance, 160px);
   }
   html:has(.purchase-page) {
-    scroll-padding-bottom: 160px;
+    --aster-checkout-clearance: max(
+      160px,
+      calc(var(--aster-checkout-height, 0px) + 16px)
+    );
+    scroll-padding-bottom: var(--aster-checkout-clearance);
   }
 }
 

@@ -1,6 +1,7 @@
 import { chromium, expect } from "@playwright/test";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { probePlanCheckoutBoundaries } from "./checkout-boundaries.mjs";
 import {
   probeFinancialBoundaries,
   probeLoginBoundaries,
@@ -1281,6 +1282,7 @@ try {
   await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("运营概况");
   await restoreSettings();
+  await probePlanCheckoutBoundaries(browser, base);
   expect(errors).toEqual([]);
   expect(blockedRequests).toEqual([]);
   console.log(

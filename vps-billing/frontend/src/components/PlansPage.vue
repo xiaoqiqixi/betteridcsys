@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   ArrowRight,
   Check,
@@ -23,6 +23,41 @@ const props = defineProps<{
 const emit = defineEmits<{ review: [plan: Plan] }>();
 const region = ref<string | null>(null);
 const selectedId = ref("");
+const checkoutElement = ref<HTMLElement>();
+let releaseCheckoutHeight = () => {};
+onMounted(() => {
+  const element = checkoutElement.value;
+  if (!element) return;
+  const root = document.documentElement;
+  const property = "--aster-checkout-height";
+  const previous = root.style.getPropertyValue(property);
+  const priority = root.style.getPropertyPriority(property);
+  let active = true;
+  let lastHeight = "";
+  const measure = () => {
+    if (!active) return;
+    const height = Math.ceil(element.getBoundingClientRect().height);
+    if (!Number.isFinite(height) || height <= 0) return;
+    const value = `${height}px`;
+    if (value !== lastHeight) {
+      root.style.setProperty(property, value);
+      lastHeight = value;
+    }
+  };
+  const observer =
+    typeof ResizeObserver === "undefined"
+      ? undefined
+      : new ResizeObserver(measure);
+  observer?.observe(element, { box: "border-box" });
+  measure();
+  releaseCheckoutHeight = () => {
+    active = false;
+    observer?.disconnect();
+    if (previous) root.style.setProperty(property, previous, priority);
+    else root.style.removeProperty(property);
+  };
+});
+onBeforeUnmount(() => releaseCheckoutHeight());
 const regions = computed(() => [
   ...new Set(props.plans.map((plan) => plan.region)),
 ]);
@@ -295,7 +330,7 @@ function review() {
             }}
           </p>
         </div>
-        <div class="purchase-checkout">
+        <div ref="checkoutElement" class="purchase-checkout">
           <div v-if="summary" class="purchase-total" aria-live="polite">
             <span>{{ tr("首期订单金额", "Initial order amount") }}</span>
             <strong
@@ -764,7 +799,11 @@ function review() {
 }
 @media (max-width: 720px) {
   .purchase-page {
-    padding-bottom: 160px;
+    padding-bottom: var(--aster-checkout-clearance, 160px);
+  }
+  .plan-select {
+    /* The root scroll padding already reserves the fixed checkout height. */
+    scroll-margin-bottom: 0;
   }
   .purchase-checkout {
     position: fixed;

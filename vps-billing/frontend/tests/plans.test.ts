@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import PlansPage from "../src/components/PlansPage.vue";
 import { previewPlans } from "../src/lib/preview";
@@ -24,6 +24,61 @@ beforeEach(() => {
 });
 
 describe("plan selection and order summary", () => {
+  it.each([false, true])(
+    "releases checkout sizing and restores the prior root style (existing: %s)",
+    (existing) => {
+      const property = "--aster-checkout-height";
+      const root = document.documentElement;
+      const original = root.style.getPropertyValue(property);
+      const originalPriority = root.style.getPropertyPriority(property);
+      let notify = () => {};
+      const disconnect = vi.fn();
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(callback: ResizeObserverCallback) {
+            notify = () => callback([], this as unknown as ResizeObserver);
+          }
+          observe() {}
+          disconnect = disconnect;
+        },
+      );
+      if (existing) root.style.setProperty(property, "203px", "important");
+      else root.style.removeProperty(property);
+      const wrapper = setup();
+      let unmounted = false;
+      try {
+        vi.spyOn(
+          wrapper.get(".purchase-checkout").element,
+          "getBoundingClientRect",
+        ).mockReturnValue({ height: 181.4 } as DOMRect);
+        notify();
+        expect(root.style.getPropertyValue(property)).toBe("182px");
+        wrapper.unmount();
+        unmounted = true;
+        expect(disconnect).toHaveBeenCalledOnce();
+        expect(root.style.getPropertyValue(property)).toBe(
+          existing ? "203px" : "",
+        );
+        expect(root.style.getPropertyPriority(property)).toBe(
+          existing ? "important" : "",
+        );
+        // A queued observer callback must not overwrite a later page's style.
+        notify();
+        expect(root.style.getPropertyValue(property)).toBe(
+          existing ? "203px" : "",
+        );
+      } finally {
+        if (!unmounted) wrapper.unmount();
+        if (original)
+          root.style.setProperty(property, original, originalPriority);
+        else root.style.removeProperty(property);
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("filters real regions, updates the summary and only reviews on explicit confirmation", async () => {
     const wrapper = setup();
     const plans = previewPlans("CNY");
