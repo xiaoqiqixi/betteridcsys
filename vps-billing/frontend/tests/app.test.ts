@@ -1399,6 +1399,85 @@ describe("billing workspace flows", () => {
       wrapper.unmount();
     },
   );
+  it.each(["zh-CN", "en"])(
+    "blocks checkout while refreshing the latest invoice status in %s",
+    async (language) => {
+      activeUser = { ...fixtures.previewUser };
+      checkoutResponse = {
+        provider_id: "test-payment",
+        session_id: "refresh-race-session",
+        checkout_url: "https://checkout.example.com/session/refresh-race",
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      };
+      const { wrapper, router } = await mountApp();
+      try {
+        await wrapper.get('select[aria-label="语言"]').setValue(language);
+        await flushPromises();
+        await router.push("/invoices");
+        await flushPromises();
+        let resolveDetail!: (value: unknown) => void;
+        vi.mocked(fetch).mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveDetail = resolve as typeof resolveDetail;
+            }),
+        );
+        await wrapper.findAll(".table-action")[0]!.trigger("click");
+        await flushPromises();
+        const checkout = wrapper.get(".invoice-modal .button.secondary.full");
+        const refreshing = wrapper
+          .get(".invoice-document")
+          .attributes("aria-busy");
+        const disabled = checkout.attributes("disabled") !== undefined;
+        await checkout.trigger("click");
+        await flushPromises();
+        const duringRefresh = {
+          refreshing,
+          disabled,
+          checkoutPosts: requests.filter(
+            (request) =>
+              request.path.endsWith("/checkout") && request.method === "POST",
+          ).length,
+          hasPaymentLink: wrapper.find(".checkout-handoff a").exists(),
+        };
+        resolveDetail({
+          ok: true,
+          json: async () => ({
+            data: {
+              ...fixtures.invoices[0],
+              status: "paid",
+              paid_at: new Date().toISOString(),
+            },
+          }),
+        });
+        await flushPromises();
+        expect({
+          duringRefresh,
+          afterRefresh: {
+            refreshing: wrapper
+              .get(".invoice-document")
+              .attributes("aria-busy"),
+            status: wrapper.get(".invoice-document .badge").text(),
+            hasPaymentLink: wrapper.find(".checkout-handoff a").exists(),
+          },
+        }).toEqual({
+          duringRefresh: {
+            refreshing: "true",
+            disabled: true,
+            checkoutPosts: 0,
+            hasPaymentLink: false,
+          },
+          afterRefresh: {
+            refreshing: "false",
+            status: language === "en" ? "Paid" : "已付款",
+            hasPaymentLink: false,
+          },
+        });
+      } finally {
+        wrapper.unmount();
+      }
+    },
+  );
   it("clears invoice refresh feedback after failure while retaining the cached financial record", async () => {
     activeUser = { ...fixtures.previewUser };
     const { wrapper, router } = await mountApp();

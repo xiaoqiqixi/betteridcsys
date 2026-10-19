@@ -170,6 +170,11 @@ const selectedPlan = ref<Plan>(),
   agreed = ref(false),
   orderKey = ref("");
 const invoiceRefreshing = ref(false);
+const invoicePayable = computed(
+  () =>
+    selectedInvoice.value?.status === "unpaid" &&
+    !selectedInvoice.value.paid_at,
+);
 const orderCatalogChanged = ref(false);
 const selectedCancellation = ref<Order>(),
   cancellationReason = ref(""),
@@ -1042,7 +1047,14 @@ async function openInvoice(invoice: Invoice) {
   }
 }
 async function checkout() {
-  if (preview.value || isAdmin.value || !selectedInvoice.value || saving.value)
+  if (
+    preview.value ||
+    isAdmin.value ||
+    !selectedInvoice.value ||
+    saving.value ||
+    invoiceRefreshing.value ||
+    !invoicePayable.value
+  )
     return;
   saving.value = true;
   modalError.value = "";
@@ -1058,7 +1070,9 @@ async function checkout() {
     const verified = readCheckoutSession(result);
     if (
       generation === invoiceGeneration &&
-      selectedInvoice.value?.id === invoiceId
+      selectedInvoice.value?.id === invoiceId &&
+      !invoiceRefreshing.value &&
+      invoicePayable.value
     )
       checkoutSession.value = verified;
   } catch (e) {
@@ -1097,6 +1111,11 @@ function closeInvoice() {
   modalError.value = "";
 }
 function followCheckout(event: MouseEvent) {
+  if (invoiceRefreshing.value || !invoicePayable.value) {
+    event.preventDefault();
+    checkoutSession.value = undefined;
+    return;
+  }
   try {
     readCheckoutSession(checkoutSession.value);
   } catch {
@@ -3384,10 +3403,7 @@ onBeforeUnmount(() => {
           {{ date(selectedInvoice.paid_at) }}
         </p>
       </div>
-      <div
-        v-if="!['paid', 'void', 'cancelled'].includes(selectedInvoice.status)"
-        class="alert info"
-      >
+      <div v-if="invoicePayable" class="alert info">
         <LockKeyhole :size="18" /><span>{{
           checkoutSession
             ? tr(
@@ -3404,9 +3420,9 @@ onBeforeUnmount(() => {
         <AlertCircle :size="18" /><span>{{ modalError }}</span>
       </div>
       <button
-        v-if="!['paid', 'void', 'cancelled'].includes(selectedInvoice.status)"
+        v-if="invoicePayable"
         class="button secondary full"
-        :disabled="preview || saving || isAdmin"
+        :disabled="preview || saving || isAdmin || invoiceRefreshing"
         @click="checkout"
       >
         <LoaderCircle v-if="saving" :size="16" class="spin" /><LockKeyhole
@@ -3425,7 +3441,10 @@ onBeforeUnmount(() => {
                 : tr("获取支付入口", "Prepare checkout")
         }}
       </button>
-      <div v-if="checkoutSession" class="checkout-handoff">
+      <div
+        v-if="checkoutSession && invoicePayable && !invoiceRefreshing"
+        class="checkout-handoff"
+      >
         <a
           class="button primary full"
           :href="checkoutSession.checkout_url"
