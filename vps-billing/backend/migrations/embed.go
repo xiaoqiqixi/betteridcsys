@@ -25,3 +25,9 @@ var CurrencyRegistry string
 
 //go:embed 008_payment_runtime.sql
 var PaymentRuntime string
+
+//go:embed 009_audit_query_indexes.sql
+var AuditQueryIndexes string
+
+//go:embed 010_customer_accounts.sql
+var CustomerAccounts string

@@ -93,6 +93,105 @@ describe("exact money and status presentation", () => {
   });
 });
 describe("API integrity", () => {
+  it.each(["json", "primitive", "missing-data", "error"])(
+    "retains the trusted request header and status for %s failures",
+    async (kind) => {
+      const requestId = "a".repeat(32);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: kind !== "error",
+          status: 502,
+          headers: new Headers({ "X-Request-ID": requestId }),
+          json: async () => {
+            if (kind === "json") throw new Error("not JSON");
+            return kind === "primitive"
+              ? null
+              : kind === "missing-data"
+                ? {}
+                : {
+                    error: {
+                      code: "UNAVAILABLE",
+                      message: "Safe",
+                      request_id: "legacy-body-id",
+                    },
+                  };
+          },
+        }),
+      );
+      await expect(api("/audit-events")).rejects.toMatchObject({
+        requestId,
+        status: 502,
+      });
+    },
+  );
+  it.each([undefined, "invalid header", "A".repeat(32), "a".repeat(33)])(
+    "ignores invalid request headers while preserving legacy body IDs (%s)",
+    async (header) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 409,
+          headers: new Headers(header ? { "X-Request-ID": header } : {}),
+          json: async () => ({
+            error: { code: "CONFLICT", message: "Safe", request_id: "abc" },
+          }),
+        }),
+      );
+      await expect(api("/audit-events")).rejects.toMatchObject({
+        requestId: "abc",
+        status: 409,
+      });
+    },
+  );
+  it.each([403, 409])(
+    "retains response request identity and the actual %s status",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status,
+          headers: new Headers({ "X-Request-ID": "b".repeat(32) }),
+          json: async () => ({
+            error: {
+              code: "FORBIDDEN_OR_CONFLICT",
+              message: "Safe",
+              request_id: "abc",
+            },
+          }),
+        }),
+      );
+      await expect(api("/audit-events")).rejects.toMatchObject({
+        requestId: "b".repeat(32),
+        status,
+      });
+    },
+  );
+  it("never uses an outgoing caller request ID as a response identity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        headers: new Headers(),
+        json: async () => {
+          throw new Error("not JSON");
+        },
+      }),
+    );
+    await expect(
+      api("/audit-events", "GET", undefined, {
+        "X-Request-ID": "c".repeat(32),
+      }),
+    ).rejects.toMatchObject({ requestId: undefined, status: 502 });
+  });
+  it("does not invent a request ID for a network error", async () => {
+    const failure = new TypeError("network unavailable");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(failure));
+    await expect(api("/audit-events")).rejects.toBe(failure);
+  });
   it("sends CSRF and idempotency for writes", async () => {
     const fetcher = vi.fn().mockResolvedValue({
       ok: true,

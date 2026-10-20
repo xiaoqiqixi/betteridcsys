@@ -866,6 +866,13 @@ class PatchReleaseNotesTest(unittest.TestCase):
         runtime_pipeline.publish(api, runtime_pipeline.prepare_publish(api, env, event), artifact)
         return api, api.mutations[0][2]["body"]
 
+    def test_056_notes_cover_management_and_preserve_financial_boundaries(self):
+        _, body = self.published_notes("core", "0.5.6")
+        for text in ("客户与管理员角色管理", "最后一个启用管理员", "单笔订单详情", "商品创建", "历史快照不变", "迁移 009", "010", "schema 10", "v0.5.5", "Go 1.27.3", "不使用 Docker", "实际验证范围分别记录"):
+            self.assertIn(text, body)
+        self.assertNotIn("不新增业务功能", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/commit/{SHA}", body)
+
     def test_055_notes_describe_only_the_ui_patch_without_claiming_release_completion(self):
         api, body = self.published_notes("core", "0.5.5")
         self.assertIn("Core 0.5.4 之后的界面维护补丁", body)

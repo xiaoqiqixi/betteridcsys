@@ -62,6 +62,10 @@ export interface Service {
   memory_gb: number;
   disk_gb: number;
 }
+// Only the administrator service endpoint exposes record ownership.
+export interface AdminService extends Service {
+  customer_id: string;
+}
 export interface PlanSnapshot {
   plan_id: string;
   name: string;
@@ -116,6 +120,68 @@ export interface Audit {
   actor_email: string;
   detail: string;
 }
+// Ownership is an administrator-only projection, not the actor's identity.
+export interface AdminAuditEvent extends Audit {
+  owner_id: string;
+}
+export interface AuditEventsPage {
+  items: (Audit | AdminAuditEvent)[];
+  has_more: boolean;
+  next_cursor?: string;
+  limit: number;
+}
+export interface CustomerAccount extends User {
+  disabled: boolean;
+  revision: number;
+}
+export interface CustomerAccountsPage {
+  items: CustomerAccount[];
+  has_more: boolean;
+  next_cursor?: string;
+  limit: number;
+}
+export interface CatalogPrice {
+  currency: string;
+  amount_minor: number;
+  available: boolean;
+}
+export interface CatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  region: string;
+  cpu: number;
+  memory_gb: number;
+  disk_gb: number;
+  transfer_tb: number;
+  available: boolean;
+  prices: CatalogPrice[];
+}
+export interface Catalog {
+  revision: number;
+  currency_revision: number;
+  items: CatalogItem[];
+}
+export interface OrderPaymentAttempt {
+  id: string;
+  provider_id: string;
+  amount_minor: number;
+  currency: string;
+  currency_decimal_places: number;
+  state: string;
+  created_at: string;
+  updated_at: string;
+}
+export interface OrderDetails {
+  order: Order;
+  customer?: User;
+  invoice: Invoice | null;
+  service: Service | null;
+  payment_attempts: OrderPaymentAttempt[];
+  audit: Audit[];
+  audit_has_more: boolean;
+  payment_attempts_has_more: boolean;
+}
 export interface Overview {
   active_services: number;
   pending_invoices: number;
@@ -168,6 +234,9 @@ export async function api<T>(
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(15000),
   });
+  const headerId = response.headers?.get("X-Request-ID");
+  const requestId =
+    headerId && /^[a-f0-9]{32}$/.test(headerId) ? headerId : undefined;
   let result: {
     data?: T;
     error?: {
@@ -186,6 +255,8 @@ export async function api<T>(
         "服务暂时不可用，请稍后重试。",
         "The service is temporarily unavailable. Please try again.",
       ),
+      requestId,
+      response.status,
     );
   }
   if (!result || typeof result !== "object") {
@@ -195,6 +266,8 @@ export async function api<T>(
         "服务响应格式不正确，请稍后重试。",
         "The server returned an invalid response. Please try again.",
       ),
+      requestId,
+      response.status,
     );
   }
   if (!response.ok || result.error)
@@ -205,7 +278,7 @@ export async function api<T>(
           "请求未完成，请重试。",
           "The request did not complete. Please try again.",
         ),
-      result.error?.request_id,
+      requestId || result.error?.request_id,
       response.status,
       result.error?.details,
     );
@@ -216,6 +289,8 @@ export async function api<T>(
         "服务响应缺少数据，请稍后重试。",
         "The response is missing data. Please try again.",
       ),
+      requestId,
+      response.status,
     );
   }
   return result.data as T;

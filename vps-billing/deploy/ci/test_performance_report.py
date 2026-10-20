@@ -88,7 +88,7 @@ def fixture(baseline=False):
             "counts": {"audit_events": 10000, "currency_settings": 1, "email_settings": 1,
                        "invoices": 10000, "order_requests": 10000, "orders": 10000,
                        "outbox_events": 10000, "payment_attempts": 0, "payment_settlements": 0,
-                       "plan_prices": 3, "plans": 3, "schema_migrations": 8, "services": 1000,
+                       "plan_prices": 3, "plans": 3, "schema_migrations": 10, "services": 1000,
                        "sessions": 2, "site_settings": 1, "users": 101},
             "sha256": DATASET, "before_after_equal": True,
         },

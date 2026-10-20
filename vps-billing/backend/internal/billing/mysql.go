@@ -82,7 +82,7 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	return &MySQL{DB: db, transport: transport, database: cfg.DBName}, nil
 }
 
-var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry, migrations.PaymentRuntime}
+var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry, migrations.PaymentRuntime, migrations.AuditQueryIndexes, migrations.CustomerAccounts}
 
 func (m *MySQL) Ping(ctx context.Context) error {
 	rows, err := m.DB.QueryContext(ctx, "SELECT version,checksum FROM schema_migrations ORDER BY version")
@@ -190,6 +190,22 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 				}
 			}
 		}
+		if version == 9 {
+			// Validate every colliding index before creating any new object.
+			for _, q := range strings.Split(source, ";") {
+				if q = strings.TrimSpace(q); q == "" {
+					continue
+				}
+				if _, _, err = prepareAuditIndex(ctx, conn, q); err != nil {
+					return fmt.Errorf("migration 9 preparation failed: %w", err)
+				}
+			}
+		}
+		if version == 10 {
+			if err = prevalidateCustomerAccountMigration(ctx, conn, source); err != nil {
+				return fmt.Errorf("migration 10 preparation failed: %w", err)
+			}
+		}
 		for _, q := range strings.Split(source, ";") {
 			if version == 7 {
 				break
@@ -235,26 +251,29 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 	}
 	return nil
 }
+
+const userColumns = "id,email,name,role,password_hash,disabled,revision"
+
 func scanUser(s interface{ Scan(...any) error }) (User, error) {
 	var u User
-	e := s.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash)
+	e := s.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.Disabled, &u.Revision)
 	if errors.Is(e, sql.ErrNoRows) {
 		e = ErrNotFound
 	}
 	return u, e
 }
 func (m *MySQL) UserByEmail(c context.Context, e string) (User, error) {
-	return scanUser(m.DB.QueryRowContext(c, "SELECT id,email,name,role,password_hash FROM users WHERE email=?", e))
+	return scanUser(m.DB.QueryRowContext(c, "SELECT "+userColumns+" FROM users WHERE email=?", e))
 }
 func (m *MySQL) UserByID(c context.Context, id string) (User, error) {
-	return scanUser(m.DB.QueryRowContext(c, "SELECT id,email,name,role,password_hash FROM users WHERE id=?", id))
+	return scanUser(m.DB.QueryRowContext(c, "SELECT "+userColumns+" FROM users WHERE id=?", id))
 }
 func (m *MySQL) AddUser(c context.Context, u User) error {
-	_, e := m.DB.ExecContext(c, "INSERT INTO users(id,email,name,role,password_hash) VALUES(?,?,?,?,?)", u.ID, u.Email, u.Name, u.Role, u.PasswordHash)
+	_, e := m.DB.ExecContext(c, "INSERT INTO users(id,email,name,role,password_hash,disabled,revision) VALUES(?,?,?,?,?,?,?)", u.ID, u.Email, u.Name, u.Role, u.PasswordHash, u.Disabled, normalizedUserRevision(u).Revision)
 	return e
 }
 func (m *MySQL) Users(c context.Context) ([]User, error) {
-	r, e := m.DB.QueryContext(c, "SELECT id,email,name,role,password_hash FROM users ORDER BY created_at DESC LIMIT 1000")
+	r, e := m.DB.QueryContext(c, "SELECT "+userColumns+" FROM users ORDER BY created_at DESC LIMIT 1000")
 	if e != nil {
 		return nil, e
 	}
@@ -270,8 +289,22 @@ func (m *MySQL) Users(c context.Context) ([]User, error) {
 	return out, r.Err()
 }
 func (m *MySQL) PutSession(c context.Context, s Session) error {
-	_, e := m.DB.ExecContext(c, "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)", s.Hash, s.UserID, s.Expires)
-	return e
+	tx, err := m.DB.BeginTx(c, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	u, err := scanUser(tx.QueryRowContext(c, "SELECT "+userColumns+" FROM users WHERE id=? FOR SHARE", s.UserID))
+	if err != nil {
+		return err
+	}
+	if u.Disabled || s.Revision != 0 && s.Revision != u.Revision {
+		return ErrConflict
+	}
+	if _, err = tx.ExecContext(c, "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)", s.Hash, s.UserID, s.Expires); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (m *MySQL) Session(c context.Context, k string) (Session, error) {
 	var s Session
@@ -307,7 +340,7 @@ func (m *MySQL) Plans(c context.Context, currency string) ([]Plan, error) {
 	if !known {
 		return nil, ErrCurrency
 	}
-	rows, err := tx.QueryContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,COALESCE(pp.amount_minor,0),?,(p.available AND COALESCE(pp.available,FALSE) AND COALESCE(pp.amount_minor,0)>0) FROM plans p LEFT JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? ORDER BY COALESCE(pp.amount_minor,0),p.id", currency, currency)
+	rows, err := tx.QueryContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,COALESCE(pp.amount_minor,0),?,(p.available AND COALESCE(pp.available,FALSE) AND COALESCE(pp.amount_minor,0)>0) FROM plans p LEFT JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? WHERE p.available=TRUE ORDER BY COALESCE(pp.amount_minor,0),p.id", currency, currency)
 	if err != nil {
 		return nil, err
 	}

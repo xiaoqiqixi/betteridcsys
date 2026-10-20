@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"golang.org/x/crypto/bcrypt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,7 +46,7 @@ func NewMemory() *Memory {
 	}
 	for _, v := range []struct{ email, name, role, password string }{{"demo@aster.local", "林先生", "customer", "DemoCustomer!2026"}, {"admin@aster.local", "演示管理员", "admin", "DemoAdmin!2026"}, {"other@aster.local", "另一位客户", "customer", "DemoOther!2026"}} {
 		h, _ := bcrypt.GenerateFromPassword([]byte(v.password), bcrypt.DefaultCost)
-		u := User{ID: ID(), Email: v.email, Name: v.name, Role: v.role, PasswordHash: string(h)}
+		u := User{ID: ID(), Email: v.email, Name: v.name, Role: v.role, PasswordHash: string(h), Revision: 1}
 		m.users[u.ID] = u
 	}
 	return m
@@ -55,8 +56,8 @@ func (m *Memory) UserByEmail(_ context.Context, e string) (User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, u := range m.users {
-		if u.Email == e {
-			return u, nil
+		if strings.EqualFold(u.Email, e) {
+			return normalizedUserRevision(u), nil
 		}
 	}
 	return User{}, ErrNotFound
@@ -68,17 +69,17 @@ func (m *Memory) UserByID(_ context.Context, id string) (User, error) {
 	if !ok {
 		return u, ErrNotFound
 	}
-	return u, nil
+	return normalizedUserRevision(u), nil
 }
 func (m *Memory) AddUser(_ context.Context, u User) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, v := range m.users {
-		if v.Email == u.Email {
+		if strings.EqualFold(v.Email, u.Email) || v.ID == u.ID {
 			return ErrConflict
 		}
 	}
-	m.users[u.ID] = u
+	m.users[u.ID] = normalizedUserRevision(u)
 	return nil
 }
 func (m *Memory) Users(context.Context) ([]User, error) {
@@ -86,13 +87,21 @@ func (m *Memory) Users(context.Context) ([]User, error) {
 	defer m.mu.Unlock()
 	r := []User{}
 	for _, u := range m.users {
-		r = append(r, u)
+		r = append(r, normalizedUserRevision(u))
 	}
 	return r, nil
 }
 func (m *Memory) PutSession(_ context.Context, s Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	u, ok := m.users[s.UserID]
+	if !ok {
+		return ErrNotFound
+	}
+	u = normalizedUserRevision(u)
+	if u.Disabled || s.Revision != 0 && s.Revision != u.Revision {
+		return ErrConflict
+	}
 	for k, v := range m.sessions {
 		if v.Expires.Before(time.Now()) {
 			delete(m.sessions, k)
@@ -123,7 +132,14 @@ func (m *Memory) Plans(_ context.Context, currency string) ([]Plan, error) {
 	if !known {
 		return nil, ErrCurrency
 	}
-	out := append([]Plan{}, m.plans...)
+	// A draft is not a public listing. Currency-specific unavailability remains
+	// a visible published product, so missing quotes never become fallback FX.
+	out := make([]Plan, 0, len(m.plans))
+	for _, plan := range m.plans {
+		if plan.Available {
+			out = append(out, plan)
+		}
+	}
 	for n := range out {
 		price := m.prices[out[n].ID][currency]
 		if price.AmountMinor < 0 || price.AmountMinor > MaxMinor {

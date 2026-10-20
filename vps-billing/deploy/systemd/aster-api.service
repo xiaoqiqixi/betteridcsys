@@ -55,6 +55,10 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=aster-api
+LimitCORE=0
+# Journal rate limits may discard messages; this is not a lossless audit sink.
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=10000
 
 # No ExecStartPre migration/bootstrap: reviewed database changes run separately
 # with a distinct credential that the aster runtime account cannot read.

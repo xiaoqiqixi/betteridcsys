@@ -18,6 +18,8 @@ var ErrCurrency = errors.New("unsupported currency")
 const MaxMinor int64 = 9007199254740991
 
 type User struct {
+	Disabled     bool   `json:"-"`
+	Revision     int64  `json:"-"`
 	ID           string `json:"id"`
 	Email        string `json:"email"`
 	Name         string `json:"name"`
@@ -110,9 +112,11 @@ type Audit struct {
 	Detail     string    `json:"detail"`
 }
 type Session struct {
-	Hash    string
-	UserID  string
-	Expires time.Time
+	// Revision binds an in-flight password check to the account state it read.
+	Revision int64
+	Hash     string
+	UserID   string
+	Expires  time.Time
 }
 type Summary struct {
 	ActiveServices  int
@@ -154,6 +158,7 @@ type Store interface {
 	Invoices(context.Context, string) ([]Invoice, error)
 	Services(context.Context, string) ([]Service, error)
 	Audits(context.Context, string) ([]Audit, error)
+	AuditPage(context.Context, string, AuditQuery) (AuditPage, error)
 	CreateOrder(context.Context, User, string, string, string, string) (Order, bool, error)
 	CreateQuotedOrder(context.Context, User, string, string, string, string, *PriceQuote) (Order, bool, error)
 	CancelOrder(context.Context, User, string, string) (OrderCancellation, error)

@@ -4,7 +4,7 @@ Go HTTP API、MySQL 8.4/InnoDB 存储和显式 demo 内存模式。当前正式 
 
 ## 本机演示
 
-使用受支持、已更新的 Go 工具链；模块最低声明为 1.24.0，发布使用的精确版本记录在 BUILD.json。前端开发版本见 package.json/锁文件；发布包运行不需要 Node.js。
+使用受支持、已更新的 Go 工具链；模块最低声明为 1.26.0（现有 `x/crypto v0.56.0` 安全更新的上游最低要求），当前 CI 固定 1.27.3，实际发布版本记录在 BUILD.json。工具链仅用于构建，不要求 Ubuntu 22 的系统预装同版本 Go；原生静态发行程序运行不需要 Go 或 Node.js。前端开发版本见 package.json/锁文件。
 
 ```sh
 cd backend

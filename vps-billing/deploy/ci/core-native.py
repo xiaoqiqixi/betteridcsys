@@ -36,6 +36,7 @@ class AcceptanceFailure(RuntimeError):
 
 
 PUBLISHED_VERSION = "0.5.2"
+CANDIDATE_SCHEMA = 10
 PUBLISHED_SOURCE = "9ed610a283020f50e2cfc529f8b5145b4a9c8fc3"
 PUBLISHED_RELEASE_ID = 413559379
 PUBLISHED_BUILD_RUN_ID = 38702170922
@@ -824,6 +825,14 @@ class Fixture:
             database or self.spec["database"], *tables])
         return sha256(raw)
 
+    def legacy_business_hash(self, database, tables):
+        # Migration10 intentionally appends users.disabled/revision. Compare all
+        # prior business bytes, not SELECT * before/after differing column sets.
+        require("users" in tables and len(tables) > 1, "Historical users inventory is missing")
+        other = self.full_data_hash(database, [table for table in tables if table != "users"])
+        users = self.resources.sql("SELECT HEX(id),HEX(email),HEX(name),HEX(role),HEX(password_hash),DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s.%f') FROM users ORDER BY id;", database=database)
+        return sha256((other + "\n" + users).encode())
+
     def restore(self):
         with observe_restore_protected_open(self.executor, self):
             return self._restore()
@@ -874,7 +883,7 @@ class Fixture:
                 "Actual published old program did not validate the restored database")
         candidate_report = native.preflight(self.candidate, environment)
         require(candidate_report["exit_code"] == 0 and candidate_report["database"]["status"] == "pending_migrations" and
-                candidate_report["database"]["schema_version"] == 7 and candidate_report["database"]["required_schema_version"] == 8,
+                candidate_report["database"]["schema_version"] == 7 and candidate_report["database"]["required_schema_version"] == CANDIDATE_SCHEMA,
                 "Restored historical database is not the candidate's unchanged schema-7 prefix")
         return {"backup_source_core_version": PUBLISHED_VERSION, "source_database": self.spec["database"], "restore_database": target,
                 "empty_target_verified": True, "full_table_data_sha256": source_hash, "restored_table_data_sha256": restored_hash,
@@ -966,9 +975,9 @@ def legacy_native(executor, spec, candidate, trace):
 
 
 def legacy_schema_migration(resources, executor, fresh, baseline):
-    """Unchanged SQL 1..6, published 6 -> 7, then candidate payment 7 -> 8.
+    """Unchanged SQL 1..6, published 6 -> 7, then candidate 7 -> current.
 
-    The published binary must reject schema 8. Historical restore is verified
+    The published binary must reject the current schema. Historical restore is verified
     separately while the source and restored databases are still schema 7.
     """
     resources.legacy_migration_trace = {"calls": []}
@@ -982,7 +991,7 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
         "GRANT ALL PRIVILEGES ON `" + database + "`.* TO '" + account + "'@'localhost';")
     resources.sql("CREATE TABLE schema_migrations(version INT PRIMARY KEY, checksum CHAR(64) NOT NULL, applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)) ENGINE=InnoDB;", database=database)
     files = sorted(Path(fresh.candidate, "migrations").glob("*.sql"))
-    require(len(files) == 8, "Legacy fixture requires the reviewed eight-migration inventory")
+    require(len(files) == CANDIDATE_SCHEMA, "Legacy fixture requires the reviewed current migration inventory")
     for number, path in enumerate(files[:6], 1):
         stage("legacy-apply-prefix-" + str(number))
         if number == 3:
@@ -1020,20 +1029,22 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
     historical_tables = resources.sql("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME<>'schema_migrations' ORDER BY TABLE_NAME;", database=database).splitlines()
     require(len(historical_tables) == 13 and all(re.fullmatch(r"[a-z_]+", name) for name in historical_tables),
             "Historical schema table inventory is unexpected")
-    historical_hash = fresh.full_data_hash(database, historical_tables)
+    historical_hash = fresh.legacy_business_hash(database, historical_tables)
     stage("legacy-candidate-apply-payment-migration")
     native.api(fresh.candidate, environment, "-migrate")
     stage("legacy-preflight-candidate")
     after = native.preflight(fresh.candidate, environment)
     stage("legacy-preflight-published")
     old = native.preflight(baseline["directory"], environment)
-    require(after["exit_code"] == 0 and after["database"]["status"] == "current" and after["database"]["schema_version"] == 8 and
+    require(after["exit_code"] == 0 and after["database"]["status"] == "current" and after["database"]["schema_version"] == CANDIDATE_SCHEMA and
             old["exit_code"] != 0 and old["database"]["status"] == "incompatible",
             "Payment schema migration must be current for the candidate and rejected by the published old program")
     count_after = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
     require(count_before == "13" and count_prefix7 == "14" and count_after == "16", "Actual migrations did not add the registry and two payment tables")
-    require(fresh.full_data_hash(database, historical_tables) == historical_hash,
+    require(fresh.legacy_business_hash(database, historical_tables) == historical_hash,
             "Additive payment migration changed existing business records")
+    require(resources.sql("SELECT COUNT(*) FROM users WHERE disabled<>0 OR revision<>1;", database=database) == "0",
+            "Account migration did not initialize historic users to enabled revision1")
     require(resources.sql("SELECT (SELECT COUNT(*) FROM payment_attempts)+(SELECT COUNT(*) FROM payment_settlements);", database=database) == "0",
             "Migration invented a payment attempt or settlement")
     require(resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database) == usd_before,
@@ -1042,9 +1053,11 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
     stage("legacy-repeat-migration")
     native.api(fresh.candidate, environment, "-migrate")
     require(fresh.full_data_hash(database) == digest_before, "Repeated migration changed actual database data")
-    return {"schema_before": 6, "published_schema": 7, "schema_after": 8, "tables_before": 13, "tables_published": 14, "tables_after": 16,
+    return {"schema_before": 6, "published_schema": 7, "schema_after": CANDIDATE_SCHEMA, "tables_before": 13, "tables_published": 14, "tables_after": 16,
             "actual_candidate_binary_migrate": True, "unchanged_selected_sql_prefix": True,
-            "actual_published_binary_migrate_6_to_7": True, "actual_candidate_binary_migrate_7_to_8": True,
+            "actual_published_binary_migrate_6_to_7": True, "actual_candidate_binary_migrate_7_to_current": True,
+            "audit_query_indexes_added": CANDIDATE_SCHEMA >= 9,
+            "account_state_columns_added_with_enabled_revision1": CANDIDATE_SCHEMA >= 10,
             "published_baseline_version": PUBLISHED_VERSION, "published_baseline_preflight_before_payment_migration": "current",
             "published_baseline_preflight_after_payment_migration": "incompatible", "historical_usd_prices_preserved": True,
             "existing_business_table_data_sha256": historical_hash, "additive_payment_migration_preserved_existing_data": True,
@@ -1372,27 +1385,27 @@ def run_scenarios(args, candidate, baseline):
         candidate_schema = fault.preflight(upgrade.candidate, held_environment)
         rejected_old = fault.preflight(upgrade.baseline, held_environment)
         require(candidate_schema["exit_code"] == 0 and candidate_schema["database"]["status"] == "current" and
-                candidate_schema["database"]["schema_version"] == 8 and
+                candidate_schema["database"]["schema_version"] == CANDIDATE_SCHEMA and
                 rejected_old["exit_code"] != 0 and rejected_old["database"]["status"] == "incompatible",
-                "Occupied-port recovery did not independently verify the schema-8 rollback boundary")
+                "Occupied-port recovery did not independently verify the current-schema rollback boundary")
         held_data_hash = upgrade.full_data_hash()
         fact(args.evidence, "interrupt-resume", {"process_killed_after_real_service_stop": True,
              "before_database_migration": interrupted["database_migration"], "original_operation_id_reused": True,
              "resume_reached_migration_and_candidate_start": True, "fault": "actual-bound-api-port"})
         fact(args.evidence, "payment-schema-rollback-blocked", dict(hold,
-             fault="actual-bound-api-port-after-payment-migration", schema_before=7, schema_after=8,
+             fault="actual-bound-api-port-after-payment-migration", schema_before=7, schema_after=CANDIDATE_SCHEMA,
              new_schema_migration_added=True, migration_command_count=1, target_start_attempts=1,
              actual_published_old_schema_guard="incompatible", target_schema="current",
              automatic_database_restore=False, api_stopped=True, https_maintenance=True))
         # The synthetic port fault is now gone. Resume the original operation
-        # and preserved schema-8 data; never downgrade tables or open writes by
+        # and preserved current-schema data; never downgrade tables or open writes by
         # deleting the maintenance marker before candidate checks succeed.
         stage("reviewed-port-recovery-and-version-upgrade")
         upgraded = upgrade.execute(native=fault, resume=True)
         require(upgraded["status"] == "succeeded", "Published Core v" + PUBLISHED_VERSION + " to candidate upgrade failed")
         require(upgraded["operation_id"] == hold["operation_id"] and fault.migration_calls == 1 and fault.target_starts == 2 and
                 upgrade.full_data_hash() == held_data_hash,
-                "Reviewed schema-8 recovery repeated migration or changed existing database data")
+                "Reviewed current-schema recovery repeated migration or changed existing database data")
         live = upgrade.confirm_current(upgrade.candidate)
         upgrade.login()
         require(upgrade.execute(resume=True) == upgraded and upgrade.confirm_current(upgrade.candidate)["api_pid"] == live["api_pid"], "Successful upgrade retry repeated activation")

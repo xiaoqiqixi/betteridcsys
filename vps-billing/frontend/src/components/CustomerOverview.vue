@@ -165,9 +165,23 @@ const currencyServices = computed(() =>
               <span class="customer-order-date">{{
                 date(order.created_at)
               }}</span>
-              <strong>{{
-                money(order.total_minor, order.currency, order.currency_format)
-              }}</strong>
+              <strong
+                :class="{
+                  'long-amount':
+                    money(
+                      order.total_minor,
+                      order.currency,
+                      order.currency_format,
+                    ).length > 16,
+                }"
+                >{{
+                  money(
+                    order.total_minor,
+                    order.currency,
+                    order.currency_format,
+                  )
+                }}</strong
+              >
               <span class="badge" :class="statusTone(order.status)">{{
                 statusLabel(order.status)
               }}</span>
@@ -279,6 +293,21 @@ const currencyServices = computed(() =>
               tr("此币种暂无服务费用。", "No service costs in this currency.")
             }}
           </p>
+          <p
+            v-if="currencyServices.length > 4"
+            class="customer-section-note customer-cost-scope"
+          >
+            {{
+              tr(
+                "仅显示前 4 项服务费用。",
+                "Showing the first 4 service costs.",
+              )
+            }}
+            <button class="text-button" @click="emit('navigate', 'services')">
+              {{ tr("查看全部服务", "View all services")
+              }}<ArrowRight :size="16" />
+            </button>
+          </p>
           <p class="customer-section-note">
             {{
               tr(
@@ -294,55 +323,76 @@ const currencyServices = computed(() =>
 </template>
 
 <style scoped>
+.customer-overview {
+  min-width: 0;
+}
 .account-facts {
   display: grid;
-  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.2fr) minmax(0, 0.75fr);
-  gap: 24px;
-  padding: 28px 0 18px;
-  margin-bottom: 40px;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 14px 28px;
+  padding: 24px 28px;
+  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
 }
 .account-facts > div {
   min-width: 0;
+}
+.account-facts > div:nth-child(2) {
+  padding-inline: 28px;
+  border-inline: 1px solid var(--border);
 }
 .account-facts > div > span {
   font-size: 14px;
   color: var(--text-secondary);
 }
 .account-facts > div > p {
-  margin-top: 8px;
-  font-size: clamp(26px, 2.4vw, 34px);
+  margin-top: 7px;
+  font-size: 26px;
   font-weight: 600;
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
+.account-facts > div:nth-child(2) > p {
+  font-size: 30px;
+}
 .account-facts small {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-secondary);
   font-weight: 400;
-  margin-left: 8px;
+  margin-left: 7px;
   white-space: nowrap;
 }
 .account-scope {
   grid-column: 1 / -1;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 .account-scope b {
   margin-left: 6px;
-  font-size: 12px;
   font-weight: 500;
 }
 .customer-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 296px);
-  gap: 36px;
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 300px);
+  gap: 24px;
   align-items: start;
 }
 .customer-records {
   min-width: 0;
+}
+.customer-services,
+.customer-orders,
+.customer-billing {
+  min-width: 0;
+  padding: 26px 28px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
 }
 .customer-section-heading {
   display: flex;
@@ -350,36 +400,29 @@ const currencyServices = computed(() =>
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
 }
 .customer-section-heading h2 {
-  font-size: 18px;
-  line-height: 1.5;
+  font-size: 19px;
+  line-height: 1.4;
   font-weight: 600;
 }
 .customer-section-heading > svg {
   color: var(--text-secondary);
 }
 .customer-service-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px minmax(120px, 0.5fr);
-  gap: 16px;
-  background: var(--surface-subtle);
-  color: var(--text-secondary);
-  font-size: 13px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
-}
-.customer-service-columns > :last-child {
-  text-align: right;
+  display: none;
 }
 .customer-service-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px minmax(120px, 0.5fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(110px, 0.5fr);
+  gap: 18px;
   align-items: center;
-  padding: 22px 0;
+  padding: 20px 0;
   border-bottom: 1px solid var(--border);
+}
+.customer-service-row:first-of-type {
+  padding-top: 4px;
 }
 .customer-service-identity {
   display: flex;
@@ -387,19 +430,24 @@ const currencyServices = computed(() =>
   gap: 14px;
   min-width: 0;
 }
+.customer-service-identity > div {
+  min-width: 0;
+}
 .customer-server-icon {
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
   color: var(--text-secondary);
+  background: var(--surface-subtle);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 13px;
 }
 .customer-service-identity h3 {
-  font-size: 15px;
-  font-weight: 550;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .customer-service-identity p {
@@ -420,35 +468,42 @@ const currencyServices = computed(() =>
 }
 .customer-service-price strong {
   font-size: 15px;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 .customer-renewal-label {
   display: none;
 }
 .customer-service-price > span {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 .customer-section-note {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.8;
   padding-top: 16px;
 }
 .customer-orders {
-  margin-top: 42px;
+  margin-top: 24px;
+}
+.customer-orders .customer-section-heading {
+  margin-bottom: 12px;
 }
 .customer-order-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 94px minmax(90px, 0.5fr) auto;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 88px minmax(80px, 0.5fr) auto;
+  gap: 14px;
   align-items: center;
   padding: 18px 0;
   border-top: 1px solid var(--border);
 }
+.customer-order-row:last-child {
+  padding-bottom: 0;
+}
 .customer-order-row h3 {
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 550;
   overflow-wrap: anywhere;
 }
 .customer-order-row .mono {
@@ -459,7 +514,7 @@ const currencyServices = computed(() =>
 }
 .customer-order-date {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 .customer-order-row > strong {
   font-size: 15px;
@@ -468,14 +523,10 @@ const currencyServices = computed(() =>
   overflow-wrap: anywhere;
 }
 .customer-billing {
-  background: var(--surface-subtle);
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  min-width: 0;
+  padding: 26px 24px;
 }
 .customer-billing .customer-section-heading {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 .customer-invoice + .customer-invoice {
   margin-top: 24px;
@@ -483,9 +534,9 @@ const currencyServices = computed(() =>
   padding-top: 24px;
 }
 .customer-invoice-amount {
-  margin: 12px 0 4px;
-  font-size: 28px;
-  line-height: 1.4;
+  margin: 14px 0 6px;
+  font-size: 30px;
+  line-height: 1.3;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
@@ -502,17 +553,20 @@ const currencyServices = computed(() =>
   flex-wrap: wrap;
   color: var(--text-secondary);
   font-size: 13px;
-  margin: 20px 0 16px;
+  margin: 22px 0 18px;
 }
 .customer-invoice-due span {
   color: var(--text-primary);
 }
+.customer-invoice .button {
+  background: var(--surface-subtle);
+}
 .customer-all-invoices {
-  margin-top: 16px;
+  margin-top: 18px;
 }
 .customer-cost-details {
-  margin-top: 24px;
-  padding-top: 20px;
+  margin-top: 22px;
+  padding-top: 16px;
   border-top: 1px solid var(--border);
 }
 .customer-cost-details summary {
@@ -522,7 +576,7 @@ const currencyServices = computed(() =>
   gap: 12px;
   cursor: pointer;
   font-size: 14px;
-  min-height: 32px;
+  min-height: 44px;
   list-style: none;
 }
 .customer-cost-details summary::-webkit-details-marker {
@@ -552,7 +606,8 @@ const currencyServices = computed(() =>
 }
 .customer-invoice-clear p {
   font-size: 16px;
-  margin: 24px 0 8px;
+  font-weight: 550;
+  margin: 26px 0 8px;
 }
 .customer-invoice-clear span {
   color: var(--text-secondary);
@@ -561,37 +616,42 @@ const currencyServices = computed(() =>
 .customer-empty {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  text-align: center;
   gap: 14px;
-  padding: 36px 0;
-  border-top: 1px solid var(--border);
+  padding: 32px 16px;
 }
-.customer-empty > svg,
-.customer-empty p {
+.customer-empty > svg {
+  box-sizing: content-box;
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--surface-subtle);
   color: var(--text-secondary);
+  margin-bottom: 4px;
 }
 .customer-empty h3 {
-  font-size: 18px;
+  font-size: 19px;
+  font-weight: 600;
 }
 .customer-empty p,
 .customer-order-empty {
   font-size: 14px;
   color: var(--text-secondary);
 }
+.customer-empty p {
+  max-width: 360px;
+}
+.customer-empty .button {
+  margin-top: 6px;
+}
 .customer-order-empty {
   border-top: 1px solid var(--border);
-  padding: 24px 0;
+  padding: 22px 0 4px;
 }
 @media (max-width: 1200px) {
   .customer-workspace {
-    gap: 24px;
     grid-template-columns: minmax(0, 1fr) 270px;
-  }
-  .customer-service-columns {
-    display: none;
-  }
-  .customer-renewal-label {
-    display: inline;
+    gap: 20px;
   }
   .customer-service-row {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -609,8 +669,11 @@ const currencyServices = computed(() =>
     grid-column: 1 / -1;
     display: flex;
     justify-content: space-between;
-    padding-left: 56px;
+    padding-left: 58px;
     text-align: left;
+  }
+  .customer-renewal-label {
+    display: inline;
   }
   .customer-order-row {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -629,21 +692,29 @@ const currencyServices = computed(() =>
     grid-row: 2;
     justify-self: end;
   }
+  .customer-order-row:has(> strong.long-amount) > div {
+    grid-column: 1 / -1;
+  }
+  .customer-order-row > strong.long-amount {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    text-align: left;
+  }
+  .customer-order-row:has(> strong.long-amount) > .customer-order-date,
+  .customer-order-row:has(> strong.long-amount) > .badge {
+    grid-row: 3;
+  }
 }
 @media (max-width: 980px) {
   .customer-workspace {
     grid-template-columns: minmax(0, 1fr);
-    gap: 32px;
-  }
-  .customer-billing {
-    max-width: none;
   }
   .has-invoice .customer-billing {
     grid-row: 1;
   }
   .customer-invoice {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     column-gap: 24px;
     align-items: center;
   }
@@ -666,72 +737,61 @@ const currencyServices = computed(() =>
 }
 @media (max-width: 720px) {
   .account-facts {
-    grid-template-columns: 1fr 1fr;
-    gap: 24px 16px;
-    padding: 24px 0 18px;
-    margin-bottom: 32px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 20px 16px;
+    padding: 22px 20px;
   }
   .account-facts > div:nth-child(2) {
     grid-column: 1 / -1;
     grid-row: 1;
+    padding: 0 0 18px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
   }
   .account-facts > div > p {
-    font-size: 30px;
+    font-size: 26px;
   }
   .account-facts > div:nth-child(2) > p {
-    font-size: 38px;
+    font-size: 32px;
   }
-  .account-facts > div > span,
-  .account-facts small {
-    font-size: 14px;
+  .customer-services,
+  .customer-orders,
+  .customer-billing {
+    padding: 22px 20px;
+    border-radius: 18px;
   }
   .customer-section-heading {
-    margin-bottom: 18px;
+    margin-bottom: 20px;
+  }
+  .customer-section-heading h2 {
+    font-size: 18px;
   }
   .customer-service-identity {
     gap: 12px;
   }
   .customer-server-icon {
-    width: 36px;
-    height: 40px;
-  }
-  .customer-service-identity h3 {
-    font-size: 16px;
-  }
-  .customer-service-identity p {
-    font-size: 13px;
+    width: 38px;
+    height: 42px;
+    border-radius: 12px;
   }
   .customer-service-price {
-    padding-left: 48px;
+    padding-left: 50px;
     flex-wrap: wrap;
     gap: 8px;
-  }
-  .customer-order-row {
-    padding: 18px 0;
-  }
-  .customer-orders {
-    margin-top: 32px;
-  }
-  .customer-billing {
-    padding: 24px 20px;
   }
   .customer-invoice {
     display: block;
   }
   .customer-invoice-due {
-    margin: 16px 0;
-  }
-  .customer-invoice-amount {
-    font-size: 30px;
+    margin: 18px 0;
   }
   .customer-overview .text-button {
     min-height: 44px;
     font-size: 14px;
   }
 }
-/* Preserve the whole financial value at a readable size before allowing reflow. */
 .account-facts > div > p.long-amount {
-  font-size: 24px;
+  font-size: 22px;
 }
 .customer-invoice-amount.long-amount {
   font-size: 22px;

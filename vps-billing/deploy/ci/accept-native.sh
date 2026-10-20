@@ -164,6 +164,9 @@ for user in "$api_user" "$web_user" "$smtp_user" "$payment_user" "$socket_group"
 done
 for path in "$opt" "$config" "$logs" "$run" "/etc/systemd/system/$api_unit" "/etc/systemd/system/$web_unit" "/etc/systemd/system/$smtp_unit" "/etc/systemd/system/$payment_unit"; do [[ ! -e $path && ! -L $path ]] || fail 'Refusing to reuse an existing privileged path.'; done
 
+step 'Real isolated edge security headers and privacy-safe diagnostics'
+python3 "$project/deploy/ci/edge-observability.py" --nginx "$ASTER_ACCEPT_NGINX_BIN" --report "$evidence/edge-observability.json"
+
 step 'Build actual raw release programs and resources from the selected source'
 core_version=$(python3 - "$project/backend/pkg/pluginapi/protocol.go" <<'PYVERSION'
 from pathlib import Path
@@ -331,7 +334,7 @@ emit_json_fact PREFLIGHT_EMPTY_JSON preflight-empty.json
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate > "$scratch/migrate.log" 2>&1
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate >> "$scratch/migrate.log" 2>&1
 migration_count=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM schema_migrations')
-[[ $migration_count == 8 ]] || fail 'The current source did not apply exactly eight reviewed migrations.'
+[[ $migration_count == 10 ]] || fail 'The current source did not apply exactly ten reviewed migrations.'
 [[ $("${mysql_cmd[@]}" "$db" --execute="SELECT COUNT(*) FROM plan_prices WHERE currency='USD'") == 0 ]] || fail 'Fresh migration installed unapproved USD prices.'
 for role in admin customer second; do
   account_role=customer; [[ $role != admin ]] || account_role=admin
@@ -346,7 +349,7 @@ report = json.loads(Path(sys.argv[1]).read_text())
 database = report['database']
 assert report['read_only'] is True and report['configuration_checked'] is True
 assert database['read_only'] is True and database['status'] == 'current'
-assert database['schema_version'] == 8 and len(database['migration_checksums']) == 8
+assert database['schema_version'] == 10 and len(database['migration_checksums']) == 10
 assert database['admin_count'] == 1 and database['pending_migrations'] == []
 assert database['table_visibility_verified'] is True
 PYCURRENT

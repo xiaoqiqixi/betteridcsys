@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -77,6 +78,7 @@ func validSessionSecret(key string) bool {
 	return len(seen) >= 8
 }
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("service", "aster-api", "core_version", pluginapi.CoreVersion))
 	version := flag.Bool("version", false, "Print core version")
 	migrate := flag.Bool("migrate", false, "Apply embedded MySQL schema; seeds unavailable plans only")
 	create := flag.Bool("create-user", false, "Create user from BOOTSTRAP_* environment")
@@ -202,18 +204,18 @@ func main() {
 		return updates.Current{CoreVersion: pluginapi.CoreVersion, SMTPVersion: state.Version, SMTPStatus: state.Status, PluginPolicyRevision: state.PolicyRevision, SMTPProtocol: state.SMTPProtocol, SMTPCoreMin: state.SMTPCoreMin, SMTPCoreMaxExclusive: state.SMTPCoreMaxExclusive}
 	})
 	app := billing.NewAppWithIntegrations(store, billing.Config{Updates: updateService, HostOperations: local.hostOperations, Plugins: plugins, SMTPKey: local.smtpKey, Demo: demo, Origin: origin, Secret: key, SecureCookie: !demo, TrustedProxyCIDRs: local.proxyCIDRs}, registry)
-	server := &http.Server{Addr: listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-stop
-		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = server.Shutdown(c)
-	}()
-	slog.Info("billing API listening", "address", listen, "demo_mode", demo)
-	if e := server.ListenAndServe(); e != nil && !errors.Is(e, http.ErrServerClosed) {
-		fatal("HTTP server failed")
+	server := &http.Server{Addr: listen, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(transportLogWriter{slog.Default()}, "", 0)}
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		fatal("HTTP listener failed")
+	}
+	stop, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stopSignals()
+	slog.Info("billing API listening", "event", "server.started", "address", listen, "demo_mode", demo)
+	// Wait for active handlers before main's deferred DB.Close. Serve returning
+	// ErrServerClosed only means listeners closed, not that Shutdown has drained.
+	if err := runHTTPServer(stop, server, listener, 10*time.Second, slog.Default()); err != nil {
+		fatal("HTTP server stopped without a complete drain")
 	}
 }
 

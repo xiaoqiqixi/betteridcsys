@@ -33,6 +33,12 @@ func validateAppliedMigrations(ctx context.Context, conn *sql.Conn, sources []st
 // MySQL DDL commits independently. Resume only known statements whose existing
 // definitions match exactly; a matching object name alone is insufficient.
 func prepareMigrationStatement(ctx context.Context, conn *sql.Conn, version int, q string) (string, bool, error) {
+	if version == 10 {
+		return prepareCustomerAccountMigration(ctx, conn, q)
+	}
+	if version == 9 {
+		return prepareAuditIndex(ctx, conn, q)
+	}
 	if version == 8 {
 		for _, table := range []string{"payment_attempts", "payment_settlements"} {
 			if strings.HasPrefix(q, "CREATE TABLE IF NOT EXISTS "+table+" (") {

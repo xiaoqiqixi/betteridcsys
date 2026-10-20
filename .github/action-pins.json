@@ -4,9 +4,9 @@
   "scope": "Four required GitHub-owned actions; download-artifact not selected because publisher uses controlled REST artifact download. No Actions workflow installed or triggered.",
   "runner": "ubuntu-24.04 GitHub-hosted standard runner; all selected actions use node24, requiring runner >= 2.327.1.",
   "toolchains": {
-    "go": "1.27.2",
+    "go": "1.27.3",
     "node": "24.19.0",
-    "status": "Previously verified by main task; not re-downloaded by this pin review."
+    "status": "Go 1.27.3 official metadata independently checked on 2026-10-20; archive validation and actual execution are recorded separately. Node remains at the previously verified pin; Actions were not re-verified by this toolchain update."
   },
   "actions": [
     {
@@ -67,5 +67,22 @@
     "Latest means latest observed official release on verification date, not a permanent latest promise.",
     "No exhaustive source/dependency audit or live GitHub Actions run performed by this subtask.",
     "Full SHA pinning prevents tag drift but does not establish absence of vulnerabilities."
-  ]
+  ],
+  "toolchain_verification": {
+    "verified_date_utc": "2026-10-20",
+    "scope": "Go toolchain metadata only; the original Actions verification date, pins and sources above are unchanged.",
+    "sources": [
+      "https://go.dev/doc/devel/release#go1.27.3",
+      "https://go.dev/dl/?mode=json"
+    ],
+    "go": {
+      "version": "1.27.3",
+      "release_date_utc": "2026-10-19",
+      "security_fix_package": "crypto/x509",
+      "linux_amd64_archive": "go1.27.3.linux-amd64.tar.gz",
+      "size": 70588678,
+      "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+    },
+    "limitations": "Official metadata read through the web tool; this field does not claim the archive was downloaded, tests passed, the vulnerability database was scanned, or Actions were re-audited."
+  }
 }

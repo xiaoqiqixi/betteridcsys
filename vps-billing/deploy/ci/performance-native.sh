@@ -67,7 +67,7 @@ done
 for perf_tool in git go python3 tar sha256sum mktemp timeout; do
   command -v "$perf_tool" >/dev/null || fail 'A required performance tool is unavailable.'
 done
-[[ $(GOENV=off GOTOOLCHAIN=local GOFLAGS='' go env GOVERSION) == go1.27.2 ]] || fail 'The reviewed Go 1.27.2 toolchain is required.'
+[[ $(GOENV=off GOTOOLCHAIN=local GOFLAGS='' go env GOVERSION) == go1.27.3 ]] || fail 'The reviewed Go 1.27.3 toolchain is required.'
 [[ -n $perf_repo && -n $perf_output && $perf_output == /* ]] || fail 'Explicit source and absolute output paths are required.'
 perf_repo=$(cd -- "$perf_repo" && pwd -P)
 [[ $(git -C "$perf_repo" rev-parse --show-toplevel) == "$perf_repo" && $(git -C "$perf_repo" rev-parse HEAD) == "$GITHUB_SHA" ]] \

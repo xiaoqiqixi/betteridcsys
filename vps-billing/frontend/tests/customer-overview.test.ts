@@ -54,6 +54,38 @@ const props = {
 
 beforeEach(() => setLocale("zh-CN"));
 describe("customer overview financial presentation", () => {
+  it.each(["zh-CN", "en"] as const)(
+    "labels the first four cost items and routes to all services in %s without changing totals",
+    async (language) => {
+      setLocale(language);
+      const services = Array.from({ length: 5 }, (_, index) => ({
+        ...service,
+        id: `s-${index}`,
+        name: `service-${index + 1}`,
+      }));
+      const wrapper = mount(CustomerOverview, {
+        props: {
+          ...props,
+          services,
+          overview: { ...props.overview, monthly_total_minor: 19500 },
+        },
+      });
+      expect(wrapper.findAll(".customer-cost-item")).toHaveLength(4);
+      expect(wrapper.get(".customer-cost-scope").text()).toContain(
+        language === "en"
+          ? "Showing the first 4 service costs."
+          : "仅显示前 4 项服务费用。",
+      );
+      expect(wrapper.get(".account-facts").text()).toContain(
+        money(19500, "CNY"),
+      );
+      await wrapper.get(".customer-cost-scope button").trigger("click");
+      expect(wrapper.emitted("navigate")?.[0]).toEqual(["services"]);
+      await wrapper.setProps({ services: services.slice(0, 4) });
+      expect(wrapper.find(".customer-cost-scope").exists()).toBe(false);
+      wrapper.unmount();
+    },
+  );
   it("keeps invoice historical formatting independent from selected-currency totals", () => {
     const wrapper = mount(CustomerOverview, { props });
     expect(wrapper.get(".customer-invoice-amount").text()).toBe(

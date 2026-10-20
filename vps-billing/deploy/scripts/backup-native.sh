@@ -5,7 +5,44 @@ set -euo pipefail
 umask 077
 export LC_ALL=C
 
-fail() { printf 'Backup failed: %s\n' "$1" >&2; exit 1; }
+# Only this script's fixed-schema diagnostics reach the original stderr. Host
+# tools may print paths, SQL or credentials: never forward their raw stderr.
+exec 3>&2 2>/dev/null
+operation_id=unavailable phase=input_validation tool_role=builtin failure_reason=unexpected_exit staging=''
+diagnostic() {
+  printf '{"event":"%s","operation_id":"%s","phase":"%s","tool_role":"%s","exit_code":%s,"reason":"%s"}\n' \
+    "$1" "$operation_id" "$phase" "$tool_role" "$2" "$3" >&3 || :
+}
+cleanup() {
+  local result=$?
+  trap - EXIT
+  if [[ -n "$staging" ]] && ! rm -rf -- "$staging"; then
+    if ((result == 0)); then result=1; phase=cleanup; tool_role=filesystem; failure_reason=cleanup_failed; fi
+  fi
+  if ((result != 0)); then diagnostic backup_failed "$result" "$failure_reason"; fi
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'failure_reason=interrupted; exit 130' INT
+trap 'failure_reason=interrupted; exit 143' TERM
+if [[ -r /proc/sys/kernel/random/uuid ]]; then
+  IFS= read -r operation_id < /proc/sys/kernel/random/uuid || operation_id=unavailable
+  operation_id=${operation_id//-/}
+fi
+if [[ ! "$operation_id" =~ ^[a-f0-9]{32}$ ]]; then
+  operation_id=unavailable failure_reason=operation_id_unavailable
+  exit 1
+fi
+# Only fixed source-selected reason codes may reach the diagnostic. Never
+# serialize argument values, arbitrary descriptions or underlying tool errors.
+fail() {
+  case "$1" in
+    missing_argument|repeated_argument|unsupported_argument|invalid_database|unsupported_database|unsafe_path|required_tool|private_client_config|unsafe_output_dir|invalid_release_directory|invalid_client_options|utc_timestamp|schema_changed|empty_archive|publish_collision) failure_reason=$1 ;;
+    *) failure_reason=validation_failed ;;
+  esac
+  exit "${2:-1}"
+}
+command_failed() { failure_reason=command_failed; exit "$1"; }
 usage() {
   printf '%s\n' 'Usage: backup-native.sh --client-config /private/client.cnf --socket /run/mysqld/mysqld.sock --database NAME --output-dir /private/backups --release-directory /verified/assembled-release'
   printf '%s\n' 'Independently verify the assembled release first; prevent migrations and all other DDL throughout the backup window.'
@@ -16,8 +53,8 @@ while (($#)); do
   case "$1" in
     --help) usage; exit 0 ;;
     --client-config|--socket|--database|--output-dir|--release-directory)
-      (($# >= 2)) || fail 'Missing argument value.'
-      [[ ! ${arguments[$1]+set} ]] || fail 'Repeated argument.'
+      (($# >= 2)) || fail missing_argument
+      [[ ! ${arguments[$1]+set} ]] || fail repeated_argument
       arguments[$1]=1
       case "$1" in
         --client-config) client_config=$2 ;;
@@ -27,29 +64,29 @@ while (($#)); do
         --release-directory) release_directory=$2 ;;
       esac
       shift 2 ;;
-    *) usage >&2; fail 'Unsupported argument.' ;;
+    *) usage >&2; fail unsupported_argument ;;
   esac
 done
-[[ -n "$client_config" && -n "$db_socket" && -n "$database" && -n "$output_dir" && -n "$release_directory" ]] || { usage >&2; fail 'All five arguments are required.'; }
-[[ "$database" =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] || fail 'Database name must be a 1-64 character ASCII identifier beginning with a letter or underscore.'
-case "${database,,}" in mysql|sys|information_schema|performance_schema) fail 'System databases are not supported.' ;; esac
+[[ -n "$client_config" && -n "$db_socket" && -n "$database" && -n "$output_dir" && -n "$release_directory" ]] || { usage >&2; fail missing_argument; }
+[[ "$database" =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ ]] || fail invalid_database
+case "${database,,}" in mysql|sys|information_schema|performance_schema) fail unsupported_database ;; esac
 for path in "$client_config" "$db_socket" "$output_dir" "$release_directory"; do
-  [[ "$path" == /* && ! "$path" =~ [[:cntrl:]] ]] || fail 'Use absolute paths without control characters.'
+  [[ "$path" == /* && ! "$path" =~ [[:cntrl:]] ]] || fail unsafe_path
 done
 for command in mysql mysqldump gzip sha256sum mktemp stat realpath mv date cmp python3; do
-  command -v "$command" >/dev/null 2>&1 || fail 'A required tool is unavailable (Bash, GNU coreutils, Python 3, gzip, MySQL 8.4 mysql/mysqldump).'
+  command -v "$command" >/dev/null 2>&1 || fail required_tool
 done
-[[ -f "$client_config" && ! -L "$client_config" && -r "$client_config" ]] || fail 'Client config must be a readable regular file, not a symlink.'
-[[ $(stat -c %u -- "$client_config") == "$EUID" ]] || fail 'Client config must belong to the account running this script.'
-case "$(stat -c %a -- "$client_config")" in 400|600) ;; *) fail 'Client config permissions must be 0400 or 0600.' ;; esac
-[[ $(stat -c %h -- "$client_config") == 1 ]] || fail 'Client config must not have additional hard links.'
+[[ -f "$client_config" && ! -L "$client_config" && -r "$client_config" ]] || fail private_client_config
+[[ $(stat -c %u -- "$client_config") == "$EUID" ]] || fail private_client_config
+case "$(stat -c %a -- "$client_config")" in 400|600) ;; *) fail private_client_config ;; esac
+[[ $(stat -c %h -- "$client_config") == 1 ]] || fail private_client_config
 while [[ "$output_dir" != / && "$output_dir" == */ ]]; do output_dir=${output_dir%/}; done
-[[ -d "$output_dir" && ! -L "$output_dir" ]] || fail 'Output directory must already exist and must not be a symlink.'
-[[ $(stat -c %u -- "$output_dir") == "$EUID" && $(stat -c %a -- "$output_dir") == 700 ]] || fail 'Output directory must belong to this account and have mode 0700.'
-[[ -w "$output_dir" && -x "$output_dir" ]] || fail 'Output directory is not writable.'
+[[ -d "$output_dir" && ! -L "$output_dir" ]] || fail unsafe_output_dir
+[[ $(stat -c %u -- "$output_dir") == "$EUID" && $(stat -c %a -- "$output_dir") == 700 ]] || fail unsafe_output_dir
+[[ -w "$output_dir" && -x "$output_dir" ]] || fail unsafe_output_dir
 client_config=$(realpath -e -- "$client_config")
 output_dir=$(realpath -e -- "$output_dir")
-[[ -d "$release_directory" ]] || fail 'Release directory must already exist.'
+[[ -d "$release_directory" ]] || fail invalid_release_directory
 release_directory=$(realpath -e -- "$release_directory")
 # Check all canonical ancestors, not only the immediate parent. A writable
 # grandparent can otherwise rename an apparently private child. Root-owned
@@ -61,9 +98,9 @@ check_directory_chain() {
   while :; do
     owner=$(stat -c %u -- "$directory")
     mode=$(stat -c %a -- "$directory")
-    [[ "$owner" == "$EUID" || "$owner" == 0 ]] || fail 'Credential/output directory ancestors must belong to this account or root.'
+    [[ "$owner" == "$EUID" || "$owner" == 0 ]] || fail unsafe_path
     if (( (8#$mode & 0022) != 0 )); then
-      [[ "$owner" == 0 ]] && (( (8#$mode & 01000) != 0 )) || fail 'Credential/output directory ancestors must not be group/world writable (except root-owned sticky directories).'
+      [[ "$owner" == 0 ]] && (( (8#$mode & 01000) != 0 )) || fail unsafe_path
     fi
     [[ "$directory" != / ]] || break
     directory=${directory%/*}
@@ -74,9 +111,9 @@ check_directory_chain "${client_config%/*}"
 check_directory_chain "$output_dir"
 # Recheck canonical endpoints so a redirected original path cannot bypass the
 # ownership/permissions checks above. This is not isolation from the same UID.
-[[ -f "$client_config" && $(stat -c %u -- "$client_config") == "$EUID" && $(stat -c %h -- "$client_config") == 1 ]] || fail 'Canonical client config does not meet ownership or regular-file requirements.'
-case "$(stat -c %a -- "$client_config")" in 400|600) ;; *) fail 'Canonical client config must remain private.' ;; esac
-[[ $(stat -c %u -- "$output_dir") == "$EUID" && $(stat -c %a -- "$output_dir") == 700 ]] || fail 'Canonical output directory must remain private.'
+[[ -f "$client_config" && $(stat -c %u -- "$client_config") == "$EUID" && $(stat -c %h -- "$client_config") == 1 ]] || fail private_client_config
+case "$(stat -c %a -- "$client_config")" in 400|600) ;; *) fail private_client_config ;; esac
+[[ $(stat -c %u -- "$output_dir") == "$EUID" && $(stat -c %a -- "$output_dir") == 700 ]] || fail unsafe_output_dir
 
 # Do not source this file or print values. Only credentials are accepted; extra
 # MySQL options could silently omit tables, change targets, run SQL or hide errors.
@@ -85,33 +122,31 @@ declare -A options=()
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*[#\;] ]] && continue
   if [[ "$line" =~ ^[[:space:]]*\[client\][[:space:]]*$ ]]; then
-    ((seen_group == 0)) || fail 'Client config must contain exactly one [client] group.'
+    ((seen_group == 0)) || fail invalid_client_options
     seen_group=1
   elif [[ "$line" =~ ^[[:space:]]*(user|password)[[:space:]]*=[[:space:]]*(.+)$ ]]; then
-    ((seen_group == 1)) || fail 'Credentials must be inside [client].'
+    ((seen_group == 1)) || fail invalid_client_options
     option=${BASH_REMATCH[1]}
     if [[ "$option" == user ]]; then
-      [[ ${BASH_REMATCH[2]} =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}[[:space:]]*$ ]] || fail 'Use an explicit unquoted 1-32 character backup account name.'
+      [[ ${BASH_REMATCH[2]} =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}[[:space:]]*$ ]] || fail invalid_client_options
     fi
-    [[ ! ${options[$option]+set} ]] || fail 'Repeated client config option.'
+    [[ ! ${options[$option]+set} ]] || fail invalid_client_options
     options[$option]=1
   else
-    fail 'Client config permits only [client], user/password assignments and comments; includes and all other options are rejected.'
+    fail invalid_client_options
   fi
 done < "$client_config"
-[[ ${options[user]+set} ]] || fail 'Client config requires an explicit user.'
+[[ ${options[user]+set} ]] || fail invalid_client_options
 unset line
 
+phase=staging tool_role=filesystem
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-[[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || fail 'Could not obtain a UTC timestamp.'
+[[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || fail utc_timestamp
 staging=$(mktemp -d "$output_dir/.aster-$database-$stamp-XXXXXXXX.partial")
-cleanup() { [[ -z "$staging" ]] || rm -rf -- "$staging"; }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 # A default ACL can override umask when files are created. Clear it only on
 # this new private staging directory before writing any backup contents.
-if ! python3 - "$staging" 2>/dev/null <<'PY'
+phase=staging_privacy tool_role=python
+if python3 - "$staging" 2>/dev/null <<'PY'
 import errno
 import os
 import stat
@@ -143,8 +178,9 @@ try:
 except OSError:
     raise SystemExit(1) from None
 PY
-then
-  fail 'New backup staging directory could not be made private.'
+then :
+else
+  command_failed "$?"
 fi
 name=${staging##*/}
 final="$output_dir/${name#.}"
@@ -224,6 +260,9 @@ def extend_shape(shape, sql):
             table, column = add.groups()
             require(table in shape and column not in shape[table], "Unknown or repeated migration column.")
             shape[table].append(column)
+        elif index := re.fullmatch(r"CREATE INDEX ([a-z_][a-z0-9_]*) ON ([a-z_][a-z0-9_]*)\(([a-z_][a-z0-9_]*(?:,[a-z_][a-z0-9_]*)*)\)", statement):
+            _, table, columns = index.groups()
+            require(table in shape and all(column in shape[table] for column in columns.split(",")), "Index migration refers to an unknown table or column.")
         elif other or insert:
             require((other or insert)[1] in shape, "Unknown migration table.")
         else:
@@ -316,7 +355,8 @@ except (OSError, ValueError, TypeError, KeyError, UnicodeError):
     sys.exit(1)
 PY
 }
-metadata prepare "$staging/release.json" || exit 1
+phase=release_metadata tool_role=metadata_validator
+metadata prepare "$staging/release.json"
 
 # --defaults-file must be first. Explicit socket transport and disabling login
 # paths prevent unrelated personal settings from selecting another server.
@@ -338,19 +378,24 @@ SELECT 'index', TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COALESCE(COLUM
 SELECT 'key', TABLE_NAME, CONSTRAINT_NAME, COLUMN_NAME, ORDINAL_POSITION, COALESCE(POSITION_IN_UNIQUE_CONSTRAINT,0), COALESCE(REFERENCED_TABLE_SCHEMA,''), COALESCE(REFERENCED_TABLE_NAME,''), COALESCE(REFERENCED_COLUMN_NAME,'') FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION;
 SELECT 'reference', TABLE_NAME, CONSTRAINT_NAME, UNIQUE_CONSTRAINT_SCHEMA, UNIQUE_CONSTRAINT_NAME, MATCH_OPTION, UPDATE_RULE, DELETE_RULE, REFERENCED_TABLE_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() ORDER BY TABLE_NAME, CONSTRAINT_NAME;"
 capture_schema() {
-  if ! (
+  tool_role=mysql
+  if (
     unset MYSQL_PWD MYSQL_HOST MYSQL_TCP_PORT MYSQL_UNIX_PORT MYSQL_GROUP_SUFFIX MYSQL_TEST_LOGIN_FILE
     mysql --defaults-file="$client_config" --no-login-paths \
       --protocol=SOCKET --socket="$db_socket" --batch --skip-column-names \
       --execute="$schema_query" "$database" 2>"$staging/schema.stderr"
-  ) > "$1"; then
-    fail 'Schema observation failed. Check the approved private client diagnostics and backup account metadata privileges.'
+  ) > "$1"; then :
+  else
+    command_failed "$?"
   fi
 }
+phase=schema_before
 capture_schema "$staging/schema.before"
-metadata validate "$staging/release.json" "$staging/schema.before" "$staging/BACKUP.json" || exit 1
+phase=schema_validate_before tool_role=metadata_validator
+metadata validate "$staging/release.json" "$staging/schema.before" "$staging/BACKUP.json"
 # No --databases: no generated CREATE DATABASE or USE source-database clause.
-if ! (
+phase=dump tool_role=mysqldump
+if (
   unset MYSQL_PWD MYSQL_HOST MYSQL_TCP_PORT MYSQL_UNIX_PORT MYSQL_GROUP_SUFFIX MYSQL_TEST_LOGIN_FILE
   mysqldump --defaults-file="$client_config" --no-login-paths \
     --protocol=SOCKET --socket="$db_socket" \
@@ -358,31 +403,43 @@ if ! (
     --no-tablespaces --set-gtid-purged=OFF --hex-blob \
     --default-character-set=utf8mb4 --skip-add-drop-table --skip-add-locks \
     "$database" 2>"$staging/dump.stderr"
-) | gzip -n -c > "$staging/database.sql.gz" 2>"$staging/gzip.stderr"; then
+) | gzip -n -c > "$staging/database.sql.gz" 2>"$staging/gzip.stderr"; then :
+else
+  pipeline_status=("${PIPESTATUS[@]}")
   # Never echo server/config diagnostics or a partially successful SQL dump.
-  fail 'Dump or compression failed. No completed backup was published; check the approved database/client diagnostics privately.'
+  if ((pipeline_status[1] != 0)); then tool_role=gzip; command_failed "${pipeline_status[1]}"; fi
+  command_failed "${pipeline_status[0]}"
 fi
+phase=schema_after
 capture_schema "$staging/schema.after"
-metadata validate "$staging/release.json" "$staging/schema.after" "$staging/BACKUP.after.json" || exit 1
-cmp --silent "$staging/schema.before" "$staging/schema.after" && cmp --silent "$staging/BACKUP.json" "$staging/BACKUP.after.json" || fail 'Database schema or migration history changed during the dump. No completed backup was published.'
+phase=schema_validate_after tool_role=metadata_validator
+metadata validate "$staging/release.json" "$staging/schema.after" "$staging/BACKUP.after.json"
+phase=schema_stability tool_role=filesystem
+cmp --silent "$staging/schema.before" "$staging/schema.after" && cmp --silent "$staging/BACKUP.json" "$staging/BACKUP.after.json" || fail schema_changed
 # This detects observed changes; it does not lock out concurrent migrations or
 # DDL that changes and changes back between observations. The operator must
 # prevent migrations/DDL for the entire backup window.
-[[ -s "$staging/database.sql.gz" ]] || fail 'The archive is empty.'
-if ! gzip -t "$staging/database.sql.gz" 2>"$staging/gzip.stderr"; then
-  fail 'Compressed archive validation failed. No completed backup was published.'
+[[ -s "$staging/database.sql.gz" ]] || fail empty_archive
+phase=archive_validation tool_role=gzip
+if gzip -t "$staging/database.sql.gz" 2>"$staging/gzip.stderr"; then :
+else
+  command_failed "$?"
 fi
 # Preserve a non-sensitive warning indicator rather than possibly secret stderr.
 warning=no
 [[ ! -s "$staging/dump.stderr" ]] || warning=yes
+phase=finalize_metadata tool_role=filesystem
 rm -- "$staging/dump.stderr" "$staging/gzip.stderr" "$staging/schema.stderr" "$staging/release.json" "$staging/schema.before" "$staging/schema.after" "$staging/BACKUP.after.json"
 printf 'format=aster-native-logical-v1\ncreated_utc=%s\ndatabase=%s\ntransport=local-unix-socket\ndump_warnings=%s\nencrypted=no\n' "$stamp" "$database" "$warning" > "$staging/BACKUP.txt"
+phase=checksum_creation tool_role=sha256sum
 (cd "$staging" && sha256sum database.sql.gz BACKUP.txt BACKUP.json > SHA256SUMS)
-(cd "$staging" && sha256sum --check --status SHA256SUMS) || fail 'Checksum verification failed.'
+phase=checksum_validation
+(cd "$staging" && sha256sum --check --status SHA256SUMS)
 # Publish the complete inventory as one directory on the same filesystem. GNU mv -n
 # may report success on collision, so also prove that the staging name vanished.
+phase=publish tool_role=filesystem
 mv --no-clobber --no-target-directory -- "$staging" "$final"
-[[ ! -e "$staging" ]] || fail 'Destination already exists; existing backup was not overwritten.'
+[[ ! -e "$staging" ]] || fail publish_collision
 staging=''
 printf 'Created %s (unencrypted). Verify, encrypt and copy off-host; this is not a restore test.\n' "$final"
-[[ "$warning" == no ]] || printf '%s\n' 'mysqldump emitted warnings. Review the approved private diagnostics before accepting this recovery point.' >&2
+if [[ "$warning" != no ]]; then phase=dump; tool_role=mysqldump; diagnostic backup_warning 0 dump_warning_raw_diagnostics_discarded; fi

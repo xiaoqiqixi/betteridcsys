@@ -76,9 +76,9 @@ func TestPaymentMySQLHistoricalInvoiceWithoutSnapshots(t *testing.T) {
 	m, ctx := migrationTestDatabase(t)
 	migrationHistoricalPrefix(t, ctx, m, 1)
 	owner := User{ID: ID(), Email: ID() + "@test.invalid", Name: "Legacy payment owner", Role: "customer", PasswordHash: "unused"}
-	if e := m.AddUser(ctx, owner); e != nil {
-		t.Fatal(e)
-	}
+	// Seed the actual v1 shape before upgrading. Current AddUser intentionally
+	// requires the current account columns; it must not accept old schemas.
+	migrationExec(t, ctx, m.DB, "INSERT INTO users(id,email,name,role,password_hash) VALUES(?,?,?,?,?)", owner.ID, owner.Email, owner.Name, owner.Role, owner.PasswordHash)
 	orderID, invoiceID := ID(), ID()
 	migrationExec(t, ctx, m.DB, "INSERT INTO orders(id,number,user_id,plan_id,plan_name,hostname,status,total_minor,currency,created_at) VALUES(?,?,?,'starter','Historical plan','legacy-pay-host','pending_payment',1234,'USD','2025-01-02 03:04:05')", orderID, "ORD-"+orderID, owner.ID)
 	migrationExec(t, ctx, m.DB, "INSERT INTO invoices(id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at) VALUES(?,?,?,?,'unpaid',1234,'USD','2025-01-02 03:04:05','2025-01-09 03:04:05')", invoiceID, "INV-"+invoiceID, owner.ID, orderID)

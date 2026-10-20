@@ -2,6 +2,7 @@ package billing
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -123,6 +124,12 @@ func (c *SMTPCipher) decrypt(value string) (emailCredentials, error) {
 	}
 	return credentials, nil
 }
-func recordEmailAuditFailure(outcome string) {
-	slog.Error("SMTP test final audit failed", "outcome", outcome)
+func recordEmailAuditFailure(ctx context.Context, actor User, revision int64, outcome string, err error) {
+	logger := slog.Default()
+	attrs := []any{"outcome", outcome, "revision", revision, "actor_id", actor.ID, "error_class", errorKind(err)}
+	if state := observation(ctx); state != nil {
+		logger = state.logger
+		attrs = append(attrs, "request_id", state.requestID, "route", state.route)
+	}
+	logger.Log(context.WithoutCancel(ctx), slog.LevelError, "smtp_test_final_audit_failed", attrs...)
 }

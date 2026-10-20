@@ -74,7 +74,10 @@ export function readCancellationResult(
   return { order, invoice };
 }
 
-export function cancellationError(error: unknown): string {
+export function cancellationError(
+  error: unknown,
+  administrator = false,
+): string {
   const labels: Record<string, [string, string]> = {
     INVALID_BODY: [
       "取消请求无效，请重新检查后提交。",
@@ -92,10 +95,15 @@ export function cancellationError(error: unknown): string {
       "订单当前状态不允许取消，请刷新订单和账单记录。",
       "The order can no longer be cancelled in its current state. Refresh orders and invoices.",
     ],
-    CANCELLATION_UNAVAILABLE: [
-      "当前支付配置不支持此取消操作，请联系运营方。",
-      "Cancellation is unavailable with the current payment configuration. Contact the operator.",
-    ],
+    CANCELLATION_UNAVAILABLE: administrator
+      ? [
+          "无法排除未确认的支付处理，请先核对支付记录；当前不能安全取消。",
+          "Unconfirmed payment processing cannot be ruled out. Check payment records before proceeding; this order cannot currently be cancelled safely.",
+        ]
+      : [
+          "当前支付配置不支持此取消操作，请联系运营方。",
+          "Cancellation is unavailable with the current payment configuration. Contact the operator.",
+        ],
     AUTH_REQUIRED: [
       "请重新登录后核对订单。",
       "Sign in again to check the order.",

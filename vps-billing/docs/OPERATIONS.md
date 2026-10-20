@@ -1,6 +1,6 @@
 # 单服务器原生 Linux 运维手册
 
-部署基线为 Ubuntu 24.04 / amd64，同一台服务器运行 Nginx、systemd API 和 MySQL 8.4 LTS。高可用暂缓。原生自动化的实际结果见 [原生验证记录](VALIDATION.md)；外部主机的资源、已有服务、真实域名、公共 CA 证书、开机恢复及运维计划需与该环境匹配。历史 `0.3.0-rc.1` 产物保持原提交和哈希。
+正式 CI 与发布门禁的部署基线仍为 Ubuntu 24.04 / amd64；Ubuntu 22.04 / amd64 为新增验证目标，不等于完整支持验收已完成，其他发行版与架构的边界见 [安装前置确认与兼容矩阵](INSTALL.md#前置确认)。采用原生部署，同一台服务器运行 Nginx、systemd API 和 Oracle MySQL 8.4 LTS。高可用暂缓。原生自动化的实际结果见 [原生验证记录](VALIDATION.md)；外部主机的资源、已有服务、真实域名、公共 CA 证书、开机恢复及运维计划需与该环境匹配。历史 `0.3.0-rc.1` 产物保持原提交和哈希。
 
 初次安装见 [INSTALL.md](INSTALL.md)，宝塔环境见 [BAOTA.md](BAOTA.md)，升级回滚见 [UPGRADE.md](UPGRADE.md)，备份恢复见 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)，站点与计价见 [SITE_SETTINGS.md](SITE_SETTINGS.md)。实际证据见 [VALIDATION.md](VALIDATION.md)，最终放行见 [RELEASE.md](RELEASE.md)。以下步骤供管理已安装的原生实例使用，不会由应用或 CI 自动在外部服务器执行。
 
@@ -17,7 +17,7 @@
 
 单机不是故障域隔离：磁盘、系统或主机故障可能同时影响 API 和数据库。异地备份、恢复演练与明确维护窗口仍必需，不能用两个本机目录代替灾备。尚无容量测试或 SLA，不从示例配置推导可承载用户数。
 
-当前原生方案以本机 Unix socket 连接数据库。后端当前要求显式设置 `MYSQL_ALLOW_INSECURE=true` 才接受无 TLS 的 socket；只在已核实 socket 路径/权限的本机连接使用此例外。它不会自动确认 DSN 是 socket，管理员必须核对。若改成 TCP/跨主机，应先重新审查连接边界，使用证书验证的 `tls=true` 并关闭此例外，不能沿用明文设置。
+当前原生方案以本机 Unix socket 连接数据库。后端要求显式设置 `MYSQL_ALLOW_INSECURE=true` 才接受无 TLS 的连接，且该例外会强制检查 DSN 使用绝对路径的本机 Unix socket；不能用于无 TLS 的 TCP。管理员仍须核对 socket 的真实位置、权限及数据库身份。若改成 TCP/跨主机，应先重新审查连接边界，使用证书验证的 `tls=true` 并关闭此例外，不能沿用明文设置。
 
 运行数据库身份仅有本库 SELECT、INSERT、UPDATE、DELETE；迁移使用独立身份，DDL 不在日常 API 启动中自动执行。备份身份按实际选项审查权限，不共享运行凭据，不使用数据库 root 作为应用账号。
 
@@ -74,7 +74,7 @@ curl --fail --show-error https://billing.example.com/readyz
 | SMTP 不可用 | 策略 revision/批准版本、SHA/兼容区间、不同 UID、socket 权限、服务退出/重启限制、精确目的地与后台配置 | 给插件读取 API 秘密、改 manifest 掩盖错误、盲目重发不确定邮件 |
 | 磁盘空间不足 | 数据库/journal/备份占用和保留政策 | 随意删除 MySQL 文件、唯一备份或迁移记录 |
 
-应用、Nginx 和数据库日志可能包含客户/订单标识。限制读取与保留，分享前脱敏；不收集完整环境变量、秘密文件或 DSN 到工单。journal 保留和磁盘限制应结合目标主机政策制定，应用不会修改主机日志配置。
+请求 JSON 采用字段白名单，业务审计仍可能包含客户/订单标识及取消原因；两者不是同一保留系统。请求 ID 追踪、后台真分页、Nginx 原始 engine 日志取舍、备份安全错误及 journald 容量/权限见 [生产日志与审计](LOGGING.md)。不收集完整环境变量、秘密文件或 DSN 到工单。journal 保留和磁盘限制应结合目标主机政策制定，应用不会自动修改整机日志配置，也不保证 journal 无损保留。
 
 ## 5. 备份、恢复和秘密轮换
 

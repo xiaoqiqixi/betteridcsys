@@ -121,7 +121,10 @@ function review() {
       <div class="purchase-catalog">
         <section class="region-panel" aria-labelledby="region-title">
           <div class="purchase-section-heading">
-            <h2 id="region-title">{{ tr("选择区域", "Choose a region") }}</h2>
+            <h2 id="region-title">
+              <span class="selection-step" aria-hidden="true">01</span>
+              {{ tr("选择区域", "Choose a region") }}
+            </h2>
           </div>
           <div
             class="region-options"
@@ -157,7 +160,10 @@ function review() {
 
         <section aria-labelledby="plan-title">
           <div class="purchase-section-heading purchase-plan-heading">
-            <h2 id="plan-title">{{ tr("选择套餐", "Choose a plan") }}</h2>
+            <h2 id="plan-title">
+              <span class="selection-step" aria-hidden="true">02</span>
+              {{ tr("选择套餐", "Choose a plan") }}
+            </h2>
             <span v-if="!loading" class="catalog-count">{{
               tr(
                 `${visiblePlans.length} 个套餐`,
@@ -407,13 +413,13 @@ function review() {
 .purchase-billing {
   margin-left: auto;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 12px;
 }
 .purchase-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) 296px;
   align-items: start;
-  gap: 32px;
+  gap: 24px;
 }
 .purchase-section-heading {
   display: flex;
@@ -421,29 +427,54 @@ function review() {
   gap: 8px;
 }
 .purchase-section-heading h2 {
-  font-size: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 19px;
   font-weight: 600;
+}
+.selection-step {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
 }
 .region-panel {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px 20px;
-  padding-bottom: 24px;
-  margin-bottom: 28px;
-  border-bottom: 1px solid var(--border);
+  gap: 18px;
+  padding: 22px 24px;
+  margin-bottom: 26px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
 }
 .region-panel h2 {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 .region-options {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 5px;
   min-width: 0;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-subtle);
 }
 .region-options button {
   display: inline-flex;
@@ -454,7 +485,7 @@ function review() {
   min-height: 44px;
   padding: 8px 12px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 9px;
   font-size: 14px;
   line-height: 1.5;
   text-align: left;
@@ -464,23 +495,21 @@ function review() {
   background: var(--surface-subtle);
 }
 .region-options button[aria-pressed="true"] {
-  background: var(--theme-soft);
+  background: var(--surface);
   color: var(--brand-ink);
   border-color: var(--blue);
 }
 .purchase-plan-heading {
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 .catalog-count {
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
 }
 .catalog-plans {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
+  display: grid;
+  gap: 16px;
 }
 .catalog-plan {
   display: grid;
@@ -492,17 +521,17 @@ function review() {
   gap: 20px;
   min-width: 0;
   padding: 24px;
-  border-bottom: 1px solid var(--border);
-}
-.catalog-plan:last-child {
-  border-bottom: 0;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
 }
 .catalog-plan.selected {
-  background: var(--theme-soft);
-  box-shadow: inset 3px 0 var(--blue);
+  border-color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
 }
 .catalog-plan h3 {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 600;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -560,7 +589,7 @@ function review() {
 .catalog-specs dd {
   margin: 0;
   color: var(--text-primary);
-  font-size: 18px;
+  font-size: 19px;
   line-height: 1.6;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -587,7 +616,7 @@ function review() {
   flex-wrap: wrap;
   gap: 0 6px;
   margin: 0;
-  font-size: 21px;
+  font-size: 24px;
   font-weight: 600;
   letter-spacing: -0.4px;
   line-height: 1.5;
@@ -619,8 +648,10 @@ function review() {
   top: 32px;
   min-width: 0;
   padding: 24px;
-  border-radius: 12px;
-  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
 }
 .purchase-summary > .purchase-section-heading {
   padding-bottom: 20px;
@@ -633,7 +664,7 @@ function review() {
   margin-top: 24px;
 }
 .purchase-summary h3 {
-  font-size: 19px;
+  font-size: 22px;
   line-height: 1.5;
   font-weight: 600;
   overflow-wrap: anywhere;
@@ -641,7 +672,7 @@ function review() {
 .purchase-summary-specs {
   display: grid;
   gap: 12px;
-  margin: 24px 0;
+  margin: 22px 0;
 }
 .purchase-summary-specs > div {
   display: flex;
@@ -676,7 +707,7 @@ function review() {
 }
 .purchase-total strong {
   min-width: 0;
-  font-size: 29px;
+  font-size: 32px;
   line-height: 1.4;
   font-weight: 600;
   letter-spacing: -0.6px;
@@ -690,14 +721,14 @@ function review() {
 .purchase-price-note {
   margin-top: 12px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.7;
 }
 .purchase-boundary {
   margin-top: 24px;
   padding-top: 20px;
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.7;
 }
 .purchase-boundary span {
@@ -730,7 +761,7 @@ function review() {
   gap: 12px;
   padding: 56px 24px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 18px;
   background: var(--surface);
   text-align: center;
   color: var(--text-secondary);
@@ -843,15 +874,20 @@ function review() {
     align-items: baseline;
     gap: 12px;
     margin-bottom: 24px;
-    padding-bottom: 20px;
+    padding: 20px;
   }
   .region-options {
     order: 1;
     flex-basis: 100%;
     gap: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
   }
   .region-options button {
     padding: 8px 10px;
+    border-color: var(--control-border);
+    background: var(--surface-subtle);
   }
   .catalog-plans {
     display: grid;
@@ -867,11 +903,11 @@ function review() {
     gap: 20px;
     padding: 20px;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 18px;
   }
   .catalog-plan.selected {
     border-color: var(--blue);
-    box-shadow: none;
+    box-shadow: inset 0 0 0 1px var(--blue);
   }
   .catalog-plan h3 {
     font-size: 18px;

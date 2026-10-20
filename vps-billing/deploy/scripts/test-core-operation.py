@@ -14,6 +14,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -1855,6 +1856,103 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("root", output.getvalue())
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             operation.main(["plan", "--spec", str(self.spec_path), "--trust-owner", "12345"])
+
+
+class EdgeLoggingTests(unittest.TestCase):
+    # Pure rendering/contract checks: no Linux ACL or host/service fixture.
+    def setUp(self):
+        self.spec = {"release_directory": "/unused", "instance_root": "/opt/aster-test", "config_root": "/etc/aster-test",
+                     "runtime_user": "asttest", "api_unit": "aster-test.service", "nginx_binary": "/usr/sbin/nginx",
+                     "origin": "https://billing.example.test", "edge_listen_address": "127.0.0.1",
+                     "listen_address": "127.0.0.1:18080", "certificate": "/private/certificate", "certificate_key": "/private/key"}
+
+    def test_generated_and_manual_nginx_share_only_safe_json_log_fields(self):
+        block = operation.nginx_logging_text()
+        template = (SCRIPTS.parent / "nginx.native.conf").read_text()
+        manual = template.split("# BEGIN ASTER PRIVACY LOGGING", 1)[1].split("# END ASTER PRIVACY LOGGING", 1)[0]
+        self.assertEqual(block, "# BEGIN ASTER PRIVACY LOGGING" + manual + "# END ASTER PRIVACY LOGGING")
+        self.assertIn("escape=json", block)
+        self.assertIn('default OTHER;', block)
+        self.assertIn('"~^[0-9a-f]{32}$" $upstream_http_x_request_id;', block)
+        # The maps may inspect URI/method to classify them, but log_format must
+        # never interpolate the original URI, method or any client header.
+        format_text = block.split("log_format aster_access", 1)[1]
+        variables = set(re.findall(r"\$[a-z_0-9]+", format_text))
+        self.assertEqual(variables, {"$time_iso8601", "$request_id", "$aster_api_request_id", "$aster_log_method",
+                                     "$aster_log_route", "$status", "$body_bytes_sent", "$request_time",
+                                     "$upstream_status", "$upstream_response_time"})
+        destination = "access_log syslog:server=unix:/dev/log,tag=aster_edge,severity=info,nohostname aster_access;"
+        self.assertEqual(template.count(destination), 4)
+        self.assertEqual(template.count("error_log /dev/null warn;"), 4)
+        # Nothing in the shared http include sets another site's logging policy.
+        before_servers = template.split("\nserver {", 1)[0]
+        self.assertNotIn("access_log ", before_servers)
+        self.assertNotIn("error_log ", before_servers)
+
+    def test_generated_nginx_preserves_header_inheritance_and_safe_log_sink(self):
+        text = operation.nginx_text(self.spec).decode()
+        self.assertIn(operation.nginx_logging_text(), text)
+        self.assertIn("expires -1;", text)
+        location = text.split("    location / {", 1)[1]
+        self.assertNotRegex(location, r"(?m)^\s*add_header\b")
+        self.assertNotIn("access_log off", text)
+        self.assertIn("access_log syslog:server=unix:/dev/log,tag=aster_edge,severity=info,nohostname aster_access;", text)
+        self.assertNotIn("error_log stderr", text)
+
+    def test_syslog_tags_use_nginx_supported_grammar(self):
+        template = (SCRIPTS.parent / "nginx.native.conf").read_text()
+        for text, expected_count in ((template, 4), (operation.nginx_text(self.spec).decode(), 1)):
+            tags = re.findall(r"\btag=([^,;\s]+)", text)
+            self.assertEqual(len(tags), expected_count)
+            for tag in tags:
+                self.assertRegex(tag, r"^[A-Za-z0-9_]+$")
+                self.assertEqual(tag, "aster_edge")
+
+    def test_fixture_initial_error_log_option_preserves_supported_version_floor(self):
+        edge = load("edge_initial_log_options_under_test", SCRIPTS.parent / "ci/edge-observability.py")
+        self.assertEqual(edge.initial_error_log_options("nginx version: nginx/1.19.4"), [])
+        for version in ("1.19.5", "1.24.0 (Ubuntu)", "1.30.6"):
+            self.assertEqual(edge.initial_error_log_options("nginx version: nginx/" + version), ["-e", "/dev/null"])
+        for version in ("nginx/1.18.0", "nginx/1.19.3", "unknown version"):
+            with self.subTest(version=version), self.assertRaises(RuntimeError):
+                edge.initial_error_log_options(version)
+
+    def test_generated_units_disable_core_dumps_and_bound_journal_rate(self):
+        with patch.object(operation, "read_file", return_value=(SCRIPTS.parent / "systemd/aster-api.service").read_bytes()):
+            api = operation.api_unit_text(self.spec).decode()
+        for unit in (api, operation.edge_unit_text(self.spec).decode()):
+            self.assertIn("LimitCORE=0\n", unit)
+            self.assertIn("LogRateLimitIntervalSec=30s\n", unit)
+            self.assertIn("LogRateLimitBurst=10000\n", unit)
+        for name in ("aster-smtp.service", "aster-payment.service"):
+            unit = (SCRIPTS.parent / "systemd" / name).read_text()
+            self.assertIn("StandardOutput=null\n", unit)
+            self.assertIn("StandardError=null\n", unit)
+
+    def test_safe_edge_log_parser_rejects_private_fields_and_forged_ids(self):
+        edge = load("edge_observability_fixture_under_test", SCRIPTS.parent / "ci/edge-observability.py")
+        record = {"event": "edge_request", "time": "2026-10-20T00:00:00+00:00", "edge_id": "c" * 32,
+                  "api_request_id": edge.API_ID, "method": "GET", "route": "/api/v1/invoices/:id",
+                  "status": 200, "body_bytes": 16, "request_time": "0.001",
+                  "upstream_status": "200", "upstream_response_time": "0.001"}
+        self.assertEqual(edge.log_record(b"<190>fixture aster_edge: " + json.dumps(record).encode()), record)
+        for change in ({"route": edge.CANARY}, {"route": edge.RESOURCE_ID}, {"edge_id": edge.CLIENT_ID},
+                       {"api_request_id": edge.CANARY}, {"method": "PRIVATE_METHOD"}, {"status": "200"},
+                       {"body_bytes": "16"}, {"request_time": "-1"}, {"raw_path": "/secret"}):
+            with self.subTest(fields=sorted(change)), self.assertRaises((RuntimeError, ValueError)):
+                edge.log_record(json.dumps(dict(record, **change)).encode())
+
+    def test_native_command_diagnostic_contains_no_argv_output_or_environment(self):
+        native = operation.Native(dict(self.spec, operation_id="a" * 32))
+        output = io.StringIO()
+        process = types.SimpleNamespace(poll=lambda: 42, returncode=42, pid=999999)
+        with contextlib.redirect_stderr(output), patch.object(operation.subprocess, "Popen", return_value=process), \
+                self.assertRaises(updater.Rejected):
+            native.run(["/private/" + CANARY, CANARY], env={"MYSQL_DSN": CANARY}, data=CANARY.encode())
+        value = json.loads(output.getvalue())
+        self.assertEqual(value, {"event": "native_command_failed", "operation_id": "a" * 32,
+                                 "phase": "native_command", "tool_role": "OTHER", "exit_code": 42, "reason": "command_failed"})
+        self.assertNotIn(CANARY, output.getvalue())
 
 
 if __name__ == "__main__":

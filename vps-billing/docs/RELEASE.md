@@ -1,27 +1,28 @@
 # 版本、构建与发布
 
-Core 与运行时插件分别采用语义化版本、构建包和 Release。本页准备目标 Core `0.5.5` 的交付，尚未发布，也不表示发布门禁已通过；当前正式基线仍为 `0.5.4`，正式资产以 Release 实际清单为准。官方 SMTP 保持独立 `1.1.0`，本次不准备新的 SMTP 版本；`aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。支付运行时协议保持 `aster.payment/1`，最低要求 Core `0.5.3`；0.5.4 沿用的支付数据库结构及回退边界继续适用于 0.5.5，见 [UPGRADE.md](UPGRADE.md)。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
+Core 与运行时插件分别采用语义化版本、构建包和 Release。本页准备目标 Core `0.5.6` 的交付，发行状态与门禁结果须查对应正常 Release 及构建；本轮开发对照基线为正式 `0.5.4`，正式资产以 Release 实际清单为准。官方 SMTP 保持独立 `1.1.0`，本次不准备新的 SMTP 版本；`aster.smtp/1` 协议保持不变，兼容 Core `>=0.4.0,<0.6.0`。支付运行时协议保持 `aster.payment/1`，最低要求 Core `0.5.3`；0.5.4 沿用的支付数据库结构及回退边界继续适用于 0.5.6，见 [UPGRADE.md](UPGRADE.md)。发布前必须通过与源码对应的检查；实际执行结论见 [VALIDATION.md](VALIDATION.md) 和各 Release 的来源文件，不从历史绿灯推导新版本通过。
 
 本项目在 `main` 维护。正常发布采用公开、非草稿、非预发布的 Release；这是版本交付状态，不宣称支付、主控/被控、商业运营或安全认证已完成。发布流程不部署服务器、不操作真实付款、不发送外部邮件。root `LICENSE` 和第三方版权材料保留；根 README 可随产品变化更新。
 
-## 0.5.5 补丁范围
+## 0.5.6 补丁范围
 
-本候选集中改进客户实际购机与查看账务的界面：客户首页以服务、续费和待处理账单为主要内容；套餐页对齐规格与价格，明确选择摘要；手机端重排套餐、账单和订单核对入口。共用导航改为桌面可独立滚动的常驻侧栏、1024px 及以下的抽屉，统一客户、账单与后台的排版、间距和表格层级。仅调整现有信息和交互的呈现，不增加业务功能，不改付款、金额、安全、多币种规则或数据库更新。
+本候选保留客户首页、套餐比较、移动端导航与统一抽屉/弹窗；补齐客户及管理员角色、停用、密码重置与会话撤销，真实单笔订单详情，以及商品创建/复制/编辑、草稿/上架和多币种报价。生产日志使用脱敏 JSON/journald，业务审计支持权限隔离的游标分页。账户写入要求原因、版本与实际管理员复核，禁止危险自降权/自停用并保护最后一位启用管理员；订单不开放任意状态改写。
 
+迁移 009 为审计索引，010 为账户状态/版本，原 001–008 不重写。全局商品/价格版本使旧报价失效，已成交金额、历史快照、支付幂等及安全约束保持；没有真实资源开通、Redis 或新支付渠道。Go 工具链为 1.27.3，运行原生 Linux amd64；Ubuntu 22/24 与其他发行版的验证范围分别报告，不把一个平台通过冒充全面支持。
 视觉验收须实际打开本候选运行生成的桌面和手机截图，并覆盖两种语言、空态、长金额、导航及焦点；截图文件存在或自动化检查通过均不能替代人工看图。本节是候选范围，是否完成及仍有何限制以实际验证记录为准。
 
 ## 计划交付物与独立版本
 
-下表和后文命令是发布准备模板；`v0.5.5` 标签及资产只有在发布完成并核验后才可用于官方安装或升级。
+下表和后文命令是发布准备模板；`v0.5.6` 标签及资产只有在发布完成并核验后才可用于官方安装或升级。
 
 | 项目 | 标签          | 原始 Linux amd64 程序                                                | 单独资源包                                      |
 | ---- | ------------- | -------------------------------------------------------------------- | ----------------------------------------------- |
-| Core | `v0.5.5`      | `aster-api-0.5.5-linux-amd64`、`aster-plugin-host-0.5.5-linux-amd64` | `aster-core-0.5.5-linux-amd64-resources.tar.gz` |
+| Core | `v0.5.6`      | `aster-api-0.5.6-linux-amd64`、`aster-plugin-host-0.5.6-linux-amd64` | `aster-core-0.5.6-linux-amd64-resources.tar.gz` |
 | SMTP | `smtp-v1.1.0` | `aster-smtp-1.1.0-linux-amd64`                                       | `aster-smtp-1.1.0-linux-amd64-resources.tar.gz` |
 
 每个 Release 另含 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`：Core 共 6 个手工发布资产，SMTP 共 5 个。程序为未压缩的静态 ELF 可执行文件；下载后须按固定目标名安装和赋予执行权限。资源包不含 ELF，不能把它当作已经带程序的旧运行包。
 
-Core 目标资源根目录为 `aster-core-0.5.5-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。资源内 `core-manager.py prepare` 核验同版本资产并自动组装 `bin/aster-api`、`bin/aster-plugin-host`；管理员再审查私密规格和计划摘要，明确确认 `core-operation.py apply` 完成专用实例的初始化、迁移、配置和激活。MySQL 系统服务、Nginx 程序、TLS 证书和宿主环境须先准备；网页没有执行权限。单个 API 程序不能替代网页、配置、数据库或插件宿主。
+Core 目标资源根目录为 `aster-core-0.5.6-linux-amd64-resources/`，包含 `web/`、`migrations/*.sql`、`docs/`、原生 `deploy/` 工具与样例、依赖清单及许可证。资源内 `core-manager.py prepare` 核验同版本资产并自动组装 `bin/aster-api`、`bin/aster-plugin-host`；管理员再审查私密规格和计划摘要，明确确认 `core-operation.py apply` 完成专用实例的初始化、迁移、配置和激活。MySQL 系统服务、Nginx 程序、TLS 证书和宿主环境须先准备；网页没有执行权限。单个 API 程序不能替代网页、配置、数据库或插件宿主。
 
 SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `manifest.json`、`LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.json`、`SHA256SUMS`。管理工具同时核验资源与原始程序，再组装为不可覆盖的六文件版本目录；安装不批准、不启动。两种 Release 分别记录来源，不能用 Core 校验和证明 SMTP 程序。
 
@@ -39,13 +40,13 @@ SMTP 资源根目录为 `aster-smtp-1.1.0-linux-amd64-resources/`，只含 `mani
 
 ## 从精确提交复现
 
-需要 Git、GNU tar、gzip、sha256sum、Python 3，以及 BUILD 中相同的 Go/Node.js/npm。Core 构建使用前端锁文件；SMTP 只构建独立 Go 程序。依赖由 `go.sum` / `package-lock.json` 固定，下载渠道与缓存仍须可信。以下命令在仓库根目录运行，SHA 与版本必须来自同一已审查提交，输出目录尚不存在且位于仓库之外。准备 0.5.5 时须先完成对应版本声明并提交候选，再替换 `COMMIT_SHA`，不能用这些示例给未提交工作区或旧 0.5.4 程序改名：
+需要 Git、GNU tar、gzip、sha256sum、Python 3，以及 BUILD 中相同的 Go/Node.js/npm。Core 构建使用前端锁文件；SMTP 只构建独立 Go 程序。依赖由 `go.sum` / `package-lock.json` 固定，下载渠道与缓存仍须可信。以下命令在仓库根目录运行，SHA 与版本必须来自同一已审查提交，输出目录尚不存在且位于仓库之外。准备 0.5.6 时须先完成对应版本声明并提交候选，再替换 `COMMIT_SHA`，不能用这些示例给未提交工作区或旧 0.5.4 程序改名：
 
 ```sh
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.5 --output /workspace/core-a
+  --commit COMMIT_SHA --kind core --version 0.5.6 --output /workspace/core-a
 vps-billing/deploy/scripts/package-release.sh \
-  --commit COMMIT_SHA --kind core --version 0.5.5 --output /workspace/core-b
+  --commit COMMIT_SHA --kind core --version 0.5.6 --output /workspace/core-b
 diff -r /workspace/core-a /workspace/core-b
 
 vps-billing/deploy/scripts/package-release.sh \

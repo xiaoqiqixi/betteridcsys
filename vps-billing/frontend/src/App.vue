@@ -57,6 +57,7 @@ import type {
   Session,
   Plan,
   Service,
+  AdminService,
   Order,
   Invoice,
   Audit,
@@ -70,6 +71,12 @@ import SettingsPage from "./components/SettingsPage.vue";
 import UpdatesPage from "./components/UpdatesPage.vue";
 import PlansPage from "./components/PlansPage.vue";
 import CustomerOverview from "./components/CustomerOverview.vue";
+import AuditLogPage from "./components/AuditLogPage.vue";
+import CustomerAccountsPage from "./components/CustomerAccountsPage.vue";
+import CatalogPage from "./components/CatalogPage.vue";
+import OrderDetailsPage from "./components/OrderDetailsPage.vue";
+import "./management.css";
+import { auditActionLabel } from "./lib/audit";
 import FinancialSettingsPage from "./components/FinancialSettingsPage.vue";
 import { readCurrencyRegistry, type CurrencyRegistry } from "./lib/currencies";
 import {
@@ -158,6 +165,7 @@ const plans = ref<Plan[]>([]),
   invoices = ref<Invoice[]>([]),
   audit = ref<Audit[]>([]),
   customers = ref<User[]>([]);
+const adminServices = ref<AdminService[]>();
 const overview = ref<Overview>(),
   adminOverview = ref<AdminOverview>();
 const orderDialog = ref<HTMLDialogElement>(),
@@ -241,6 +249,8 @@ const nav = computed(() =>
           icon: LayoutDashboard,
         },
         { id: "customers", label: tr("客户管理", "Customers"), icon: Users },
+        { id: "catalog", label: tr("商品管理", "Products"), icon: Layers },
+        { id: "services", label: tr("服务管理", "Services"), icon: Server },
         {
           id: "orders",
           label: tr("订单管理", "Orders"),
@@ -293,26 +303,57 @@ const nav = computed(() =>
         },
       ],
 );
+const orderDetailID = computed(() =>
+  page.value === "orders" ? route.path.split("/")[2] || "" : "",
+);
 const pageTitle = computed(() =>
-  page.value === "account"
-    ? tr("账户与安全", "Account and security")
-    : nav.value.find((n) => n.id === page.value)?.label ||
-      tr("页面未找到", "Page not found"),
+  page.value === "orders" && orderDetailID.value
+    ? tr("订单详情", "Order details")
+    : page.value === "audit"
+      ? isAdmin.value
+        ? tr("审计日志", "Audit log")
+        : tr("操作记录", "Account activity")
+      : page.value === "account"
+        ? tr("账户与安全", "Account and security")
+        : nav.value.find((n) => n.id === page.value)?.label ||
+          tr("页面未找到", "Page not found"),
 );
 const matches = (value: unknown) =>
   JSON.stringify(value).toLowerCase().includes(query.value.toLowerCase());
-const filteredServices = computed(() => services.value.filter(matches)),
+const displayedServices = computed(() =>
+  isAdmin.value ? (adminServices.value ?? []) : services.value,
+);
+const serviceCustomers = computed(
+  () => new Map(customers.value.map((customer) => [customer.id, customer])),
+);
+function serviceCustomerID(service: Service): string {
+  return isAdmin.value &&
+    "customer_id" in service &&
+    typeof service.customer_id === "string"
+    ? service.customer_id
+    : "";
+}
+function serviceCustomer(service: Service) {
+  return serviceCustomers.value.get(serviceCustomerID(service));
+}
+const filteredServices = computed(() =>
+    displayedServices.value.filter((service) => {
+      const customer = isAdmin.value ? serviceCustomer(service) : undefined;
+      return matches(service) || (!!customer && matches(customer));
+    }),
+  ),
   filteredOrders = computed(() => orders.value.filter(matches)),
   filteredInvoices = computed(() => invoices.value.filter(matches)),
-  filteredCustomers = computed(() => customers.value.filter(matches)),
-  filteredAudit = computed(() => audit.value.filter(matches));
+  filteredCustomers = computed(() => customers.value.filter(matches));
 const listScope = computed(() => {
   const counts: Record<string, () => [number, number]> = {
-    services: () => [services.value.length, filteredServices.value.length],
+    services: () => [
+      displayedServices.value.length,
+      filteredServices.value.length,
+    ],
     orders: () => [orders.value.length, filteredOrders.value.length],
     invoices: () => [invoices.value.length, filteredInvoices.value.length],
     customers: () => [customers.value.length, filteredCustomers.value.length],
-    audit: () => [audit.value.length, filteredAudit.value.length],
   };
   const current = counts[page.value]?.();
   return current
@@ -557,6 +598,7 @@ async function logout() {
     preview.value = false;
     session.value.user = null;
     services.value = [];
+    adminServices.value = undefined;
     orders.value = [];
     invoices.value = [];
     customers.value = [];
@@ -602,6 +644,12 @@ async function load() {
     if (preview.value) {
       plans.value = fixture.previewPlans(currency.value);
       services.value = fixture.services;
+      adminServices.value = isAdmin.value
+        ? fixture.services.map((service) => ({
+            ...service,
+            customer_id: fixture.previewUser.id,
+          }))
+        : undefined;
       orders.value = fixture.orders;
       invoices.value = fixture.invoices;
       audit.value = fixture.audit;
@@ -647,7 +695,7 @@ async function load() {
     }
     const requestedCurrency = displayCurrency.value;
     if (isAdmin.value) {
-      const [a, b, c, d, e] = await Promise.all([
+      const [a, b, c, d, e, f] = await Promise.all([
         api<AdminOverview>(
           "/admin/overview?currency=" + encodeURIComponent(requestedCurrency),
         ),
@@ -655,6 +703,7 @@ async function load() {
         api<Order[]>("/admin/orders"),
         api<Invoice[]>("/admin/invoices"),
         api<Audit[]>("/audit"),
+        api<AdminService[]>("/admin/services"),
       ]);
       if (
         generation !== loadGeneration ||
@@ -666,6 +715,7 @@ async function load() {
       orders.value = c;
       invoices.value = d;
       audit.value = e;
+      adminServices.value = f;
     } else {
       const [a, b, c, d, e, f] = await Promise.all([
         api<Overview>(
@@ -823,7 +873,7 @@ async function cancelOrder() {
       attempt.uncertain = true;
     else delete cancellationAttempts.value[account];
     if (account !== cancellationAccount.value) return;
-    cancellationMessage.value = cancellationError(e);
+    cancellationMessage.value = cancellationError(e, attempt.admin);
     if (!attempt.uncertain && e instanceof ApiError) {
       cancellationBlocked.value = [
         "NOT_FOUND",
@@ -1177,10 +1227,11 @@ watch(
   { flush: "sync" },
 );
 watch(
-  () => session.value.user?.id,
+  cancellationAccount,
   (next, previous) => {
     if (next === previous) return;
     loadGeneration++;
+    loading.value = false;
     reportCurrency.value = "";
     orderDialog.value?.close();
     selectedPlan.value = undefined;
@@ -1188,6 +1239,7 @@ watch(
     agreed.value = false;
     orderKey.value = "";
     services.value = [];
+    adminServices.value = undefined;
     orders.value = [];
     invoices.value = [];
     customers.value = [];
@@ -1470,25 +1522,27 @@ onBeforeUnmount(() => {
         :aria-hidden="navigationHidden ? true : undefined"
         :inert="navigationHidden ? true : undefined"
       >
-        <button
-          class="sidebar-close icon-button"
-          :aria-label="tr('关闭导航', 'Close navigation')"
-          @click="closeNavigation"
-        >
-          <X :size="21" />
-        </button>
-        <a class="brand" href="/overview" @click.prevent="go('overview')"
-          ><div class="brand-mark">
-            <component :is="brandIcon" :size="25" aria-hidden="true" />
-          </div>
-          <strong>{{ branding.site_name }}</strong></a
-        >
-        <div class="workspace-context">
-          {{
-            isAdmin
-              ? tr("管理控制台", "Admin console")
-              : tr("客户中心", "Customer center")
-          }}
+        <div class="sidebar-header">
+          <button
+            class="sidebar-close icon-button"
+            :aria-label="tr('关闭导航', 'Close navigation')"
+            @click="closeNavigation"
+          >
+            <X :size="21" />
+          </button>
+          <a class="brand" href="/overview" @click.prevent="go('overview')">
+            <div class="brand-mark">
+              <component :is="brandIcon" :size="25" aria-hidden="true" />
+            </div>
+            <div class="brand-details">
+              <strong>{{ branding.site_name }}</strong>
+              <span class="workspace-context">{{
+                isAdmin
+                  ? tr("管理控制台", "Admin console")
+                  : tr("客户中心", "Customer center")
+              }}</span>
+            </div>
+          </a>
         </div>
         <div class="nav-label">
           {{
@@ -1518,14 +1572,8 @@ onBeforeUnmount(() => {
           >
         </nav>
         <div class="sidebar-bottom">
-          <div class="sidebar-note">
-            <span class="status-dot" /><span>{{
-              preview
-                ? tr("只读预览模式", "Read-only preview")
-                : session.demo_mode
-                  ? tr("本地演示环境", "Local demo")
-                  : tr("已连接", "Connected")
-            }}</span>
+          <div class="nav-label">
+            {{ tr("账户与支持", "Account and support") }}
           </div>
           <button
             class="side-action"
@@ -1550,6 +1598,15 @@ onBeforeUnmount(() => {
                   ? tr("管理员", "Administrator")
                   : tr("个人账户", "Personal account")
               }}</small>
+              <div class="sidebar-note">
+                <span class="status-dot" /><span>{{
+                  preview
+                    ? tr("只读预览模式", "Read-only preview")
+                    : session.demo_mode
+                      ? tr("本地演示环境", "Local demo")
+                      : tr("已连接", "Connected")
+                }}</span>
+              </div>
             </div>
             <button
               :aria-label="tr('退出登录', 'Sign out')"
@@ -1734,8 +1791,12 @@ onBeforeUnmount(() => {
                       )
                   : page === "services"
                     ? tr(
-                        "查看已开通服务与续费日期。",
-                        "View active services and renewal dates.",
+                        isAdmin
+                          ? "查看全站服务账务记录与客户归属；此页不执行资源操作。"
+                          : "查看已开通服务与续费日期。",
+                        isAdmin
+                          ? "Review service billing records and customer ownership across accounts. This page does not operate resources."
+                          : "View active services and renewal dates.",
                       )
                     : page === "plans"
                       ? tr(
@@ -1754,38 +1815,43 @@ onBeforeUnmount(() => {
                             )
                           : page === "customers"
                             ? tr(
-                                "查看客户资料与账户标识。",
-                                "View customer accounts.",
+                                "管理账户身份、角色与登录访问。",
+                                "Manage account identities, roles and sign-in access.",
                               )
-                            : page === "audit"
+                            : page === "catalog"
                               ? tr(
-                                  "记录重要操作，让变化有据可查。",
-                                  "Review recorded account and billing actions.",
+                                  "管理商品规格、独立报价与上架状态。",
+                                  "Manage specifications, independent prices and publication.",
                                 )
-                              : page === "integrations"
+                              : page === "audit"
                                 ? tr(
-                                    "查看支付与邮件服务配置。",
-                                    "View registered payment and email adapters.",
+                                    "记录重要操作，让变化有据可查。",
+                                    "Review recorded account and billing actions.",
                                   )
-                                : page === "finance"
+                                : page === "integrations"
                                   ? tr(
-                                      "管理币种、金额格式和套餐独立价格。",
-                                      "Manage currencies, amount formats and independent plan prices.",
+                                      "查看支付与邮件服务配置。",
+                                      "View registered payment and email adapters.",
                                     )
-                                  : page === "settings"
+                                  : page === "finance"
                                     ? tr(
-                                        "设置站点品牌、联系方式和默认偏好。",
-                                        "Manage site branding, contact details and defaults.",
+                                        "管理币种、金额格式和套餐独立价格。",
+                                        "Manage currencies, amount formats and independent plan prices.",
                                       )
-                                    : page === "updates"
+                                    : page === "settings"
                                       ? tr(
-                                          "检查核心与插件版本，生成可审计的主机更新交接。",
-                                          "Check core and plugin versions and request an audited host handoff.",
+                                          "设置站点品牌、联系方式和默认偏好。",
+                                          "Manage site branding, contact details and defaults.",
                                         )
-                                      : tr(
-                                          "你的身份、会话与安全信息。",
-                                          "Your profile, session and security information.",
-                                        )
+                                      : page === "updates"
+                                        ? tr(
+                                            "检查核心与插件版本，生成可审计的主机更新交接。",
+                                            "Check core and plugin versions and request an audited host handoff.",
+                                          )
+                                        : tr(
+                                            "你的身份、会话与安全信息。",
+                                            "Your profile, session and security information.",
+                                          )
               }}
             </p>
           </div>
@@ -1807,6 +1873,18 @@ onBeforeUnmount(() => {
             {{ tr("导出当前列表", "Export current list") }}
           </button>
         </div>
+        <p
+          v-if="page === 'overview' && !isAdmin && error && overview"
+          class="page-note overview-refresh-note"
+          role="status"
+        >
+          {{
+            tr(
+              "当前显示上次载入的数据，可能不是最新状态。请重试刷新。",
+              "Previously loaded data is shown and may be out of date. Retry to refresh.",
+            )
+          }}
+        </p>
         <div
           v-if="loading && !overview && !adminOverview && page !== 'plans'"
           class="skeleton-grid"
@@ -1815,16 +1893,18 @@ onBeforeUnmount(() => {
         >
           <div v-for="n in 3" :key="n" class="skeleton" />
         </div>
-        <CustomerOverview
-          v-else-if="page === 'overview' && !isAdmin"
-          :overview="overview"
-          :services="services"
-          :orders="orders"
-          :unpaid="unpaid"
-          :currency="displayCurrency"
-          @navigate="go"
-          @invoice="openInvoice"
-        />
+        <template v-else-if="page === 'overview' && !isAdmin">
+          <CustomerOverview
+            v-if="overview"
+            :overview="overview"
+            :services="services"
+            :orders="orders"
+            :unpaid="unpaid"
+            :currency="displayCurrency"
+            @navigate="go"
+            @invoice="openInvoice"
+          />
+        </template>
         <template v-else-if="page === 'overview' && isAdmin">
           <p class="page-note">
             {{
@@ -2293,7 +2373,11 @@ onBeforeUnmount(() => {
                 </thead>
                 <tbody>
                   <tr v-for="event in audit.slice(0, 4)" :key="event.id">
-                    <td>{{ event.action }}</td>
+                    <td>
+                      {{ auditActionLabel(event.action) }}<br /><code>{{
+                        event.action
+                      }}</code>
+                    </td>
                     <td>{{ event.actor_email }}</td>
                     <td class="mono">{{ event.target }}</td>
                     <td>{{ date(event.created_at) }}</td>
@@ -2319,140 +2403,244 @@ onBeforeUnmount(() => {
           :pending-plan="pendingOrder?.plan"
           @review="openOrder"
         />
-        <template v-else-if="page === 'services'"
-          ><div class="list-toolbar">
-            <span
-              >{{ tr("已载入服务", "Loaded services")
-              }}<small
-                class="count-tag"
-                data-testid="list-count"
-                role="status"
-                >{{ listCountLabel }}</small
-              ></span
-            ><label class="search-field"
-              ><Search :size="16" /><input
-                v-model="query"
-                :placeholder="
-                  tr('搜索服务、区域或 IP', 'Search service, region or IP')
-                "
-                :aria-label="tr('搜索服务', 'Search services')"
-                aria-describedby="record-list-scope"
-            /></label>
-          </div>
-          <div class="list-scope-note settings-help" id="record-list-scope">
-            <p>
-              {{
-                tr(
-                  "正式环境每次最多载入 1,000 条记录；搜索仅限已载入内容。",
-                  "Production lists load up to 1,000 records at a time. Search covers loaded records only.",
-                )
-              }}
-            </p>
+        <template v-else-if="page === 'services'">
+          <template v-if="!isAdmin || adminServices !== undefined">
             <p
-              v-if="listScope?.mayBeTruncated"
+              v-if="isAdmin && error"
+              class="page-note"
               role="status"
-              data-testid="list-limit-warning"
+              data-testid="service-refresh-note"
             >
               {{
                 tr(
-                  "已载入记录达到 1,000 条，可能还有记录未载入。",
-                  "At least 1,000 records are loaded; additional records may not be loaded.",
+                  "当前显示上次载入的全站服务记录，可能不是最新状态。请重试刷新。",
+                  "Previously loaded service records are shown and may be out of date. Retry to refresh.",
                 )
               }}
             </p>
-          </div>
-          <div class="service-cards">
-            <article
-              v-for="service in filteredServices"
-              :key="service.id"
-              class="panel service-card"
+            <div class="list-toolbar">
+              <span
+                >{{ tr("已载入服务", "Loaded services")
+                }}<small
+                  class="count-tag"
+                  data-testid="list-count"
+                  role="status"
+                  >{{ listCountLabel }}</small
+                ></span
+              ><label class="search-field"
+                ><Search :size="16" /><input
+                  v-model="query"
+                  :placeholder="
+                    isAdmin
+                      ? tr(
+                          '搜索服务、客户、区域或 IP',
+                          'Search services, customers, regions or IPs',
+                        )
+                      : tr(
+                          '搜索服务、区域或 IP',
+                          'Search service, region or IP',
+                        )
+                  "
+                  :aria-label="tr('搜索服务', 'Search services')"
+                  aria-describedby="record-list-scope"
+              /></label>
+            </div>
+            <div
+              class="list-scope-note settings-help"
+              id="record-list-scope"
+              data-testid="service-limit-note"
             >
-              <div class="service-card-top">
-                <div class="service-icon"><Server :size="24" /></div>
-                <span class="badge" :class="statusTone(service.status)"
-                  ><i />{{ statusLabel(service.status) }}</span
-                >
-              </div>
-              <h2>{{ service.name }}</h2>
-              <p class="muted">{{ service.region }}</p>
-              <div class="service-specs">
-                <span
-                  ><b>{{ service.cpu }}</b> vCPU</span
-                ><span
-                  ><b>{{ service.memory_gb }}</b>
-                  {{ tr("GB 内存", " GB memory") }} </span
-                ><span
-                  ><b>{{ service.disk_gb }}</b> GB SSD</span
-                >
-              </div>
-              <dl>
-                <div>
-                  <dt>{{ tr("公网地址", "Public address") }}</dt>
-                  <dd class="mono">
-                    {{ service.ipv4 || tr("待分配", "Awaiting allocation") }}
-                  </dd>
+              <p>
+                {{
+                  tr(
+                    "正式环境每次最多载入 1,000 条记录；搜索仅限已载入内容。",
+                    "Production lists load up to 1,000 records at a time. Search covers loaded records only.",
+                  )
+                }}
+              </p>
+              <p
+                v-if="listScope?.mayBeTruncated"
+                role="status"
+                data-testid="list-limit-warning"
+              >
+                {{
+                  tr(
+                    "已载入记录达到 1,000 条，可能还有记录未载入。",
+                    "At least 1,000 records are loaded; additional records may not be loaded.",
+                  )
+                }}
+              </p>
+            </div>
+            <div class="service-cards">
+              <article
+                v-for="service in filteredServices"
+                :key="service.id"
+                :data-service-id="service.id"
+                class="panel service-card"
+                :class="{ 'admin-service-card': isAdmin }"
+              >
+                <div class="service-card-top">
+                  <div class="service-icon"><Server :size="24" /></div>
+                  <span class="badge" :class="statusTone(service.status)"
+                    ><i />{{ statusLabel(service.status) }}</span
+                  >
                 </div>
-                <div>
-                  <dt>{{ tr("服务方案", "Plan") }}</dt>
-                  <dd>{{ service.plan_name }}</dd>
+                <h2>{{ service.name }}</h2>
+                <p class="muted">{{ service.region }}</p>
+                <div class="service-specs">
+                  <span
+                    ><b>{{ service.cpu }}</b> vCPU</span
+                  ><span
+                    ><b>{{ service.memory_gb }}</b>
+                    {{ tr("GB 内存", " GB memory") }} </span
+                  ><span
+                    ><b>{{ service.disk_gb }}</b> GB SSD</span
+                  >
                 </div>
-                <div>
-                  <dt>{{ tr("下次到期", "Next due date") }}</dt>
-                  <dd>{{ date(service.next_due_at) }}</dd>
+                <dl>
+                  <div
+                    v-if="isAdmin"
+                    class="service-customer"
+                    data-testid="service-customer"
+                  >
+                    <dt>{{ tr("客户归属", "Customer") }}</dt>
+                    <dd>
+                      <div>
+                        {{
+                          serviceCustomer(service)?.name ||
+                          tr("客户资料未载入", "Customer details not loaded")
+                        }}
+                      </div>
+                      <div v-if="serviceCustomer(service)?.email">
+                        {{ serviceCustomer(service)?.email }}
+                      </div>
+                      <div class="mono">
+                        {{
+                          serviceCustomerID(service) ||
+                          tr("未记录客户 ID", "Customer ID not recorded")
+                        }}
+                      </div>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{{ tr("公网地址", "Public address") }}</dt>
+                    <dd class="mono">
+                      {{ service.ipv4 || tr("待分配", "Awaiting allocation") }}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{{ tr("服务方案", "Plan") }}</dt>
+                    <dd>{{ service.plan_name }}</dd>
+                  </div>
+                  <div>
+                    <dt>{{ tr("下次到期", "Next due date") }}</dt>
+                    <dd>{{ date(service.next_due_at) }}</dd>
+                  </div>
+                </dl>
+                <div class="service-card-footer">
+                  <b
+                    >{{
+                      money(
+                        service.price_minor,
+                        service.currency,
+                        service.currency_format,
+                      )
+                    }}<small> {{ tr("/ 月", "/ month") }} </small></b
+                  ><span> {{ tr("账务记录", "Billing record") }} </span>
                 </div>
-              </dl>
-              <div class="service-card-footer">
-                <b
-                  >{{
-                    money(
-                      service.price_minor,
-                      service.currency,
-                      service.currency_format,
-                    )
-                  }}<small> {{ tr("/ 月", "/ month") }} </small></b
-                ><span> {{ tr("账务记录", "Billing record") }} </span>
-              </div>
-            </article>
-          </div>
-          <div v-if="!filteredServices.length" class="panel empty-state">
-            <Server :size="30" />
-            <h3>
+              </article>
+            </div>
+            <div v-if="!filteredServices.length" class="panel empty-state">
+              <Server :size="30" />
+              <h3>
+                {{
+                  query
+                    ? tr("没有匹配的服务", "No matching services")
+                    : isAdmin
+                      ? tr("暂无服务账务记录", "No service billing records")
+                      : tr("还没有云服务器", "No cloud servers yet")
+                }}
+              </h3>
+              <p>
+                {{
+                  query
+                    ? tr(
+                        "试试其他名称、区域或 IP。",
+                        "Try another name, region or IP.",
+                      )
+                    : isAdmin
+                      ? tr(
+                          "当前未载入全站服务记录。请确认服务端记录，必要时刷新。",
+                          "No service records are loaded. Check the server records and refresh if needed.",
+                        )
+                      : tr(
+                          "选择一个方案，开始你的云端业务。",
+                          "Choose a plan to create your first service order.",
+                        )
+                }}
+              </p>
+              <button
+                v-if="!query && !isAdmin"
+                class="button primary"
+                @click="go('plans')"
+              >
+                {{ tr("选择方案", "Choose a plan") }} <ArrowRight :size="16" />
+              </button>
+            </div>
+            <p class="page-note">
               {{
-                query
-                  ? tr("没有匹配的服务", "No matching services")
-                  : tr("还没有云服务器", "No cloud servers yet")
-              }}
-            </h3>
-            <p>
-              {{
-                query
-                  ? tr(
-                      "试试其他名称、区域或 IP。",
-                      "Try another name, region or IP.",
-                    )
-                  : tr(
-                      "选择一个方案，开始你的云端业务。",
-                      "Choose a plan to create your first service order.",
-                    )
+                tr(
+                  "当前仅展示账务服务记录。电源管理、系统重装与实时监控将在控制器集成后提供。",
+                  "Only billing records are shown. Power controls, OS reinstall and monitoring require a future controller integration.",
+                )
               }}
             </p>
-            <button v-if="!query" class="button primary" @click="go('plans')">
-              {{ tr("选择方案", "Choose a plan") }} <ArrowRight :size="16" />
-            </button>
-          </div>
-          <p class="page-note">
-            {{
-              tr(
-                "当前仅展示账务服务记录。电源管理、系统重装与实时监控将在控制器集成后提供。",
-                "Only billing records are shown. Power controls, OS reinstall and monitoring require a future controller integration.",
-              )
-            }}
-          </p></template
-        >
-        <template
-          v-else-if="
-            ['orders', 'invoices', 'customers', 'audit'].includes(page)
-          "
+          </template>
+        </template>
+        <CustomerAccountsPage
+          v-else-if="page === 'customers' && isAdmin"
+          :key="cancellationAccount"
+          :account="cancellationAccount"
+          :preview="preview"
+          :refresh-key="integrationRefresh"
+          @auth-expired="session.user = null"
+          @saved="load"
+        />
+        <CatalogPage
+          v-else-if="page === 'catalog' && isAdmin"
+          :key="cancellationAccount"
+          :account="cancellationAccount"
+          :preview="preview"
+          :refresh-key="integrationRefresh"
+          @auth-expired="session.user = null"
+          @saved="load"
+        />
+        <OrderDetailsPage
+          v-else-if="page === 'orders' && orderDetailID"
+          :key="cancellationAccount + ':' + orderDetailID"
+          :account="cancellationAccount"
+          :administrator="isAdmin"
+          :orderID="orderDetailID"
+          :preview="preview"
+          :refresh-key="integrationRefresh"
+          :busy="saving"
+          @auth-expired="session.user = null"
+          @invoice="openInvoice"
+          @cancel="openCancellation"
+          @back="go('orders')"
+          @audit="go('audit')"
+        />
+        <AuditLogPage
+          v-else-if="page === 'audit'"
+          :key="cancellationAccount"
+          :account="cancellationAccount"
+          :administrator="isAdmin"
+          :preview="preview"
+          :preview-items="audit"
+          :refresh-key="integrationRefresh"
+          @auth-expired="session.user = null"
+        />
+        <template v-else-if="['orders', 'invoices'].includes(page)"
           ><section v-if="page === 'invoices'" class="invoice-summary">
             <div>
               <span> {{ tr("待付款金额", "Amount unpaid") }} </span
@@ -2556,7 +2744,11 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <div class="table-wrap">
-              <table v-if="page === 'orders'">
+              <table
+                v-if="page === 'orders'"
+                class="order-table"
+                :aria-label="tr('订单列表', 'Order list')"
+              >
                 <thead>
                   <tr>
                     <th>{{ tr("订单编号", "Order number") }}</th>
@@ -2572,9 +2764,26 @@ onBeforeUnmount(() => {
                     v-for="order in filteredOrders"
                     :key="order.id"
                     :data-order-id="order.id"
+                    :class="{
+                      'long-order':
+                        money(
+                          order.total_minor,
+                          order.currency,
+                          order.currency_format,
+                        ).length > 16,
+                    }"
                   >
-                    <td class="mono strong">{{ order.number }}</td>
-                    <td>
+                    <td class="mono strong">
+                      <a
+                        class="order-detail-link"
+                        :href="'/orders/' + encodeURIComponent(order.id)"
+                        @click.prevent="
+                          go('orders/' + encodeURIComponent(order.id))
+                        "
+                        >{{ order.number }}</a
+                      >
+                    </td>
+                    <td :data-label="tr('服务方案', 'Plan')">
                       <strong>{{
                         order.plan_snapshot?.name || order.plan_name
                       }}</strong>
@@ -2596,8 +2805,16 @@ onBeforeUnmount(() => {
                         }}
                       </div>
                     </td>
-                    <td class="muted">{{ date(order.created_at) }}</td>
-                    <td class="numeric">
+                    <td
+                      class="muted"
+                      :data-label="tr('创建日期（UTC）', 'Created on (UTC)')"
+                    >
+                      {{ date(order.created_at) }}
+                    </td>
+                    <td
+                      class="numeric"
+                      :data-label="tr('订单金额', 'Order amount')"
+                    >
                       {{
                         money(
                           order.total_minor,
@@ -2706,75 +2923,6 @@ onBeforeUnmount(() => {
                         query
                           ? tr("没有匹配的账单", "No matching invoices")
                           : tr("暂无账单记录。", "No invoice records.")
-                      }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <table v-else-if="page === 'customers'">
-                <thead>
-                  <tr>
-                    <th>{{ tr("客户", "Customer") }}</th>
-                    <th>{{ tr("邮箱", "Email") }}</th>
-                    <th>{{ tr("角色", "Role") }}</th>
-                    <th>{{ tr("账户标识", "Account ID") }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="customer in filteredCustomers" :key="customer.id">
-                    <td>
-                      <div class="customer-name">
-                        <span class="avatar small">{{
-                          customer.name.slice(0, 1)
-                        }}</span
-                        ><b>{{ customer.name }}</b>
-                      </div>
-                    </td>
-                    <td>{{ customer.email }}</td>
-                    <td>
-                      <span class="badge gray">{{
-                        customer.role === "admin"
-                          ? tr("管理员", "Administrator")
-                          : tr("客户", "Customer")
-                      }}</span>
-                    </td>
-                    <td class="mono muted">{{ customer.id }}</td>
-                  </tr>
-                  <tr v-if="!filteredCustomers.length">
-                    <td colspan="4" class="table-empty">
-                      {{
-                        query
-                          ? tr("没有匹配的客户", "No matching customers")
-                          : tr("暂无客户账户。", "No customer accounts.")
-                      }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <table v-else>
-                <thead>
-                  <tr>
-                    <th>{{ tr("操作类型", "Action type") }}</th>
-                    <th>{{ tr("操作者", "Actor") }}</th>
-                    <th>{{ tr("目标", "Target") }}</th>
-                    <th>{{ tr("详情", "Details") }}</th>
-                    <th>{{ tr("日期（UTC）", "Date (UTC)") }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="event in filteredAudit" :key="event.id">
-                    <td class="mono strong">{{ event.action }}</td>
-                    <td>{{ event.actor_email }}</td>
-                    <td class="mono">{{ event.target }}</td>
-                    <td class="audit-detail">{{ event.detail }}</td>
-                    <td class="muted">{{ date(event.created_at) }}</td>
-                  </tr>
-                  <tr v-if="!filteredAudit.length">
-                    <td colspan="5" class="table-empty">
-                      {{
-                        query
-                          ? tr("没有匹配的操作", "No matching actions")
-                          : tr("暂无审计记录。", "No audit records.")
                       }}
                     </td>
                   </tr>
@@ -3007,7 +3155,7 @@ onBeforeUnmount(() => {
     <form @submit.prevent="createOrder">
       <div class="modal-heading">
         <div>
-          <p class="eyebrow">{{ tr("服务订单", "SERVICE ORDER") }}</p>
+          <p class="eyebrow">{{ tr("服务订单", "Service order") }}</p>
           <h2 id="order-title">
             {{ tr("确认你的云服务器", "Confirm your cloud server") }}
           </h2>
@@ -3022,111 +3170,117 @@ onBeforeUnmount(() => {
           <X :size="21" />
         </button>
       </div>
-      <div v-if="selectedPlan" class="order-plan">
-        <div class="service-icon"><Server :size="24" /></div>
-        <div>
-          <b>{{ selectedPlan.name }}</b>
-          <p>
-            {{ selectedPlan.cpu }} vCPU · {{ selectedPlan.memory_gb }} GB ·
-            {{ selectedPlan.disk_gb }} GB
-          </p>
-        </div>
-        <strong
-          >{{
-            money(
-              selectedPlan.price_minor,
-              selectedPlan.currency,
-              selectedPlan.currency_format,
-            )
-          }}<small> {{ tr("/ 月", "/ month") }} </small></strong
-        >
-      </div>
-      <label for="hostname"> {{ tr("服务器名称", "Server name") }} </label
-      ><input
-        id="hostname"
-        v-model="hostname"
-        pattern="[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]|[a-zA-Z0-9]"
-        maxlength="63"
-        required
-        :placeholder="tr('例如 production-api', 'For example, production-api')"
-        autocomplete="off"
-        :disabled="saving || !!pendingOrder"
-      />
-      <p class="field-help">
-        {{
-          tr(
-            "1–63 个英文字母、数字或连字符，不以连字符开头或结尾。",
-            "1–63 letters, digits or hyphens. Must not start or end with a hyphen.",
-          )
-        }}
-      </p>
-      <dl class="order-summary">
-        <div>
-          <dt>{{ tr("区域", "Region") }}</dt>
-          <dd>{{ selectedPlan?.region }}</dd>
-        </div>
-        <div>
-          <dt>{{ tr("计费周期", "Billing cycle") }}</dt>
-          <dd>{{ tr("每月", "Monthly") }} · {{ selectedPlan?.currency }}</dd>
-        </div>
-        <div>
-          <dt>{{ tr("首期订单金额", "Initial order amount") }}</dt>
-          <dd>
-            {{
+      <div class="modal-body">
+        <div v-if="selectedPlan" class="order-plan">
+          <div class="service-icon"><Server :size="24" /></div>
+          <div>
+            <b>{{ selectedPlan.name }}</b>
+            <p>
+              {{ selectedPlan.cpu }} vCPU · {{ selectedPlan.memory_gb }} GB ·
+              {{ selectedPlan.disk_gb }} GB
+            </p>
+          </div>
+          <strong
+            >{{
               money(
-                selectedPlan?.price_minor || 0,
-                selectedPlan?.currency,
-                selectedPlan?.currency_format,
+                selectedPlan.price_minor,
+                selectedPlan.currency,
+                selectedPlan.currency_format,
               )
-            }}
-          </dd>
+            }}<small> {{ tr("/ 月", "/ month") }} </small></strong
+          >
         </div>
-      </dl>
-      <div class="alert info">
-        <AlertCircle :size="18" /><span>{{
-          preview
-            ? tr(
-                "只读预览，不能创建订单。",
-                "Read-only preview. Orders cannot be created.",
-              )
-            : tr(
-                "创建订单本身不发起扣款，也不会自动开通服务。",
-                "Creating an order does not itself initiate a charge or automatically activate a service.",
-              )
-        }}</span>
-      </div>
-      <label class="checkbox-label"
+        <label for="hostname"> {{ tr("服务器名称", "Server name") }} </label
         ><input
-          v-model="agreed"
-          type="checkbox"
+          id="hostname"
+          v-model="hostname"
+          pattern="[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]|[a-zA-Z0-9]"
+          maxlength="63"
           required
-          :disabled="preview || saving || !!pendingOrder"
-        /><span>
+          :placeholder="
+            tr('例如 production-api', 'For example, production-api')
+          "
+          autocomplete="off"
+          :disabled="saving || !!pendingOrder"
+        />
+        <p class="field-help">
           {{
             tr(
-              "我确认方案与金额，了解此操作仅创建待付款订单。",
-              "I have checked the plan and amount and understand that this creates an unpaid order only.",
+              "1–63 个英文字母、数字或连字符，不以连字符开头或结尾。",
+              "1–63 letters, digits or hyphens. Must not start or end with a hyphen.",
             )
           }}
-        </span></label
-      >
-      <div v-if="modalError" class="alert error" role="alert">
-        <AlertCircle :size="18" /><span>{{ modalError }}</span>
+        </p>
+        <dl class="order-summary">
+          <div>
+            <dt>{{ tr("区域", "Region") }}</dt>
+            <dd>{{ selectedPlan?.region }}</dd>
+          </div>
+          <div>
+            <dt>{{ tr("计费周期", "Billing cycle") }}</dt>
+            <dd>{{ tr("每月", "Monthly") }} · {{ selectedPlan?.currency }}</dd>
+          </div>
+          <div>
+            <dt>{{ tr("首期订单金额", "Initial order amount") }}</dt>
+            <dd>
+              {{
+                money(
+                  selectedPlan?.price_minor || 0,
+                  selectedPlan?.currency,
+                  selectedPlan?.currency_format,
+                )
+              }}
+            </dd>
+          </div>
+        </dl>
+        <div class="alert info">
+          <AlertCircle :size="18" /><span>{{
+            preview
+              ? tr(
+                  "只读预览，不能创建订单。",
+                  "Read-only preview. Orders cannot be created.",
+                )
+              : tr(
+                  "创建订单本身不发起扣款，也不会自动开通服务。",
+                  "Creating an order does not itself initiate a charge or automatically activate a service.",
+                )
+          }}</span>
+        </div>
+        <label class="checkbox-label"
+          ><input
+            v-model="agreed"
+            type="checkbox"
+            required
+            :disabled="preview || saving || !!pendingOrder"
+          /><span>
+            {{
+              tr(
+                "我确认方案与金额，了解此操作仅创建待付款订单。",
+                "I have checked the plan and amount and understand that this creates an unpaid order only.",
+              )
+            }}
+          </span></label
+        >
+        <div v-if="modalError" class="alert error" role="alert">
+          <AlertCircle :size="18" /><span>{{ modalError }}</span>
+        </div>
       </div>
-      <button
-        class="button primary full"
-        :disabled="preview || saving || !agreed || (loading && !pendingOrder)"
-      >
-        <LoaderCircle v-if="saving" :size="17" class="spin" />{{
-          saving
-            ? tr("正在创建…", "Creating…")
-            : preview
-              ? tr("预览模式不可下单", "Orders disabled in preview")
-              : pendingOrder
-                ? tr("核对并重试原订单", "Retry original order")
-                : tr("创建待付款订单", "Create unpaid order")
-        }}<ArrowRight v-if="!saving" :size="17" />
-      </button>
+      <div class="modal-actions">
+        <button
+          class="button primary full"
+          :disabled="preview || saving || !agreed || (loading && !pendingOrder)"
+        >
+          <LoaderCircle v-if="saving" :size="17" class="spin" />{{
+            saving
+              ? tr("正在创建…", "Creating…")
+              : preview
+                ? tr("预览模式不可下单", "Orders disabled in preview")
+                : pendingOrder
+                  ? tr("核对并重试原订单", "Retry original order")
+                  : tr("创建待付款订单", "Create unpaid order")
+          }}<ArrowRight v-if="!saving" :size="17" />
+        </button>
+      </div>
     </form>
   </dialog>
   <dialog
@@ -3139,7 +3293,7 @@ onBeforeUnmount(() => {
     <form @submit.prevent="cancelOrder">
       <div class="modal-heading">
         <div>
-          <p class="eyebrow">{{ tr("订单处理", "ORDER ACTION") }}</p>
+          <p class="eyebrow">{{ tr("订单处理", "Order action") }}</p>
           <h2 id="cancellation-title">{{ tr("取消订单", "Cancel order") }}</h2>
         </div>
         <button
@@ -3152,126 +3306,130 @@ onBeforeUnmount(() => {
           <X :size="21" />
         </button>
       </div>
-      <dl v-if="selectedCancellation" class="order-summary">
-        <div>
-          <dt>{{ tr("订单编号", "Order number") }}</dt>
-          <dd class="mono">{{ selectedCancellation.number }}</dd>
+      <div class="modal-body">
+        <dl v-if="selectedCancellation" class="order-summary">
+          <div>
+            <dt>{{ tr("订单编号", "Order number") }}</dt>
+            <dd class="mono">{{ selectedCancellation.number }}</dd>
+          </div>
+          <div>
+            <dt>{{ tr("服务方案", "Plan") }}</dt>
+            <dd>
+              {{
+                selectedCancellation.plan_snapshot?.name ||
+                selectedCancellation.plan_name
+              }}
+            </dd>
+          </div>
+          <div>
+            <dt>{{ tr("订单金额", "Order amount") }}</dt>
+            <dd>
+              {{
+                money(
+                  selectedCancellation.total_minor,
+                  selectedCancellation.currency,
+                  selectedCancellation.currency_format,
+                )
+              }}
+            </dd>
+          </div>
+        </dl>
+        <div class="alert info">
+          <AlertCircle :size="18" /><span>{{
+            tr(
+              "确认后将取消此待付款订单，并作废关联的未付账单。历史记录和金额会保留。",
+              "Confirming cancels this unpaid order and voids its unpaid invoice. Historical records and amounts are retained.",
+            )
+          }}</span>
         </div>
-        <div>
-          <dt>{{ tr("服务方案", "Plan") }}</dt>
-          <dd>
-            {{
-              selectedCancellation.plan_snapshot?.name ||
-              selectedCancellation.plan_name
-            }}
-          </dd>
-        </div>
-        <div>
-          <dt>{{ tr("订单金额", "Order amount") }}</dt>
-          <dd>
-            {{
-              money(
-                selectedCancellation.total_minor,
-                selectedCancellation.currency,
-                selectedCancellation.currency_format,
-              )
-            }}
-          </dd>
-        </div>
-      </dl>
-      <div class="alert info">
-        <AlertCircle :size="18" /><span>{{
-          tr(
-            "确认后将取消此待付款订单，并作废关联的未付账单。历史记录和金额会保留。",
-            "Confirming cancels this unpaid order and voids its unpaid invoice. Historical records and amounts are retained.",
-          )
-        }}</span>
-      </div>
-      <label for="cancellation-reason">{{
-        tr("取消原因", "Cancellation reason")
-      }}</label>
-      <textarea
-        id="cancellation-reason"
-        v-model="cancellationReason"
-        name="cancellation_reason"
-        required
-        maxlength="500"
-        rows="3"
-        :disabled="saving || !!pendingCancellation?.uncertain"
-        :aria-invalid="!!cancellationReason && !cancellationReasonValid"
-        aria-describedby="cancellation-reason-help"
-      ></textarea>
-      <p
-        id="cancellation-reason-help"
-        class="field-help"
-        :class="{ 'cancellation-invalid': cancellationReasonBytes > 500 }"
-      >
-        {{
-          tr(
-            "单行纯文本，不含尖括号，去除首尾空白后 1–500 个 UTF-8 字节。",
-            "Single-line plain text without angle brackets; 1–500 UTF-8 bytes after trimming whitespace.",
-          )
-        }}
-        <span>{{ cancellationReasonBytes }}/500</span>
-      </p>
-      <label class="checkbox-label">
-        <input
-          v-model="cancellationAgreed"
-          type="checkbox"
-          name="confirm_cancellation"
+        <label for="cancellation-reason">{{
+          tr("取消原因", "Cancellation reason")
+        }}</label>
+        <textarea
+          id="cancellation-reason"
+          v-model="cancellationReason"
+          name="cancellation_reason"
           required
+          maxlength="500"
+          rows="3"
           :disabled="saving || !!pendingCancellation?.uncertain"
-        />
-        <span>{{
-          tr(
-            "我确认取消此订单并作废关联未付账单。",
-            "I confirm cancelling this order and voiding its unpaid invoice.",
-          )
-        }}</span>
-      </label>
-      <div
-        v-if="pendingCancellation?.uncertain"
-        class="alert info"
-        role="status"
-      >
-        <AlertCircle :size="18" /><span>{{
-          tr(
-            "取消结果尚未确认。请查看最新订单记录；也可明确重试同一订单和原原因。",
-            "The cancellation result is unconfirmed. Check current order history, or explicitly retry the same order and original reason.",
-          )
-        }}</span>
+          :aria-invalid="!!cancellationReason && !cancellationReasonValid"
+          aria-describedby="cancellation-reason-help"
+        ></textarea>
+        <p
+          id="cancellation-reason-help"
+          class="field-help"
+          :class="{ 'cancellation-invalid': cancellationReasonBytes > 500 }"
+        >
+          {{
+            tr(
+              "单行纯文本，不含尖括号，去除首尾空白后 1–500 个 UTF-8 字节。",
+              "Single-line plain text without angle brackets; 1–500 UTF-8 bytes after trimming whitespace.",
+            )
+          }}
+          <span>{{ cancellationReasonBytes }}/500</span>
+        </p>
+        <label class="checkbox-label">
+          <input
+            v-model="cancellationAgreed"
+            type="checkbox"
+            name="confirm_cancellation"
+            required
+            :disabled="saving || !!pendingCancellation?.uncertain"
+          />
+          <span>{{
+            tr(
+              "我确认取消此订单并作废关联未付账单。",
+              "I confirm cancelling this order and voiding its unpaid invoice.",
+            )
+          }}</span>
+        </label>
+        <div
+          v-if="pendingCancellation?.uncertain"
+          class="alert info"
+          role="status"
+        >
+          <AlertCircle :size="18" /><span>{{
+            tr(
+              "取消结果尚未确认。请查看最新订单记录；也可明确重试同一订单和原原因。",
+              "The cancellation result is unconfirmed. Check current order history, or explicitly retry the same order and original reason.",
+            )
+          }}</span>
+        </div>
+        <div v-if="cancellationMessage" class="alert error" role="alert">
+          <AlertCircle :size="18" /><span>{{ cancellationMessage }}</span>
+        </div>
       </div>
-      <div v-if="cancellationMessage" class="alert error" role="alert">
-        <AlertCircle :size="18" /><span>{{ cancellationMessage }}</span>
+      <div class="modal-actions">
+        <button
+          class="button primary full"
+          type="submit"
+          :disabled="
+            preview ||
+            saving ||
+            loading ||
+            !cancellationAgreed ||
+            !cancellationReasonValid ||
+            cancellationBlocked
+          "
+        >
+          <LoaderCircle v-if="saving" class="spin" :size="17" />{{
+            saving
+              ? tr("正在取消…", "Cancelling…")
+              : pendingCancellation?.uncertain
+                ? tr("重试原取消请求", "Retry original cancellation")
+                : tr("确认取消订单", "Confirm cancellation")
+          }}
+        </button>
+        <button
+          type="button"
+          class="button secondary full"
+          :disabled="saving || loading"
+          @click="checkCancellationHistory"
+        >
+          {{ tr("查看最新订单记录", "Check current order history") }}
+        </button>
       </div>
-      <button
-        class="button primary full"
-        type="submit"
-        :disabled="
-          preview ||
-          saving ||
-          loading ||
-          !cancellationAgreed ||
-          !cancellationReasonValid ||
-          cancellationBlocked
-        "
-      >
-        <LoaderCircle v-if="saving" class="spin" :size="17" />{{
-          saving
-            ? tr("正在取消…", "Cancelling…")
-            : pendingCancellation?.uncertain
-              ? tr("重试原取消请求", "Retry original cancellation")
-              : tr("确认取消订单", "Confirm cancellation")
-        }}
-      </button>
-      <button
-        type="button"
-        class="button secondary full"
-        :disabled="saving || loading"
-        @click="checkCancellationHistory"
-      >
-        {{ tr("查看最新订单记录", "Check current order history") }}
-      </button>
     </form>
   </dialog>
   <dialog
@@ -3282,7 +3440,6 @@ onBeforeUnmount(() => {
   >
     <div class="modal-heading">
       <div>
-        <p class="eyebrow">{{ tr("账单明细", "BILLING DETAILS") }}</p>
         <h2 id="invoice-title">{{ tr("账单详情", "Invoice details") }}</h2>
       </div>
       <button
@@ -3295,191 +3452,192 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <template v-if="selectedInvoice">
-      <div
-        v-if="invoiceRefreshing"
-        class="alert info invoice-refresh-status"
-        role="status"
-      >
-        <LoaderCircle :size="18" class="spin" aria-hidden="true" /><span>{{
-          tr("正在更新账单详情…", "Updating invoice details…")
-        }}</span>
-      </div>
-      <div class="invoice-document" :aria-busy="invoiceRefreshing">
-        <div class="invoice-doc-top">
-          <div class="brand-mark">
-            <ReceiptText :size="25" aria-hidden="true" />
-          </div>
-          <span class="badge" :class="statusTone(selectedInvoice.status)">{{
-            statusLabel(selectedInvoice.status)
+      <div class="modal-body">
+        <div
+          v-if="invoiceRefreshing"
+          class="alert info invoice-refresh-status"
+          role="status"
+        >
+          <LoaderCircle :size="18" class="spin" aria-hidden="true" /><span>{{
+            tr("正在更新账单详情…", "Updating invoice details…")
           }}</span>
         </div>
-        <h3>{{ selectedInvoice.number }}</h3>
-        <dl class="invoice-issuer" v-if="selectedInvoice.issuer">
-          <div>
-            <dt>{{ tr("开具方", "Issued by") }}</dt>
-            <dd>{{ selectedInvoice.issuer.name }}</dd>
+        <div class="invoice-document" :aria-busy="invoiceRefreshing">
+          <div class="invoice-doc-top">
+            <h3>{{ selectedInvoice.number }}</h3>
+            <span class="badge" :class="statusTone(selectedInvoice.status)">{{
+              statusLabel(selectedInvoice.status)
+            }}</span>
           </div>
-          <div v-if="selectedInvoice.issuer.address">
-            <dt>{{ tr("地址", "Address") }}</dt>
-            <dd>{{ selectedInvoice.issuer.address }}</dd>
-          </div>
-          <div v-if="selectedInvoice.issuer.support_email">
-            <dt>{{ tr("联系邮箱", "Contact email") }}</dt>
-            <dd>{{ selectedInvoice.issuer.support_email }}</dd>
-          </div>
-        </dl>
-        <p v-else class="page-note">
-          {{
-            tr(
-              "此历史账单未记录开具方信息。",
-              "Issuer information was not recorded for this historical invoice.",
-            )
-          }}
-        </p>
-        <div class="invoice-dates">
-          <div>
-            <span> {{ tr("出账日期", "Issued on") }} </span
-            ><b>{{ date(selectedInvoice.issued_at) }}</b>
-          </div>
-          <div>
-            <span> {{ tr("到期日期", "Due on") }} </span
-            ><b>{{ date(selectedInvoice.due_at) }}</b>
-          </div>
-          <div>
-            <span> {{ tr("币种", "Currency") }} </span
-            ><b>{{ selectedInvoice.currency }}</b>
-          </div>
-        </div>
-        <div class="invoice-line-header">
-          <span> {{ tr("服务项目", "Service item") }} </span
-          ><span> {{ tr("金额", "Amount") }} </span>
-        </div>
-        <template v-if="selectedInvoice.line_items?.length"
-          ><div
-            v-for="(item, index) in selectedInvoice.line_items"
-            :key="index"
-            class="invoice-line"
-          >
-            <span>{{ item.description }}</span
-            ><b>{{
+          <div class="invoice-total">
+            <span> {{ tr("账单总额", "Invoice total") }} </span
+            ><strong>{{
               money(
-                item.amount_minor,
+                selectedInvoice.amount_minor,
+                selectedInvoice.currency,
+                selectedInvoice.currency_format,
+              )
+            }}</strong>
+          </div>
+          <dl class="invoice-issuer" v-if="selectedInvoice.issuer">
+            <div>
+              <dt>{{ tr("开具方", "Issued by") }}</dt>
+              <dd>{{ selectedInvoice.issuer.name }}</dd>
+            </div>
+            <div v-if="selectedInvoice.issuer.address">
+              <dt>{{ tr("地址", "Address") }}</dt>
+              <dd>{{ selectedInvoice.issuer.address }}</dd>
+            </div>
+            <div v-if="selectedInvoice.issuer.support_email">
+              <dt>{{ tr("联系邮箱", "Contact email") }}</dt>
+              <dd>{{ selectedInvoice.issuer.support_email }}</dd>
+            </div>
+          </dl>
+          <p v-else class="page-note">
+            {{
+              tr(
+                "此历史账单未记录开具方信息。",
+                "Issuer information was not recorded for this historical invoice.",
+              )
+            }}
+          </p>
+          <div class="invoice-dates">
+            <div>
+              <span> {{ tr("出账日期", "Issued on") }} </span
+              ><b>{{ date(selectedInvoice.issued_at) }}</b>
+            </div>
+            <div>
+              <span> {{ tr("到期日期", "Due on") }} </span
+              ><b>{{ date(selectedInvoice.due_at) }}</b>
+            </div>
+            <div>
+              <span> {{ tr("币种", "Currency") }} </span
+              ><b>{{ selectedInvoice.currency }}</b>
+            </div>
+          </div>
+          <div class="invoice-line-header">
+            <span> {{ tr("服务项目", "Service item") }} </span
+            ><span> {{ tr("金额", "Amount") }} </span>
+          </div>
+          <template v-if="selectedInvoice.line_items?.length"
+            ><div
+              v-for="(item, index) in selectedInvoice.line_items"
+              :key="index"
+              class="invoice-line"
+            >
+              <span>{{ item.description }}</span
+              ><b>{{
+                money(
+                  item.amount_minor,
+                  selectedInvoice.currency,
+                  selectedInvoice.currency_format,
+                )
+              }}</b>
+            </div></template
+          >
+          <div v-else class="invoice-line">
+            <div>
+              <b>{{
+                invoiceOrder?.plan_name ||
+                tr("云服务器服务", "Cloud server service")
+              }}</b
+              ><small>{{
+                invoiceOrder?.number || selectedInvoice.order_id
+              }}</small>
+            </div>
+            <b>{{
+              money(
+                selectedInvoice.amount_minor,
                 selectedInvoice.currency,
                 selectedInvoice.currency_format,
               )
             }}</b>
-          </div></template
-        >
-        <div v-else class="invoice-line">
-          <div>
-            <b>{{
-              invoiceOrder?.plan_name ||
-              tr("云服务器服务", "Cloud server service")
-            }}</b
-            ><small>{{
-              invoiceOrder?.number || selectedInvoice.order_id
-            }}</small>
           </div>
-          <b>{{
-            money(
-              selectedInvoice.amount_minor,
-              selectedInvoice.currency,
-              selectedInvoice.currency_format,
-            )
-          }}</b>
+          <p v-if="selectedInvoice.paid_at" class="paid-caption">
+            <CheckCircle2 :size="15" /> {{ tr("付款日期：", "Paid on: ") }}
+            {{ date(selectedInvoice.paid_at) }}
+          </p>
         </div>
-        <div class="invoice-total">
-          <span> {{ tr("账单总额", "Invoice total") }} </span
-          ><strong>{{
-            money(
-              selectedInvoice.amount_minor,
-              selectedInvoice.currency,
-              selectedInvoice.currency_format,
-            )
-          }}</strong>
-        </div>
-        <p v-if="selectedInvoice.paid_at" class="paid-caption">
-          <CheckCircle2 :size="15" /> {{ tr("付款日期：", "Paid on: ") }}
-          {{ date(selectedInvoice.paid_at) }}
-        </p>
       </div>
-      <div v-if="invoicePayable" class="alert info">
-        <LockKeyhole :size="18" /><span>{{
-          checkoutSession
-            ? tr(
-                "结账入口已准备好。前往服务商完成支付后，仍以服务端确认的账单状态为准。",
-                "The checkout link is ready. After paying with the provider, the invoice status still depends on server confirmation.",
-              )
-            : tr(
-                "可获取已接入服务商的支付入口。已有付款请核对原渠道并刷新账单，勿重复支付。",
-                "Prepare a checkout link from an available provider. For an existing payment, check the original provider and refresh the invoice. Avoid duplicate payments.",
-              )
-        }}</span>
-      </div>
-      <div v-if="modalError" class="alert error" role="alert">
-        <AlertCircle :size="18" /><span>{{ modalError }}</span>
-      </div>
-      <button
-        v-if="invoicePayable"
-        class="button secondary full"
-        :disabled="preview || saving || isAdmin || invoiceRefreshing"
-        @click="checkout"
-      >
-        <LoaderCircle v-if="saving" :size="16" class="spin" /><LockKeyhole
-          v-else
-          :size="16"
-        />{{
-          preview
-            ? tr("预览模式 · 支付不可用", "Preview · Payments unavailable")
-            : isAdmin
+      <div class="modal-actions invoice-actions">
+        <div v-if="invoicePayable" class="alert info">
+          <LockKeyhole :size="18" /><span>{{
+            checkoutSession
               ? tr(
-                  "管理员不能代客户付款",
-                  "Administrators cannot pay for customers",
+                  "结账入口已准备好。前往服务商完成支付后，仍以服务端确认的账单状态为准。",
+                  "The checkout link is ready. After paying with the provider, the invoice status still depends on server confirmation.",
                 )
-              : saving
-                ? tr("正在获取…", "Preparing…")
-                : tr("获取支付入口", "Prepare checkout")
-        }}
-      </button>
-      <div
-        v-if="checkoutSession && invoicePayable && !invoiceRefreshing"
-        class="checkout-handoff"
-      >
-        <a
-          class="button primary full"
-          :href="checkoutSession.checkout_url"
-          @click="followCheckout"
-          target="_blank"
-          rel="noopener noreferrer"
+              : tr(
+                  "可获取已接入服务商的支付入口。已有付款请核对原渠道并刷新账单，勿重复支付。",
+                  "Prepare a checkout link from an available provider. For an existing payment, check the original provider and refresh the invoice. Avoid duplicate payments.",
+                )
+          }}</span>
+        </div>
+        <div v-if="modalError" class="alert error" role="alert">
+          <AlertCircle :size="18" /><span>{{ modalError }}</span>
+        </div>
+        <button
+          v-if="invoicePayable"
+          class="button secondary full"
+          :disabled="preview || saving || isAdmin || invoiceRefreshing"
+          @click="checkout"
         >
-          {{ tr("前往支付服务商", "Open payment provider") }}
-          <ArrowUpRight :size="16"
-        /></a>
-        <p>
-          {{ tr("将在新标签页打开", "Opens in a new tab: ") }}
-          {{ checkoutHost }}
+          <LoaderCircle v-if="saving" :size="16" class="spin" /><LockKeyhole
+            v-else
+            :size="16"
+          />{{
+            preview
+              ? tr("预览模式 · 支付不可用", "Preview · Payments unavailable")
+              : isAdmin
+                ? tr(
+                    "管理员不能代客户付款",
+                    "Administrators cannot pay for customers",
+                  )
+                : saving
+                  ? tr("正在获取…", "Preparing…")
+                  : tr("获取支付入口", "Prepare checkout")
+          }}
+        </button>
+        <div
+          v-if="checkoutSession && invoicePayable && !invoiceRefreshing"
+          class="checkout-handoff"
+        >
+          <a
+            class="button primary full"
+            :href="checkoutSession.checkout_url"
+            @click="followCheckout"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {{ tr("前往支付服务商", "Open payment provider") }}
+            <ArrowUpRight :size="16"
+          /></a>
+          <p>
+            {{ tr("将在新标签页打开", "Opens in a new tab: ") }}
+            {{ checkoutHost }}
+            {{
+              tr(
+                "。此操作不代表已付款；入口失效后请核对原渠道并刷新账单，勿重复支付。",
+                ". This does not confirm payment. If the link expires, check the original provider and refresh the invoice. Avoid duplicate payments.",
+              )
+            }}
+          </p>
+        </div>
+        <p class="invoice-caption">
           {{
-            tr(
-              "。此操作不代表已付款；入口失效后请核对原渠道并刷新账单，勿重复支付。",
-              ". This does not confirm payment. If the link expires, check the original provider and refresh the invoice. Avoid duplicate payments.",
-            )
+            session.demo_mode
+              ? tr(
+                  "演示账单，不作为税务发票或付款凭证。",
+                  "Demo invoice. Not a tax invoice or payment receipt.",
+                )
+              : tr(
+                  "此为服务账单，不替代当地税务发票。",
+                  "This service invoice does not replace a local tax invoice.",
+                )
           }}
         </p>
       </div>
-      <p class="invoice-caption">
-        {{
-          session.demo_mode
-            ? tr(
-                "演示账单，不作为税务发票或付款凭证。",
-                "Demo invoice. Not a tax invoice or payment receipt.",
-              )
-            : tr(
-                "此为服务账单，不替代当地税务发票。",
-                "This service invoice does not replace a local tax invoice.",
-              )
-        }}
-      </p></template
-    >
+    </template>
   </dialog>
   <dialog
     ref="helpDialog"
@@ -3496,86 +3654,104 @@ onBeforeUnmount(() => {
         <X :size="21" />
       </button>
     </div>
-    <p>
-      {{ branding.site_name }}
-      {{
-        tr(
-          "提供服务、订单和账单管理。",
-          "provides service, order and invoice management.",
-        )
-      }}
-    </p>
-    <p v-if="branding.support_email">
-      <a :href="safeSettingsEmailHref(branding.support_email)">{{
-        branding.support_email
-      }}</a>
-    </p>
-    <p v-if="branding.support_url">
-      <a
-        :href="safeSettingsURL(branding.support_url)"
-        target="_blank"
-        rel="noopener noreferrer"
-        >{{ tr("客户支持", "Support") }}</a
-      >
-    </p>
-    <p v-if="branding.display_url">
-      <a
-        :href="safeSettingsURL(branding.display_url, true)"
-        target="_blank"
-        rel="noopener noreferrer"
-        >{{ branding.display_url }}</a
-      >
-    </p>
-    <ul class="help-list">
-      <li>
-        <Check :size="18" />
+    <div class="modal-body">
+      <p>
+        {{ branding.site_name }}
         {{
           tr(
-            "真实 API、角色权限与服务端金额校验",
-            "API authorization and server-side price validation",
+            "提供服务、订单和账单管理。",
+            "provides service, order and invoice management.",
           )
         }}
-      </li>
-      <li>
-        <Check :size="18" />
-        {{
-          tr(
-            "独立客户工作台与管理员视图",
-            "Separate customer and administrator views",
-          )
-        }}
-      </li>
-      <li>
-        <Clock3 :size="18" />
-        {{
-          tr(
-            "支付网关、节点控制器尚未接入",
-            "Payment gateways and server controllers are not connected",
-          )
-        }}
-      </li>
-      <li>
-        <Clock3 :size="18" />
-        {{
-          tr(
-            "税务、退款、密码自助服务尚待实施",
-            "Tax, refunds and self-service passwords are not implemented yet",
-          )
-        }}
-      </li>
-    </ul>
-    <div class="alert info">
-      <ShieldCheck :size="19" /><span>
-        {{
-          tr(
-            "演示不等于生产认证。真实上线前仍需安全审查、支付集成与备份恢复演练。",
-            "A demo is not production certification. Security review, payment integration and backup recovery testing remain release requirements.",
-          )
-        }}
-      </span>
+      </p>
+      <p v-if="branding.support_email">
+        <a :href="safeSettingsEmailHref(branding.support_email)">{{
+          branding.support_email
+        }}</a>
+      </p>
+      <p v-if="branding.support_url">
+        <a
+          :href="safeSettingsURL(branding.support_url)"
+          target="_blank"
+          rel="noopener noreferrer"
+          >{{ tr("客户支持", "Support") }}</a
+        >
+      </p>
+      <p v-if="branding.display_url">
+        <a
+          :href="safeSettingsURL(branding.display_url, true)"
+          target="_blank"
+          rel="noopener noreferrer"
+          >{{ branding.display_url }}</a
+        >
+      </p>
+      <ul class="help-list">
+        <li>
+          <Check :size="18" />
+          {{
+            tr(
+              "真实 API、角色权限与服务端金额校验",
+              "API authorization and server-side price validation",
+            )
+          }}
+        </li>
+        <li>
+          <Check :size="18" />
+          {{
+            tr(
+              "独立客户工作台与管理员视图",
+              "Separate customer and administrator views",
+            )
+          }}
+        </li>
+        <li>
+          <Clock3 :size="18" />
+          {{
+            tr(
+              "支付网关、节点控制器尚未接入",
+              "Payment gateways and server controllers are not connected",
+            )
+          }}
+        </li>
+        <li>
+          <Clock3 :size="18" />
+          {{
+            tr(
+              "税务、退款、密码自助服务尚待实施",
+              "Tax, refunds and self-service passwords are not implemented yet",
+            )
+          }}
+        </li>
+      </ul>
+      <div class="alert info">
+        <ShieldCheck :size="19" /><span>
+          {{
+            tr(
+              "演示不等于生产认证。真实上线前仍需安全审查、支付集成与备份恢复演练。",
+              "A demo is not production certification. Security review, payment integration and backup recovery testing remain release requirements.",
+            )
+          }}
+        </span>
+      </div>
     </div>
-    <button class="button primary full" @click="helpDialog?.close()">
-      {{ tr("了解了", "Got it") }}
-    </button>
+    <div class="modal-actions">
+      <button class="button primary full" @click="helpDialog?.close()">
+        {{ tr("了解了", "Got it") }}
+      </button>
+    </div>
   </dialog>
 </template>
+
+<style scoped>
+.admin-service-card {
+  display: flex;
+  flex-direction: column;
+}
+.admin-service-card dl {
+  flex: 1;
+}
+.admin-service-card .service-customer {
+  display: grid;
+  grid-template-columns: 5.5em minmax(0, 1fr);
+}
+</style>

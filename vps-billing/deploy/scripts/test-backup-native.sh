@@ -28,7 +28,7 @@ release = fixtures / "release"
 (release / "migrations").mkdir(parents=True)
 (release / "manifests").mkdir()
 paths = sorted(source.glob("[0-9][0-9][0-9]_*.sql"))
-assert len(paths) == 8, "Review the schema fixture for new migrations"
+assert len(paths) == 10, "Review the schema fixture for new migrations"
 for path in paths:
     (release / "migrations" / path.name).write_bytes(path.read_bytes())
 build = {"schema": 3, "distribution_format": "raw-binaries-v1", "release_kind": "core", "release_label": "0.5.0",
@@ -39,7 +39,7 @@ build = {"schema": 3, "distribution_format": "raw-binaries-v1", "release_kind": 
 # Independent expected inventory: never derive this fixture from the script's
 # parser. Hashes use the immutable real migration bytes, as MySQL history does.
 tables = {
-    "users": "id email name role password_hash created_at",
+    "users": "id email name role password_hash created_at disabled revision",
     "sessions": "token_hash user_id expires_at",
     "plans": "id name description cpu memory_gb disk_gb transfer_tb region price_minor currency available",
     "orders": "id number user_id plan_id plan_name hostname status total_minor currency created_at issuer_snapshot currency_snapshot plan_snapshot",
@@ -62,6 +62,11 @@ rows += [["column", table, column, "fixture-type", "YES", "NULL", "", "", "", ""
          for table in sorted(tables) for index, column in enumerate(tables[table].split(), 1)]
 rows += [["constraint", "users", "PRIMARY", "PRIMARY KEY", "YES", ""],
          ["index", "users", "PRIMARY", "0", "1", "id", "A", "0", "BTREE", "YES", ""]]
+for name, columns in (("ix_audit_date_id", ("created_at", "id")),
+                      ("ix_audit_actor_date_id", ("actor_email", "created_at", "id")),
+                      ("ix_audit_action_date_id", ("action", "created_at", "id"))):
+    rows += [["index", "audit_events", name, "1", str(index), column, "A", "0", "BTREE", "YES", ""]
+             for index, column in enumerate(columns, 1)]
 inventory = [row for row in rows if row[0] != "migration"][2:]
 def write(name, contents):
     (fixtures / (name + ".tsv")).write_text("".join("\t".join(row) + "\n" for row in contents))
@@ -70,7 +75,7 @@ for name, contents in {
     "empty-history": [row for row in rows if row[0] != "migration"],
     "gap": [row for row in rows if row[:2] != ["migration", "2"]],
     "checksum": [[*row[:2], "0" * 64] if row[:2] == ["migration", "1"] else row for row in rows],
-    "unknown-version": rows[:2] + history + [["migration", "9", "0" * 64]] + inventory,
+    "unknown-version": rows[:2] + history + [["migration", "11", "0" * 64]] + inventory,
     "duplicate-version": rows[:2] + history[:1] + history + inventory,
     "zero-version": rows[:2] + [["migration", "0", "0" * 64]] + rows[2:],
     "negative-version": rows[:2] + [["migration", "-1", "0" * 64]] + rows[2:],
@@ -79,6 +84,8 @@ for name, contents in {
     "missing-column": [row for row in rows if row[:3] != ["column", "orders", "plan_snapshot"]],
     "missing-payment-table": [row for row in rows if not (row[0] in {"table", "column"} and row[1] == "payment_settlements")],
     "missing-payment-column": [row for row in rows if row[:3] != ["column", "payment_attempts", "merchant_account_id"]],
+    "missing-account-column": [row for row in rows if row[:3] != ["column", "users", "disabled"]],
+    "partial-account-next-migration": [row for row in rows if row[:2] != ["migration", "10"]],
     "unknown-table": rows + [["table", "unreviewed", "BASE TABLE", "InnoDB"]],
     "extra-column": rows + [["column", "orders", "unreviewed", "int", "YES", "NULL", "", "", "", "", "14", ""]],
     "wrong-engine": [[*row[:3], "MyISAM"] if row[:2] == ["table", "plans"] else row for row in rows],
@@ -90,15 +97,25 @@ for name, contents in {
     "percona": [[*row[:2], "Percona Server (GPL)", *row[3:]] if row[0] == "identity" else row for row in rows],
 }.items():
     write(name, contents)
-prefix7 = [row for row in rows if row[:2] != ["migration", "8"] and not
+prefix9 = [row for row in rows if row[:2] != ["migration", "10"] and not
+           (row[0] == "column" and row[1] == "users" and row[2] in {"disabled", "revision"})]
+write("prefix9", prefix9)
+prefix8 = [row for row in prefix9 if row[:2] != ["migration", "9"] and not
+           (row[0] == "index" and row[1] == "audit_events")]
+write("prefix8", prefix8)
+prefix7 = [row for row in prefix8 if row[:2] != ["migration", "8"] and not
            (row[0] in {"table", "column"} and row[1] in {"payment_attempts", "payment_settlements"})]
 write("prefix7", prefix7)
 prefix6 = [row for row in prefix7 if row[:2] != ["migration", "7"] and not
            (row[0] in {"table", "column"} and row[1] == "currency_settings") and not
            (row[0] == "column" and row[2] in {"currency_snapshot", "plan_snapshot"})]
 write("prefix6", prefix6)
-write("partial-next-migration", [row for row in rows if row[:2] != ["migration", "8"]])
-write("partial-payment-next-migration", [row for row in rows if row[:2] != ["migration", "8"] and not
+for version, prefix in ((6, prefix6), (7, prefix7), (8, prefix8), (9, prefix9)):
+    assert [row[1] for row in prefix if row[0] == "migration"] == [str(number) for number in range(1, version + 1)]
+    assert [row[2] for row in prefix if row[:2] == ["column", "users"]] == ["id", "email", "name", "role", "password_hash", "created_at"]
+assert [row[2] for row in rows if row[:2] == ["column", "users"]] == tables["users"].split()
+write("partial-next-migration", [row for row in prefix8 if row[:2] != ["migration", "8"]])
+write("partial-payment-next-migration", [row for row in prefix8 if row[:2] != ["migration", "8"] and not
            (row[0] in {"table", "column"} and row[1] == "payment_settlements")])
 PY
 cat > "$test_dir/private/client.cnf" <<'CNF'
@@ -167,6 +184,7 @@ fi
 if [[ ${ASTER_TEST_RELEASE_CHANGE+set} ]]; then
   printf '\n' >> "$ASTER_TEST_FIXTURES/release/migrations/001_initial.sql"
 fi
+if [[ ${ASTER_TEST_DUMP_WARN:-0} == 1 ]]; then printf '%s\n' 'fixture-private-diagnostic-do-not-log' >&2; fi
 if [[ ${ASTER_TEST_DUMP_FAIL:-0} == 1 ]]; then
   printf '%s\n' 'fixture-private-diagnostic-do-not-log' >&2
   exit 42
@@ -229,7 +247,27 @@ assert_clean() {
 expect_failure() {
   local archives_before
   archives_before=$(find "$test_dir/backups" -name database.sql.gz -type f | wc -l)
-  if "$@" > "$test_dir/result.log" 2>&1; then fail 'operation unexpectedly succeeded'; fi
+  local result=0
+  "$@" > "$test_dir/result.log" 2>&1 || result=$?
+  ((result != 0)) || fail 'operation unexpectedly succeeded'
+  python3 - "$test_dir/result.log" "$result" <<'PYDIAGNOSTIC'
+import json
+from pathlib import Path
+import re
+import sys
+lines = Path(sys.argv[1]).read_text().splitlines()
+assert len(lines) == 1, "Expected one safe failure event"
+event = json.loads(lines[0])
+assert set(event) == {"event", "operation_id", "phase", "tool_role", "exit_code", "reason"}
+assert event["event"] == "backup_failed" and event["exit_code"] == int(sys.argv[2])
+assert re.fullmatch(r"[a-f0-9]{32}", event["operation_id"])
+assert re.fullmatch(r"[a-z_]+", event["phase"])
+assert event["tool_role"] in {"builtin", "filesystem", "python", "metadata_validator", "mysql", "mysqldump", "gzip", "sha256sum"}
+assert event["reason"] in {"validation_failed", "command_failed", "unexpected_exit", "interrupted", "cleanup_failed",
+    "missing_argument", "repeated_argument", "unsupported_argument", "invalid_database", "unsupported_database",
+    "unsafe_path", "required_tool", "private_client_config", "unsafe_output_dir", "invalid_release_directory",
+    "invalid_client_options", "utc_timestamp", "schema_changed", "empty_archive", "publish_collision"}
+PYDIAGNOSTIC
   assert_no_private_markers "$test_dir/result.log"
   assert_clean
   [[ $(find "$test_dir/backups" -name database.sql.gz -type f | wc -l) == "$archives_before" ]] || fail 'a failed operation published a backup'
@@ -263,7 +301,7 @@ from pathlib import Path
 import sys
 backup, release = map(Path, sys.argv[1:])
 metadata = json.loads((backup / "BACKUP.json").read_bytes())
-assert metadata == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": 8,
+assert metadata == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": 10,
                     "migration_checksums": {str(number): hashlib.sha256(path.read_bytes()).hexdigest()
                                             for number, path in enumerate(sorted((release / "migrations").glob("*.sql")), 1)}}
 assert set(path.name for path in backup.iterdir()) == {"database.sql.gz", "BACKUP.txt", "BACKUP.json", "SHA256SUMS"}
@@ -277,15 +315,33 @@ assert_no_private_markers "$test_dir/backups" "$test_dir/calls"
 printf '%s\n' 'PASS: 8 concurrent same-second backups, private permissions, fixed socket/options, environment isolation, portable checksums (fake mysqldump)'
 
 expect_failure env ASTER_TEST_DUMP_FAIL=1 bash "$script" "${base_args[@]}"
+python3 - "$test_dir/result.log" <<'PYDIAGNOSTIC'
+import json, sys
+from pathlib import Path
+value = json.loads(Path(sys.argv[1]).read_text())
+assert (value["phase"], value["tool_role"], value["exit_code"]) == ("dump", "mysqldump", 42)
+PYDIAGNOSTIC
 expect_failure env ASTER_TEST_GZIP_FAIL=1 bash "$script" "${base_args[@]}"
+python3 - "$test_dir/result.log" <<'PYDIAGNOSTIC'
+import json, sys
+from pathlib import Path
+value = json.loads(Path(sys.argv[1]).read_text())
+assert (value["phase"], value["tool_role"], value["exit_code"]) == ("dump", "gzip", 43)
+PYDIAGNOSTIC
 expect_failure env ASTER_TEST_GZIP_CORRUPT=1 bash "$script" "${base_args[@]}"
 expect_failure env ASTER_TEST_SHA_FAIL=1 bash "$script" "${base_args[@]}"
+python3 - "$test_dir/result.log" <<'PYDIAGNOSTIC'
+import json, sys
+from pathlib import Path
+value = json.loads(Path(sys.argv[1]).read_text())
+assert (value["phase"], value["tool_role"], value["exit_code"]) == ("checksum_creation", "sha256sum", 44)
+PYDIAGNOSTIC
 [[ $(find "$test_dir/backups" -name database.sql.gz -type f | wc -l) == 8 ]] || fail 'a failed run published a backup'
 printf '%s\n' 'PASS: dump, compression, compressed-data validation and checksum failures publish nothing; private diagnostics are not echoed'
 expect_preflight_failure env ASTER_TEST_METADATA_FAIL=1 bash "$script" "${base_args[@]}"
 expect_preflight_failure env ASTER_TEST_SCHEMA_COUNT=1 bash "$script" "${base_args[@]}"
 expect_preflight_failure env ASTER_TEST_SCHEMA_COUNT=invalid bash "$script" "${base_args[@]}"
-for snapshot in empty-history gap checksum unknown-version duplicate-version zero-version negative-version empty-schema missing-table missing-column missing-payment-table missing-payment-column unknown-table extra-column wrong-engine wrong-database old-mysql mariadb percona partial-next-migration partial-payment-next-migration; do
+for snapshot in empty-history gap checksum unknown-version duplicate-version zero-version negative-version empty-schema missing-table missing-column missing-payment-table missing-payment-column missing-account-column partial-account-next-migration unknown-table extra-column wrong-engine wrong-database old-mysql mariadb percona partial-next-migration partial-payment-next-migration; do
   expect_preflight_failure env ASTER_TEST_SNAPSHOT="$snapshot" bash "$script" "${base_args[@]}"
 done
 printf '%s\n' 'PASS: unsupported server/database identity, empty/gapped/changed/unknown migration history and unknown/partial tables or columns stop before dumping'
@@ -324,7 +380,7 @@ elif mutation == "source-missing":
 elif mutation == "source-mapping":
     build["source_files"]["migrations/001_initial.sql"] = "vps-billing/backend/migrations/002_site_settings.sql"
 elif mutation == "source-extra":
-    build["source_files"]["migrations/009_unknown.sql"] = "vps-billing/backend/migrations/009_unknown.sql"
+    build["source_files"]["migrations/010_unknown.sql"] = "vps-billing/backend/migrations/010_unknown.sql"
 elif mutation == "missing-sql":
     (root / "migrations/003_currencies.sql").unlink()
 elif mutation == "duplicate-number":
@@ -399,17 +455,29 @@ bash "$script" "${base_args[@]}" >/dev/null
 assert_clean
 env ASTER_TEST_SNAPSHOT=prefix6 bash "$script" "${base_args[@]}" >/dev/null
 env ASTER_TEST_SNAPSHOT=prefix7 bash "$script" "${base_args[@]}" >/dev/null
+env ASTER_TEST_SNAPSHOT=prefix8 bash "$script" "${base_args[@]}" >/dev/null
+env ASTER_TEST_SNAPSHOT=prefix9 bash "$script" "${base_args[@]}" >/dev/null
 python3 - "$test_dir/backups" <<'PY'
 import json
 from pathlib import Path
 import sys
 metadata = [json.loads(path.read_bytes()) for path in Path(sys.argv[1]).glob("*/BACKUP.json")]
-assert len(metadata) == 11
-for version in (6, 7):
+assert len(metadata) == 13
+for version in (6, 7, 8, 9):
     prefix = [item for item in metadata if item["schema_version"] == version]
     assert len(prefix) == 1 and set(prefix[0]["migration_checksums"]) == {str(number) for number in range(1, version + 1)}
     assert prefix[0]["core_version"] == "0.5.0" and prefix[0]["source_commit"] == "a" * 40
 PY
 assert_clean
 printf '%s\n' 'PASS: BACKUP.json records the actual complete applied prefix, including an older schema, without inventing unapplied migrations'
+env ASTER_TEST_DUMP_WARN=1 bash "$script" "${base_args[@]}" >"$test_dir/warning.stdout" 2>"$test_dir/warning.log"
+assert_no_private_markers "$test_dir/warning.stdout" "$test_dir/warning.log"
+python3 - "$test_dir/warning.log" <<'PYDIAGNOSTIC'
+import json, sys
+from pathlib import Path
+value = json.loads(Path(sys.argv[1]).read_text())
+assert value["event"] == "backup_warning" and value["exit_code"] == 0
+assert value["reason"] == "dump_warning_raw_diagnostics_discarded"
+PYDIAGNOSTIC
+printf '%s\n' 'PASS: failed CLI emits one safe NDJSON event with actual status; raw stderr is discarded, including successful dump warnings'
 printf '%s\n' 'PASS: read-only private config accepted. All tests use fakebin with modeled system-root ownership; no MySQL connection or native service boot was tested.'

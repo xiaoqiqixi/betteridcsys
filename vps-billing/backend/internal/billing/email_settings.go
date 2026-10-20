@@ -332,7 +332,7 @@ func (s *SMTPService) Send(ctx context.Context, message integrations.EmailMessag
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	if auditErr := s.store.RecordEmailTest(auditCtx, access.Actor, r.Revision, outcome); auditErr != nil {
-		recordEmailAuditFailure(outcome)
+		recordEmailAuditFailure(auditCtx, access.Actor, r.Revision, outcome, auditErr)
 	}
 	if result != nil {
 		return integrations.EmailReceipt{}, result

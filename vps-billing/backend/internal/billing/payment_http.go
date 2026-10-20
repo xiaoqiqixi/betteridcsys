@@ -164,6 +164,7 @@ func (a *App) paymentStoreError(w http.ResponseWriter, r *http.Request, err erro
 	case errors.Is(err, ErrPaymentUncertain):
 		fail(w, r, 409, "PAYMENT_PENDING", "支付结果未确认，请核对原渠道记录")
 	default:
+		observeError(r.Context(), "PAYMENT_STORAGE_UNAVAILABLE", errorKind(err))
 		fail(w, r, 503, "PAYMENT_STORAGE_UNAVAILABLE", "支付记录暂不可用，请稍后重试")
 	}
 }

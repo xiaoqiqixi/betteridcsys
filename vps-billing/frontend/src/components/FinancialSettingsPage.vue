@@ -1284,8 +1284,9 @@ select[aria-invalid="true"] {
   min-width: 0;
 }
 .price-input input {
-  flex: 1 1 calc(17ch + 30px);
-  min-width: min(100%, calc(17ch + 30px));
+  flex: 1 1 calc(17ch + 14px);
+  min-width: min(100%, calc(17ch + 14px));
+  padding-inline: 6px;
   font-variant-numeric: tabular-nums;
 }
 .price-input span {

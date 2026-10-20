@@ -1,32 +1,27 @@
 @import url("./typography.css");
 :root {
   font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    "PingFang SC",
-    "Hiragino Sans GB",
-    "Microsoft YaHei",
-    sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   color: var(--text-primary);
   background: var(--page-background);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --blue: #1769e8;
-  --text-primary: #252930;
-  --text-secondary: #65707e;
+  --text-primary: #1d1d1f;
+  --text-secondary: #62646b;
   --surface: #ffffff;
-  --surface-subtle: #fafbfd;
-  --page-background: #f7f8fa;
-  --control-border: #86909b;
+  --surface-subtle: #f8f9fb;
+  --page-background: #f5f5f7;
+  --control-border: #7d8793;
   --status-success: #21734b;
   --status-warning: #b45309;
   --status-danger: #b42318;
   --status-neutral: #5f6b7a;
   --muted: var(--text-secondary);
-  --border: #e9ebef;
+  --border: #e5e5ea;
+  --panel-shadow: 0 2px 12px rgb(29 29 31 / 0.025);
 }
 * {
   box-sizing: border-box;
@@ -1128,11 +1123,12 @@ tr:last-child td {
 }
 .service-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 19px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
 }
 .service-card {
-  padding: 22px;
+  min-width: 0;
+  padding: 26px;
 }
 .service-card-top {
   display: flex;
@@ -1141,31 +1137,32 @@ tr:last-child td {
   margin-bottom: 24px;
 }
 .service-card h2 {
-  font-size: 16px;
+  font-size: 19px;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 .service-card > p {
-  font-size: 12px;
-  margin-top: 9px;
+  font-size: 14px;
+  margin-top: 6px;
 }
 .service-specs {
   display: flex;
   gap: 13px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-secondary);
   flex-wrap: wrap;
-  margin: 26px 0;
+  margin: 24px 0;
 }
 .service-specs b {
   font-weight: 550;
-  color: var(--text-secondary);
-  font-size: 14px;
+  color: var(--text-primary);
+  font-size: 16px;
 }
 .service-card dl {
   margin: 0;
   padding: 20px 0;
-  border-top: 1px solid #edf0f5;
-  border-bottom: 1px solid #edf0f5;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 .service-card dl > div,
 .account-details > div,
@@ -1190,16 +1187,38 @@ dd {
   overflow-wrap: anywhere;
 }
 .service-card dd.mono {
-  font-size: 12px;
+  font-size: 13px;
+}
+.service-card dl > div {
+  font-size: 14px;
+}
+.service-card dd {
+  color: var(--text-primary);
+  text-align: right;
+  min-width: 0;
+}
+.service-card .service-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
 }
 .service-card-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
   padding-top: 20px;
 }
 .service-card-footer b {
-  font-size: 18px;
+  min-width: 0;
+  font-size: 24px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
   letter-spacing: -0.4px;
 }
 .service-card-footer small {
@@ -1209,7 +1228,7 @@ dd {
   letter-spacing: 0;
 }
 .service-card-footer > span {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 .empty-state {
@@ -1388,36 +1407,119 @@ dd {
   flex-shrink: 0;
 }
 .modal {
-  border: 1px solid #e5e9f0;
-  border-radius: 17px;
-  padding: 28px;
-  max-width: 520px;
-  width: calc(100% - 32px);
-  box-shadow: 0 24px 100px #13264029;
-  color: #303d4f;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 0;
+  max-width: 560px;
+  width: calc(100% - 40px);
+  box-shadow: 0 24px 80px rgb(29 29 31 / 0.18);
+  color: var(--text-primary);
+  background: var(--surface);
   max-height: calc(100dvh - 48px);
-  overflow: auto;
+  overflow: hidden;
 }
 .modal::backdrop {
-  background: #1b2a404f;
-  backdrop-filter: blur(5px);
+  background: rgb(29 29 31 / 0.32);
 }
 .modal-heading {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 15px;
-  margin-bottom: 25px;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .modal-heading h2 {
-  font-size: 21px;
-  margin-top: 6px;
+  font-size: 24px;
+  line-height: 1.35;
+  letter-spacing: -0.4px;
+  margin: 0;
+}
+.modal[open],
+.modal > form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.modal > form {
+  max-height: inherit;
+}
+.modal-heading > div,
+.modal-body,
+.modal-actions {
+  min-width: 0;
+}
+.modal-heading .eyebrow {
+  margin: 0 0 8px;
+  font-size: 13px;
+  letter-spacing: normal;
+  font-weight: 500;
+}
+.modal-heading .icon-button {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  margin: -4px -8px -4px 0;
+  border-radius: 50%;
+  background: var(--page-background);
+  color: var(--text-secondary);
+}
+.modal-body {
+  flex: 1 1 auto;
+  padding: 24px 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 16px;
+}
+.modal-actions {
+  flex-shrink: 0;
+  display: grid;
+  gap: 12px;
+  max-height: 45dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 12px;
+  padding: 20px 28px max(20px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+.modal .field-help,
+.modal .checkbox-label,
+.modal .alert {
+  font-size: 14px;
+  line-height: 1.65;
+}
+.modal .checkbox-label {
+  margin-bottom: 0;
+}
+.modal .field-help {
+  margin-top: 8px;
+}
+.modal .alert,
+.modal-actions .invoice-caption,
+.modal-actions .checkout-handoff {
+  margin: 0;
+}
+.modal .alert + .alert {
+  margin-top: 12px;
+}
+.modal-body > .alert:last-child {
+  margin-bottom: 0;
+}
+.modal .button {
+  min-height: 44px;
+  height: auto;
+  padding-block: 10px;
+  white-space: normal;
+  line-height: 1.5;
 }
 .modal label:not(.checkbox-label) {
   display: block;
-  font-size: 13px;
-  margin: 20px 0 9px;
-  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 24px 0 10px;
+  color: var(--text-primary);
+  font-weight: 500;
 }
 .modal input:not([type="checkbox"]) {
   font-size: 14px;
@@ -1444,37 +1546,40 @@ dd {
   overflow-wrap: anywhere;
 }
 .order-plan {
-  display: flex;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
   align-items: center;
-  gap: 13px;
-  background: #f7f9fc;
-  border: 1px solid #edf1f7;
-  padding: 16px;
-  border-radius: 9px;
+  gap: 12px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  padding: 18px;
+  border-radius: 16px;
   margin-bottom: 24px;
 }
 .order-plan b {
-  font-size: 14px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
 }
 .order-plan p {
-  font-size: 12px;
-  margin-top: 6px;
+  font-size: 14px;
+  margin-top: 4px;
   color: var(--text-secondary);
 }
 .order-plan > strong {
-  margin-left: auto;
-  font-size: 22px;
-  white-space: nowrap;
-  letter-spacing: -0.8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  letter-spacing: -0.6px;
+  overflow-wrap: anywhere;
 }
 .order-plan small {
-  display: block;
-  font-size: 11px;
-  letter-spacing: 0;
+  display: inline;
+  font-size: 14px;
+  letter-spacing: normal;
   font-weight: 400;
   color: var(--text-secondary);
-  text-align: right;
-  margin-top: 5px;
 }
 .field-help {
   font-size: 11px;
@@ -1483,11 +1588,21 @@ dd {
   line-height: 1.7;
 }
 .order-summary {
-  padding: 23px 0;
+  padding: 24px 0;
   margin: 0;
 }
 .order-summary > div {
-  font-size: 13px;
+  font-size: 14px;
+  gap: 12px 20px;
+  min-width: 0;
+}
+.modal .order-summary dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.modal .order-summary dd,
+.modal .invoice-issuer dd {
+  color: var(--text-primary);
 }
 .order-summary > div:last-child {
   padding-top: 17px;
@@ -1510,24 +1625,17 @@ dd {
   margin: 0;
   box-shadow: none;
 }
-.modal .alert {
-  font-size: 12px;
-  margin-bottom: 18px;
-}
-.modal .button {
-  min-height: 44px;
-}
 .invoice-document {
-  border: 1px solid #e9edf3;
-  border-radius: 10px;
-  padding: 23px;
-  margin-bottom: 20px;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
 }
 .invoice-doc-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 25px;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 .invoice-doc-top .brand-mark {
   height: 28px;
@@ -1536,75 +1644,92 @@ dd {
   font-size: 23px;
 }
 .invoice-document h3 {
-  font-family: Consolas, monospace;
-  font-size: 18px;
-  font-weight: 500;
-  letter-spacing: -0.6px;
-  margin-bottom: 24px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 17px;
+  line-height: 1.5;
+  font-weight: 600;
+  letter-spacing: normal;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .invoice-dates {
-  display: flex;
-  justify-content: space-between;
-  gap: 15px;
-  margin-bottom: 28px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 20px 0;
+  margin-bottom: 16px;
+  border-block: 1px solid var(--border);
 }
 .invoice-dates span {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-secondary);
   display: block;
-  margin-bottom: 9px;
+  margin-bottom: 6px;
 }
 .invoice-dates b {
-  font-size: 12px;
-  font-weight: 450;
-  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 .invoice-line-header,
 .invoice-line,
 .invoice-total {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px 20px;
+  align-items: start;
+}
+.invoice-line > *,
+.invoice-total > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.invoice-line > :last-child,
+.invoice-line-header > :last-child {
+  text-align: right;
 }
 .invoice-line-header {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-secondary);
-  background: #f7f9fc;
-  border-top: 1px solid #edf1f6;
-  border-bottom: 1px solid #edf1f6;
-  margin: 0 -23px;
-  padding: 12px 23px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
 }
 .invoice-line {
-  padding: 22px 0;
-  font-size: 13px;
-  color: var(--text-secondary);
+  padding: 20px 0;
+  font-size: 14px;
+  color: var(--text-primary);
 }
 .invoice-line small {
   display: block;
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-secondary);
-  margin-top: 7px;
+  margin-top: 6px;
 }
 .invoice-total {
-  border-top: 1px solid #edf1f6;
-  padding-top: 21px;
-  font-size: 13px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+  font-size: 14px;
   color: var(--text-secondary);
 }
 .invoice-total strong {
-  font-size: 26px;
-  color: #354459;
-  font-weight: 500;
-  letter-spacing: -0.8px;
+  font-size: 30px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  font-variant-numeric: tabular-nums;
 }
 .invoice-caption {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-secondary);
   text-align: center;
-  margin-top: 17px;
-  line-height: 1.7;
+  margin-top: 16px;
+  line-height: 1.65;
 }
 .paid-caption {
   display: flex;
@@ -1614,7 +1739,7 @@ dd {
   color: var(--status-success);
   margin-top: 20px;
 }
-.help-modal > p {
+.help-modal .modal-body > p {
   font-size: 14px;
   line-height: 1.9;
   color: var(--text-secondary);
@@ -1626,11 +1751,11 @@ dd {
 }
 .help-list li {
   display: flex;
-  gap: 11px;
-  align-items: center;
-  font-size: 13px;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 14px;
   color: var(--text-secondary);
-  padding: 11px 0;
+  padding: 12px 0;
 }
 .help-list svg {
   color: var(--text-secondary);
@@ -2122,8 +2247,7 @@ dd {
   .sidebar-scrim {
     position: fixed;
     inset: 0;
-    background: #26344955;
-    backdrop-filter: blur(2px);
+    background: rgb(29 29 31 / 0.32);
     z-index: 29;
   }
   .sidebar-close {
@@ -2432,32 +2556,35 @@ dd {
     font-size: 12px;
   }
   .modal {
-    padding: 23px;
-    border-radius: 14px;
-    max-height: calc(100dvh - 28px);
+    width: calc(100% - 24px);
+    border-radius: 20px;
+    max-height: calc(100dvh - 24px);
+  }
+  .modal-heading {
+    padding: 20px;
+    gap: 16px;
   }
   .modal-heading h2 {
-    font-size: 19px;
+    font-size: 22px;
   }
-  .modal-heading .eyebrow {
-    font-size: 10px;
+  .modal-body {
+    padding: 20px;
+  }
+  .modal-actions {
+    padding: 16px 20px max(16px, env(safe-area-inset-bottom));
   }
   .order-plan {
-    padding: 13px;
-    gap: 10px;
+    padding: 16px;
   }
-  .order-plan p {
-    font-size: 10px;
+  .invoice-line {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
   }
-  .order-plan > strong {
-    font-size: 21px;
+  .invoice-line > :last-child {
+    text-align: left;
   }
-  .invoice-document {
-    padding: 18px;
-  }
-  .invoice-line-header {
-    margin: 0 -18px;
-    padding: 12px 18px;
+  .invoice-line-header > :last-child {
+    display: none;
   }
   .invoice-document h3 {
     font-size: 16px;
@@ -2499,9 +2626,6 @@ dd {
   }
   .invoice-dates {
     gap: 8px;
-  }
-  .invoice-dates b {
-    font-size: 11px;
   }
 }
 @media (max-width: 380px) {
@@ -2767,22 +2891,41 @@ dd {
 }
 .integration-drawer {
   margin: 0 0 0 auto;
-  border-radius: 22px 0 0 22px;
+  border-radius: 24px 0 0 24px;
   height: 100dvh;
   max-height: 100dvh;
   width: min(560px, 100%);
-  padding: 32px;
+  padding: 0;
+}
+.integration-drawer .account-details {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-subtle);
+}
+.integration-drawer .account-details > div {
+  font-size: 14px;
+}
+.integration-drawer .account-details dd {
+  color: var(--text-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.integration-field small svg,
+.help-list svg {
+  flex-shrink: 0;
+  margin-top: 4px;
 }
 .integration-detail-status {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 11px;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 .integration-detail-description {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.9;
   margin: 18px 0;
 }
@@ -2794,7 +2937,7 @@ dd {
   margin-bottom: 12px;
 }
 .integration-detail-section > p {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.8;
   color: var(--text-secondary);
 }
@@ -2804,25 +2947,26 @@ dd {
 }
 .integration-field > div {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 10px;
-  font-size: 12px;
+  gap: 6px 12px;
+  font-size: 14px;
 }
 .integration-field span,
 .integration-field small {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 14px;
 }
 .integration-field code {
   display: block;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 14px;
   overflow-wrap: anywhere;
-  color: #5a6c86;
+  color: var(--text-secondary);
 }
 .integration-field small {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 5px;
   margin-top: 8px;
 }
@@ -2835,7 +2979,7 @@ dd {
 .integration-steps {
   padding-left: 20px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.9;
 }
 .integration-steps li {
@@ -2843,11 +2987,11 @@ dd {
   margin-bottom: 10px;
 }
 .integration-limitations {
-  background: #f8f9fc;
+  background: var(--surface-subtle);
   border-radius: 12px;
   padding: 17px;
-  font-size: 12px;
-  color: #667285;
+  font-size: 14px;
+  color: var(--text-secondary);
   line-height: 1.8;
   margin-bottom: 24px;
 }
@@ -2889,8 +3033,9 @@ dd {
     grid-template-columns: 1fr;
   }
   .integration-drawer {
-    padding: 24px;
-    border-radius: 16px 0 0 16px;
+    width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
   }
 }
 .checkout-handoff {
@@ -3327,17 +3472,15 @@ dd {
   overflow-wrap: anywhere;
 }
 .invoice-issuer {
-  margin: 20px 0;
-  padding: 15px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  margin: 0 0 20px;
+  padding: 0;
 }
 .invoice-issuer > div {
   display: grid;
   grid-template-columns: minmax(75px, 0.4fr) minmax(0, 1fr);
   gap: 12px;
   padding: 5px 0;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.8;
 }
 .invoice-issuer dt {
@@ -3445,12 +3588,12 @@ th,
   padding: 0 23px;
 }
 
-/* Shared console composition: quiet navigation, one working surface, readable data. */
+/* Light console: a quiet navigation layer around clearly grouped work surfaces. */
 .app-shell {
-  --sidebar: clamp(216px, 16vw, 248px);
+  --sidebar: 232px;
   display: grid;
   grid-template-columns: var(--sidebar) minmax(0, 1fr);
-  background: var(--surface);
+  background: var(--page-background);
   min-height: 100dvh;
 }
 html:has(.app-shell) {
@@ -3458,7 +3601,7 @@ html:has(.app-shell) {
 }
 .navigation-rail {
   min-width: 0;
-  background: var(--page-background);
+  background: var(--surface-subtle);
   border-right: 1px solid var(--border);
 }
 .sidebar > * {
@@ -3477,29 +3620,40 @@ html:has(.app-shell) {
 .user-menu > div {
   flex: 1;
 }
+.sidebar-header {
+  padding: 28px 20px 28px;
+}
+.brand-details {
+  min-width: 0;
+}
 .app-shell .brand {
-  margin: 30px 24px 12px;
+  margin: 0;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
 }
 .app-shell .brand strong {
-  font-size: 21px;
-  line-height: 1.5;
+  display: block;
+  font-size: 19px;
+  line-height: 1.45;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .app-shell .brand-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  flex-shrink: 0;
 }
 .workspace-context {
+  display: block;
   color: var(--text-secondary);
   font-size: 13px;
-  margin: 0 24px 36px;
+  margin-top: 4px;
 }
 .app-shell .nav-label {
-  margin: 0 24px 12px;
+  margin: 0 20px 10px;
   font-size: 12px;
+  font-weight: 500;
   letter-spacing: normal;
 }
 .app-shell .sidebar nav {
@@ -3508,12 +3662,48 @@ html:has(.app-shell) {
 .app-shell .sidebar nav a {
   min-height: 46px;
   padding: 10px 12px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   gap: 12px;
   font-size: 14px;
+  border-radius: 11px;
 }
 .app-shell .sidebar-bottom {
-  padding-top: 28px;
+  padding: 24px 12px max(16px, env(safe-area-inset-bottom));
+}
+.app-shell .sidebar-bottom .nav-label {
+  margin-inline: 12px;
+}
+.app-shell .side-action {
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.app-shell .user-menu {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.app-shell .user-menu b {
+  font-size: 14px;
+}
+.app-shell .user-menu small {
+  font-size: 12px;
+}
+.app-shell .user-menu button {
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 10px;
+}
+.app-shell .user-menu button:hover {
+  background: var(--page-background);
+}
+.app-shell .sidebar-note {
+  margin: 6px 0 0;
+  font-size: 12px;
 }
 .app-shell .topbar {
   position: sticky;
@@ -3521,7 +3711,7 @@ html:has(.app-shell) {
   z-index: 20;
   min-height: 76px;
   padding: 12px 40px;
-  background: var(--surface);
+  background: var(--surface-subtle);
   gap: 20px;
 }
 .app-shell .breadcrumbs {
@@ -3531,7 +3721,7 @@ html:has(.app-shell) {
 }
 .app-shell .breadcrumbs b {
   color: var(--text-primary);
-  font-weight: 500;
+  font-weight: 600;
 }
 .app-shell .topbar-right {
   gap: 16px;
@@ -3549,22 +3739,24 @@ html:has(.app-shell) {
   min-height: 38px;
   max-width: 148px;
   font-size: 13px;
-  border-radius: 8px;
+  border-radius: 9px;
 }
 .app-shell main {
   max-width: 1360px;
+  margin: 0 auto;
+  width: 100%;
   padding: 40px 40px 0;
 }
 .app-shell .page-heading {
   align-items: flex-start;
-  margin-bottom: 32px;
+  margin-bottom: 28px;
   gap: 24px;
 }
 .app-shell .page-heading h1 {
-  font-size: 32px;
-  font-weight: 600;
-  line-height: 1.4;
-  margin: 0 0 10px;
+  font-size: 36px;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0 0 12px;
   overflow-wrap: anywhere;
 }
 .app-shell .page-heading > div > p:last-child {
@@ -3572,12 +3764,33 @@ html:has(.app-shell) {
   line-height: 1.7;
 }
 .app-shell .page-heading > .button {
-  margin-top: 4px;
+  margin-top: 5px;
   min-height: 44px;
 }
-.app-shell .panel {
-  border-radius: 12px;
+.app-shell .button {
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 550;
+}
+.app-shell .primary {
   box-shadow: none;
+}
+.app-shell .secondary {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+.app-shell .text-button {
+  color: var(--brand-ink);
+}
+.app-shell .icon-button {
+  border-radius: 11px;
+}
+:lang(en) .app-shell .page-heading h1 {
+  letter-spacing: -0.035em;
+}
+.app-shell .panel {
+  border-radius: 18px;
+  box-shadow: var(--panel-shadow);
 }
 .app-shell .panel-heading h2 {
   font-size: 18px;
@@ -3589,7 +3802,8 @@ html:has(.app-shell) {
 .app-shell .badge {
   font-size: 12px;
   font-weight: 500;
-  padding: 4px 8px;
+  padding: 4px 9px;
+  border-radius: 7px;
 }
 .app-shell th {
   font-size: 14px;
@@ -3606,18 +3820,19 @@ html:has(.app-shell) {
   font-size: 14px;
 }
 .app-shell .invoice-summary {
-  background: var(--surface-subtle);
-  border-radius: 12px;
-  box-shadow: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--panel-shadow);
 }
 .app-shell .main-footer {
-  margin-top: 40px;
+  margin-top: 32px;
   padding: 24px 0;
   font-size: 13px;
 }
 .app-shell .demo-banner {
   padding: 9px 40px;
-  background: var(--surface-subtle);
+  background: var(--surface);
   font-size: 13px;
 }
 @media (max-width: 1150px) {
@@ -3638,7 +3853,7 @@ html:has(.app-shell) {
   .navigation-rail {
     position: fixed;
     inset: 0 auto 0 0;
-    width: min(320px, calc(100vw - 48px));
+    width: min(300px, calc(100vw - 44px));
     height: 100dvh;
     transform: translateX(-100%);
     transition: transform 0.2s;
@@ -3651,8 +3866,7 @@ html:has(.app-shell) {
     position: fixed;
     inset: 0;
     z-index: 29;
-    background: #26344955;
-    backdrop-filter: blur(2px);
+    background: rgb(29 29 31 / 0.32);
   }
   .app-shell .sidebar-close {
     display: inline-grid;
@@ -3662,6 +3876,7 @@ html:has(.app-shell) {
     z-index: 2;
     width: 44px;
     height: 44px;
+    border-radius: 50%;
     background: var(--page-background);
   }
   .app-shell .sidebar {
@@ -3673,18 +3888,14 @@ html:has(.app-shell) {
     min-height: 44px;
     margin-left: -8px;
   }
-  .app-shell .sidebar .brand {
-    margin-right: 68px;
+  .sidebar-header {
+    padding: 24px 68px 24px 20px;
   }
   body:has(.app-shell.sidebar-open) {
     overflow: hidden;
   }
 }
 @media (max-width: 720px) {
-  .app-shell .brand {
-    margin-top: 30px;
-    margin-right: 60px;
-  }
   .app-shell .topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 44px;
@@ -3802,40 +4013,76 @@ html:has(.app-shell) {
   }
 }
 
-/* The same invoice records reflow into readable rows on a phone. */
+/* Recorded orders and invoices remain readable without horizontal scrolling. */
 @media (max-width: 720px) {
-  .app-shell .data-panel .invoice-table {
+  .app-shell .invoice-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 12px 20px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+  }
+  .app-shell .invoice-summary > div {
+    min-width: 0;
+  }
+  .app-shell .invoice-summary > div > span {
+    margin-bottom: 4px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .app-shell .invoice-summary b {
+    display: block;
+    font-size: 26px;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+  .app-shell .invoice-summary small {
+    display: inline-block;
+    margin-left: 6px;
+  }
+  .app-shell .invoice-summary > p {
+    grid-column: 1 / -1;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .app-shell .invoice-summary p span {
+    font-size: 12px;
+  }
+  .app-shell .data-panel :is(.invoice-table, .order-table) {
     min-width: 0;
     white-space: normal;
   }
-  .invoice-table thead {
+  :is(.invoice-table, .order-table) thead {
     position: absolute;
     width: 1px;
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
   }
-  .invoice-table tbody {
+  :is(.invoice-table, .order-table) tbody {
     display: block;
   }
-  .invoice-table tbody tr {
+  :is(.invoice-table, .order-table) tbody tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 12px 16px;
     padding: 20px;
     border-top: 1px solid var(--border);
   }
-  .app-shell .invoice-table td {
+  .app-shell :is(.invoice-table, .order-table) td {
     min-width: 0;
     padding: 0;
     border: 0;
     overflow-wrap: anywhere;
   }
-  .invoice-table td:nth-child(1) {
+  :is(.invoice-table, .order-table) td:nth-child(1) {
     grid-column: 1;
     grid-row: 1;
   }
-  .invoice-table td:nth-child(5) {
+  :is(.invoice-table, .order-table) td:nth-child(5) {
     grid-column: 2;
     grid-row: 1;
     text-align: right;
@@ -3860,17 +4107,59 @@ html:has(.app-shell) {
   .invoice-table td:nth-child(3) {
     text-align: right;
   }
-  .invoice-table td[data-label]::before {
+  :is(.invoice-table, .order-table) td[data-label]::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 4px;
     font-size: 12px;
   }
-  .invoice-table .table-empty {
+  :is(.invoice-table, .order-table) .table-empty {
     grid-column: 1 / -1;
   }
-  .invoice-table .table-action {
+  :is(.invoice-table, .order-table) .table-action {
     text-align: right;
+  }
+  .order-table td:nth-child(1) {
+    align-self: center;
+  }
+  .order-table td:nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .order-table td:nth-child(2) > strong {
+    color: var(--text-primary);
+    font-size: 15px;
+  }
+  .order-table td:nth-child(2) > .muted {
+    margin-top: 5px;
+    font-size: 13px;
+  }
+  .app-shell .order-table td:nth-child(4) {
+    grid-column: 1;
+    grid-row: 3;
+    align-self: center;
+    font-size: 21px;
+  }
+  .order-table td:nth-child(6) {
+    grid-column: 2;
+    grid-row: 3;
+    align-self: center;
+    justify-self: end;
+  }
+  .order-table td:nth-child(3) {
+    grid-column: 1 / -1;
+    grid-row: 4;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .order-table .long-order td:nth-child(4) {
+    grid-column: 1 / -1;
+  }
+  .order-table .long-order td:nth-child(3) {
+    grid-column: 1;
+  }
+  .order-table .long-order td:nth-child(6) {
+    grid-row: 4;
   }
 }
 
