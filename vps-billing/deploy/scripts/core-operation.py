@@ -449,6 +449,22 @@ class Native:
     def __init__(self, spec, trust=updater._Trust()):
         self.spec, self.trust = spec, trust
 
+    def command_diagnostic(self, argv, exit_code, reason):
+        identity = self.spec.get("operation_id", "")
+        if not isinstance(identity, str) or not updater.REQUEST.fullmatch(identity):
+            identity = "unavailable"
+        role = os.path.basename(argv[0]) if argv else "OTHER"
+        if role not in {"aster-api", "mysql", "mysqldump", "nginx", "bash", "systemctl", "systemd-analyze", "busctl", "useradd"}:
+            role = "OTHER"
+        if reason not in {"launch_failed", "guard_failed", "command_failed"}:
+            reason = "native_failed"
+        try:
+            print(json.dumps({"event": "native_command_failed", "operation_id": identity, "phase": "native_command",
+                              "tool_role": role, "exit_code": exit_code if type(exit_code) is int else None,
+                              "reason": reason}, sort_keys=True), file=sys.stderr)
+        except OSError:
+            pass  # Logging failure must not replace the operation's real failure.
+
     def run(self, argv, env=None, data=None, timeout=90, allow_failure=False, identity=None):
         # A bounded private file prevents hostile output from exhausting RAM.
         # Kill the owned process group on deadline; command outcome can still be
@@ -474,13 +490,19 @@ class Native:
                 output.seek(0)
                 result = subprocess.CompletedProcess(argv, process.returncode, output.read((4 << 20) + 1))
             except OSError:
+                self.command_diagnostic(argv, None, "launch_failed")
                 raise Rejected("A fixed native operation could not run; inspect the private checkpoint.") from None
+            except Rejected:
+                self.command_diagnostic(argv, getattr(process, "returncode", None), "guard_failed")
+                raise
             finally:
                 if process is not None and process.poll() is None:
                     with contextlib.suppress(ProcessLookupError):
                         os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
-            require(allow_failure or result.returncode == 0, "A fixed native operation failed; raw diagnostics were suppressed.")
+            if not allow_failure and result.returncode != 0:
+                self.command_diagnostic(argv, result.returncode, "command_failed")
+                raise Rejected("A fixed native operation failed; raw diagnostics were suppressed.")
             return result
 
     def sql(self, config, query):
@@ -753,6 +775,85 @@ def api_unit_text(spec, trust=updater._Trust(), release=None):
     return text.encode()
 
 
+def nginx_logging_text():
+    # Keep this block identical to nginx.native.conf. Only fixed route/method
+    # labels leave Nginx; request payloads and raw engine diagnostics do not.
+    return '''# BEGIN ASTER PRIVACY LOGGING
+map $request_method $aster_log_method {
+  default OTHER;
+  "~^GET$" GET;
+  "~^POST$" POST;
+  "~^HEAD$" HEAD;
+}
+map $uri $aster_log_route {
+  default OTHER;
+  / /web;
+  /index.html /web;
+  "~^/(overview|services|plans|orders|invoices|customers|audit|integrations|finance|settings|updates|account)$" /web;
+  "~^/assets/" /assets/:asset;
+  /healthz /healthz;
+  /readyz /readyz;
+  /api/v1/session /api/v1/session;
+  /api/v1/currencies /api/v1/currencies;
+  /api/v1/plans /api/v1/plans;
+  /api/v1/site-settings /api/v1/site-settings;
+  /api/v1/services /api/v1/services;
+  /api/v1/orders /api/v1/orders;
+  /api/v1/invoices /api/v1/invoices;
+  /api/v1/audit /api/v1/audit;
+  /api/v1/audit-events /api/v1/audit-events;
+  /api/v1/admin/audit-events /api/v1/admin/audit-events;
+  /api/v1/overview /api/v1/overview;
+  /api/v1/auth/login /api/v1/auth/login;
+  /api/v1/auth/logout /api/v1/auth/logout;
+  /api/v1/admin/overview /api/v1/admin/overview;
+  /api/v1/admin/customers /api/v1/admin/customers;
+  /api/v1/admin/customer-accounts /api/v1/admin/customer-accounts;
+  /api/v1/admin/catalog /api/v1/admin/catalog;
+  /api/v1/admin/services /api/v1/admin/services;
+  /api/v1/admin/orders /api/v1/admin/orders;
+  /api/v1/admin/invoices /api/v1/admin/invoices;
+  /api/v1/admin/currencies /api/v1/admin/currencies;
+  /api/v1/admin/plan-prices /api/v1/admin/plan-prices;
+  /api/v1/admin/site-settings /api/v1/admin/site-settings;
+  /api/v1/admin/email-settings /api/v1/admin/email-settings;
+  /api/v1/admin/email-settings/test /api/v1/admin/email-settings/test;
+  /api/v1/admin/updates /api/v1/admin/updates;
+  /api/v1/admin/updates/check /api/v1/admin/updates/check;
+  /api/v1/admin/updates/handoff /api/v1/admin/updates/handoff;
+  /api/v1/admin/updates/operation /api/v1/admin/updates/operation;
+  /api/v1/admin/plugins /api/v1/admin/plugins;
+  /api/v1/admin/plugins/check /api/v1/admin/plugins/check;
+  /api/v1/admin/plugins/payment/check /api/v1/admin/plugins/payment/check;
+  /api/v1/admin/integrations /api/v1/admin/integrations;
+  "~^/api/v1/invoices/[0-9a-f]{32}$" /api/v1/invoices/:id;
+  "~^/api/v1/admin/invoices/[0-9a-f]{32}$" /api/v1/admin/invoices/:id;
+  "~^/api/v1/invoices/[0-9a-f]{32}/checkout$" /api/v1/invoices/:id/checkout;
+  "~^/api/v1/admin/invoices/[0-9a-f]{32}/checkout$" /api/v1/admin/invoices/:id/checkout;
+  "~^/api/v1/orders/[0-9a-f]{32}$" /api/v1/orders/:id;
+  "~^/api/v1/admin/orders/[0-9a-f]{32}$" /api/v1/admin/orders/:id;
+  "~^/api/v1/admin/customer-accounts/[0-9a-f]{32}$" /api/v1/admin/customer-accounts/:id;
+  "~^/api/v1/admin/customer-accounts/[0-9a-f]{32}/password$" /api/v1/admin/customer-accounts/:id/password;
+  "~^/api/v1/admin/customer-accounts/[0-9a-f]{32}/revoke-sessions$" /api/v1/admin/customer-accounts/:id/revoke-sessions;
+  "~^/api/v1/admin/catalog/[A-Za-z0-9_.-]{1,64}$" /api/v1/admin/catalog/:id;
+  "~^/api/v1/admin/catalog/[A-Za-z0-9_.-]{1,64}/duplicate$" /api/v1/admin/catalog/:id/duplicate;
+  "~^/api/v1/orders/[0-9a-f]{32}/cancel$" /api/v1/orders/:id/cancel;
+  "~^/api/v1/admin/orders/[0-9a-f]{32}/cancel$" /api/v1/admin/orders/:id/cancel;
+  "~^/api/v1/payment-callbacks/[a-z][a-z0-9_.-]{1,63}$" /api/v1/payment-callbacks/:provider;
+}
+map $upstream_http_x_request_id $aster_api_request_id {
+  default "";
+  "~^[0-9a-f]{32}$" $upstream_http_x_request_id;
+}
+log_format aster_access escape=json
+  '{"event":"edge_request","time":"$time_iso8601",'
+  '"edge_id":"$request_id","api_request_id":"$aster_api_request_id",'
+  '"method":"$aster_log_method","route":"$aster_log_route",'
+  '"status":$status,"body_bytes":$body_bytes_sent,"request_time":"$request_time",'
+  '"upstream_status":"$upstream_status","upstream_response_time":"$upstream_response_time"}';
+# END ASTER PRIVACY LOGGING'''
+
+
 def nginx_text(spec):
     hostname = urllib.parse.urlsplit(spec["origin"]).hostname
     port = urllib.parse.urlsplit(spec["origin"]).port or 443
@@ -760,11 +861,11 @@ def nginx_text(spec):
     headers = '\n'.join("proxy_set_header " + line + ";" for line in ('Host $http_host', 'X-Real-IP $remote_addr', 'X-Forwarded-For $remote_addr', 'X-Forwarded-Proto https', 'X-Forwarded-Host ""', 'Forwarded ""'))
     return f'''user www-data;
 pid {config}/nginx.pid;
-error_log stderr warn;
+error_log /dev/null warn;
 worker_processes 1;
 events {{ worker_connections 512; }}
 http {{
-  access_log off;
+{nginx_logging_text()}
   client_body_temp_path {config}/nginx-temp/client;
   proxy_temp_path {config}/nginx-temp/proxy;
   fastcgi_temp_path {config}/nginx-temp/fastcgi;
@@ -780,6 +881,10 @@ http {{
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_tickets off;
     server_tokens off;
+    # Engine errors can contain the raw request/query/referrer. Keep only the
+    # allowlisted JSON request summary; inspect service/config failures separately.
+    error_log /dev/null warn;
+    access_log syslog:server=unix:/dev/log,tag=aster_edge,severity=info,nohostname aster_access;
     if ($host != {hostname}) {{ return 444; }}
     root {spec['instance_root']}/current/web;
     add_header X-Content-Type-Options nosniff always;
@@ -804,7 +909,8 @@ http {{
     location ~ /\\. {{ deny all; }}
     location / {{
       if (-f {config}/maintenance) {{ return 503; }}
-      add_header Cache-Control "no-cache" always;
+      # Unlike add_header, expires does not discard the server security headers.
+      expires -1;
       try_files $uri $uri/ /index.html;
     }}
   }}
@@ -827,6 +933,12 @@ ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths={spec['config_root']}
 NoNewPrivileges=true
+LimitCORE=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aster-edge-control
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=10000
 [Install]
 WantedBy=multi-user.target
 '''.encode()

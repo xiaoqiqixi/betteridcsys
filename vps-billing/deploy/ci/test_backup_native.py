@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the real fake-database backup suite with isolated scanner availability."""
 import errno
+import json
 import os
 from pathlib import Path
 import shutil
@@ -23,7 +24,7 @@ class BackupStagingPermissionsTest(unittest.TestCase):
         self.root = Path(self.scratch.name)
         self.staging = self.root / "new-staging"
         self.staging.mkdir(mode=0o700)
-        source = BACKUP.read_text().split('if ! python3 - "$staging" 2>/dev/null <<\'PY\'\n', 1)[1].split("\nPY\nthen", 1)[0]
+        source = BACKUP.read_text().split('if python3 - "$staging" 2>/dev/null <<\'PY\'\n', 1)[1].split("\nPY\nthen", 1)[0]
         self.guard = compile(source, str(BACKUP), "exec")
 
     def run_guard(self, path=None):
@@ -136,9 +137,110 @@ class BackupStagingPermissionsTest(unittest.TestCase):
             env=dict(os.environ, PATH=str(tools) + ":" + os.environ["PATH"]), text=True, capture_output=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
-        self.assertEqual(result.stderr, "Backup failed: New backup staging directory could not be made private.\n")
+        event = json.loads(result.stderr)
+        self.assertEqual(set(event), {"event", "operation_id", "phase", "tool_role", "exit_code", "reason"})
+        self.assertEqual((event["event"], event["phase"], event["tool_role"], event["exit_code"]),
+                         ("backup_failed", "staging_privacy", "python", 71))
+        self.assertRegex(event["operation_id"], r"^[a-f0-9]{32}$")
         self.assertEqual(list(output.iterdir()), [])
         self.assertFalse((self.root / "unexpected-call").exists())
+
+
+class BackupValidationReasonTests(unittest.TestCase):
+    def reject(self, arguments, reason, tools=None):
+        result = subprocess.run(["bash", str(BACKUP), *arguments],
+            env=dict(os.environ, PATH=str(tools) + ":" + os.environ["PATH"]) if tools else None,
+            text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        event = json.loads(result.stderr)
+        self.assertEqual(set(event), {"event", "operation_id", "phase", "tool_role", "exit_code", "reason"})
+        self.assertEqual((event["event"], event["phase"], event["tool_role"], event["exit_code"], event["reason"]),
+                         ("backup_failed", "input_validation", "builtin", 1, reason))
+        self.assertRegex(event["operation_id"], r"^[a-f0-9]{32}$")
+        self.assertNotIn("fixture-not-a-real-secret", result.stdout + result.stderr)
+        self.assertNotIn("fixture-private-diagnostic-do-not-log", result.stdout + result.stderr)
+
+    def test_missing_value_has_fixed_argument_reason(self):
+        self.reject(["--database"], "missing_argument")
+
+    def test_invalid_database_reason_never_echoes_its_value(self):
+        self.reject(["--client-config", "/private/config", "--socket", "/private/socket",
+            "--database", "fixture-not-a-real-secret-bad", "--output-dir", "/private/output",
+            "--release-directory", "/private/release"], "invalid_database")
+
+    def test_non_private_client_config_has_distinct_reason_without_its_path(self):
+        with tempfile.TemporaryDirectory(prefix="fixture-private-diagnostic-do-not-log-") as directory:
+            root = Path(directory)
+            tools = root / "bin"
+            tools.mkdir()
+            for name in ("mysql", "mysqldump"):
+                target = tools / name
+                target.write_text("#!/bin/sh\nexit 99\n")
+                target.chmod(0o700)
+            config = root / "client.cnf"
+            config.write_text("[client]\nuser=fixture\npassword=fixture-not-a-real-secret\n")
+            config.chmod(0o644)
+            output, release = root / "output", root / "release"
+            output.mkdir(mode=0o700)
+            release.mkdir(mode=0o700)
+            self.reject(["--client-config", str(config), "--socket", str(root / "socket"),
+                "--database", "fixture", "--output-dir", str(output), "--release-directory", str(release)],
+                "private_client_config", tools)
+            self.assertEqual(list(output.iterdir()), [])
+
+
+class BackupMetadataGrammarTest(unittest.TestCase):
+    def setUp(self):
+        source = BACKUP.read_text().split('metadata() {\n  python3 - "$release_directory" "$database" "$@" <<\'PY\'\n', 1)[1].split("\nPY\n}", 1)[0]
+        namespace = {}
+        exec(compile(source.rsplit("\ntry:\n", 1)[0], str(BACKUP), "exec"), namespace)
+        self.extend, self.rejected = namespace["extend_shape"], namespace["Rejected"]
+
+    def test_real_ninth_index_migration_does_not_invent_new_columns_or_tables(self):
+        shape = {"audit_events": ["id", "user_id", "action", "target", "created_at", "actor_email", "detail"]}
+        expected = {name: list(columns) for name, columns in shape.items()}
+        migration = BACKUP.parents[2] / "backend/migrations/009_audit_query_indexes.sql"
+        self.extend(shape, migration.read_text())
+        self.assertEqual(shape, expected)
+
+    def test_real_tenth_account_migration_appends_only_two_user_columns(self):
+        original = ["id", "email", "name", "role", "password_hash", "created_at"]
+        shape = {"users": list(original), "orders": ["id", "user_id"]}
+        migration = BACKUP.parents[2] / "backend/migrations/010_customer_accounts.sql"
+        self.extend(shape, migration.read_text())
+        self.assertEqual(shape, {"users": original + ["disabled", "revision"], "orders": ["id", "user_id"]})
+        with self.assertRaises(self.rejected):
+            self.extend(shape, migration.read_text())
+
+    def test_historical_prefix_shapes_do_not_invent_future_account_columns(self):
+        paths = sorted((BACKUP.parents[2] / "backend/migrations").glob("[0-9][0-9][0-9]_*.sql"))
+        self.assertEqual(len(paths), 10, "Review this fixture when a migration is added")
+        shape = {"schema_migrations": ["version", "checksum", "applied_at"]}
+        prefixes = {}
+        for version, path in enumerate(paths, 1):
+            self.assertEqual(int(path.name[:3]), version)
+            self.extend(shape, path.read_text())
+            prefixes[version] = {table: list(columns) for table, columns in shape.items()}
+        original = ["id", "email", "name", "role", "password_hash", "created_at"]
+        for version in (6, 7, 8, 9):
+            with self.subTest(version=version):
+                self.assertEqual(prefixes[version]["users"], original)
+        self.assertEqual(prefixes[10]["users"], original + ["disabled", "revision"])
+        self.assertEqual({k: v for k, v in prefixes[9].items() if k != "users"},
+                         {k: v for k, v in prefixes[10].items() if k != "users"})
+        self.assertEqual(prefixes[8], prefixes[9], "Index-only migration must preserve column inventory")
+        self.assertNotIn("currency_settings", prefixes[6])
+        self.assertIn("currency_settings", prefixes[7])
+        for table in ("payment_attempts", "payment_settlements"):
+            self.assertNotIn(table, prefixes[7])
+            self.assertIn(table, prefixes[8])
+
+    def test_index_grammar_rejects_unknown_tables_columns_and_unreviewed_sql(self):
+        for sql in ("CREATE INDEX ix_bad ON unknown(id)", "CREATE INDEX ix_bad ON audit_events(unknown)",
+                    "CREATE INDEX ix_bad ON audit_events(id(8))", "DROP INDEX ix_bad ON audit_events"):
+            with self.subTest(sql=sql), self.assertRaises(self.rejected):
+                self.extend({"audit_events": ["id"]}, sql)
 
 
 class BackupScannerTest(unittest.TestCase):

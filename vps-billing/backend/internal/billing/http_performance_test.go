@@ -319,7 +319,7 @@ func httpPerfSeed(ctx context.Context, f *httpPerfFixture, seed string, p httpPe
 	}
 	f.cookie = httpPerfID(seed, "customer-cookie-a") + httpPerfID(seed, "customer-cookie-b")
 	f.adminCookie = httpPerfID(seed, "admin-cookie-a") + httpPerfID(seed, "admin-cookie-b")
-	for _, session := range []Session{{digest(f.cookie), f.customer, stamp.AddDate(40, 0, 0)}, {digest(f.adminCookie), f.adminID, stamp.AddDate(40, 0, 0)}} {
+	for _, session := range []Session{{Hash: digest(f.cookie), UserID: f.customer, Expires: stamp.AddDate(40, 0, 0)}, {Hash: digest(f.adminCookie), UserID: f.adminID, Expires: stamp.AddDate(40, 0, 0)}} {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)", session.Hash, session.UserID, session.Expires); err != nil {
 			return err
 		}

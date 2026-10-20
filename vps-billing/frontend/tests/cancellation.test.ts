@@ -125,7 +125,11 @@ beforeEach(() => {
         });
       }
       if (endpoint === "/admin/customers") return response([user]);
-      if (endpoint === "/services" || endpoint === "/audit")
+      if (
+        endpoint === "/services" ||
+        endpoint === "/admin/services" ||
+        endpoint === "/audit"
+      )
         return response([]);
       if (endpoint.startsWith("/plans?"))
         return response(fixtures.previewPlans("CNY"));

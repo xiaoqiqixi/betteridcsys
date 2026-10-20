@@ -320,7 +320,7 @@ onBeforeUnmount(() => {
       <template v-if="selected"
         ><div class="modal-heading">
           <div>
-            <p class="eyebrow">{{ tr("扩展详情", "INTEGRATION DETAILS") }}</p>
+            <p class="eyebrow">{{ tr("扩展详情", "Integration details") }}</p>
             <h2 id="integration-title">{{ selected.name }}</h2>
           </div>
           <button
@@ -331,171 +331,180 @@ onBeforeUnmount(() => {
             <X :size="21" />
           </button>
         </div>
-        <div class="integration-detail-status">
-          <span class="badge" :class="tone(selected)">{{
-            label(selected)
-          }}</span
-          ><span class="mono">{{ selected.id }}</span>
-        </div>
-        <p class="integration-detail-description">{{ selected.description }}</p>
-        <dl class="account-details">
-          <div>
-            <dt>{{ tr("当前选择", "Selection") }}</dt>
-            <dd>
-              {{
-                selected.enabled
-                  ? tr("已启用", "Enabled")
-                  : tr("未启用", "Disabled")
-              }}
-            </dd>
+        <div class="modal-body">
+          <div class="integration-detail-status">
+            <span class="badge" :class="tone(selected)">{{
+              label(selected)
+            }}</span
+            ><span class="mono">{{ selected.id }}</span>
           </div>
-          <div>
-            <dt>{{ tr("配置状态", "Configuration status") }}</dt>
-            <dd>
-              {{
-                selected.configured
-                  ? tr("已配置", "Configured")
-                  : tr("未配置", "Not configured")
-              }}
-            </dd>
-          </div>
-          <div>
-            <dt>{{ tr("配置方式", "Configuration method") }}</dt>
-            <dd>
-              {{
-                selected.configuration_mode === "admin_api"
-                  ? tr("管理员设置", "Administrator settings")
-                  : tr("服务端环境变量", "Server environment variables")
-              }}
-            </dd>
-          </div>
-        </dl>
-        <section
-          v-if="selected.kind === 'payment'"
-          class="integration-detail-section"
-        >
-          <h3>{{ tr("支持币种", "Supported currencies") }}</h3>
-          <p>
-            {{
-              selected.supported_currencies.length
-                ? selected.supported_currencies
-                    .map(
-                      (code) =>
-                        `${code} · ${selected?.currency_decimal_places[code]} ${tr("位小数", "decimal places")}`,
-                    )
-                    .join(" / ")
-                : tr("无可用支付币种", "No payment currencies available")
-            }}
+          <p class="integration-detail-description">
+            {{ selected.description }}
           </p>
-        </section>
-        <section class="integration-detail-section">
-          <h3>{{ tr("接口能力", "Capabilities") }}</h3>
-          <div class="integration-capabilities">
-            <span
-              v-for="capability in selected.capabilities"
-              :key="capability"
-              >{{ capability }}</span
-            ><span v-if="!selected.capabilities.length">
-              {{ tr("暂无可用能力", "No available capabilities") }}
-            </span>
-          </div>
-        </section>
-        <section class="integration-detail-section">
-          <h3>{{ tr("配置项清单", "Configuration fields") }}</h3>
-          <p>
-            {{
-              tr(
-                "这里只显示字段说明，不读取或展示已保存的配置值。",
-                "Only field descriptions are shown. Saved values are never read or displayed here.",
-              )
-            }}
-          </p>
-          <div
-            v-for="field in selected.configuration_fields"
-            :key="field.key"
-            class="integration-field"
-          >
+          <dl class="account-details">
             <div>
-              <b>{{ field.label }}</b
-              ><span
-                >{{
-                  field.required
-                    ? tr("必填", "Required")
-                    : tr("可选", "Optional")
-                }}
-                ·
+              <dt>{{ tr("当前选择", "Selection") }}</dt>
+              <dd>
                 {{
-                  field.secret || field.type === "secret_ref"
-                    ? tr("密钥引用", "Secret reference")
-                    : field.type === "url"
-                      ? tr("服务地址", "Service URL")
-                      : tr("文本", "Text")
-                }}</span
-              >
+                  selected.enabled
+                    ? tr("已启用", "Enabled")
+                    : tr("未启用", "Disabled")
+                }}
+              </dd>
             </div>
-            <code>{{ field.key }}</code
-            ><small v-if="field.secret || field.type === 'secret_ref'"
-              ><LockKeyhole :size="12" />
-              {{
-                tr(
-                  "通过服务端密钥管理注入，不在浏览器输入",
-                  "Injected through server secret management, never entered in the browser",
-                )
-              }}
-            </small>
-          </div>
-          <p
-            v-if="!selected.configuration_fields.length"
-            class="integration-field-empty"
+            <div>
+              <dt>{{ tr("配置状态", "Configuration status") }}</dt>
+              <dd>
+                {{
+                  selected.configured
+                    ? tr("已配置", "Configured")
+                    : tr("未配置", "Not configured")
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>{{ tr("配置方式", "Configuration method") }}</dt>
+              <dd>
+                {{
+                  selected.configuration_mode === "admin_api"
+                    ? tr("管理员设置", "Administrator settings")
+                    : tr("服务端环境变量", "Server environment variables")
+                }}
+              </dd>
+            </div>
+          </dl>
+          <section
+            v-if="selected.kind === 'payment'"
+            class="integration-detail-section"
           >
-            {{
-              tr(
-                "此适配器未声明配置项。",
-                "This adapter has no configuration fields.",
-              )
-            }}
-          </p>
-        </section>
-        <section class="integration-detail-section">
-          <h3>{{ tr("如何接入", "How to connect") }}</h3>
-          <ol class="integration-steps">
-            <li>
+            <h3>{{ tr("支持币种", "Supported currencies") }}</h3>
+            <p>
+              {{
+                selected.supported_currencies.length
+                  ? selected.supported_currencies
+                      .map(
+                        (code) =>
+                          `${code} · ${selected?.currency_decimal_places[code]} ${tr("位小数", "decimal places")}`,
+                      )
+                      .join(" / ")
+                  : tr("无可用支付币种", "No payment currencies available")
+              }}
+            </p>
+          </section>
+          <section class="integration-detail-section">
+            <h3>{{ tr("接口能力", "Capabilities") }}</h3>
+            <div class="integration-capabilities">
+              <span
+                v-for="capability in selected.capabilities"
+                :key="capability"
+                >{{ capability }}</span
+              ><span v-if="!selected.capabilities.length">
+                {{ tr("暂无可用能力", "No available capabilities") }}
+              </span>
+            </div>
+          </section>
+          <section class="integration-detail-section">
+            <h3>{{ tr("配置项清单", "Configuration fields") }}</h3>
+            <p>
               {{
                 tr(
-                  "在服务端配置已注册的适配器与所需环境变量，密钥通过部署平台安全注入。",
-                  "Configure a registered adapter and its environment variables on the server. Inject secrets securely through the deployment platform.",
+                  "这里只显示字段说明，不读取或展示已保存的配置值。",
+                  "Only field descriptions are shown. Saved values are never read or displayed here.",
                 )
               }}
-            </li>
-            <li>
+            </p>
+            <div
+              v-for="field in selected.configuration_fields"
+              :key="field.key"
+              class="integration-field"
+            >
+              <div>
+                <b>{{ field.label }}</b
+                ><span
+                  >{{
+                    field.required
+                      ? tr("必填", "Required")
+                      : tr("可选", "Optional")
+                  }}
+                  ·
+                  {{
+                    field.secret || field.type === "secret_ref"
+                      ? tr("密钥引用", "Secret reference")
+                      : field.type === "url"
+                        ? tr("服务地址", "Service URL")
+                        : tr("文本", "Text")
+                  }}</span
+                >
+              </div>
+              <code>{{ field.key }}</code
+              ><small v-if="field.secret || field.type === 'secret_ref'"
+                ><LockKeyhole :size="12" />
+                {{
+                  tr(
+                    "通过服务端密钥管理注入，不在浏览器输入",
+                    "Injected through server secret management, never entered in the browser",
+                  )
+                }}
+              </small>
+            </div>
+            <p
+              v-if="!selected.configuration_fields.length"
+              class="integration-field-empty"
+            >
               {{
                 tr(
-                  "重启服务使配置生效，返回此页刷新清单，并另行验证外部服务连通性。",
-                  "Restart the service, refresh this page, and separately verify connectivity to the external provider.",
+                  "此适配器未声明配置项。",
+                  "This adapter has no configuration fields.",
                 )
               }}
-            </li>
-            <li>
-              {{
-                tr(
-                  "新供应商需实现类型化接口、注册并重新构建。暂不支持在线安装、上传脚本或在此切换。",
-                  "New providers require a typed implementation, registration and rebuild. Online installation, script upload and switching here are not supported.",
-                )
-              }}
-            </li>
-          </ol>
-        </section>
-        <div v-if="selected.limitations.length" class="integration-limitations">
-          <b> {{ tr("当前限制", "Current limitations") }} </b>
-          <ul>
-            <li v-for="limitation in selected.limitations" :key="limitation">
-              {{ limitation }}
-            </li>
-          </ul>
+            </p>
+          </section>
+          <section class="integration-detail-section">
+            <h3>{{ tr("如何接入", "How to connect") }}</h3>
+            <ol class="integration-steps">
+              <li>
+                {{
+                  tr(
+                    "在服务端配置已注册的适配器与所需环境变量，密钥通过部署平台安全注入。",
+                    "Configure a registered adapter and its environment variables on the server. Inject secrets securely through the deployment platform.",
+                  )
+                }}
+              </li>
+              <li>
+                {{
+                  tr(
+                    "重启服务使配置生效，返回此页刷新清单，并另行验证外部服务连通性。",
+                    "Restart the service, refresh this page, and separately verify connectivity to the external provider.",
+                  )
+                }}
+              </li>
+              <li>
+                {{
+                  tr(
+                    "新供应商需实现类型化接口、注册并重新构建。暂不支持在线安装、上传脚本或在此切换。",
+                    "New providers require a typed implementation, registration and rebuild. Online installation, script upload and switching here are not supported.",
+                  )
+                }}
+              </li>
+            </ol>
+          </section>
+          <div
+            v-if="selected.limitations.length"
+            class="integration-limitations"
+          >
+            <b> {{ tr("当前限制", "Current limitations") }} </b>
+            <ul>
+              <li v-for="limitation in selected.limitations" :key="limitation">
+                {{ limitation }}
+              </li>
+            </ul>
+          </div>
         </div>
-        <button class="button secondary full" @click="drawer?.close()">
-          {{ tr("关闭说明", "Close guide") }}
-        </button>
+        <div class="modal-actions">
+          <button class="button secondary full" @click="drawer?.close()">
+            {{ tr("关闭说明", "Close guide") }}
+          </button>
+        </div>
       </template>
     </dialog>
   </div>

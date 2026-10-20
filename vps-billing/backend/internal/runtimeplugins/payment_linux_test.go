@@ -4,9 +4,11 @@ import (
 	"aster/billing/pkg/pluginapi"
 	"aster/billing/pkg/pluginapi/paymentv1"
 	"aster/billing/pkg/pluginserver"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -438,37 +440,125 @@ func TestPaymentApprovalSharesRPCCapacityAndRecovers(t *testing.T) {
 }
 
 func TestPaymentServerRequiresOneOperationOnHandshakenConnection(t *testing.T) {
-	f := newPaymentFixture(t)
-	var calls atomic.Int32
-	f.paymentServe(t, paymentProcessor{create: func(context.Context, paymentv1.Config, paymentv1.Intent) (paymentv1.Checkout, error) {
-		calls.Add(1)
-		return paymentCheckout(), nil
-	}})
-	client := func() *http.Client {
-		return &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", f.policy.Payment.Socket)
-		}}}
-	}
-	first, second := client(), client()
-	defer first.CloseIdleConnections()
-	defer second.CloseIdleConnections()
-	nonce := strings.Repeat("a", 64)
-	request := pluginapi.PaymentCreateRequest{Protocol: pluginapi.PaymentProtocol, Version: f.manifest.Version, RequestID: nonce, TimeoutMS: 1000, Config: f.paymentConfig(), Intent: paymentIntent()}
-	var out pluginapi.PaymentCreateResponse
-	if exchange(context.Background(), first, "/v1/payment/checkout", request, &out) == nil || calls.Load() != 0 {
-		t.Fatal("unhandshaken operation accepted")
-	}
-	var identity pluginapi.Identity
-	if e := exchange(context.Background(), first, "/v1/handshake", pluginapi.Hello{Protocol: pluginapi.PaymentProtocol, CoreVersion: pluginapi.CoreVersion, Nonce: nonce}, &identity); e != nil {
-		t.Fatal(e)
-	}
-	if exchange(context.Background(), second, "/v1/payment/checkout", request, &out) == nil || calls.Load() != 0 {
-		t.Fatal("handshake moved between connections")
-	}
-	if e := exchange(context.Background(), first, "/v1/payment/checkout", request, &out); e != nil || out.Status != "accepted" {
-		t.Fatal(e, out)
-	}
-	if exchange(context.Background(), first, "/v1/payment/checkout", request, &out) == nil || calls.Load() != 1 {
-		t.Fatal("connection replay accepted")
+	for _, operations := range []struct{ first, replay string }{
+		{"checkout", "checkout"}, {"checkout", "verify"},
+		{"verify", "checkout"}, {"verify", "verify"},
+	} {
+		t.Run(operations.first+"_then_"+operations.replay, func(t *testing.T) {
+			f := newPaymentFixture(t)
+			var creates, verifies atomic.Int32
+			f.paymentServe(t, paymentProcessor{
+				create: func(context.Context, paymentv1.Config, paymentv1.Intent) (paymentv1.Checkout, error) {
+					creates.Add(1)
+					return paymentCheckout(), nil
+				},
+				verify: func(context.Context, paymentv1.Config, paymentv1.Callback) (paymentv1.VerifiedEvent, error) {
+					verifies.Add(1)
+					return paymentEvent(), nil
+				},
+			})
+			client := func() *http.Client {
+				t.Helper()
+				conn, err := net.DialTimeout("unix", f.policy.Payment.Socket, 2*time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var dials atomic.Int32
+				transport := &http.Transport{Proxy: nil, MaxConnsPerHost: 1, MaxIdleConns: 1, MaxIdleConnsPerHost: 1,
+					DialContext: func(context.Context, string, string) (net.Conn, error) {
+						if dials.Add(1) != 1 {
+							return nil, errors.New("test client attempted to redial its pinned Unix connection")
+						}
+						return conn, nil
+					}}
+				c := &http.Client{Transport: transport, Timeout: 2 * time.Second,
+					CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+				t.Cleanup(func() {
+					c.CloseIdleConnections()
+					conn.Close()
+					if n := dials.Load(); n != 1 {
+						t.Errorf("pinned connection handed to transport %d times, want 1", n)
+					}
+				})
+				return c
+			}
+			first, second := client(), client()
+			post := func(c *http.Client, path string, input any, status int) []byte {
+				t.Helper()
+				raw, err := json.Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Like exchange, omit GetBody and idempotency headers to forbid
+				// automatic replay; unlike exchange, drain rejected responses too.
+				req, err := http.NewRequest("POST", "http://plugin.local"+path, io.NopCloser(bytes.NewReader(raw)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.ContentLength = int64(len(raw))
+				req.Header.Set("Content-Type", "application/json")
+				response, err := c.Do(req)
+				if err != nil {
+					t.Fatalf("%s: transport error is not a protocol rejection: %v", path, err)
+				}
+				body, readErr := io.ReadAll(io.LimitReader(response.Body, pluginapi.MaxResponseBytes+1))
+				closeErr := response.Body.Close()
+				if readErr != nil || closeErr != nil || len(body) > pluginapi.MaxResponseBytes {
+					t.Fatalf("%s: incomplete or oversized response: read=%v close=%v bytes=%d", path, readErr, closeErr, len(body))
+				}
+				if response.StatusCode != status {
+					t.Fatalf("%s: HTTP %d, want %d; body=%q", path, response.StatusCode, status, body)
+				}
+				if status == http.StatusConflict && string(body) != "handshake required\n" {
+					t.Fatalf("%s: unexpected rejection body %q", path, body)
+				}
+				if status == http.StatusOK && response.Header.Get("Content-Type") != "application/json" {
+					t.Fatalf("%s: unexpected success content type %q", path, response.Header.Get("Content-Type"))
+				}
+				return body
+			}
+			nonce := strings.Repeat("a", 64)
+			operation := func(c *http.Client, name string, status int) []byte {
+				t.Helper()
+				var input any = pluginapi.PaymentCreateRequest{Protocol: pluginapi.PaymentProtocol, Version: f.manifest.Version, RequestID: nonce, TimeoutMS: 1000, Config: f.paymentConfig(), Intent: paymentIntent()}
+				if name == "verify" {
+					input = pluginapi.PaymentVerifyRequest{Protocol: pluginapi.PaymentProtocol, Version: f.manifest.Version, RequestID: nonce, TimeoutMS: 1000, Config: f.paymentConfig(), Callback: paymentCallback()}
+				}
+				return post(c, "/v1/payment/"+name, input, status)
+			}
+			assertCalls := func(wantCreates, wantVerifies int32) {
+				t.Helper()
+				if c, v := creates.Load(), verifies.Load(); c != wantCreates || v != wantVerifies {
+					t.Fatalf("processor calls: checkout=%d verify=%d, want %d/%d", c, v, wantCreates, wantVerifies)
+				}
+			}
+			operation(first, operations.first, http.StatusConflict)
+			assertCalls(0, 0)
+			body := post(first, "/v1/handshake", pluginapi.Hello{Protocol: pluginapi.PaymentProtocol, CoreVersion: pluginapi.CoreVersion, Nonce: nonce}, http.StatusOK)
+			var identity pluginapi.Identity
+			if err := pluginapi.DecodeStrict(body, pluginapi.MaxResponseBytes, &identity); err != nil || identity.Protocol != pluginapi.PaymentProtocol || identity.ID != f.manifest.ID || identity.Nonce != nonce {
+				t.Fatal("invalid handshake identity", err, identity)
+			}
+			operation(second, operations.first, http.StatusConflict)
+			assertCalls(0, 0)
+			body = operation(first, operations.first, http.StatusOK)
+			var wantCreates, wantVerifies int32
+			if operations.first == "checkout" {
+				var out pluginapi.PaymentCreateResponse
+				if err := pluginapi.DecodeStrict(body, pluginapi.MaxResponseBytes, &out); err != nil || out.Protocol != pluginapi.PaymentProtocol || out.RequestID != nonce || out.Status != "accepted" || out.Checkout == nil {
+					t.Fatal("checkout not accepted", err, out)
+				}
+				wantCreates = 1
+			} else {
+				var out pluginapi.PaymentVerifyResponse
+				if err := pluginapi.DecodeStrict(body, pluginapi.MaxResponseBytes, &out); err != nil || out.Protocol != pluginapi.PaymentProtocol || out.RequestID != nonce || out.Status != "verified" || out.Event == nil {
+					t.Fatal("callback not verified", err, out)
+				}
+				wantVerifies = 1
+			}
+			assertCalls(wantCreates, wantVerifies)
+			operation(first, operations.replay, http.StatusConflict)
+			assertCalls(wantCreates, wantVerifies)
+		})
 	}
 }

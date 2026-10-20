@@ -366,6 +366,33 @@ describe("cancellation result integrity", () => {
 });
 
 describe("safe cancellation errors", () => {
+  it.each(["zh-CN", "en"] as const)(
+    "gives administrators a payment-review instruction without changing the customer message in %s",
+    (language) => {
+      setLocale(language);
+      const error = new ApiError(
+        "CANCELLATION_UNAVAILABLE",
+        "raw-provider-secret",
+        "request-admin",
+        409,
+      );
+      const customerMessage = cancellationError(error);
+      const adminMessage = cancellationError(error, true);
+      expect(customerMessage).toContain(
+        language === "en" ? "Contact the operator." : "请联系运营方",
+      );
+      expect(adminMessage).toContain(
+        language === "en"
+          ? "Check payment records before proceeding"
+          : "请先核对支付记录",
+      );
+      expect(adminMessage).not.toContain(
+        language === "en" ? "Contact the operator" : "联系运营方",
+      );
+      expect(adminMessage).toContain("request-admin");
+      expect(adminMessage).not.toContain("raw-provider-secret");
+    },
+  );
   const labels = [
     ["INVALID_BODY", "取消请求无效", "The cancellation request is invalid"],
     ["INVALID_CANCELLATION", "单行纯文本原因", "single-line plain-text reason"],

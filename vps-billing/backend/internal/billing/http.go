@@ -24,6 +24,7 @@ import (
 )
 
 type Config struct {
+	Logger            *slog.Logger
 	Updates           UpdateService
 	HostOperations    HostOperationSource
 	Plugins           *runtimeplugins.Manager
@@ -55,6 +56,9 @@ func NewApp(s Store, c Config) *App {
 
 // NewAppWithIntegrations injects a validated immutable registry. Nil fails closed.
 func NewAppWithIntegrations(s Store, c Config, registry *integrations.Registry) *App {
+	if c.Logger == nil {
+		c.Logger = slog.Default()
+	}
 	if registry == nil {
 		registry = integrations.Default()
 	}
@@ -100,7 +104,14 @@ func (a *App) current(r *http.Request) (User, error) {
 	if e != nil {
 		return User{}, e
 	}
-	return a.Store.UserByID(r.Context(), s.UserID)
+	u, err := a.Store.UserByID(r.Context(), s.UserID)
+	if err == nil && u.Disabled {
+		return User{}, ErrNotFound
+	}
+	if err == nil {
+		observeActor(r.Context(), u)
+	}
+	return u, err
 }
 func jsonOut(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -108,6 +119,7 @@ func jsonOut(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": v})
 }
 func fail(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	observeError(r.Context(), code, "")
 	locale := requestLocale(r.Header.Get("Accept-Language"))
 	w.Header().Set("Content-Language", locale)
 	if locale == "en" {
@@ -120,14 +132,8 @@ func fail(w http.ResponseWriter, r *http.Request, status int, code, msg string) 
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": msg, "request_id": w.Header().Get("X-Request-ID")}})
 }
 func (a *App) internal(w http.ResponseWriter, r *http.Request, e error) {
-	slog.Error("request failed", "request_id", w.Header().Get("X-Request-ID"), "error_type", errorKind(e))
+	observeError(r.Context(), "INTERNAL_ERROR", errorKind(e))
 	fail(w, r, 500, "INTERNAL_ERROR", "暂时无法完成请求，请稍后重试")
-}
-func errorKind(e error) string {
-	if errors.Is(e, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	return "storage_error"
 }
 func body(w http.ResponseWriter, r *http.Request, v any) bool {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -149,8 +155,7 @@ func body(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 func (a *App) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Request-ID", ID())
+	return a.observeHTTP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Add("Vary", "Accept-Language")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -162,14 +167,8 @@ func (a *App) Handler() http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 		defer cancel()
 		r = r.WithContext(ctx)
-		defer func() {
-			if recover() != nil {
-				slog.Error("request panic", "request_id", w.Header().Get("X-Request-ID"))
-				fail(w, r, 500, "INTERNAL_ERROR", "暂时无法完成请求")
-			}
-		}()
 		a.serve(w, r)
-	})
+	}))
 }
 func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
@@ -196,6 +195,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if p == "/readyz" && r.Method == "GET" {
 		if e := a.Store.Ping(r.Context()); e != nil {
+			observeError(r.Context(), "NOT_READY", errorKind(e))
 			fail(w, r, 503, "NOT_READY", "服务尚未就绪")
 		} else {
 			jsonOut(w, 200, map[string]string{"status": "ready"})
@@ -314,6 +314,18 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			u.Role = "customer"
 		}
 		a.cancelOrderHTTP(w, r, u, cancellationID)
+		return
+	}
+	if orderID, matched := orderDetailPath(p, admin); matched {
+		a.orderDetailHTTP(w, r, uid, orderID)
+		return
+	}
+	if p == "/admin/customer-accounts" || strings.HasPrefix(p, "/admin/customer-accounts/") {
+		a.adminCustomerAccountsHTTP(w, r, u, p)
+		return
+	}
+	if p == "/admin/catalog" || strings.HasPrefix(p, "/admin/catalog/") {
+		a.adminCatalogHTTP(w, r, u, p)
 		return
 	}
 	if p == "/admin/currencies" {
@@ -457,12 +469,16 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	case "/services":
 		v, e := a.Store.Services(r.Context(), uid)
 		a.result(w, r, v, e)
+	case "/admin/services":
+		a.adminServicesHTTP(w, r)
 	case "/orders", "/admin/orders":
 		v, e := a.Store.Orders(r.Context(), uid)
 		a.result(w, r, v, e)
 	case "/invoices", "/admin/invoices":
 		v, e := a.Store.Invoices(r.Context(), uid)
 		a.result(w, r, v, e)
+	case "/audit-events", "/admin/audit-events":
+		a.auditEventsHTTP(w, r, u, uid)
 	case "/audit":
 		if u.Role == "admin" {
 			uid = ""
@@ -554,12 +570,16 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	valid := bcrypt.CompareHashAndPassword(hash, []byte(v.Password)) == nil
-	if !valid || e != nil {
+	if !valid || e != nil || u.Disabled {
 		fail(w, r, 401, "INVALID_CREDENTIALS", "邮箱或密码不正确")
 		return
 	}
 	token := ID() + ID()
-	if e = a.Store.PutSession(r.Context(), Session{Hash: digest(token), UserID: u.ID, Expires: time.Now().UTC().Add(8 * time.Hour)}); e != nil {
+	if e = a.Store.PutSession(r.Context(), Session{Revision: u.Revision, Hash: digest(token), UserID: u.ID, Expires: time.Now().UTC().Add(8 * time.Hour)}); e != nil {
+		if errors.Is(e, ErrNotFound) || errors.Is(e, ErrConflict) {
+			fail(w, r, 401, "INVALID_CREDENTIALS", "邮箱或密码不正确")
+			return
+		}
 		a.internal(w, r, e)
 		return
 	}
@@ -568,6 +588,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		a.internal(w, r, e)
 		return
 	}
+	observeActor(r.Context(), u)
 	a.setCookie(w, token)
 	jsonOut(w, 200, map[string]any{"user": u, "csrf_token": a.csrf(token), "demo_mode": a.Config.Demo})
 }

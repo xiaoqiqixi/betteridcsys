@@ -59,12 +59,42 @@ def executable(path, source):
 def wait_for(path, process, timeout=12):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if path.exists():
+        # write_text creates an empty file before writing the PID. Waiting only
+        # for existence can kill the writer early and later mistake /proc/ for
+        # a surviving child; require the complete, bounded PID first.
+        try:
+            with path.open("rb") as marker:
+                raw = marker.read(11)
+        except FileNotFoundError:
+            raw = b""
+        if raw and len(raw) <= 10 and raw[:1] != b"0" and raw.isdigit() and int(raw) <= 2147483647:
             return
         if process.poll() is not None:
             raise AssertionError("Fixture helper exited before readiness")
         time.sleep(0.02)
     raise AssertionError("Fixture readiness timed out")
+
+
+class PidFileReadinessTests(unittest.TestCase):
+    def test_empty_or_invalid_pid_file_is_not_ready(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory(prefix="aster-pid-readiness-") as directory:
+            marker = Path(directory) / "fixture.pid"
+            for raw in (b"", b"not-a-pid", b"0", b"-1", b"12\n34", b"123\n", b"\xff", b"2147483648", b"12345678901"):
+                with self.subTest(raw=raw):
+                    marker.write_bytes(raw)
+                    with mock.patch.object(time, "monotonic", side_effect=(0, 0, 2)), mock.patch.object(time, "sleep"):
+                        with self.assertRaisesRegex(AssertionError, "Fixture readiness timed out"):
+                            wait_for(marker, process, timeout=1)
+
+    def test_complete_positive_pid_file_is_ready(self):
+        process = mock.Mock()
+        process.poll.side_effect = AssertionError("Ready PID must not wait for fixture exit")
+        with tempfile.TemporaryDirectory(prefix="aster-pid-readiness-") as directory:
+            marker = Path(directory) / "fixture.pid"
+            marker.write_bytes(b"12345")
+            self.assertIsNone(wait_for(marker, process))
 
 
 class BrowserVersionTextTests(unittest.TestCase):

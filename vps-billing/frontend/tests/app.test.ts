@@ -11,6 +11,7 @@ import {
 } from "../src/lib/i18n";
 import App from "../src/App.vue";
 import { defaultCurrencyRegistry } from "../src/lib/currencies";
+import { money, type Service, type Session, type User } from "../src/lib/api";
 const configuredCurrencies = () => ({
   ...structuredClone(defaultCurrencyRegistry),
   currencies: [
@@ -29,6 +30,8 @@ const configuredCurrencies = () => ({
 });
 import * as fixtures from "../src/lib/preview";
 let checkoutResponse: unknown;
+let adminServiceRows: (Service & { customer_id: string })[];
+let adminLoadedCustomers: User[];
 let activeUser: null | typeof fixtures.previewUser = null;
 let requests: { path: string; method: string; options: RequestInit }[] = [];
 function mockNavigationMedia(initial = false) {
@@ -80,6 +83,32 @@ beforeEach(() => {
   restorePreferences();
   activeUser = null;
   checkoutResponse = undefined;
+  adminLoadedCustomers = [
+    fixtures.previewUser,
+    {
+      ...fixtures.previewUser,
+      id: "other-customer",
+      name: "林二",
+      email: "other@example.invalid",
+    },
+  ];
+  adminServiceRows = [
+    {
+      ...fixtures.services[0]!,
+      name: "cross-account-one",
+      customer_id: fixtures.previewUser.id,
+    },
+    {
+      ...fixtures.services[1]!,
+      name: "cross-account-two",
+      customer_id: "other-customer",
+    },
+    {
+      ...fixtures.services[2]!,
+      name: "unknown-owner-service",
+      customer_id: "customer-not-loaded",
+    },
+  ];
   requests = [];
   mockNavigationMedia();
   HTMLDialogElement.prototype.showModal = function () {
@@ -120,12 +149,52 @@ beforeEach(() => {
           recent_orders: fixtures.orders,
         };
       else if (endpoint === "/services") data = fixtures.services;
+      else if (endpoint === "/admin/services") data = adminServiceRows;
+      else if (endpoint === "/admin/customers") data = adminLoadedCustomers;
+      else if (endpoint.startsWith("/admin/customer-accounts?"))
+        data = {
+          items: adminLoadedCustomers.map((c) => ({
+            ...c,
+            disabled: false,
+            revision: 1,
+          })),
+          has_more: false,
+          limit: 50,
+        };
+      else if (endpoint === "/admin/catalog")
+        data = { revision: 1, currency_revision: 1, items: [] };
+      else if (endpoint === "/admin/orders") data = fixtures.orders;
+      else if (endpoint === "/admin/invoices") data = fixtures.invoices;
+      else if (endpoint.startsWith("/admin/overview?"))
+        data = {
+          customers: 2,
+          total_services: 3,
+          unpaid_invoices: 1,
+          unpaid_total_minor: 2400,
+          revenue_minor: 0,
+          currency: requestedCurrency,
+        };
       else if (endpoint.startsWith("/plans?"))
         data = fixtures.previewPlans(requestedCurrency as "CNY" | "USD");
       else if (endpoint === "/orders")
         data = options.method === "POST" ? fixtures.orders[0] : fixtures.orders;
       else if (endpoint === "/invoices") data = fixtures.invoices;
       else if (endpoint === "/audit") data = fixtures.audit;
+      else if (
+        ["/audit-events", "/admin/audit-events"].includes(
+          endpoint.split("?")[0]!,
+        )
+      )
+        data = {
+          items: fixtures.audit.map((event) => ({
+            ...event,
+            ...(activeUser?.role === "admin"
+              ? { owner_id: "a".repeat(32) }
+              : {}),
+          })),
+          has_more: false,
+          limit: 50,
+        };
       else if (endpoint.endsWith("/checkout") && checkoutResponse !== undefined)
         data = checkoutResponse;
       else if (endpoint.endsWith("/checkout"))
@@ -147,8 +216,491 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("billing workspace flows", () => {
+  it("uses real paged customer management and dedicated product navigation for administrators", async () => {
+    activeUser = { ...fixtures.previewUser, role: "admin" };
+    const { wrapper, router } = await mountApp();
+    try {
+      expect(wrapper.get('nav a[href="/catalog"]').text()).toBe("商品管理");
+      await router.push("/customers");
+      await flushPromises();
+      expect(
+        wrapper.find('[data-testid="customer-accounts-page"]').exists(),
+      ).toBe(true);
+      expect(
+        requests.some((r) => r.path === "/admin/customer-accounts?limit=50"),
+      ).toBe(true);
+      expect(wrapper.find('[data-testid="list-count"]').exists()).toBe(false);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+  it("does not expose or request customer/catalog management for customer sessions", async () => {
+    activeUser = { ...fixtures.previewUser, role: "customer" };
+    const { wrapper, router } = await mountApp();
+    try {
+      expect(wrapper.find('nav a[href="/catalog"]').exists()).toBe(false);
+      for (const path of ["/customers", "/catalog"]) {
+        await router.push(path);
+        await flushPromises();
+      }
+      expect(
+        wrapper.find('[data-testid="customer-accounts-page"]').exists(),
+      ).toBe(false);
+      expect(wrapper.find('[data-testid="catalog-page"]').exists()).toBe(false);
+      expect(
+        requests.some(
+          (r) =>
+            r.path.startsWith("/admin/customer-accounts") ||
+            r.path.startsWith("/admin/catalog"),
+        ),
+      ).toBe(false);
+      expect(
+        wrapper.findAll(".mobile-bottom-nav a").length,
+      ).toBeLessThanOrEqual(5);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it.each(["zh-CN", "en"] as const)(
+    "reads cross-account services only through the administrator endpoint and preserves exact owners in %s",
+    async (language) => {
+      setLocale(language);
+      activeUser = {
+        ...fixtures.previewUser,
+        id: "admin-session",
+        name: "Operator",
+        role: "admin",
+      };
+      const { wrapper, router } = await mountApp();
+      try {
+        expect(wrapper.get('nav a[href="/services"]').text()).toBe(
+          language === "en" ? "Services" : "服务管理",
+        );
+        await router.push("/services");
+        await flushPromises();
+        const cards = wrapper.findAll(".service-card");
+        expect(cards).toHaveLength(3);
+        expect(
+          cards[0]!.get('[data-testid="service-customer"]').text(),
+        ).toContain(fixtures.previewUser.id);
+        expect(
+          cards[0]!.get('[data-testid="service-customer"]').text(),
+        ).toContain(fixtures.previewUser.name);
+        expect(
+          cards[1]!.get('[data-testid="service-customer"]').text(),
+        ).toContain("other-customer");
+        expect(
+          cards[1]!.get('[data-testid="service-customer"]').text(),
+        ).toContain("林二");
+        const unknown = cards[2]!.get('[data-testid="service-customer"]');
+        expect(unknown.text()).toContain("customer-not-loaded");
+        expect(unknown.text()).toContain(
+          language === "en" ? "Customer details not loaded" : "客户资料未载入",
+        );
+        expect(unknown.text()).not.toContain("Operator");
+        expect(unknown.text()).not.toContain(fixtures.previewUser.name);
+        expect(cards[0]!.get(".service-card-footer").text()).toContain(
+          money(
+            fixtures.services[0]!.price_minor,
+            fixtures.services[0]!.currency,
+            fixtures.services[0]!.currency_format,
+          ),
+        );
+        expect(
+          requests.filter((request) => request.path === "/admin/services"),
+        ).toHaveLength(1);
+        expect(requests.some((request) => request.path === "/services")).toBe(
+          false,
+        );
+        expect(requests.every((request) => request.method === "GET")).toBe(
+          true,
+        );
+        expect(
+          wrapper.find('[data-testid="service-limit-note"]').text(),
+        ).toContain("1,000");
+        expect(wrapper.findAll(".service-card button")).toHaveLength(0);
+      } finally {
+        wrapper.unmount();
+      }
+    },
+  );
+  it("keeps customer service reads owner-scoped and never requests or exposes administrator owners", async () => {
+    activeUser = { ...fixtures.previewUser };
+    const { wrapper, router } = await mountApp();
+    try {
+      await router.push("/services");
+      await flushPromises();
+      expect(wrapper.get('nav a[href="/services"]').text()).toBe("云服务器");
+      expect(wrapper.findAll('[data-testid="service-customer"]')).toHaveLength(
+        0,
+      );
+      expect(wrapper.text()).not.toContain("customer-not-loaded");
+      expect(requests.some((request) => request.path === "/services")).toBe(
+        true,
+      );
+      expect(
+        requests.some((request) => request.path.startsWith("/admin/")),
+      ).toBe(false);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+  it("clears administrator services on a same-account role change and ignores its late read", async () => {
+    activeUser = { ...fixtures.previewUser, role: "admin" };
+    const { wrapper, router } = await mountApp();
+    try {
+      await router.push("/services");
+      await flushPromises();
+      let release!: (value: unknown) => void;
+      const originalFetch = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((path: string, options: RequestInit) =>
+          path.endsWith("/admin/services")
+            ? new Promise((resolve) => {
+                release = resolve;
+              })
+            : originalFetch(path, options),
+        ),
+      );
+      await wrapper.get('button[aria-label="刷新数据"]').trigger("click");
+      await flushPromises();
+      // Simulate the same session account being reclassified by the server.
+      // Server authorization is separately tested; this checks local data lifetime.
+      const state = wrapper.vm as unknown as {
+        session: Session;
+        adminServices: unknown;
+      };
+      state.session.user = { ...fixtures.previewUser, role: "customer" };
+      await flushPromises();
+      expect(state.adminServices).toBeUndefined();
+      expect(wrapper.findAll('[data-testid="service-customer"]')).toHaveLength(
+        0,
+      );
+      release({ ok: true, json: async () => ({ data: adminServiceRows }) });
+      await flushPromises();
+      expect(state.adminServices).toBeUndefined();
+      expect(wrapper.text()).not.toContain("cross-account-one");
+      expect(wrapper.text()).not.toContain("customer-not-loaded");
+    } finally {
+      wrapper.unmount();
+    }
+  });
+  it("does not label a failed first administrator service read as an empty service list", async () => {
+    activeUser = { ...fixtures.previewUser, role: "admin" };
+    const originalFetch = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) =>
+        path.endsWith("/admin/services")
+          ? {
+              ok: false,
+              status: 503,
+              json: async () => ({
+                error: { code: "UNAVAILABLE", message: "Services unavailable" },
+              }),
+            }
+          : originalFetch(path, options),
+      ),
+    );
+    const { wrapper, router } = await mountApp();
+    try {
+      await router.push("/services");
+      await flushPromises();
+      expect(wrapper.get(".alert.error").text()).toContain(
+        "Services unavailable",
+      );
+      expect(wrapper.find(".service-cards").exists()).toBe(false);
+      expect(wrapper.find(".empty-state").exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("这个页面还不存在");
+    } finally {
+      wrapper.unmount();
+    }
+  });
+  it("retains loaded administrator service records and marks them stale after a failed refresh", async () => {
+    activeUser = { ...fixtures.previewUser, role: "admin" };
+    const { wrapper, router } = await mountApp();
+    try {
+      await router.push("/services");
+      await flushPromises();
+      const before = wrapper.get(".service-cards").text();
+      const originalFetch = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) =>
+          path.endsWith("/admin/services")
+            ? {
+                ok: false,
+                status: 503,
+                json: async () => ({
+                  error: {
+                    code: "UNAVAILABLE",
+                    message: "Services unavailable",
+                  },
+                }),
+              }
+            : originalFetch(path, options),
+        ),
+      );
+      await wrapper.get('button[aria-label="刷新数据"]').trigger("click");
+      await flushPromises();
+      expect(wrapper.get(".alert.error").text()).toContain(
+        "Services unavailable",
+      );
+      expect(wrapper.get(".service-cards").text()).toBe(before);
+      expect(
+        wrapper.get('[data-testid="service-refresh-note"]').text(),
+      ).toContain("上次载入");
+      expect(wrapper.find(".empty-state").exists()).toBe(false);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+  it.each(["zh-CN", "en"] as const)(
+    "keeps native task dialogs separated into context, scrollable content and existing actions in %s",
+    async (language) => {
+      setLocale(language);
+      activeUser = { ...fixtures.previewUser };
+      const originalFetch = fetch;
+      const recorded = {
+        ...structuredClone(fixtures.invoices[0]!),
+        amount_minor: Number.MAX_SAFE_INTEGER,
+        currency_format: {
+          code: "USD",
+          name: "US Dollar",
+          prefix: "P".repeat(24),
+          suffix: "S".repeat(24),
+          decimal_places: 2,
+        },
+        line_items: [
+          {
+            description: "Recorded service",
+            amount_minor: Number.MAX_SAFE_INTEGER,
+          },
+        ],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) =>
+          path === "/api/v1/invoices" || path === "/api/v1/invoices/i1"
+            ? {
+                ok: true,
+                json: async () => ({
+                  data: path.endsWith("/i1") ? recorded : [recorded],
+                }),
+              }
+            : originalFetch(path, options),
+        ),
+      );
+      const { wrapper, router } = await mountApp();
+      await router.push("/invoices");
+      await flushPromises();
+      await wrapper.get(".invoice-table tbody button").trigger("click");
+      await flushPromises();
+      const invoiceDialog = wrapper.get(".invoice-modal");
+      expect(invoiceDialog.attributes("aria-labelledby")).toBe("invoice-title");
+      expect(invoiceDialog.get(".modal-heading #invoice-title").exists()).toBe(
+        true,
+      );
+      expect(invoiceDialog.find(".modal-heading .eyebrow").exists()).toBe(
+        false,
+      );
+      const expected = money(
+        recorded.amount_minor,
+        recorded.currency,
+        recorded.currency_format,
+      );
+      expect(invoiceDialog.get(".modal-body .invoice-line > b").text()).toBe(
+        expected,
+      );
+      expect(
+        invoiceDialog.get(".modal-body .invoice-total strong").text(),
+      ).toBe(expected);
+      expect(
+        invoiceDialog.get(".modal-actions button").attributes("disabled"),
+      ).toBeUndefined();
+      expect(invoiceDialog.get(".modal-actions").text()).toContain(
+        language === "en" ? "Avoid duplicate payments" : "勿重复支付",
+      );
+      await invoiceDialog.get(".modal-heading button").trigger("click");
+      await router.push("/plans");
+      await flushPromises();
+      await wrapper.get(".purchase-checkout .button.primary").trigger("click");
+      const orderDialog = wrapper.get('dialog[aria-labelledby="order-title"]');
+      expect(orderDialog.get(".modal-body #hostname").exists()).toBe(true);
+      expect(orderDialog.get(".modal-body .checkbox-label").exists()).toBe(
+        true,
+      );
+      expect(
+        orderDialog
+          .get(".modal-actions .button.primary")
+          .attributes("disabled"),
+      ).toBeDefined();
+      expect(orderDialog.get(".modal-heading button").attributes("type")).toBe(
+        "button",
+      );
+      expect(requests.every((request) => request.method === "GET")).toBe(true);
+      wrapper.unmount();
+    },
+  );
+  it.each(["zh-CN", "en"] as const)(
+    "retains recorded order fields and the existing action in the responsive table in %s",
+    async (language) => {
+      setLocale(language);
+      activeUser = { ...fixtures.previewUser };
+      const recorded = structuredClone(fixtures.orders[0]!);
+      const { wrapper, router } = await mountApp();
+      await router.push("/orders");
+      await flushPromises();
+      const table = wrapper.get(".order-table");
+      expect(table.attributes("aria-label")).toBe(
+        language === "en" ? "Order list" : "订单列表",
+      );
+      const row = table.get(`tr[data-order-id="${recorded.id}"]`);
+      const cells = row.findAll("td");
+      expect(cells[0]!.text()).toBe(recorded.number);
+      expect(cells[1]!.text()).toContain(recorded.plan_name);
+      expect(cells[2]!.attributes("data-label")).toBe(
+        language === "en" ? "Created on (UTC)" : "创建日期（UTC）",
+      );
+      expect(cells[3]!.text()).toBe(
+        money(
+          recorded.total_minor,
+          recorded.currency,
+          recorded.currency_format,
+        ),
+      );
+      expect(cells[3]!.attributes("data-label")).toBe(
+        language === "en" ? "Order amount" : "订单金额",
+      );
+      expect(cells[5]!.get("button").text()).toBe(
+        language === "en" ? "Cancel order" : "取消订单",
+      );
+      expect(fixtures.orders[0]).toEqual(recorded);
+      expect(requests.every((request) => request.method === "GET")).toBe(true);
+      wrapper.unmount();
+    },
+  );
+  it.each(["zh-CN", "en"] as const)(
+    "does not present a failed initial overview load as empty records in %s and permits retry",
+    async (language) => {
+      setLocale(language);
+      activeUser = { ...fixtures.previewUser };
+      let unavailable = true;
+      const originalFetch = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) =>
+          unavailable && path.endsWith("/services")
+            ? {
+                ok: false,
+                status: 503,
+                json: async () => ({
+                  error: { code: "UNAVAILABLE", message: "Data unavailable" },
+                }),
+              }
+            : originalFetch(path, options),
+        ),
+      );
+      const { wrapper } = await mountApp();
+      expect(wrapper.get(".alert.error").text()).toContain("Data unavailable");
+      expect(wrapper.find(".customer-overview").exists()).toBe(false);
+      expect(wrapper.find(".customer-empty").exists()).toBe(false);
+      expect(wrapper.find(".customer-invoice-clear").exists()).toBe(false);
+      expect(wrapper.text()).not.toContain(
+        language === "en" ? "Page not found" : "这个页面还不存在。",
+      );
+      unavailable = false;
+      await wrapper.get(".alert.error button").trigger("click");
+      await flushPromises();
+      expect(wrapper.find(".alert.error").exists()).toBe(false);
+      expect(wrapper.find(".customer-overview").exists()).toBe(true);
+      expect(wrapper.get(".customer-service-list").text()).toContain(
+        fixtures.services[0]!.name,
+      );
+      wrapper.unmount();
+    },
+  );
+  it.each(["zh-CN", "en"] as const)(
+    "retains the successful overview with a stale-data explanation after refresh failure in %s",
+    async (language) => {
+      setLocale(language);
+      activeUser = { ...fixtures.previewUser };
+      let unavailable = false;
+      const originalFetch = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) =>
+          unavailable && path.endsWith("/services")
+            ? {
+                ok: false,
+                status: 503,
+                json: async () => ({
+                  error: { code: "UNAVAILABLE", message: "Data unavailable" },
+                }),
+              }
+            : originalFetch(path, options),
+        ),
+      );
+      const { wrapper } = await mountApp();
+      const before = wrapper.get(".customer-overview").text();
+      unavailable = true;
+      await wrapper
+        .get(
+          `button[aria-label="${language === "en" ? "Refresh data" : "刷新数据"}"]`,
+        )
+        .trigger("click");
+      await flushPromises();
+      expect(wrapper.get(".customer-overview").text()).toBe(before);
+      expect(wrapper.get(".overview-refresh-note").text()).toContain(
+        language === "en"
+          ? "Previously loaded data is shown"
+          : "当前显示上次载入的数据",
+      );
+      unavailable = false;
+      await wrapper.get(".alert.error button").trigger("click");
+      await flushPromises();
+      expect(wrapper.find(".overview-refresh-note").exists()).toBe(false);
+      expect(wrapper.find(".alert.error").exists()).toBe(false);
+      wrapper.unmount();
+    },
+  );
+  it.each(["admin", "customer"] as const)(
+    "routes audit queries to the %s endpoint instead of the legacy loaded-record table",
+    async (role) => {
+      activeUser = { ...fixtures.previewUser, role };
+      const { wrapper, router } = await mountApp();
+      try {
+        await router.push("/audit");
+        await flushPromises();
+        expect(wrapper.find('[data-testid="audit-log-page"]').exists()).toBe(
+          true,
+        );
+        expect(wrapper.find(".data-panel table").exists()).toBe(false);
+        expect(wrapper.get("h1").text()).toBe(
+          role === "admin" ? "审计日志" : "操作记录",
+        );
+        expect(
+          requests.some(
+            (request) =>
+              request.path ===
+              `/${role === "admin" ? "admin/" : ""}audit-events?limit=50`,
+          ),
+        ).toBe(true);
+        expect(wrapper.findAll(".audit-event")).toHaveLength(
+          fixtures.audit.length,
+        );
+        expect(wrapper.find('[name="audit_owner"]').exists()).toBe(
+          role === "admin",
+        );
+      } finally {
+        wrapper.unmount();
+      }
+    },
+  );
   it.each(
-    ["services", "orders", "invoices", "customers", "audit"].flatMap((page) =>
+    ["services", "orders", "invoices"].flatMap((page) =>
       ["zh-CN", "en"].map((language) => ({ page, language })),
     ),
   )(

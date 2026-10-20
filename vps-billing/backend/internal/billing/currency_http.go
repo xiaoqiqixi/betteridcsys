@@ -118,6 +118,7 @@ func (a *App) currencyError(w http.ResponseWriter, r *http.Request, err error) {
 	var inUse *CurrencyInUse
 	switch {
 	case errors.As(err, &inUse):
+		observeError(r.Context(), "CURRENCY_IN_USE", "")
 		locale := requestLocale(r.Header.Get("Accept-Language"))
 		message := "此币种仍有未完成的付款或服务义务"
 		if locale == "en" {

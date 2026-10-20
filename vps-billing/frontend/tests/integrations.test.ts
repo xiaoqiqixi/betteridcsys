@@ -42,6 +42,37 @@ afterEach(() => {
 });
 
 describe("read-only integrations registry", () => {
+  it.each(["zh-CN", "en"] as const)(
+    "preserves the native read-only drawer context, metadata and separate close action in %s",
+    async (language) => {
+      setLocale(language);
+      const fetcher = vi.fn().mockResolvedValue(reply({ items: manifest() }));
+      vi.stubGlobal("fetch", fetcher);
+      const wrapper = mount(IntegrationsPage, {
+        props: { preview: false, refreshToken: 0 },
+      });
+      await flushPromises();
+      await wrapper.get(".integration-card button").trigger("click");
+      const drawer = wrapper.get("dialog.integration-drawer");
+      expect(drawer.attributes("aria-labelledby")).toBe("integration-title");
+      expect(drawer.get(".modal-heading #integration-title").text()).toBe(
+        manifest()[0]!.name,
+      );
+      expect(
+        drawer.get(".modal-body .integration-detail-status").text(),
+      ).toContain(manifest()[0]!.id);
+      expect(drawer.findAll(".modal-body input")).toHaveLength(0);
+      expect(drawer.get(".modal-actions button").text()).toBe(
+        language === "en" ? "Close guide" : "关闭说明",
+      );
+      await drawer.get(".modal-actions button").trigger("click");
+      expect(drawer.attributes("open")).toBeUndefined();
+      expect(fetcher.mock.calls.every((call) => call[1].method === "GET")).toBe(
+        true,
+      );
+      wrapper.unmount();
+    },
+  );
   it("switches preview metadata and controls to English without any network request", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
@@ -254,6 +285,7 @@ describe("admin-only integrations route", () => {
           currency: "USD",
         },
         "/admin/customers": [],
+        "/admin/services": [],
         "/admin/orders": [],
         "/admin/invoices": [],
         "/admin/audit": [],

@@ -173,7 +173,7 @@ func TestRecentOrdersHTTPOverviewScopeAndFailure(t *testing.T) {
 	defer server.Close()
 	tokens := map[string]string{owner.ID: ID() + ID(), admin.ID: ID() + ID()}
 	for uid, token := range tokens {
-		if err := m.PutSession(t.Context(), Session{digest(token), uid, time.Now().Add(time.Hour)}); err != nil {
+		if err := m.PutSession(t.Context(), Session{Hash: digest(token), UserID: uid, Expires: time.Now().Add(time.Hour)}); err != nil {
 			t.Fatal(err)
 		}
 	}

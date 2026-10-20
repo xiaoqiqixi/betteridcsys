@@ -22,7 +22,7 @@
 
 ## 构建检查
 
-工具链与锁文件绑定所选源码，当前基线 Go `1.27.2`、Node.js `24.19.0`，实际 npm 与扫描版本由来源及 job 日志记录。Core/SMTP 标签入口都先执行要求的源码验证：
+工具链与锁文件绑定所选源码，当前基线 Go `1.27.3`、Node.js `24.19.0`，实际 npm 与扫描版本由来源及 job 日志记录。Core/SMTP 标签入口都先执行要求的源码验证：
 
 - Go race/vet、真实 `_test` MySQL、前端测试/类型/格式/生产构建、HTTP/config 与发布负向测试。
 - 一次性 Ubuntu 24.04 runner 上的真实 systemd/Nginx、localhost 私有测试 CA HTTPS、运行/迁移身份分离、API 重启，以及包含支付尝试和结算记录的备份与空库恢复检查。

@@ -471,11 +471,11 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
                             raise AssertionError("published migration did not start from schema 6")
                         state["schema"] = 7
                     else:
-                        if state["schema"] not in (7, 8):
+                        if state["schema"] not in (7, CORE.CANDIDATE_SCHEMA):
                             raise AssertionError("candidate did not preserve the published prefix")
-                        state["schema"] = 8
-                incompatible = release == published and state["schema"] == 8 and not old_accepts_new
-                status = "incompatible" if incompatible else ("pending_migrations" if release == candidate and state["schema"] < 8 else "current")
+                        state["schema"] = CORE.CANDIDATE_SCHEMA
+                incompatible = release == published and state["schema"] == CORE.CANDIDATE_SCHEMA and not old_accepts_new
+                status = "incompatible" if incompatible else ("pending_migrations" if release == candidate and state["schema"] < CORE.CANDIDATE_SCHEMA else "current")
                 raw = json.dumps({"schema": 1, "read_only": True, "configuration_checked": True,
                     "database": {"schema_version": state["schema"], "status": status}}).encode()
                 return subprocess.CompletedProcess(["synthetic-native"], int(incompatible), raw)
@@ -486,23 +486,25 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
 
         def sql(query, *, database=None):
             if query.startswith("SELECT COUNT(*) FROM information_schema.TABLES"):
-                return str({6: 13, 7: 14, 8: 16}[state["schema"]])
+                return str({6: 13, 7: 14, CORE.CANDIDATE_SCHEMA: 16}[state["schema"]])
             if query.startswith("SELECT SUM(amount_minor)"):
                 return "1500"
             if query.startswith("SELECT TABLE_NAME"):
                 return "\n".join("table_" + letter for letter in "abcdefghijklm")
+            if query.startswith("SELECT COUNT(*) FROM users WHERE disabled"):
+                return "0"
             if query.startswith("SELECT (SELECT COUNT(*) FROM payment_attempts)"):
                 return str(int(invented_payment))
             return ""
 
         def data_hash(database=None, tables=()):
             if tables:
-                return "changed" if changed_business and state["schema"] == 8 else "existing-business-data-hash"
-            return "complete-schema-eight-data-hash"
+                return "changed" if changed_business and state["schema"] == CORE.CANDIDATE_SCHEMA else "existing-business-data-hash"
+            return "complete-current-schema-data-hash"
 
         with tempfile.TemporaryDirectory(prefix="aster-legacy-schema-guard-") as directory:
             resources = SimpleNamespace(restores=[], control=Path(directory), socket=Path(directory) / "unused.sock", sql=sql)
-            fresh = SimpleNamespace(candidate=candidate, spec={"database": "fresh_fixture"}, full_data_hash=data_hash)
+            fresh = SimpleNamespace(candidate=candidate, spec={"database": "fresh_fixture"}, full_data_hash=data_hash, legacy_business_hash=data_hash)
             executor = SimpleNamespace(Native=Native, runtime_environment=lambda spec: {}, require=CORE.require)
             with patch.object(CORE, "stage"):
                 report = CORE.legacy_schema_migration(resources, executor, fresh, {"directory": published})
@@ -512,14 +514,14 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
         report, calls, candidate, published = self.scenario()
         self.assertEqual([call for call in calls if call[1] == "-migrate"],
             [(published, "-migrate"), (candidate, "-migrate"), (candidate, "-migrate")])
-        self.assertEqual((report["schema_before"], report["published_schema"], report["schema_after"]), (6, 7, 8))
+        self.assertEqual((report["schema_before"], report["published_schema"], report["schema_after"]), (6, 7, CORE.CANDIDATE_SCHEMA))
         self.assertEqual((report["tables_before"], report["tables_published"], report["tables_after"]), (13, 14, 16))
         self.assertEqual(report["published_baseline_preflight_after_payment_migration"], "incompatible")
         self.assertTrue(report["additive_payment_migration_preserved_existing_data"])
         self.assertTrue(report["new_payment_tables_empty"])
         self.assertTrue(report["repeat_migration_data_unchanged"])
 
-    def test_old_program_acceptance_after_schema_eight_cannot_claim_success(self):
+    def test_old_program_acceptance_after_current_schema_cannot_claim_success(self):
         with self.assertRaisesRegex(CORE.AcceptanceFailure, "rejected by the published old program"):
             self.scenario(old_accepts_new=True)
 

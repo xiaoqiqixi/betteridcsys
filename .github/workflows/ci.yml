@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -74,6 +74,11 @@ jobs:
             ${{ runner.temp }}/native-acceptance-evidence/api-properties.txt
             ${{ runner.temp }}/native-acceptance-evidence/systemd-verify.log
             ${{ runner.temp }}/native-acceptance-evidence/nginx-config.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability.json
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-generated-engine.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-generated-syslog.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-template-engine.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-template-syslog.log
             ${{ runner.temp }}/native-acceptance-evidence/failure-unit-status.txt
           if-no-files-found: ignore
           retention-days: 7
@@ -110,7 +115,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
       - name: Go vulnerability gate (network failures fail the check)
         working-directory: vps-billing/backend
@@ -129,7 +134,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.3'
           cache: false
       - name: Read official published component metadata with the production client
         working-directory: vps-billing/backend

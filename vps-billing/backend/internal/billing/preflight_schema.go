@@ -8,7 +8,7 @@ import (
 )
 
 // These bounded descriptions are the physical columns shipped by migrations
-// 1–8, not an SQL interpreter. A history row alone cannot detect interrupted
+// 1–10, not an SQL interpreter. A history row alone cannot detect interrupted
 // DDL or a later manual edit. Compatible extra indexes/checks are permitted.
 func preflightColumns(version int) map[string]map[string]string {
 	specs := map[string]string{
@@ -45,6 +45,9 @@ func preflightColumns(version int) map[string]map[string]string {
 	if version >= 8 {
 		specs["payment_attempts"] = "id:char(32)! request_key:varchar(128)! user_id:char(32)! invoice_id:char(32)! order_id:char(32)! provider_id:varchar(64)! merchant_account_id:varchar(128)! amount_minor:bigint! currency:char(3)! currency_decimal_places:int! state:enum('pending','checkout','uncertain','settled')! checkout:json? created_at:datetime(6)! updated_at:datetime(6)!"
 		specs["payment_settlements"] = "attempt_id:char(32)! provider_id:varchar(64)! event_id:varchar(128)! transaction_id:varchar(128)! settled_at:datetime(6)! received_at:datetime(6)!"
+	}
+	if version >= 10 {
+		specs["users"] += " disabled:tinyint(1)! revision:bigint!"
 	}
 	result := make(map[string]map[string]string, len(specs))
 	for table, spec := range specs {
@@ -112,10 +115,14 @@ func preflightChecks(version int) map[string]map[string]string {
 			"payment_attempts_currency_code": currencyCodeMigrationCheck(),
 		}
 	}
+	if version >= 10 {
+		checks["users"] = map[string]string{"users_disabled_boolean": "disabled IN (0,1)", "users_revision_min": "revision >= 1", "users_revision_max": "revision <= 9007199254740991"}
+	}
 	return checks
 }
 
 var preflightDefaults = map[string]string{
+	"users.disabled": "0", "users.revision": "1",
 	"schema_migrations.applied_at": "current_timestamp(6)", "users.created_at": "current_timestamp(6)", "order_requests.created_at": "current_timestamp(6)",
 	"plans.available": "0", "plan_prices.available": "0", "services.ipv4": "", "outbox_events.attempts": "0", "currency_settings.prices_revision": "1",
 }
@@ -275,7 +282,13 @@ func validatePreflightTableShape(ctx context.Context, conn *sql.Conn, version in
 			return errors.New("schema has missing required checks")
 		}
 	}
-	return validatePreflightTableKeys(ctx, conn, version, tables, partial)
+	if err := validatePreflightTableKeys(ctx, conn, version, tables, partial); err != nil {
+		return err
+	}
+	if version >= 9 && (!partial || tables["audit_events"] != "") {
+		return validateAuditIndexes(ctx, conn)
+	}
+	return nil
 }
 
 func validatePreflightKeys(ctx context.Context, conn *sql.Conn, version int) error {

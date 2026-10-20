@@ -1134,6 +1134,31 @@ def publish(api, policy, archive_bytes):
                 + inherited
                 + f"\n\n[宝塔部署]({source_docs}BAOTA.md) · [插件安装与回退]({source_docs}PLUGINS.md)。"
             )
+        if kind == "core" and provenance["version"] == "0.5.6":
+            fields["body"] = (
+                "## Core 0.5.6\n\n"
+                "以正式 0.5.4 为对照，保留客户首页、套餐比较、手机底栏及统一抽屉和弹窗。"
+                "新增客户与管理员角色管理、账户停用、密码重置和会话撤销；写入要求原因、并发版本与实际管理员复核，"
+                "保护最后一个启用管理员，禁止危险自降权/自停用。"
+                "新增单笔订单详情，关联真实客户、账单、支付尝试和审计，不开放任意订单状态改写。"
+                "新增商品创建、复制、编辑、草稿和上下架，各币种独立报价；商品和币种配置双版本校验阻止旧精度金额写入，商品变更令旧报价失效，历史快照不变。\n\n"
+                "生产诊断使用脱敏 JSON/journald，业务审计支持权限隔离的游标分页。"
+                "迁移 009 增加审计索引，010 增加账户状态及版本；正式 001–008 不重写。"
+                "迁移到 schema 10 后不能直接切回只认识旧 schema 的程序；须使用已验证备份及匹配版本恢复。"
+                "修复支付 Unix RPC 测试的物理连接重拨问题，不放宽生产握手或重放约束。"
+                "Go 1.27.3、x/crypto v0.56.0；不改变金额、支付幂等、多币种及历史快照规则。\n\n"
+                "原生 Linux amd64、Go + Vue/TypeScript + MySQL；不使用 Docker，不添加 Redis、真实资源开通或新支付渠道。"
+                "Ubuntu 22 与 24 的实际验证范围分别记录，不宣称所有 Linux 均已支持。"
+                "旧 v0.5.5 构建失败并保留原标签；本次使用独立新标签。"
+                "官方 SMTP 仍为独立 1.1.0、默认关闭；支付协议仍为 aster.payment/1、最低 Core 0.5.3。\n\n"
+                f"[源码提交](https://github.com/{REPOSITORY}/commit/{provenance['source_sha']}) · "
+                f"[构建运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。"
+                "精确构建的回归、原生 systemd/TLS、备份恢复、浏览器和依赖扫描范围以运行证据为准。"
+                "合成支付/邮件及测试 CA 不代表真实渠道、公共证书续期或生产容量验收。\n\n"
+                f"[验证记录]({source_docs}VALIDATION.md) · [管理边界]({source_docs}ADMIN_MANAGEMENT.md) · "
+                f"[日志]({source_docs}LOGGING.md) · [安装]({source_docs}INSTALL.md) · "
+                f"[升级恢复]({source_docs}UPGRADE.md) · [宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
+            )
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

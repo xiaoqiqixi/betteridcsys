@@ -20,7 +20,7 @@ import struct
 import sys
 import zlib
 
-CORE_VERSION = "0.5.5"
+CORE_VERSION = "0.5.6"
 PAYMENT_MIN_CORE_VERSION = "0.5.3"
 FILES = frozenset({"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"})
 MAX_ARCHIVE = 80 << 20

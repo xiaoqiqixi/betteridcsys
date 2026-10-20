@@ -2,6 +2,13 @@ import { chromium, expect } from "@playwright/test";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { probePlanCheckoutBoundaries } from "./checkout-boundaries.mjs";
+import { probeOverlayBoundaries } from "./overlay-boundaries.mjs";
+import { probeAdminManagement } from "./admin-management-boundaries.mjs";
+import { probeAuditBoundaries } from "./audit-boundaries.mjs";
+import {
+  probeManagementWorkflows,
+  exerciseManagementLive,
+} from "./management-workflows-boundaries.mjs";
 import {
   probeFinancialBoundaries,
   probeLoginBoundaries,
@@ -985,7 +992,26 @@ try {
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("运营概况");
+  await expect(page.locator(".skeleton-grid")).toHaveCount(0);
   await shot("admin-desktop");
+  const allAdminServices = await json("/admin/services");
+  await page.getByRole("link", { name: "服务管理", exact: true }).click();
+  await expect(page.locator("h1")).toHaveText("服务管理");
+  await expect(page.locator(".service-card")).toHaveCount(
+    allAdminServices.length,
+  );
+  for (const service of allAdminServices) {
+    const card = page.locator(`.service-card[data-service-id="${service.id}"]`);
+    await expect(card.getByTestId("service-customer")).toContainText(
+      service.customer_id,
+    );
+    await expect(card.locator(".service-card-footer")).toContainText(
+      amount(service),
+    );
+    await expect(card.locator("button")).toHaveCount(0);
+  }
+  await expect(page.getByTestId("service-limit-note")).toContainText("1,000");
+  await page.getByRole("link", { name: "运营总览", exact: true }).click();
   await page.getByRole("link", { name: "扩展中心", exact: true }).click();
   const smtp = page.locator(".smtp-settings");
   await expect(smtp.getByText("已保存：禁用", { exact: true })).toBeVisible();
@@ -1241,9 +1267,26 @@ try {
       .locator(".stat-value"),
   ).toHaveText(new RegExp(`^${adminOverview.unpaid_invoices}\\s*笔$`));
   await page.getByRole("link", { name: "审计日志", exact: true }).click();
+  await expect(page.getByTestId("audit-log-page")).toBeVisible();
+  await page.locator(".audit-query-summary").click();
+  await page.locator('[name="audit_action"]').fill("order.cancelled");
+  await page.getByRole("button", { name: "查询记录", exact: true }).click();
+  const adminAuditPage = await json(
+    "/admin/audit-events?limit=50&action=order.cancelled",
+  );
+  await expect(page.locator(".audit-event")).toHaveCount(
+    adminAuditPage.items.length,
+  );
+  const activeAdmin = await json("/session");
+  const administeredEvent = adminAuditPage.items.find(
+    (event) => event.target === adminPair.order.id,
+  );
+  expect(administeredEvent.actor_email).toBe(activeAdmin.user.email);
+  expect(administeredEvent.owner_id).toMatch(/^[a-f0-9]{32}$/);
+  expect(administeredEvent.owner_id).not.toBe(activeAdmin.user.id);
   for (const cancelledOrder of [order, adminTarget]) {
     const auditRow = page
-      .getByRole("row")
+      .locator(".audit-event")
       .filter({ hasText: cancelledOrder.id });
     await expect(auditRow.filter({ hasText: "order.cancelled" })).toHaveCount(
       1,
@@ -1254,6 +1297,13 @@ try {
     .getByRole("button", { name: "体验客户工作台", exact: true })
     .click();
   await expect(page.locator("h1")).toContainText("你好");
+  const forbiddenAdminServices = await page.request.get(
+    base + "/api/v1/admin/services",
+  );
+  expect(forbiddenAdminServices.status()).toBe(403);
+  await expect(
+    page.getByRole("link", { name: "服务管理", exact: true }),
+  ).toHaveCount(0);
   const customerHistory = await cancellationState();
   expect(customerHistory.services).toEqual(servicesBeforeCancellation);
   for (const pair of [customerPair, adminPair]) {
@@ -1278,11 +1328,32 @@ try {
       historyRow.getByRole("button", { name: "取消订单", exact: true }),
     ).toHaveCount(0);
   }
+  await page.goto(base + "/audit");
+  await expect(page.getByTestId("audit-log-page")).toBeVisible();
+  const ownAuditPage = await json("/audit-events?limit=50");
+  expect(ownAuditPage.items.every((event) => !("owner_id" in event))).toBe(
+    true,
+  );
+  await expect(page.locator(".audit-event")).toHaveCount(
+    ownAuditPage.items.length,
+  );
+  await expect(page.locator('[name="audit_owner"]')).toHaveCount(0);
+  const forbiddenAdminAudit = await page.request.get(
+    base + "/api/v1/admin/audit-events?limit=50",
+  );
+  expect(forbiddenAdminAudit.status()).toBe(403);
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("运营概况");
   await restoreSettings();
+  await exerciseManagementLive(browser, page, base, {
+    output: process.env.MANAGEMENT_E2E_OUTPUT_DIR,
+  });
   await probePlanCheckoutBoundaries(browser, base);
+  await probeOverlayBoundaries(browser, base);
+  await probeAdminManagement(browser, base);
+  await probeAuditBoundaries(browser, base);
+  await probeManagementWorkflows(browser, base);
   expect(errors).toEqual([]);
   expect(blockedRequests).toEqual([]);
   console.log(
