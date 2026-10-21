@@ -1369,8 +1369,8 @@ onBeforeUnmount(() => {
 }
 .price-row {
   display: grid;
-  grid-template-columns: 1fr minmax(0, 1.4fr) auto;
-  gap: 6px 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
   padding: 15px;
   border-bottom: 1px solid var(--border-subtle);
   align-items: center;
@@ -1380,8 +1380,10 @@ onBeforeUnmount(() => {
 }
 .price-currency {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  grid-column: 1/-1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px 8px;
   min-width: 0;
 }
 .price-currency strong {
@@ -1397,13 +1399,15 @@ onBeforeUnmount(() => {
   color: var(--status-warning);
 }
 .price-amount {
-  display: flex;
+  display: grid;
+  grid-column: 1/-1;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 5px;
+  gap: 6px 8px;
   background: var(--bg-canvas);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  padding: 0 9px;
+  padding: 8px 10px;
   min-width: 0;
 }
 .price-amount:focus-within {
@@ -1411,6 +1415,7 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 .price-amount input {
+  grid-column: 1/-1;
   min-width: 0;
   width: 100%;
   background: transparent;
@@ -1426,11 +1431,18 @@ onBeforeUnmount(() => {
 .price-period {
   font-size: 10px;
   color: var(--text-secondary);
-  flex-shrink: 0;
-  max-width: 55px;
+  min-width: 0;
+  max-width: none;
   overflow-wrap: anywhere;
 }
+.price-affix {
+  grid-column: 1;
+}
+.price-period {
+  grid-column: 2;
+}
 .quote-availability {
+  grid-column: 1;
   display: flex;
   gap: 5px;
   align-items: center;
@@ -1445,7 +1457,9 @@ onBeforeUnmount(() => {
   accent-color: var(--accent-admin);
 }
 .precision-note {
-  grid-column: 2/4;
+  grid-column: 2;
+  justify-self: end;
+  align-self: center;
   color: var(--text-secondary);
   font-size: 9px;
 }
@@ -1677,10 +1691,10 @@ onBeforeUnmount(() => {
   .price-row {
     padding: 12px;
     gap: 8px;
-    grid-template-columns: 65px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
   }
   .quote-availability {
-    grid-column: 2;
+    grid-column: 1;
     padding-top: 3px;
     min-height: 24px;
   }
@@ -1688,9 +1702,9 @@ onBeforeUnmount(() => {
     grid-column: 2;
   }
   .price-currency {
-    grid-row: 1/4;
+    grid-row: auto;
     align-self: start;
-    padding-top: 10px;
+    padding-top: 0;
   }
   .price-currency span {
     font-size: 9px;

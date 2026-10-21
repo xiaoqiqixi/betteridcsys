@@ -12,6 +12,16 @@ export const syntheticAccounts = {
 };
 export const widths = [320, 375, 720, 721, 768, 1440];
 export const dialog = (page) => page.getByRole("dialog").last();
+const screenStates = new WeakMap();
+let gotoSequence = 0;
+function safeRequestPath(raw) {
+  const path = new URL(raw).pathname;
+  return /^\/(?:api\/v1\/[A-Za-z0-9_/-]+|assets\/[A-Za-z0-9_.-]+|favicon\.svg)?$/.test(
+    path,
+  )
+    ? path.replace(/\/[a-f0-9]{32,64}(?=\/|$)/g, "/:id").slice(0, 96)
+    : "OTHER_PATH";
+}
 export function strictBase(value) {
   const url = new URL(value);
   assert.equal(url.protocol, "http:");
@@ -67,6 +77,8 @@ export async function createScreen(browser, base, storageState) {
     writes: [],
     violations: [],
     pageErrors: [],
+    responses: [],
+    requestFailures: [],
     permits: new Map(),
     fixtures: [],
   };
@@ -120,7 +132,40 @@ export async function createScreen(browser, base, storageState) {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
-  page.on("pageerror", () => state.pageErrors.push("uncaught page error"));
+  screenStates.set(page, state);
+  page.on("pageerror", (error) => {
+    const name = /^(?:Type|Reference|Syntax|Range|Eval|URI)?Error$/.test(
+      error.name,
+    )
+      ? error.name
+      : "Error";
+    const asset = /\/assets\/([A-Za-z0-9_.-]+\.js):(\d+):(\d+)/.exec(
+      error.stack || "",
+    );
+    state.pageErrors.push({
+      name,
+      ...(asset
+        ? { asset: asset[1], line: Number(asset[2]), column: Number(asset[3]) }
+        : {}),
+    });
+  });
+  page.on("response", (response) => {
+    state.responses.push({
+      method: response.request().method(),
+      path: safeRequestPath(response.url()),
+      status: response.status(),
+    });
+    if (state.responses.length > 32) state.responses.shift();
+  });
+  page.on("requestfailed", (request) => {
+    const failure = request.failure()?.errorText || "REQUEST_FAILED";
+    state.requestFailures.push({
+      method: request.method(),
+      path: safeRequestPath(request.url()),
+      code: /^net::[A-Z_]+$/.test(failure) ? failure : "REQUEST_FAILED",
+    });
+    if (state.requestFailures.length > 8) state.requestFailures.shift();
+  });
   context.on("page", (extra) => {
     if (extra !== page) state.violations.push("unexpected popup");
   });
@@ -145,6 +190,8 @@ export function fixture(state, method, path, data, status = 200) {
   };
 }
 export async function goto(page, base, route) {
+  const call = ++gotoSequence;
+  let navigationKind = "pending";
   // Every full navigation mounts the real shell, which reads site defaults only
   // after session/registry readiness. Do not inspect stale fallback branding.
   const settings = page.waitForResponse(
@@ -153,8 +200,42 @@ export async function goto(page, base, route) {
       response.request().method() === "GET" &&
       response.status() === 200,
   );
-  await page.goto(`${base}/#${route}`, { waitUntil: "domcontentloaded" });
-  await (await settings).finished();
+  try {
+    const navigation = (async () => {
+      const response = await page.goto(`${base}/#${route}`, {
+        waitUntil: "domcontentloaded",
+      });
+      navigationKind = response === null ? "same-document" : "document";
+      // Hash-only navigation does not mount a new shell. SPA behavior has its
+      // own real-link tests; this helper explicitly requests a fresh document.
+      if (response === null)
+        await page.reload({ waitUntil: "domcontentloaded" });
+    })();
+    const [, response] = await Promise.all([navigation, settings]);
+    await response.finished();
+  } catch (error) {
+    const state = screenStates.get(page);
+    console.error(
+      "E2E_GOTO_DIAGNOSTIC_JSON " +
+        JSON.stringify({
+          call,
+          target: route
+            .split(/[?#]/)[0]
+            .replace(/\/[a-f0-9]{32,64}(?=\/|$)/g, "/:id")
+            .slice(0, 64),
+          navigation: navigationKind,
+          pageErrors: state?.pageErrors.slice(-3) ?? [],
+          failures: state?.requestFailures.slice(-3) ?? [],
+          requests:
+            state?.requests.slice(-8).map((item) => ({
+              method: item.method,
+              path: safeRequestPath(base + item.path),
+            })) ?? [],
+          responses: state?.responses.slice(-8) ?? [],
+        }),
+    );
+    throw error;
+  }
   await expect(page.locator("#main-content")).toBeVisible();
   await settle(page);
 }
