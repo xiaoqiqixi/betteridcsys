@@ -108,6 +108,52 @@ afterEach(() => {
 });
 
 describe("independent catalog pages", () => {
+  it("keeps the full maximum-safe six-decimal quote and 24-byte affixes in the actual editor DOM", async () => {
+    const currency = {
+      ...cny,
+      decimal_places: 6,
+      prefix: "P".repeat(24),
+      suffix: "S".repeat(24),
+    };
+    mocks.read.mockImplementation(async (path: string) =>
+      structuredClone(
+        path === "/admin/catalog"
+          ? {
+              ...catalog,
+              items: [
+                {
+                  ...catalog.items[0]!,
+                  prices: [
+                    {
+                      currency: "CNY",
+                      amount_minor: Number.MAX_SAFE_INTEGER,
+                      available: true,
+                    },
+                  ],
+                },
+              ],
+            }
+          : { revision: 3, default_currency: "CNY", currencies: [currency] },
+      ),
+    );
+    const wrapper = render(AdminCatalogPage);
+    await flushPromises();
+    await button(wrapper, "编辑商品").trigger("click");
+    await flushPromises();
+    const row = wrapper.find(".price-row");
+    expect(
+      (row.find(".price-amount input").element as HTMLInputElement).value,
+    ).toBe("9007199254.740991");
+    expect(row.findAll(".price-affix").map((node) => node.text())).toEqual([
+      "P".repeat(24),
+      "S".repeat(24),
+    ]);
+    expect(row.find(".price-currency strong").text()).toBe("CNY");
+    expect(row.find(".price-amount input").attributes("inputmode")).toBe(
+      "decimal",
+    );
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
   it("starts in the first real region, switches regions and has no comparison or all-regions control", async () => {
     const wrapper = render(CatalogPage);
     await flushPromises();
