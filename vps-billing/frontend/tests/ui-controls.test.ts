@@ -5,6 +5,7 @@ import { mount, type VueWrapper } from "@vue/test-utils";
 import UiSelect from "../src/components/UiSelect.vue";
 import UiLoading from "../src/components/UiLoading.vue";
 import UiSpinner from "../src/components/UiSpinner.vue";
+import OverlayPanel from "../src/components/OverlayPanel.vue";
 
 const wrappers: VueWrapper[] = [];
 function screen(
@@ -34,7 +35,106 @@ afterEach(() => {
   wrappers.forEach((wrapper) => wrapper.unmount());
   wrappers.length = 0;
   document.body.innerHTML = "";
+  history.replaceState({}, "", location.href);
+  vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("overlay history opening-lifecycle identity", () => {
+  function overlay(open = true, busy = false) {
+    const wrapper = mount(OverlayPanel, {
+      props: { open, busy, title: "历史边界测试" },
+      attachTo: document.body,
+    });
+    wrappers.push(wrapper);
+    return wrapper;
+  }
+  function backTo(state: object) {
+    history.replaceState(state, "", location.href);
+    window.dispatchEvent(new PopStateEvent("popstate", { state }));
+  }
+  it("closes on the first click after a remount reuses useId while history retains the previous opening marker", async () => {
+    const first = overlay();
+    await nextTick();
+    const titleId = document
+      .querySelector('[role="dialog"]')!
+      .getAttribute("aria-labelledby");
+    const stale = { ...history.state, retained: "prior document state" };
+    first.unmount();
+    wrappers.splice(wrappers.indexOf(first), 1);
+    history.replaceState(stale, "", location.href);
+    const next = overlay();
+    await nextTick();
+    expect(
+      document
+        .querySelector('[role="dialog"]')!
+        .getAttribute("aria-labelledby"),
+    ).toBe(titleId);
+    const currentToken = history.state.idcOverlay;
+    vi.spyOn(history, "back").mockImplementation(() => backTo(stale));
+    (
+      document.querySelector('[aria-label="关闭 / Close"]') as HTMLButtonElement
+    ).click();
+    expect(next.emitted("close")).toEqual([[]]);
+    expect(currentToken).not.toBe(stale.idcOverlay);
+    await next.setProps({ open: false });
+    expect(document.body.style.overflow).not.toBe("hidden");
+  });
+  it("gives every opening of the same component a new marker while retaining accessible IDs", async () => {
+    const wrapper = overlay(false);
+    await wrapper.setProps({ open: true });
+    const initial = history.state.idcOverlay;
+    const titleId = document
+      .querySelector('[role="dialog"]')!
+      .getAttribute("aria-labelledby");
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    expect(history.state.idcOverlay).not.toBe(initial);
+    expect(
+      document
+        .querySelector('[role="dialog"]')!
+        .getAttribute("aria-labelledby"),
+    ).toBe(titleId);
+  });
+  it("restores the same active marker when busy rather than closing or minting a new lifecycle", async () => {
+    const wrapper = overlay(true, true);
+    await nextTick();
+    const token = history.state.idcOverlay;
+    backTo({ retained: "earlier route" });
+    await nextTick();
+    expect(history.state.idcOverlay).toBe(token);
+    expect(wrapper.emitted("close")).toBeUndefined();
+    expect(
+      (
+        document.querySelector(
+          '[aria-label="关闭 / Close"]',
+        ) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+  it("preserves the existing back/dirty-decline contract when the parent keeps the panel open", async () => {
+    const wrapper = overlay();
+    await nextTick();
+    const token = history.state.idcOverlay;
+    backTo({ retained: "earlier route" });
+    await nextTick();
+    expect(wrapper.emitted("close")).toEqual([[]]);
+    expect(history.state.idcOverlay).toBe(token);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+  it("closes only the nested top panel on back to its parent's marker", async () => {
+    const parent = overlay();
+    await nextTick();
+    const parentState = { ...history.state };
+    const child = overlay();
+    await nextTick();
+    expect(history.state.idcOverlay).not.toBe(parentState.idcOverlay);
+    backTo(parentState);
+    expect(child.emitted("close")).toEqual([[]]);
+    expect(parent.emitted("close")).toBeUndefined();
+    await child.setProps({ open: false });
+    expect(document.body.style.overflow).toBe("hidden");
+  });
 });
 
 describe("shared branded select", () => {

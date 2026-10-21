@@ -44,7 +44,7 @@ diff -r /workspace/core-a /workspace/core-b
 
 ## 本轮本地验收记录与正式门禁
 
-- 正式前端实际完成 832 条 Vitest、19 条 Node 数据层测试，typecheck、format:check、生产 build 通过。
+- 正式前端实际完成 837 条 Vitest、19 条 Node 数据层测试，typecheck、format:check、生产 build 通过。
 - 独立 `npm ci` 后复核的生产产物 SHA-256 一致；本轮 `npm audit` 全依赖报告 0 项漏洞。
 - root 通过 CUA 实际打开正式 dist 的浅色合成只读 fixture：桌面商品 89、币种 144、手机 catalog 67，共 300 项测量、0 失败；3 项 disabled/group-opacity 明确跳过，不计通过。保存 3 张实际截图并目视桌面/手机，浅色偏好重载后保留。这不是 MySQL-backed E2E，也不冒充完整双语言、双外观/三品牌和浏览器矩阵验收。
 - 后端/MySQL、安全与历史升级、原生 Linux amd64/systemd/Nginx HTTPS、严格 supervisor、备份恢复及插件隔离的正式结论，以本轮提交实际 Actions 证据为准；本地 Darwin 的有限入口不替代这些门禁。

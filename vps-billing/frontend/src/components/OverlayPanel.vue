@@ -29,7 +29,7 @@ const panel = ref<HTMLElement | null>(null);
 const placement = ref<CSSProperties>({});
 const titleId = useId();
 const descriptionId = useId();
-const token = `panel-${titleId}`;
+let token = "";
 let trigger: HTMLElement | null = null;
 let opened = false;
 
@@ -159,6 +159,9 @@ watch(
       release();
       return;
     }
+    // useId is for accessible DOM IDs, not history identity: it repeats after reload.
+    // Each opening gets a non-credential nonce so a stale marker cannot swallow the first Back/close.
+    token = `panel-${crypto.randomUUID()}`;
     trigger =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
