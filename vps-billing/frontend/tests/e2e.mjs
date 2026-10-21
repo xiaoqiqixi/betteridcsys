@@ -72,45 +72,78 @@ async function chooseFirst(screen, hostname) {
     apiData(screen.context, base, "/api/v1/catalog-taxonomy"),
     apiData(screen.context, base, "/api/v1/plans?currency=CNY"),
   ]);
-  const selected = plans.find(
-    (value) => value.available && value.price_minor > 0,
-  );
-  assert.ok(selected, "Disposable demo needs an available positive CNY plan");
-  assert.equal(selected.taxonomy_revision, taxonomy.revision);
-  const selectedType = taxonomy.types.find(
-    (value) => value.id === selected.type_id && value.enabled,
-  );
-  const selectedRegion = taxonomy.regions.find(
-    (value) =>
-      value.id === selected.region_id &&
-      value.type_id === selected.type_id &&
-      value.enabled &&
-      value.name === selected.region,
+  const sorted = (items) =>
+    [...items].sort(
+      (a, b) =>
+        a.sort_order - b.sort_order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+  const selectedType = sorted(taxonomy.types).find(
+    (type) => type.enabled && plans.some((plan) => plan.type_id === type.id),
   );
   assert.ok(
-    selectedType && selectedRegion,
-    "Plan must reference its real enabled taxonomy",
+    selectedType,
+    "Disposable demo needs a real type containing published plans",
   );
-  for (const id of [selected.type_id, selected.region_id, selected.id])
+  const selectedRegion = sorted(taxonomy.regions).find(
+    (region) =>
+      region.enabled &&
+      region.type_id === selectedType.id &&
+      plans.some(
+        (plan) =>
+          plan.type_id === selectedType.id && plan.region_id === region.id,
+      ),
+  );
+  assert.ok(
+    selectedRegion,
+    "Disposable demo needs a real region under its first type",
+  );
+  const selectedNode = sorted(taxonomy.nodes).find(
+    (node) =>
+      node.enabled &&
+      node.region_id === selectedRegion.id &&
+      plans.some(
+        (plan) =>
+          plan.type_id === selectedType.id &&
+          plan.region_id === selectedRegion.id &&
+          plan.node_id === node.id,
+      ),
+  );
+  assert.ok(
+    selectedNode,
+    "Disposable demo needs a real node under its first region",
+  );
+  const selected = plans.find(
+    (plan) =>
+      plan.type_id === selectedType.id &&
+      plan.region_id === selectedRegion.id &&
+      plan.node_id === selectedNode.id,
+  );
+  assert.ok(
+    selected?.available && selected.price_minor > 0,
+    "Disposable demo's actual first plan needs an available positive CNY quote; never silently skip it",
+  );
+  assert.equal(selected.taxonomy_revision, taxonomy.revision);
+  assert.equal(selected.region, selectedRegion.name);
+  for (const id of [
+    selected.type_id,
+    selected.region_id,
+    selected.node_id,
+    selected.id,
+  ])
     assert.match(id, /^[A-Za-z0-9_.-]{1,64}$/);
-  const type = page.locator(
-    `.catalog-type button[data-type-id="${selected.type_id}"]`,
-  );
-  if (await type.count()) await type.click();
-  else
-    await expect(
-      page.locator(`.single-type[data-type-id="${selected.type_id}"]`),
-    ).toBeVisible();
-  const region = page.locator(
-    `.catalog-region button[data-region-id="${selected.region_id}"]`,
-  );
-  if (await region.count()) await region.click();
-  else
-    await expect(
-      page.locator(`.single-region[data-region-id="${selected.region_id}"]`),
-    ).toBeVisible();
+  for (const [name, id] of [
+    ["type", selected.type_id],
+    ["region", selected.region_id],
+    ["node", selected.node_id],
+  ]) {
+    const control = page.locator(
+      `.catalog-${name} button[data-${name}-id="${id}"]`,
+    );
+    await expect(control).toBeVisible();
+    await expect(control).toHaveAttribute("aria-pressed", "true");
+    await expect(control).toHaveClass(/active/);
+  }
   const card = page.locator(`.gpc-card[data-plan-id="${selected.id}"]`);
-  await card.locator(".gpc-btn-choose").click();
   await expect(card).toHaveClass(/is-selected/);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.locator(".hostname-field input").fill(hostname);

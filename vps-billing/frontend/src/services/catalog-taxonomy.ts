@@ -9,10 +9,15 @@ export interface CatalogRegion extends CatalogType {
   type_id: string;
 }
 
+export interface CatalogNode extends CatalogType {
+  region_id: string;
+}
+
 export interface CatalogTaxonomy {
   revision: number;
   types: CatalogType[];
   regions: CatalogRegion[];
+  nodes: CatalogNode[];
 }
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -42,8 +47,10 @@ export function validCatalogTaxonomy(value: unknown): value is CatalogTaxonomy {
     (value.revision as number) < 1 ||
     !Array.isArray(value.types) ||
     !Array.isArray(value.regions) ||
+    !Array.isArray(value.nodes) ||
     value.types.length > 128 ||
     value.regions.length > 512 ||
+    value.nodes.length > 2048 ||
     !value.types.every((item) => validEntry(item))
   )
     return false;
@@ -61,6 +68,19 @@ export function validCatalogTaxonomy(value: unknown): value is CatalogTaxonomy {
     )
       return false;
     regions.add(item.id);
+  }
+  const nodes = new Set<string>();
+  for (const item of value.nodes) {
+    if (
+      !validEntry(item) ||
+      item.name !== item.name.trim() ||
+      !object(item) ||
+      !validId(item.region_id) ||
+      !regions.has(item.region_id) ||
+      nodes.has(item.id)
+    )
+      return false;
+    nodes.add(item.id);
   }
   return true;
 }

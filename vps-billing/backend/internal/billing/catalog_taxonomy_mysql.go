@@ -7,7 +7,7 @@ import (
 )
 
 func readTaxonomy(ctx context.Context, q currencyQuerier, lock string) (TaxonomyConfiguration, error) {
-	out := TaxonomyConfiguration{Types: []CatalogType{}, Regions: []CatalogRegion{}}
+	out := TaxonomyConfiguration{Types: []CatalogType{}, Regions: []CatalogRegion{}, Nodes: []CatalogNode{}}
 	if err := q.QueryRowContext(ctx, "SELECT revision FROM catalog_taxonomy_settings WHERE id=1"+lock).Scan(&out.Revision); err != nil {
 		return out, err
 	}
@@ -39,6 +39,23 @@ func readTaxonomy(ctx context.Context, q currencyQuerier, lock string) (Taxonomy
 			return out, err
 		}
 		out.Regions = append(out.Regions, v)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return out, err
+	}
+	rows, err = q.QueryContext(ctx, "SELECT id,region_id,name,sort_order,enabled FROM catalog_nodes ORDER BY id"+lock)
+	if err != nil {
+		return out, err
+	}
+	for rows.Next() {
+		var v CatalogNode
+		if err = rows.Scan(&v.ID, &v.RegionID, &v.Name, &v.SortOrder, &v.Enabled); err != nil {
+			rows.Close()
+			return out, err
+		}
+		out.Nodes = append(out.Nodes, v)
 	}
 	err = rows.Err()
 	rows.Close()
@@ -111,6 +128,22 @@ func (m *MySQL) UpdateCatalogTaxonomy(ctx context.Context, actor User, input Tax
 	for _, v := range next.Regions {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO catalog_regions(id,type_id,name,sort_order,enabled) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE type_id=VALUES(type_id),name=VALUES(name),sort_order=VALUES(sort_order),enabled=VALUES(enabled)", v.ID, v.TypeID, v.Name, v.SortOrder, v.Enabled); err != nil {
 			return TaxonomyConfiguration{}, err
+		}
+	}
+	for _, v := range next.Nodes {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO catalog_nodes(id,region_id,name,sort_order,enabled) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE region_id=VALUES(region_id),name=VALUES(name),sort_order=VALUES(sort_order),enabled=VALUES(enabled)", v.ID, v.RegionID, v.Name, v.SortOrder, v.Enabled); err != nil {
+			return TaxonomyConfiguration{}, err
+		}
+	}
+	nodeIDs := map[string]bool{}
+	for _, v := range next.Nodes {
+		nodeIDs[v.ID] = true
+	}
+	for _, v := range old.Nodes {
+		if !nodeIDs[v.ID] {
+			if _, err = tx.ExecContext(ctx, "DELETE FROM catalog_nodes WHERE id=?", v.ID); err != nil {
+				return TaxonomyConfiguration{}, err
+			}
 		}
 	}
 	regionIDs, typeIDs := map[string]bool{}, map[string]bool{}

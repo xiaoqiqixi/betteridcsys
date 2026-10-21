@@ -28,12 +28,21 @@ type CatalogRegion struct {
 	SortOrder int    `json:"sort_order"`
 	Enabled   bool   `json:"enabled"`
 }
+type CatalogNode struct {
+	ID        string `json:"id"`
+	RegionID  string `json:"region_id"`
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
+	Enabled   bool   `json:"enabled"`
+}
 type TaxonomyConfiguration struct {
+	Nodes    []CatalogNode   `json:"nodes"`
 	Revision int64           `json:"revision"`
 	Types    []CatalogType   `json:"types"`
 	Regions  []CatalogRegion `json:"regions"`
 }
 type TaxonomyUpdate struct {
+	Nodes    []CatalogNode   `json:"nodes"`
 	Revision int64           `json:"revision"`
 	Types    []CatalogType   `json:"types"`
 	Regions  []CatalogRegion `json:"regions"`
@@ -48,20 +57,26 @@ func legacyRegionID(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	return "r-" + hex.EncodeToString(sum[:])[:60]
 }
+func defaultNodeID(regionID string) string {
+	sum := sha256.Sum256([]byte(regionID))
+	return "n-" + hex.EncodeToString(sum[:])[:60]
+}
 func initialTaxonomy(plans []Plan) TaxonomyConfiguration {
-	out := TaxonomyConfiguration{Revision: 1, Types: []CatalogType{{ID: "generic", Name: "通用服务器", Enabled: true}}, Regions: []CatalogRegion{}}
+	out := TaxonomyConfiguration{Revision: 1, Types: []CatalogType{{ID: "generic", Name: "通用服务器", Enabled: true}}, Regions: []CatalogRegion{}, Nodes: []CatalogNode{}}
 	seen := map[string]bool{}
 	for _, p := range plans {
 		if !seen[p.Region] {
 			seen[p.Region] = true
 			out.Regions = append(out.Regions, CatalogRegion{ID: legacyRegionID(p.Region), TypeID: "generic", Name: p.Region, Enabled: true})
+			out.Nodes = append(out.Nodes, CatalogNode{ID: defaultNodeID(legacyRegionID(p.Region)), RegionID: legacyRegionID(p.Region), Name: "默认节点", Enabled: true})
 		}
 	}
 	return taxonomyProjection(out, true)
 }
 func taxonomyProjection(c TaxonomyConfiguration, admin bool) TaxonomyConfiguration {
-	out := TaxonomyConfiguration{Revision: c.Revision, Types: []CatalogType{}, Regions: []CatalogRegion{}}
+	out := TaxonomyConfiguration{Revision: c.Revision, Types: []CatalogType{}, Regions: []CatalogRegion{}, Nodes: []CatalogNode{}}
 	enabled := map[string]bool{}
+	enabledRegions := map[string]bool{}
 	for _, v := range c.Types {
 		enabled[v.ID] = v.Enabled
 		if admin || v.Enabled {
@@ -69,8 +84,14 @@ func taxonomyProjection(c TaxonomyConfiguration, admin bool) TaxonomyConfigurati
 		}
 	}
 	for _, v := range c.Regions {
+		enabledRegions[v.ID] = v.Enabled && enabled[v.TypeID]
 		if admin || (v.Enabled && enabled[v.TypeID]) {
 			out.Regions = append(out.Regions, v)
+		}
+	}
+	for _, v := range c.Nodes {
+		if admin || (v.Enabled && enabledRegions[v.RegionID]) {
+			out.Nodes = append(out.Nodes, v)
 		}
 	}
 	sort.Slice(out.Types, func(i, j int) bool {
@@ -79,6 +100,10 @@ func taxonomyProjection(c TaxonomyConfiguration, admin bool) TaxonomyConfigurati
 	})
 	sort.Slice(out.Regions, func(i, j int) bool {
 		a, b := out.Regions[i], out.Regions[j]
+		return a.SortOrder < b.SortOrder || a.SortOrder == b.SortOrder && a.ID < b.ID
+	})
+	sort.Slice(out.Nodes, func(i, j int) bool {
+		a, b := out.Nodes[i], out.Nodes[j]
 		return a.SortOrder < b.SortOrder || a.SortOrder == b.SortOrder && a.ID < b.ID
 	})
 	return out
@@ -103,8 +128,19 @@ func taxonomyRegion(c TaxonomyConfiguration, typeID, regionID string, live bool)
 	}
 	return CatalogRegion{}, false
 }
+func taxonomyNode(c TaxonomyConfiguration, typeID, regionID, nodeID string, live bool) (CatalogNode, bool) {
+	if _, ok := taxonomyRegion(c, typeID, regionID, live); !ok {
+		return CatalogNode{}, false
+	}
+	for _, n := range c.Nodes {
+		if n.ID == nodeID && n.RegionID == regionID && (!live || n.Enabled) {
+			return n, true
+		}
+	}
+	return CatalogNode{}, false
+}
 func validTaxonomy(c TaxonomyConfiguration) bool {
-	if c.Revision < 1 || c.Revision > MaxMinor || c.Types == nil || c.Regions == nil || len(c.Types) > 128 || len(c.Regions) > 512 {
+	if c.Revision < 1 || c.Revision > MaxMinor || c.Types == nil || c.Regions == nil || c.Nodes == nil || len(c.Types) > 128 || len(c.Regions) > 512 || len(c.Nodes) > 2048 {
 		return false
 	}
 	types, regions := map[string]bool{}, map[string]bool{}
@@ -120,6 +156,13 @@ func validTaxonomy(c TaxonomyConfiguration) bool {
 		}
 		regions[v.ID] = true
 	}
+	nodes := map[string]bool{}
+	for _, v := range c.Nodes {
+		if !validCatalogID(v.ID) || nodes[v.ID] || !regions[v.RegionID] || v.Name == "" || strings.TrimSpace(v.Name) != v.Name || !validText(v.Name, 120, false) || v.SortOrder < 0 || v.SortOrder > 1000000 {
+			return false
+		}
+		nodes[v.ID] = true
+	}
 	return true
 }
 func applyTaxonomy(old TaxonomyConfiguration, input TaxonomyUpdate, plans []CatalogPlan) (TaxonomyConfiguration, error) {
@@ -132,20 +175,23 @@ func applyTaxonomy(old TaxonomyConfiguration, input TaxonomyUpdate, plans []Cata
 	if _, ok := catalogReason(input.Reason); !ok {
 		return TaxonomyConfiguration{}, ErrTaxonomy
 	}
-	next := TaxonomyConfiguration{Revision: old.Revision + 1, Types: input.Types, Regions: input.Regions}
+	next := TaxonomyConfiguration{Revision: old.Revision + 1, Types: input.Types, Regions: input.Regions, Nodes: input.Nodes}
 	if !validTaxonomy(next) {
 		return TaxonomyConfiguration{}, ErrTaxonomy
 	}
 	// Deletion is permitted only when no live or draft product references the row.
-	// A region's parent is immutable while referenced, avoiding silent reassignment.
+	// Region and node parents are immutable while referenced; this avoids
+	// silently moving an existing product into another purchase category.
 	for _, p := range plans {
 		oldRegion, _ := taxonomyRegion(old, p.TypeID, p.RegionID, false)
 		nr, exists := taxonomyRegion(next, p.TypeID, p.RegionID, false)
-		if !exists || oldRegion.TypeID != nr.TypeID {
+		oldNode, _ := taxonomyNode(old, p.TypeID, p.RegionID, p.NodeID, false)
+		nextNode, nodeExists := taxonomyNode(next, p.TypeID, p.RegionID, p.NodeID, false)
+		if !exists || oldRegion.TypeID != nr.TypeID || !nodeExists || oldNode.RegionID != nextNode.RegionID {
 			return TaxonomyConfiguration{}, ErrTaxonomyInUse
 		}
 		if p.Available {
-			if _, live := taxonomyRegion(next, p.TypeID, p.RegionID, true); !live {
+			if _, live := taxonomyNode(next, p.TypeID, p.RegionID, p.NodeID, true); !live {
 				return TaxonomyConfiguration{}, ErrTaxonomyInUse
 			}
 		}
@@ -214,7 +260,7 @@ func (a *App) taxonomyHTTP(w http.ResponseWriter, r *http.Request, actor User, a
 		return
 	}
 	var input TaxonomyUpdate
-	if !financeBodyLimit(w, r, &input, 1<<20) {
+	if !financeBodyLimit(w, r, &input, 2<<20) {
 		return
 	}
 	out, err := store.UpdateCatalogTaxonomy(r.Context(), actor, input)
@@ -227,7 +273,7 @@ func (a *App) taxonomyHTTP(w http.ResponseWriter, r *http.Request, actor User, a
 func (a *App) taxonomyError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrTaxonomy):
-		fail(w, r, 400, "INVALID_TAXONOMY", "请检查类型、地区、排序、归属和修改原因")
+		fail(w, r, 400, "INVALID_TAXONOMY", "请检查类型、地区、节点、排序、归属和修改原因")
 	case errors.Is(err, ErrTaxonomyConflict):
 		fail(w, r, 409, "TAXONOMY_CONFLICT", "分类已改变，请重新读取")
 	case errors.Is(err, ErrTaxonomyInUse):

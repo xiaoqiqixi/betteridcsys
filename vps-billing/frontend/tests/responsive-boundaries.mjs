@@ -360,6 +360,7 @@ export async function probeResponsiveBoundaries(browser, base, adminStorage) {
               id: "boundary-plan",
               type_id: "boundary-type",
               region_id: "boundary-region",
+              node_id: "boundary-node",
               name: "Synthetic boundary plan",
               description: "Read-only synthetic GET fixture",
               region: "HKG",
@@ -393,6 +394,15 @@ export async function probeResponsiveBoundaries(browser, base, adminStorage) {
               id: "boundary-region",
               type_id: "boundary-type",
               name: "HKG",
+              sort_order: 0,
+              enabled: true,
+            },
+          ],
+          nodes: [
+            {
+              id: "boundary-node",
+              region_id: "boundary-region",
+              name: "Synthetic node",
               sort_order: 0,
               enabled: true,
             },

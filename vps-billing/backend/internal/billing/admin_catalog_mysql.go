@@ -5,12 +5,12 @@ import (
 	"database/sql"
 )
 
-const catalogPlanColumns = "id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,available,type_id,region_id"
+const catalogPlanColumns = "id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,available,type_id,region_id,node_id"
 
 func scanCatalogPlan(row interface{ Scan(...any) error }) (CatalogPlan, error) {
 	var p CatalogPlan
 	p.Prices = []CatalogPrice{}
-	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.CPU, &p.MemoryGB, &p.DiskGB, &p.TransferTB, &p.Region, &p.Available, &p.TypeID, &p.RegionID)
+	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.CPU, &p.MemoryGB, &p.DiskGB, &p.TransferTB, &p.Region, &p.Available, &p.TypeID, &p.RegionID, &p.NodeID)
 	return p, err
 }
 func readCatalogPlan(ctx context.Context, q currencyQuerier, id, lock string) (CatalogPlan, error) {
@@ -168,7 +168,8 @@ func (m *MySQL) mutateCatalog(ctx context.Context, actor User, id string, input 
 		action = "catalog.duplicated"
 	}
 	region, exists := taxonomyRegion(taxonomy, input.TypeID, input.RegionID, input.Available)
-	if !exists || input.Region != region.Name {
+	_, nodeExists := taxonomyNode(taxonomy, input.TypeID, input.RegionID, input.NodeID, input.Available)
+	if !exists || !nodeExists || input.Region != region.Name {
 		return CatalogResult{}, ErrTaxonomy
 	}
 	input, next, err := normalizeCatalog(input, config)
@@ -179,9 +180,9 @@ func (m *MySQL) mutateCatalog(ctx context.Context, actor User, id string, input 
 		id = ID()
 		// Legacy columns are not quotations. Existing legacy/history fields are
 		// never rewritten by edits, and new prices live only in plan_prices.
-		_, err = tx.ExecContext(ctx, "INSERT INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available,type_id,region_id) VALUES(?,?,?,?,?,?,?,?,0,?,?,?,?)", id, input.Name, input.Description, input.CPU, input.MemoryGB, input.DiskGB, input.TransferTB, input.Region, config.DefaultCurrency, input.Available, input.TypeID, input.RegionID)
+		_, err = tx.ExecContext(ctx, "INSERT INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available,type_id,region_id,node_id) VALUES(?,?,?,?,?,?,?,?,0,?,?,?,?,?)", id, input.Name, input.Description, input.CPU, input.MemoryGB, input.DiskGB, input.TransferTB, input.Region, config.DefaultCurrency, input.Available, input.TypeID, input.RegionID, input.NodeID)
 	} else {
-		_, err = tx.ExecContext(ctx, "UPDATE plans SET name=?,description=?,cpu=?,memory_gb=?,disk_gb=?,transfer_tb=?,region=?,available=?,type_id=?,region_id=? WHERE id=?", input.Name, input.Description, input.CPU, input.MemoryGB, input.DiskGB, input.TransferTB, input.Region, input.Available, input.TypeID, input.RegionID, id)
+		_, err = tx.ExecContext(ctx, "UPDATE plans SET name=?,description=?,cpu=?,memory_gb=?,disk_gb=?,transfer_tb=?,region=?,available=?,type_id=?,region_id=?,node_id=? WHERE id=?", input.Name, input.Description, input.CPU, input.MemoryGB, input.DiskGB, input.TransferTB, input.Region, input.Available, input.TypeID, input.RegionID, input.NodeID, id)
 	}
 	if err != nil {
 		return CatalogResult{}, err

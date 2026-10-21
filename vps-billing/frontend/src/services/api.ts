@@ -39,6 +39,10 @@ const SAFE_ERRORS: Record<string, [string, string]> = {
     "服务器返回了无法确认的数据，请勿视为成功。",
     "The response could not be verified. Do not treat it as success.",
   ],
+  SERVICE_UNAVAILABLE: [
+    "服务暂时不可用，请稍后手动重新加载；已提交的操作请先核对结果，勿重复提交。",
+    "The service is temporarily unavailable. Reload manually later. Check any submitted operation before submitting again.",
+  ],
   REQUEST_FAILED: [
     "请求未完成，请稍后核对。",
     "The request did not complete. Check its result before trying again.",
@@ -281,6 +285,7 @@ function validCatalogItem(value: unknown): boolean {
       "region",
       "type_id",
       "region_id",
+      "node_id",
     ]) &&
     ["cpu", "memory_gb", "disk_gb", "transfer_tb"].every((key) =>
       integer(value[key], true),
@@ -383,6 +388,7 @@ function validPayload(
           "currency",
           "type_id",
           "region_id",
+          "node_id",
         ]) &&
         moneyRecord(plan, "price_minor") &&
         integer(plan.price_revision, true) &&
@@ -550,7 +556,13 @@ export function createApiClient(options: {
       try {
         data = await response.json();
       } catch {
-        throw new ApiError("INVALID_RESPONSE", response.status, {
+        // A gateway may return HTML while its upstream is unavailable. That is
+        // not a malformed successful DTO; never retain the gateway's body.
+        const code =
+          response.status >= 500 && response.status <= 599
+            ? "SERVICE_UNAVAILABLE"
+            : "INVALID_RESPONSE";
+        throw new ApiError(code, response.status, {
           locale: options.locale(),
           requestId:
             requestHeader && REQUEST_ID.test(requestHeader)

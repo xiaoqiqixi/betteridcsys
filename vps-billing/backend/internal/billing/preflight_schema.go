@@ -8,7 +8,7 @@ import (
 )
 
 // These bounded descriptions are the physical columns shipped by migrations
-// 1–11, not an SQL interpreter. A history row alone cannot detect interrupted
+// 1–12, not an SQL interpreter. A history row alone cannot detect interrupted
 // DDL or a later manual edit. Compatible extra indexes/checks are permitted.
 func preflightColumns(version int) map[string]map[string]string {
 	specs := map[string]string{
@@ -54,6 +54,10 @@ func preflightColumns(version int) map[string]map[string]string {
 		specs["catalog_types"] = "id:varchar(64)! name:varchar(120)! sort_order:int! enabled:tinyint(1)!"
 		specs["catalog_regions"] = "id:varchar(64)! type_id:varchar(64)! name:varchar(120)! sort_order:int! enabled:tinyint(1)!"
 		specs["catalog_taxonomy_settings"] = "id:tinyint! revision:bigint!"
+	}
+	if version >= 12 {
+		specs["plans"] += " node_id:varchar(64)!"
+		specs["catalog_nodes"] = "id:varchar(64)! region_id:varchar(64)! name:varchar(120)! sort_order:int! enabled:tinyint(1)!"
 	}
 	result := make(map[string]map[string]string, len(specs))
 	for table, spec := range specs {
@@ -129,6 +133,9 @@ func preflightChecks(version int) map[string]map[string]string {
 		checks["catalog_regions"] = map[string]string{"catalog_regions_sort": "sort_order >= 0 AND sort_order <= 1000000", "catalog_regions_enabled": "enabled IN (0,1)"}
 		checks["catalog_taxonomy_settings"] = map[string]string{"catalog_taxonomy_singleton": "id = 1", "catalog_taxonomy_revision": "revision >= 1 AND revision <= 9007199254740991"}
 	}
+	if version >= 12 {
+		checks["catalog_nodes"] = map[string]string{"catalog_nodes_sort": "sort_order >= 0 AND sort_order <= 1000000", "catalog_nodes_enabled": "enabled IN (0,1)"}
+	}
 	return checks
 }
 
@@ -161,7 +168,7 @@ func preflightColumnMatches(table, name, spec, kind, nullable, extra, generated 
 		case "order_requests.request_key", "plan_prices.currency":
 			wantCharset, wantCollation = "ascii", "ascii_bin"
 		}
-		if (table == "catalog_types" && name == "id") || (table == "catalog_regions" && (name == "id" || name == "type_id")) || (table == "plans" && (name == "type_id" || name == "region_id")) {
+		if (table == "catalog_types" && name == "id") || (table == "catalog_regions" && (name == "id" || name == "type_id")) || (table == "plans" && (name == "type_id" || name == "region_id" || name == "node_id")) || (table == "catalog_nodes" && (name == "id" || name == "region_id")) {
 			wantCharset, wantCollation = "ascii", "ascii_bin"
 		}
 		if (table == "payment_attempts" && name != "user_id" && name != "invoice_id" && name != "order_id" && name != "state") || table == "payment_settlements" {
@@ -340,6 +347,9 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 			required[t+":id"] = true
 		}
 	}
+	if version >= 12 {
+		required["catalog_nodes:id"] = true
+	}
 	if partial {
 		for key := range required {
 			table, _, _ := strings.Cut(key, ":")
@@ -405,6 +415,12 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 			}
 		}
 	}
+	if version >= 12 && (!partial || tables["catalog_nodes"] != "") {
+		if id := "catalog_nodes:PRIMARY"; !valid[id] || keys[id] != "id" {
+			return errors.New("catalog node schema has an unexpected primary key")
+		}
+	}
+
 	fks := map[string]bool{
 		"sessions:user_id:users:id:CASCADE": true, "orders:user_id:users:id:RESTRICT": true, "orders:plan_id:plans:id:RESTRICT": true,
 		"invoices:user_id:users:id:RESTRICT": true, "invoices:order_id:orders:id:RESTRICT": true,
@@ -423,6 +439,10 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 		for _, k := range []string{"catalog_regions:type_id:catalog_types:id:RESTRICT", "plans:type_id:catalog_types:id:RESTRICT", "plans:region_id:catalog_regions:id:RESTRICT"} {
 			fks[k] = true
 		}
+	}
+	if version >= 12 {
+		fks["catalog_nodes:region_id:catalog_regions:id:RESTRICT"] = true
+		fks["plans:node_id:catalog_nodes:id:RESTRICT"] = true
 	}
 	if partial {
 		for key := range fks {
@@ -454,6 +474,17 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 		count++
 		id := table + ":" + constraint
 		foreignKeySizes[id]++
+		if version >= 12 && table == "catalog_nodes" && (!partial || tables[table] != "") {
+			rule := deletion
+			if rule == "NO ACTION" {
+				rule = "RESTRICT"
+			}
+			signature := strings.Join([]string{table, col, refTable, refCol, rule}, ":")
+			if !sameDB || ordinal != 1 || (update != "RESTRICT" && update != "NO ACTION") || !fks[signature] {
+				rows.Close()
+				return errors.New("catalog node schema has an unexpected foreign key")
+			}
+		}
 		if version >= 8 && (table == "payment_attempts" || table == "payment_settlements") && (!partial || tables[table] != "") {
 			deletionRule := deletion
 			if deletionRule == "NO ACTION" {

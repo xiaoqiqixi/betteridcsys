@@ -147,6 +147,12 @@ try {
                     entry.id === plan.region_id &&
                     entry.type_id === plan.type_id &&
                     entry.name === plan.region,
+                ) &&
+                publicTaxonomy.nodes.some(
+                  (entry) =>
+                    entry.id === plan.node_id &&
+                    entry.region_id === plan.region_id &&
+                    entry.enabled,
                 ),
             ),
           );
@@ -216,13 +222,19 @@ try {
             assert.ok(adminTaxonomy);
             assert.equal(value.taxonomy_revision, adminTaxonomy.revision);
             assert.ok(
-              value.items.every((plan) =>
-                adminTaxonomy.regions.some(
-                  (entry) =>
-                    entry.id === plan.region_id &&
-                    entry.type_id === plan.type_id &&
-                    entry.name === plan.region,
-                ),
+              value.items.every(
+                (plan) =>
+                  adminTaxonomy.regions.some(
+                    (entry) =>
+                      entry.id === plan.region_id &&
+                      entry.type_id === plan.type_id &&
+                      entry.name === plan.region,
+                  ) &&
+                  adminTaxonomy.nodes.some(
+                    (entry) =>
+                      entry.id === plan.node_id &&
+                      entry.region_id === plan.region_id,
+                  ),
               ),
             );
           }

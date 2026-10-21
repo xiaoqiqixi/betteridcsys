@@ -57,11 +57,28 @@ const taxonomy = {
       enabled: true,
     },
   ],
+  nodes: [
+    {
+      id: "cloud-hkg-node",
+      region_id: "cloud-hkg",
+      name: "HKG node",
+      sort_order: 0,
+      enabled: true,
+    },
+    {
+      id: "cloud-tyo-node",
+      region_id: "cloud-tyo",
+      name: "TYO node",
+      sort_order: 0,
+      enabled: true,
+    },
+  ],
 };
 const plans = Array.from({ length: 4 }, (_, i) => ({
   id: `plan-${i}`,
   type_id: "cloud",
   region_id: i < 2 ? "cloud-hkg" : "cloud-tyo",
+  node_id: i < 2 ? "cloud-hkg-node" : "cloud-tyo-node",
   taxonomy_revision: taxonomy.revision,
   name: `Plan ${i}`,
   description: "Synthetic",
@@ -105,7 +122,15 @@ function render(component: typeof CatalogPage | typeof AdminCatalogPage) {
   return wrapper;
 }
 const button = (wrapper: VueWrapper, label: string) =>
-  wrapper.findAll("button").find((b) => b.text() === label)!;
+  wrapper
+    .findAll("button")
+    .find(
+      (b) =>
+        b.text() === label ||
+        (label === "选择此套餐" &&
+          b.classes("gpc-btn-choose") &&
+          b.text() === "已选择"),
+    )!;
 function nextPlanRead(value: unknown) {
   const previous = mocks.read.getMockImplementation()!;
   let pending = true;
@@ -242,14 +267,15 @@ describe("independent catalog pages", () => {
     expect(wrapper.get("h1").text()).toBe("购买云服务器");
     expect(
       wrapper.findAll(".selection-section h2").map((node) => node.text()),
-    ).toEqual(["选择类型", "选择地区", "选择套餐", "主机名称"]);
+    ).toEqual(["选择类型", "选择地区", "选择节点", "选择套餐", "主机名称"]);
     expect(wrapper.get(".order-summary > h2").text()).toBe("订单详情");
   });
-  it("hides redundant navigation for one region without hiding its plans or inventing an all-regions option", async () => {
+  it("keeps the same framed selected control for a single region without an all-regions option", async () => {
     nextPlanRead(plans.slice(0, 2));
     const wrapper = render(CatalogPage);
     await flushPromises();
-    expect(wrapper.find(".catalog-region").exists()).toBe(false);
+    expect(wrapper.findAll(".catalog-region button.active")).toHaveLength(1);
+    expect(wrapper.findAll(".catalog-node button.active")).toHaveLength(1);
     expect(wrapper.findAll(".gpc-card")).toHaveLength(2);
     expect(wrapper.text()).not.toContain("全部地区");
   });
@@ -278,7 +304,7 @@ describe("independent catalog pages", () => {
       "Plan 0",
       "Plan 1",
     ]);
-    expect(wrapper.find(".catalog-region").exists()).toBe(false);
+    expect(wrapper.findAll(".catalog-region button.active")).toHaveLength(1);
   });
   it("does not keep a missing region or a cross-currency quote after a currency refresh", async () => {
     const wrapper = render(CatalogPage);
@@ -336,7 +362,7 @@ describe("independent catalog pages", () => {
     await flushPromises();
     expect(
       wrapper.get(".hostname-field input").attributes("disabled"),
-    ).toBeDefined();
+    ).toBeUndefined();
     await button(wrapper, "选择此套餐").trigger("click");
     expect(wrapper.get(".gpc-card.is-selected .gpc-title").text()).toBe(
       "Plan 0",
@@ -354,10 +380,12 @@ describe("independent catalog pages", () => {
       "my-cloud-01",
     );
     await button(wrapper, "TYO").trigger("click");
-    expect(wrapper.find(".gpc-card.is-selected").exists()).toBe(false);
+    expect(wrapper.get(".gpc-card.is-selected .gpc-title").text()).toBe(
+      "Plan 2",
+    );
     expect(wrapper.get(".hostname-field input").element.value).toBe("");
     expect(wrapper.get(".order-summary .summary-total strong").text()).toBe(
-      "—",
+      "¥59.00",
     );
     expect(button(wrapper, "确认订单").attributes("disabled")).toBeDefined();
   });
@@ -373,10 +401,10 @@ describe("independent catalog pages", () => {
     await flushPromises();
     expect(wrapper.get(".hostname-field input").element.value).toBe("");
     expect(wrapper.text()).not.toContain("private-original-host");
-    expect(wrapper.find(".gpc-card.is-selected").exists()).toBe(false);
+    expect(wrapper.find(".gpc-card.is-selected").exists()).toBe(true);
     expect(mocks.write).not.toHaveBeenCalled();
   });
-  it("invalidates a selected quote on refresh rather than silently replacing its price", async () => {
+  it("clears the accepted draft on refresh and shows its new first quote without submitting it", async () => {
     const wrapper = render(CatalogPage);
     await flushPromises();
     await button(wrapper, "选择此套餐").trigger("click");
@@ -386,10 +414,11 @@ describe("independent catalog pages", () => {
     );
     await wrapper.get('[aria-label="刷新套餐"]').trigger("click");
     await flushPromises();
-    expect(wrapper.find(".gpc-card.is-selected").exists()).toBe(false);
+    expect(wrapper.find(".gpc-card.is-selected").exists()).toBe(true);
     expect(wrapper.get(".order-summary .summary-total strong").text()).toBe(
-      "—",
+      "¥999.99",
     );
+    expect(wrapper.get(".hostname-field input").element.value).toBe("");
     expect(button(wrapper, "确认订单").attributes("disabled")).toBeDefined();
     expect(wrapper.findAll(".gpc-price-amount")[0]!.text()).toBe("¥999.99");
     expect(mocks.write).not.toHaveBeenCalled();
@@ -413,7 +442,7 @@ describe("independent catalog pages", () => {
     await button(wrapper, "重新读取报价").trigger("click");
     await flushPromises();
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
-    expect(wrapper.find(".gpc-card.is-selected").exists()).toBe(false);
+    expect(wrapper.find(".gpc-card.is-selected").exists()).toBe(true);
     expect(button(wrapper, "确认订单").attributes("disabled")).toBeDefined();
   });
   it("saves independent exact minor-unit prices with captured catalog/currency versions and reason", async () => {
@@ -437,6 +466,7 @@ describe("independent catalog pages", () => {
     );
     await textFields[0]!.setValue("独立测试商品");
     await selectUi(wrapper, "地区", "TYO");
+    await selectUi(wrapper, "节点", "TYO node");
     await wrapper.findAll(".price-amount input")[0]!.setValue("123456789.01");
     await wrapper.findAll(".price-amount input")[1]!.setValue("9.99");
     await wrapper.find(".reason-section textarea").setValue("合成测试新增商品");
@@ -449,6 +479,7 @@ describe("independent catalog pages", () => {
     expect(body.taxonomy_revision).toBe(taxonomy.revision);
     expect(body.type_id).toBe("cloud");
     expect(body.region_id).toBe("cloud-tyo");
+    expect(body.node_id).toBe("cloud-tyo-node");
     expect(body.region).toBe("TYO");
     expect(body.reason).toBe("合成测试新增商品");
     expect(body.prices).toEqual([

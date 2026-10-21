@@ -218,6 +218,29 @@ export function createDemoClient(currentRole: () => Role) {
         enabled: true,
       },
     ],
+    nodes: [
+      {
+        id: "standard-hkg-a",
+        region_id: "standard-hkg",
+        name: "香港一区",
+        sort_order: 0,
+        enabled: true,
+      },
+      {
+        id: "standard-sin-a",
+        region_id: "standard-sin",
+        name: "新加坡一区",
+        sort_order: 0,
+        enabled: true,
+      },
+      {
+        id: "compute-tyo-a",
+        region_id: "compute-tyo",
+        name: "东京一区",
+        sort_order: 0,
+        enabled: true,
+      },
+    ],
   };
   const catalog: Catalog = {
     revision: 7,
@@ -228,6 +251,7 @@ export function createDemoClient(currentRole: () => Role) {
         id: "hkg-essential",
         type_id: "standard",
         region_id: "standard-hkg",
+        node_id: "standard-hkg-a",
         name: "香港 · Essential",
         description:
           "轻量应用、个人站点与开发环境。所有规格与价格均为合成演示。",
@@ -246,6 +270,7 @@ export function createDemoClient(currentRole: () => Role) {
         id: "hkg-balanced",
         type_id: "standard",
         region_id: "standard-hkg",
+        node_id: "standard-hkg-a",
         name: "香港 · Balanced",
         description:
           "更从容的内存与存储，适合常驻应用。演示独立报价，非汇率换算。",
@@ -264,6 +289,7 @@ export function createDemoClient(currentRole: () => Role) {
         id: "tyo-performance",
         type_id: "compute",
         region_id: "compute-tyo",
+        node_id: "compute-tyo-a",
         name: "东京 · Performance",
         description: "高配合成示例，便于检查长规格、对比与手机布局。",
         region: "东京 TYO",
@@ -281,6 +307,7 @@ export function createDemoClient(currentRole: () => Role) {
         id: "sin-studio",
         type_id: "standard",
         region_id: "standard-sin",
+        node_id: "standard-sin-a",
         name: "新加坡 · Studio",
         description: "当前仅提供人民币独立报价；选择美元时应显示暂不可购买。",
         region: "新加坡 SIN",
@@ -295,6 +322,7 @@ export function createDemoClient(currentRole: () => Role) {
         id: "draft-compute",
         type_id: "compute",
         region_id: "compute-tyo",
+        node_id: "compute-tyo-a",
         name: "计算优化 · 草稿",
         description: "未上架的演示草稿，可编辑规格及各币种报价。",
         region: "东京 TYO",
@@ -528,6 +556,12 @@ export function createDemoClient(currentRole: () => Role) {
           taxonomy.types.some(
             (type) => type.id === item.type_id && type.enabled,
           ) &&
+          taxonomy.nodes.some(
+            (node) =>
+              node.id === item.node_id &&
+              node.region_id === item.region_id &&
+              node.enabled,
+          ) &&
           taxonomy.regions.some(
             (region) =>
               region.id === item.region_id &&
@@ -541,6 +575,7 @@ export function createDemoClient(currentRole: () => Role) {
           id: item.id,
           type_id: item.type_id,
           region_id: item.region_id,
+          node_id: item.node_id,
           taxonomy_revision: taxonomy.revision,
           name: item.name,
           description: item.description,
@@ -699,6 +734,19 @@ export function createDemoClient(currentRole: () => Role) {
       value = {
         revision: taxonomy.revision,
         types,
+        nodes: sortCatalogEntries(taxonomy.nodes).filter(
+          (node) =>
+            admin ||
+            (node.enabled &&
+              taxonomy.regions.some(
+                (region) =>
+                  region.id === node.region_id &&
+                  region.enabled &&
+                  types.some(
+                    (type) => type.id === region.type_id && type.enabled,
+                  ),
+              )),
+        ),
         regions: sortCatalogEntries(taxonomy.regions).filter(
           (row) =>
             admin ||
@@ -943,7 +991,7 @@ export function createDemoClient(currentRole: () => Role) {
     else if (path === "/admin/updates")
       value = {
         current: {
-          core_version: "0.5.7",
+          core_version: "0.5.8",
           smtp_version: "",
           smtp_status: "not_installed",
           plugin_policy_revision: 1,
@@ -970,6 +1018,7 @@ export function createDemoClient(currentRole: () => Role) {
       "region",
       "type_id",
       "region_id",
+      "node_id",
       "taxonomy_revision",
       "cpu",
       "memory_gb",
@@ -987,16 +1036,22 @@ export function createDemoClient(currentRole: () => Role) {
     if (body.taxonomy_revision !== taxonomy.revision)
       fail("TAXONOMY_CONFLICT", 409);
     const type_id = text(body.type_id, 64),
-      region_id = text(body.region_id, 64);
+      region_id = text(body.region_id, 64),
+      node_id = text(body.node_id, 64);
     const parent = taxonomy.types.find((row) => row.id === type_id);
     const location = taxonomy.regions.find(
       (row) => row.id === region_id && row.type_id === type_id,
     );
+    const node = taxonomy.nodes.find(
+      (row) => row.id === node_id && row.region_id === region_id,
+    );
     if (
       !parent ||
       !location ||
+      !node ||
       body.region !== location.name ||
-      (body.available && (!parent.enabled || !location.enabled))
+      (body.available &&
+        (!parent.enabled || !location.enabled || !node.enabled))
     )
       fail("INVALID_CATALOG");
     const name = text(body.name, 120),
@@ -1037,6 +1092,7 @@ export function createDemoClient(currentRole: () => Role) {
       description,
       type_id,
       region_id,
+      node_id,
       taxonomy_revision: taxonomy.revision,
       region,
       cpu,
@@ -1162,13 +1218,14 @@ export function createDemoClient(currentRole: () => Role) {
       if (invoice.status !== "unpaid") fail("INVOICE_NOT_PAYABLE", 409);
       return fail("PAYMENT_NOT_CONFIGURED", 503);
     } else if (path === "/admin/catalog-taxonomy") {
-      exact(body, ["revision", "types", "regions", "reason"]);
+      exact(body, ["revision", "types", "regions", "nodes", "reason"]);
       const reason = text(body.reason, 500);
       if (body.revision !== taxonomy.revision) fail("TAXONOMY_CONFLICT", 409);
       const candidate = {
         revision: taxonomy.revision + 1,
         types: body.types,
         regions: body.regions,
+        nodes: body.nodes,
       };
       if (!validCatalogTaxonomy(candidate)) fail("INVALID_TAXONOMY");
       for (const row of candidate.types) {
@@ -1177,15 +1234,28 @@ export function createDemoClient(currentRole: () => Role) {
       }
       for (const row of candidate.regions)
         exact(object(row), ["id", "type_id", "name", "sort_order", "enabled"]);
+      for (const row of candidate.nodes)
+        exact(object(row), [
+          "id",
+          "region_id",
+          "name",
+          "sort_order",
+          "enabled",
+        ]);
       for (const item of catalog.items) {
         const parent = candidate.types.find((row) => row.id === item.type_id);
         const location = candidate.regions.find(
           (row) => row.id === item.region_id && row.type_id === item.type_id,
         );
+        const node = candidate.nodes.find(
+          (row) => row.id === item.node_id && row.region_id === item.region_id,
+        );
         if (
           !parent ||
           !location ||
-          (item.available && (!parent.enabled || !location.enabled))
+          !node ||
+          (item.available &&
+            (!parent.enabled || !location.enabled || !node.enabled))
         )
           fail("TAXONOMY_IN_USE", 409);
       }

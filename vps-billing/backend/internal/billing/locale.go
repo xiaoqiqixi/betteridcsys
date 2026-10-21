@@ -43,7 +43,7 @@ func requestLocale(header string) string {
 }
 
 var englishErrors = map[string]string{
-	"INVALID_TAXONOMY":               "Check the types, regions, ordering, parent relationships and reason.",
+	"INVALID_TAXONOMY":               "Check the types, regions, nodes, ordering, parent relationships and reason.",
 	"TAXONOMY_CONFLICT":              "The catalog categories changed. Reload before editing.",
 	"TAXONOMY_IN_USE":                "Products still reference these categories. Unpublish or reassign them first.",
 	"INVALID_CATALOG":                "Check the product name, specifications, prices and reason. Publishing requires a valid price in at least one enabled currency.",

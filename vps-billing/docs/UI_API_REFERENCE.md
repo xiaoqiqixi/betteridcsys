@@ -1,3 +1,7 @@
+## Core 0.5.8 四层分类补充
+
+公开与管理 taxonomy 包含 types、regions、nodes，父链为类型 → 地区 → 节点；套餐 DTO/商品写入必须有 node_id，使用同一 taxonomy_revision。管理 POST 包含完整 nodes；不能省略字段或按名字推断父级。完整限制、默认选中、schema12 与旧订单边界见 [CATALOG_TAXONOMY.md](CATALOG_TAXONOMY.md)。
+
 # UI 独立开发 API 文档
 
 核对日期：2026-10-21（Asia/Shanghai）。本文件只提供现有 HTTP API 行为、JSON 字段与业务约束，不提供项目源码、内部实现、真实业务数据、凭证或部署信息。前端独立使用 Vue 3 + TypeScript 开发；接口之外的能力不得编造。本文不是生产验收或部署授权。

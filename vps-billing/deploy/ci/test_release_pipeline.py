@@ -866,6 +866,26 @@ class PatchReleaseNotesTest(unittest.TestCase):
         runtime_pipeline.publish(api, runtime_pipeline.prepare_publish(api, env, event), artifact)
         return api, api.mutations[0][2]["body"]
 
+    def test_058_notes_cover_four_level_purchase_schema12_and_preserved_financial_boundaries(self):
+        api, body = self.published_notes("core", "0.5.8")
+        self.assertTrue(body.startswith("## Core 0.5.8\n\n"))
+        for text in ("正式 Core 0.5.7", "类型→地区→节点→套餐", "011", "012", "schema 12",
+                     "001–011", "默认节点", "旧报价", "失效", "历史快照", "支付幂等",
+                     "认证/CSRF", "权限边界", "CNY", "六资产", "SMTP", "1.1.0", "不使用 Docker"):
+            self.assertIn(text, body)
+        self.assertRegex(body, r"(?:不提升|不增加|不改变|不递增).{0,40}(?:报价修订|报价 revision|price_revision|prices_revision)")
+        self.assertRegex(body, r"(?:分类编辑|分类修改|编辑分类|修改分类).{0,100}旧报价.{0,40}失效")
+        self.assertRegex(body, r"(?:不新增|不提供|不包含|不引入).{0,60}(?:真实资源开通|真实 VPS 开通|真实开通)")
+        self.assertRegex(body, r"(?:不新增|不提供|不包含|不引入).{0,60}新支付渠道")
+        for misleading in ("本次不新增数据库迁移", "继续 schema 10", "该版本已通过流水线"):
+            self.assertNotIn(misleading, body)
+        for document in ("RELEASE-v0.5.8.md", "VALIDATION.md", "INSTALL.md", "UPGRADE.md", "BAOTA.md", "PLUGINS.md"):
+            self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/blob/{SHA}/vps-billing/docs/{document}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/commit/{SHA}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/actions/runs/{RUN_ID}", body)
+        self.assertEqual(len(api.uploads), 6)
+        self.assertEqual([call[0] for call in api.mutations], ["POST", "PATCH"])
+
     def test_057_notes_cover_new_frontend_contrast_and_exact_financial_release_boundaries(self):
         api, body = self.published_notes("core", "0.5.7")
         self.assertTrue(body.startswith("## Core 0.5.7\n\n"))

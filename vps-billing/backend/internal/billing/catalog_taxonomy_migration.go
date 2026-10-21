@@ -97,7 +97,7 @@ func prevalidateTaxonomyMigration(ctx context.Context, conn *sql.Conn, source st
 	if err != nil {
 		return err
 	}
-	if !validTaxonomy(TaxonomyConfiguration{Revision: 1, Types: []CatalogType{{ID: "generic", Name: "通用服务器", Enabled: true}}, Regions: regions}) {
+	if !validTaxonomy(TaxonomyConfiguration{Revision: 1, Types: []CatalogType{{ID: "generic", Name: "通用服务器", Enabled: true}}, Regions: regions, Nodes: []CatalogNode{}}) {
 		return errors.New("legacy regions require explicit repair before taxonomy migration")
 	}
 

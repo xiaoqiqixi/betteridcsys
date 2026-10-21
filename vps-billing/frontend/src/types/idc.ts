@@ -51,6 +51,7 @@ export interface Plan {
   id: string;
   type_id: string;
   region_id: string;
+  node_id: string;
   taxonomy_revision: number;
   name: string;
   description: string;
@@ -238,6 +239,7 @@ export interface CatalogItem {
   id: string;
   type_id: string;
   region_id: string;
+  node_id: string;
   name: string;
   description: string;
   region: string;

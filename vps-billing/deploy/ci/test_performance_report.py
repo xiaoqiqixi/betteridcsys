@@ -85,12 +85,12 @@ def fixture(baseline=False):
         },
         "mysql_version": "8.4.10",
         "dataset": {
-            "counts": {"audit_events": 10000, "catalog_regions": 2,
+            "counts": {"audit_events": 10000, "catalog_nodes": 2, "catalog_regions": 2,
                        "catalog_taxonomy_settings": 1, "catalog_types": 1,
                        "currency_settings": 1, "email_settings": 1,
                        "invoices": 10000, "order_requests": 10000, "orders": 10000,
                        "outbox_events": 10000, "payment_attempts": 0, "payment_settlements": 0,
-                       "plan_prices": 3, "plans": 3, "schema_migrations": 11, "services": 1000,
+                       "plan_prices": 3, "plans": 3, "schema_migrations": 12, "services": 1000,
                        "sessions": 2, "site_settings": 1, "users": 101},
             "sha256": DATASET, "before_after_equal": True,
         },
@@ -204,16 +204,16 @@ class PerformanceReportTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("errors=4\n", result.stdout)
 
-    def test_schema_11_inventory_requires_exact_migrated_classification_counts(self):
+    def test_schema_12_inventory_requires_exact_migrated_classification_counts(self):
         value = fixture()
-        expected = {"catalog_types": 1, "catalog_regions": 2,
-                    "catalog_taxonomy_settings": 1, "schema_migrations": 11}
+        expected = {"catalog_nodes": 2, "catalog_types": 1, "catalog_regions": 2,
+                    "catalog_taxonomy_settings": 1, "schema_migrations": 12}
         self.assertEqual({key: value["dataset"]["counts"][key] for key in expected}, expected)
         self.assertEqual(value["dataset"]["counts"], REPORT.COUNTS)
-        self.assertEqual(len(value["dataset"]["counts"]), 19)
+        self.assertEqual(len(value["dataset"]["counts"]), 20)
 
         legacy = copy.deepcopy(value)
-        for key in ("catalog_types", "catalog_regions", "catalog_taxonomy_settings"):
+        for key in ("catalog_nodes", "catalog_types", "catalog_regions", "catalog_taxonomy_settings"):
             legacy["dataset"]["counts"].pop(key)
         legacy["dataset"]["counts"]["schema_migrations"] = 10
         self.write(legacy)

@@ -27,6 +27,7 @@ type User struct {
 	PasswordHash string `json:"-"`
 }
 type Plan struct {
+	NodeID           string         `json:"node_id"`
 	TypeID           string         `json:"type_id"`
 	RegionID         string         `json:"region_id"`
 	TaxonomyRevision int64          `json:"taxonomy_revision"`

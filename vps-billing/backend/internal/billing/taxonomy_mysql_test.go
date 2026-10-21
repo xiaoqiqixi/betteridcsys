@@ -204,8 +204,8 @@ func TestMySQLCatalogTaxonomyPreflightValidatesActualPhysicalSchema(t *testing.T
 				t.Fatal(err)
 			}
 			status, err := m.SchemaStatus(ctx)
-			if err != nil || status.Status != "current" || status.SchemaVersion != 11 || status.RequiredSchemaVersion != 11 || len(status.MigrationChecksums) != 11 || len(status.PendingMigrations) != 0 {
-				t.Fatal("fresh schema11 must be usable", status, err)
+			if err != nil || status.Status != "current" || status.SchemaVersion != len(schemaVersions) || status.RequiredSchemaVersion != len(schemaVersions) || len(status.MigrationChecksums) != len(schemaVersions) || len(status.PendingMigrations) != 0 {
+				t.Fatal("fresh current schema must be usable", status, err)
 			}
 			if test.ddl == "" {
 				if err = m.Migrate(ctx); err != nil {
@@ -213,13 +213,13 @@ func TestMySQLCatalogTaxonomyPreflightValidatesActualPhysicalSchema(t *testing.T
 				}
 				status, err = m.SchemaStatus(ctx)
 				if err != nil || status.Status != "current" {
-					t.Fatal("repeat schema11 unusable", status, err)
+					t.Fatal("repeat current schema unusable", status, err)
 				}
 				return
 			}
 			migrationExec(t, ctx, m.DB, test.ddl)
 			status, err = m.SchemaStatus(ctx)
-			if err == nil || status.Status != "incompatible" || status.SchemaVersion != 11 {
+			if err == nil || status.Status != "incompatible" || status.SchemaVersion != len(schemaVersions) {
 				t.Fatal("unsafe taxonomy physical schema accepted", status, err)
 			}
 		})

@@ -43,6 +43,22 @@ const baseTaxonomy: CatalogTaxonomy = {
       enabled: true,
     },
   ],
+  nodes: [
+    {
+      id: "compute-hk-a",
+      region_id: "compute-hk",
+      name: "香港一区",
+      sort_order: 10,
+      enabled: true,
+    },
+    {
+      id: "general-hk-a",
+      region_id: "general-hk",
+      name: "香港一区",
+      sort_order: 10,
+      enabled: true,
+    },
+  ],
 };
 const currency = {
   code: "CNY",
@@ -61,6 +77,7 @@ const baseCatalog = {
       id: "compute-small",
       type_id: "compute",
       region_id: "compute-hk",
+      node_id: "compute-hk-a",
       name: "Compute Plan",
       region: "香港",
     },
@@ -68,6 +85,7 @@ const baseCatalog = {
       id: "general-small",
       type_id: "general",
       region_id: "general-hk",
+      node_id: "general-hk-a",
       name: "General Plan",
       region: "香港",
     },
@@ -105,10 +123,10 @@ function products() {
 }
 const button = (wrapper: VueWrapper, text: string) =>
   wrapper.findAll("button").find((row) => row.text() === text)!;
-async function tab(wrapper: VueWrapper, name: "types" | "regions") {
+async function tab(wrapper: VueWrapper, name: "types" | "regions" | "nodes") {
   await wrapper
     .findAll(".taxonomy-tabs button")
-    [name === "types" ? 0 : 1]!.trigger("click");
+    [name === "types" ? 0 : name === "regions" ? 1 : 2]!.trigger("click");
 }
 async function select(trigger: ReturnType<VueWrapper["get"]>, text: string) {
   await trigger.trigger("click");
@@ -129,6 +147,7 @@ function successfulWrite(_path: string, body: CatalogTaxonomy) {
     revision: body.revision + 1,
     types: structuredClone(body.types),
     regions: structuredClone(body.regions),
+    nodes: structuredClone(body.nodes),
   });
 }
 beforeEach(() => {
@@ -225,6 +244,9 @@ describe("actual taxonomy manager editor", () => {
     expect(wrapper.text()).toContain("该类型下还有地区");
     expect(wrapper.findAll(".taxonomy-row")).toHaveLength(2);
     await tab(wrapper, "regions");
+    await tab(wrapper, "nodes");
+    await wrapper.findAll(".taxonomy-remove")[0]!.trigger("click");
+    await tab(wrapper, "regions");
     await wrapper.findAll(".taxonomy-remove")[0]!.trigger("click");
     expect(wrapper.findAll(".taxonomy-row")).toHaveLength(1);
     await tab(wrapper, "types");
@@ -294,6 +316,7 @@ describe("actual taxonomy manager editor", () => {
         enabled: true,
       })),
       regions: [],
+      nodes: [],
     };
     const wrapper = manager();
     await flushPromises();
@@ -305,6 +328,7 @@ describe("actual taxonomy manager editor", () => {
   });
 
   it("caps region drafts at 512 rows and does not add a 513th", async () => {
+    taxonomy.nodes = [];
     taxonomy.regions = Array.from({ length: 512 }, (_, index) => ({
       id: `region-${index}`,
       type_id: "compute",
@@ -400,6 +424,7 @@ describe("actual taxonomy manager editor", () => {
         index ? row : { ...(row as object), name: "Unexpected server name" },
       ),
       regions: body.regions,
+      nodes: body.nodes,
     }));
     const wrapper = manager();
     await flushPromises();
@@ -461,6 +486,7 @@ describe("actual taxonomy manager editor", () => {
       revision: sent.revision + 1,
       types: sent.types,
       regions: sent.regions,
+      nodes: sent.nodes,
     });
     await flushPromises();
     expect(wrapper.emitted("changed")).toHaveLength(1);
@@ -510,6 +536,7 @@ describe("actual taxonomy manager editor", () => {
       revision: 5,
       types: originalBody.types,
       regions: originalBody.regions,
+      nodes: originalBody.nodes,
     });
     await flushPromises();
     expect(
@@ -573,7 +600,7 @@ describe("admin products consume the same actual taxonomy", () => {
       .setValue("必须明确重新选地区");
     await button(wrapper, "保存商品").trigger("click");
     await flushPromises();
-    expect(wrapper.text()).toContain("请选择商品所属的类型和地区");
+    expect(wrapper.text()).toContain("请选择商品所属的类型、地区和节点");
     expect(mocks.write).not.toHaveBeenCalled();
     await select(selects[1]!, "香港");
     expect(selects[1]!.attributes("value")).toBe("general-hk");
@@ -653,7 +680,7 @@ describe("admin products consume the same actual taxonomy", () => {
     });
     const wrapper = products();
     await flushPromises();
-    expect(wrapper.text()).toContain("先添加并启用服务器类型和地区");
+    expect(wrapper.text()).toContain("先添加并启用类型、地区和节点");
     const create = wrapper
       .findAll("button")
       .filter((row) => row.text() === "新增商品");
@@ -703,5 +730,88 @@ describe("admin products consume the same actual taxonomy", () => {
     expect(wrapper.text()).toContain("无法读取商品");
     expect(wrapper.findAll(".product-row")).toHaveLength(0);
     expect(wrapper.find(".price-editor").exists()).toBe(false);
+  });
+});
+
+describe("node registry and product binding", () => {
+  it("adds a node to an explicit region and persists its stable parent identity", async () => {
+    const wrapper = manager();
+    await flushPromises();
+    await tab(wrapper, "nodes");
+    await button(wrapper, "新增节点").trigger("click");
+    await wrapper.get('[aria-label="节点 3 名称"]').setValue("香港二区");
+    await select(
+      wrapper.get('[aria-label="节点 3 所属地区"]'),
+      "通用型 · 香港",
+    );
+    await wrapper.get('[aria-label="节点 3 排序"]').setValue("25");
+    await wrapper
+      .get(".taxonomy-reason textarea")
+      .setValue("新增区域内的逻辑节点");
+    await button(wrapper, "保存分类").trigger("click");
+    await flushPromises();
+    const sent = mocks.write.mock.calls[0]![1];
+    expect(sent.nodes[2]).toMatchObject({
+      region_id: "general-hk",
+      name: "香港二区",
+      sort_order: 25,
+      enabled: true,
+    });
+    expect(sent.nodes[2].id).toMatch(/^node-[a-f0-9-]+$/);
+    expect(wrapper.emitted("changed")).toHaveLength(1);
+  });
+  it("will not remove a region while it still contains nodes", async () => {
+    const wrapper = manager();
+    await flushPromises();
+    await tab(wrapper, "regions");
+    await wrapper.findAll(".taxonomy-remove")[0]!.trigger("click");
+    expect(wrapper.findAll(".taxonomy-row")).toHaveLength(2);
+    expect(wrapper.get('[role="alert"]').text()).toContain("该地区下还有节点");
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it("requires a usable node as well as an enabled type and region before creating", async () => {
+    taxonomy.nodes.forEach((node) => (node.enabled = false));
+    const wrapper = products();
+    await flushPromises();
+    const buttons = wrapper
+      .findAll("button")
+      .filter((item) => item.text() === "新增商品");
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(
+      buttons.every((item) => item.attributes("disabled") !== undefined),
+    ).toBe(true);
+  });
+  it.each(["unknown node", "wrong node region"])(
+    "rejects a catalog with %s instead of guessing",
+    async (fault) => {
+      catalog.items[0]!.node_id =
+        fault === "unknown node" ? "invented" : "general-hk-a";
+      const wrapper = products();
+      await flushPromises();
+      expect(wrapper.text()).toContain("无法读取商品");
+      expect(button(wrapper, "新增商品").attributes("disabled")).toBeDefined();
+    },
+  );
+  it("sends the selected node and rejects a mismatched acknowledgement", async () => {
+    const wrapper = products();
+    await flushPromises();
+    await button(wrapper, "编辑商品").trigger("click");
+    await flushPromises();
+    const selects = wrapper.findAll('.editor-section [role="combobox"]');
+    expect(selects[2]!.attributes("value")).toBe("compute-hk-a");
+    await wrapper
+      .get(".reason-section textarea")
+      .setValue("节点归属应精确确认");
+    mocks.write.mockImplementationOnce(async (_path, body) => ({
+      revision: body.revision + 1,
+      currency_revision: body.currency_revision,
+      taxonomy_revision: body.taxonomy_revision,
+      plan: { ...catalog.items[0], node_id: "general-hk-a" },
+    }));
+    await button(wrapper, "保存商品").trigger("click");
+    await flushPromises();
+    expect(mocks.write.mock.calls[0]![1].node_id).toBe("compute-hk-a");
+    expect(wrapper.text()).toContain("保存结果尚未确认");
+    expect(button(wrapper, "保存商品").attributes("disabled")).toBeDefined();
   });
 });
