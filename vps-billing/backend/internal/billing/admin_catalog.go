@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 var ErrCatalog = errors.New("invalid catalog product")
@@ -21,6 +22,8 @@ type CatalogPrice struct {
 	Available   bool   `json:"available"`
 }
 type CatalogPlan struct {
+	TypeID      string         `json:"type_id"`
+	RegionID    string         `json:"region_id"`
 	ID          string         `json:"id"`
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
@@ -33,16 +36,21 @@ type CatalogPlan struct {
 	Prices      []CatalogPrice `json:"prices"`
 }
 type CatalogView struct {
+	TaxonomyRevision int64         `json:"taxonomy_revision"`
 	CurrencyRevision int64         `json:"currency_revision"`
 	Revision         int64         `json:"revision"`
 	Items            []CatalogPlan `json:"items"`
 }
 type CatalogResult struct {
+	TaxonomyRevision int64       `json:"taxonomy_revision"`
 	CurrencyRevision int64       `json:"currency_revision"`
 	Revision         int64       `json:"revision"`
 	Plan             CatalogPlan `json:"plan"`
 }
 type CatalogInput struct {
+	TypeID           string         `json:"type_id"`
+	RegionID         string         `json:"region_id"`
+	TaxonomyRevision int64          `json:"taxonomy_revision"`
 	CurrencyRevision int64          `json:"currency_revision"`
 	Revision         int64          `json:"revision"`
 	Reason           string         `json:"reason"`
@@ -57,6 +65,7 @@ type CatalogInput struct {
 	Prices           []CatalogPrice `json:"prices"`
 }
 type CatalogDuplicateInput struct {
+	TaxonomyRevision int64  `json:"taxonomy_revision"`
 	CurrencyRevision int64  `json:"currency_revision"`
 	Revision         int64  `json:"revision"`
 	Reason           string `json:"reason"`
@@ -89,10 +98,10 @@ func validCatalogID(id string) bool {
 	return id != "." && id != ".."
 }
 func normalizeCatalog(input CatalogInput, config CurrencyConfiguration) (CatalogInput, CurrencyConfiguration, error) {
-	input.Name, input.Region = strings.TrimSpace(input.Name), strings.TrimSpace(input.Region)
+	input.Name = strings.TrimSpace(input.Name)
 	var ok bool
 	input.Reason, ok = catalogReason(input.Reason)
-	if !ok || input.Name == "" || input.Region == "" || !validText(input.Name, 120, false) || !validText(input.Region, 120, false) || !validText(input.Description, 500, true) ||
+	if !ok || input.Name == "" || input.Region == "" || !validText(input.Name, 120, false) || !validText(input.Region, 480, false) || utf8.RuneCountInString(input.Region) > 120 || !validText(input.Description, 500, true) ||
 		input.CPU < 1 || input.CPU > 4096 || input.MemoryGB < 1 || input.MemoryGB > 1048576 || input.DiskGB < 1 || input.DiskGB > 16777216 || input.TransferTB < 1 || input.TransferTB > 1048576 || len(input.Prices) > 32 || input.Prices == nil {
 		return CatalogInput{}, config, ErrCatalog
 	}
@@ -125,7 +134,7 @@ func normalizeCatalog(input CatalogInput, config CurrencyConfiguration) (Catalog
 	return input, next, nil
 }
 func catalogPlan(p Plan, prices map[string]PlanPrice) CatalogPlan {
-	out := CatalogPlan{ID: p.ID, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: []CatalogPrice{}}
+	out := CatalogPlan{TypeID: p.TypeID, RegionID: p.RegionID, ID: p.ID, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: []CatalogPrice{}}
 	for code, price := range prices {
 		out.Prices = append(out.Prices, CatalogPrice{code, price.AmountMinor, price.Available})
 	}
@@ -149,9 +158,10 @@ func validateCatalogView(view CatalogView, config CurrencyConfiguration) error {
 	return nil
 }
 func catalogInputFrom(p CatalogPlan, revision, currencyRevision int64, reason string) CatalogInput {
-	return CatalogInput{Revision: revision, CurrencyRevision: currencyRevision, Reason: reason, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: p.Prices}
+	return CatalogInput{TypeID: p.TypeID, RegionID: p.RegionID, Revision: revision, CurrencyRevision: currencyRevision, Reason: reason, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: p.Prices}
 }
 func applyCatalogPlan(p Plan, input CatalogInput) Plan {
+	p.TypeID, p.RegionID = input.TypeID, input.RegionID
 	p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, p.Available = input.Name, input.Description, input.CPU, input.MemoryGB, input.DiskGB, input.TransferTB, input.Region, input.Available
 	return p
 }
@@ -178,7 +188,7 @@ func (m *Memory) AdminCatalog(ctx context.Context, actor User) (CatalogView, err
 	if _, err := m.activeAdministratorLocked(actor.ID); err != nil {
 		return CatalogView{}, err
 	}
-	out := CatalogView{Revision: m.pricesRevision, CurrencyRevision: m.currencies.Revision, Items: []CatalogPlan{}}
+	out := CatalogView{TaxonomyRevision: m.taxonomy.Revision, Revision: m.pricesRevision, CurrencyRevision: m.currencies.Revision, Items: []CatalogPlan{}}
 	for _, p := range m.plans {
 		out.Items = append(out.Items, catalogPlan(p, m.prices[p.ID]))
 	}
@@ -198,7 +208,7 @@ func (m *Memory) DuplicateCatalogPlan(ctx context.Context, actor User, id string
 	if !validCatalogID(id) {
 		return CatalogResult{}, ErrNotFound
 	}
-	return m.mutateCatalog(ctx, actor, id, CatalogInput{Revision: input.Revision, CurrencyRevision: input.CurrencyRevision, Reason: input.Reason}, true)
+	return m.mutateCatalog(ctx, actor, id, CatalogInput{TaxonomyRevision: input.TaxonomyRevision, Revision: input.Revision, CurrencyRevision: input.CurrencyRevision, Reason: input.Reason}, true)
 }
 func (m *Memory) mutateCatalog(ctx context.Context, actor User, id string, input CatalogInput, duplicate bool) (CatalogResult, error) {
 	m.mu.Lock()
@@ -212,6 +222,12 @@ func (m *Memory) mutateCatalog(ctx context.Context, actor User, id string, input
 	}
 	if !validCatalogRevisions(input.Revision, input.CurrencyRevision) {
 		return CatalogResult{}, ErrCatalog
+	}
+	if input.TaxonomyRevision < 1 || input.TaxonomyRevision > MaxMinor {
+		return CatalogResult{}, ErrTaxonomy
+	}
+	if input.TaxonomyRevision != m.taxonomy.Revision {
+		return CatalogResult{}, ErrTaxonomyConflict
 	}
 	if input.Revision != m.pricesRevision || input.CurrencyRevision != m.currencies.Revision || m.pricesRevision == MaxMinor {
 		return CatalogResult{}, ErrCatalogConflict
@@ -231,9 +247,15 @@ func (m *Memory) mutateCatalog(ctx context.Context, actor User, id string, input
 		action = "catalog.created"
 	}
 	if duplicate {
+		taxonomyRevision := input.TaxonomyRevision
 		input = catalogInputFrom(catalogPlan(p, m.prices[id]), input.Revision, input.CurrencyRevision, input.Reason)
+		input.TaxonomyRevision = taxonomyRevision
 		input.Available = false
 		p.ID, index, action = ID(), -1, "catalog.duplicated"
+	}
+	region, exists := taxonomyRegion(m.taxonomy, input.TypeID, input.RegionID, input.Available)
+	if !exists || input.Region != region.Name {
+		return CatalogResult{}, ErrTaxonomy
 	}
 	input, next, err := normalizeCatalog(input, m.currencies)
 	if err != nil {
@@ -252,7 +274,7 @@ func (m *Memory) mutateCatalog(ctx context.Context, actor User, id string, input
 	m.prices[p.ID], m.currencies = prices, next
 	m.pricesRevision++
 	m.audits = append(m.audits, catalogAudit(actor, action, p.ID, m.pricesRevision, input.Reason))
-	return CatalogResult{Revision: m.pricesRevision, CurrencyRevision: m.currencies.Revision, Plan: catalogPlan(p, prices)}, nil
+	return CatalogResult{TaxonomyRevision: m.taxonomy.Revision, Revision: m.pricesRevision, CurrencyRevision: m.currencies.Revision, Plan: catalogPlan(p, prices)}, nil
 }
 
 func (a *App) adminCatalogHTTP(w http.ResponseWriter, r *http.Request, actor User, p string) {
@@ -325,6 +347,8 @@ func (a *App) adminCatalogHTTP(w http.ResponseWriter, r *http.Request, actor Use
 }
 func (a *App) catalogError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, ErrTaxonomy), errors.Is(err, ErrTaxonomyConflict), errors.Is(err, ErrTaxonomyInUse):
+		a.taxonomyError(w, r, err)
 	case errors.Is(err, ErrAdminRequired):
 		fail(w, r, 403, "FORBIDDEN", "需要管理员权限")
 	case errors.Is(err, ErrCatalog):

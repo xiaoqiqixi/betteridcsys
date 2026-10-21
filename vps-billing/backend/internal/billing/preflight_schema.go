@@ -8,7 +8,7 @@ import (
 )
 
 // These bounded descriptions are the physical columns shipped by migrations
-// 1–10, not an SQL interpreter. A history row alone cannot detect interrupted
+// 1–11, not an SQL interpreter. A history row alone cannot detect interrupted
 // DDL or a later manual edit. Compatible extra indexes/checks are permitted.
 func preflightColumns(version int) map[string]map[string]string {
 	specs := map[string]string{
@@ -48,6 +48,12 @@ func preflightColumns(version int) map[string]map[string]string {
 	}
 	if version >= 10 {
 		specs["users"] += " disabled:tinyint(1)! revision:bigint!"
+	}
+	if version >= 11 {
+		specs["plans"] += " type_id:varchar(64)! region_id:varchar(64)!"
+		specs["catalog_types"] = "id:varchar(64)! name:varchar(120)! sort_order:int! enabled:tinyint(1)!"
+		specs["catalog_regions"] = "id:varchar(64)! type_id:varchar(64)! name:varchar(120)! sort_order:int! enabled:tinyint(1)!"
+		specs["catalog_taxonomy_settings"] = "id:tinyint! revision:bigint!"
 	}
 	result := make(map[string]map[string]string, len(specs))
 	for table, spec := range specs {
@@ -118,6 +124,11 @@ func preflightChecks(version int) map[string]map[string]string {
 	if version >= 10 {
 		checks["users"] = map[string]string{"users_disabled_boolean": "disabled IN (0,1)", "users_revision_min": "revision >= 1", "users_revision_max": "revision <= 9007199254740991"}
 	}
+	if version >= 11 {
+		checks["catalog_types"] = map[string]string{"catalog_types_sort": "sort_order >= 0 AND sort_order <= 1000000", "catalog_types_enabled": "enabled IN (0,1)"}
+		checks["catalog_regions"] = map[string]string{"catalog_regions_sort": "sort_order >= 0 AND sort_order <= 1000000", "catalog_regions_enabled": "enabled IN (0,1)"}
+		checks["catalog_taxonomy_settings"] = map[string]string{"catalog_taxonomy_singleton": "id = 1", "catalog_taxonomy_revision": "revision >= 1 AND revision <= 9007199254740991"}
+	}
 	return checks
 }
 
@@ -148,6 +159,9 @@ func preflightColumnMatches(table, name, spec, kind, nullable, extra, generated 
 		case "users.email":
 			wantCharset, wantCollation = "ascii", "ascii_general_ci"
 		case "order_requests.request_key", "plan_prices.currency":
+			wantCharset, wantCollation = "ascii", "ascii_bin"
+		}
+		if (table == "catalog_types" && name == "id") || (table == "catalog_regions" && (name == "id" || name == "type_id")) || (table == "plans" && (name == "type_id" || name == "region_id")) {
 			wantCharset, wantCollation = "ascii", "ascii_bin"
 		}
 		if (table == "payment_attempts" && name != "user_id" && name != "invoice_id" && name != "order_id" && name != "state") || table == "payment_settlements" {
@@ -321,6 +335,11 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 			required[key] = true
 		}
 	}
+	if version >= 11 {
+		for _, t := range []string{"catalog_types", "catalog_regions", "catalog_taxonomy_settings"} {
+			required[t+":id"] = true
+		}
+	}
 	if partial {
 		for key := range required {
 			table, _, _ := strings.Cut(key, ":")
@@ -398,6 +417,11 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 	if version >= 8 {
 		for _, key := range []string{"payment_attempts:user_id:users:id:RESTRICT", "payment_attempts:invoice_id:invoices:id:RESTRICT", "payment_attempts:order_id:orders:id:RESTRICT", "payment_settlements:attempt_id:payment_attempts:id:RESTRICT"} {
 			fks[key] = true
+		}
+	}
+	if version >= 11 {
+		for _, k := range []string{"catalog_regions:type_id:catalog_types:id:RESTRICT", "plans:type_id:catalog_types:id:RESTRICT", "plans:region_id:catalog_regions:id:RESTRICT"} {
+			fks[k] = true
 		}
 	}
 	if partial {

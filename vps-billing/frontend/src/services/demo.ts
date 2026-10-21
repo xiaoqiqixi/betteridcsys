@@ -27,6 +27,11 @@ import type {
 } from "../types/idc";
 import { formatMinor, parseMinor, validMinor } from "../types/idc";
 import { ApiError } from "./api";
+import {
+  type CatalogTaxonomy,
+  validCatalogTaxonomy,
+  sortCatalogEntries,
+} from "./catalog-taxonomy";
 
 export const DEMO_CUSTOMER_ID = "11111111111111111111111111111111";
 export const DEMO_ADMIN_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -184,12 +189,45 @@ export function createDemoClient(currentRole: () => Role) {
       },
     ],
   };
+  let taxonomy: CatalogTaxonomy = {
+    revision: 1,
+    types: [
+      { id: "standard", name: "标准云服务器", sort_order: 0, enabled: true },
+      { id: "compute", name: "计算型云服务器", sort_order: 10, enabled: true },
+    ],
+    regions: [
+      {
+        id: "standard-hkg",
+        type_id: "standard",
+        name: "香港 HKG",
+        sort_order: 0,
+        enabled: true,
+      },
+      {
+        id: "standard-sin",
+        type_id: "standard",
+        name: "新加坡 SIN",
+        sort_order: 10,
+        enabled: true,
+      },
+      {
+        id: "compute-tyo",
+        type_id: "compute",
+        name: "东京 TYO",
+        sort_order: 0,
+        enabled: true,
+      },
+    ],
+  };
   const catalog: Catalog = {
     revision: 7,
+    taxonomy_revision: taxonomy.revision,
     currency_revision: registry.revision,
     items: [
       {
         id: "hkg-essential",
+        type_id: "standard",
+        region_id: "standard-hkg",
         name: "香港 · Essential",
         description:
           "轻量应用、个人站点与开发环境。所有规格与价格均为合成演示。",
@@ -206,6 +244,8 @@ export function createDemoClient(currentRole: () => Role) {
       },
       {
         id: "hkg-balanced",
+        type_id: "standard",
+        region_id: "standard-hkg",
         name: "香港 · Balanced",
         description:
           "更从容的内存与存储，适合常驻应用。演示独立报价，非汇率换算。",
@@ -222,6 +262,8 @@ export function createDemoClient(currentRole: () => Role) {
       },
       {
         id: "tyo-performance",
+        type_id: "compute",
+        region_id: "compute-tyo",
         name: "东京 · Performance",
         description: "高配合成示例，便于检查长规格、对比与手机布局。",
         region: "东京 TYO",
@@ -237,6 +279,8 @@ export function createDemoClient(currentRole: () => Role) {
       },
       {
         id: "sin-studio",
+        type_id: "standard",
+        region_id: "standard-sin",
         name: "新加坡 · Studio",
         description: "当前仅提供人民币独立报价；选择美元时应显示暂不可购买。",
         region: "新加坡 SIN",
@@ -249,6 +293,8 @@ export function createDemoClient(currentRole: () => Role) {
       },
       {
         id: "draft-compute",
+        type_id: "compute",
+        region_id: "compute-tyo",
         name: "计算优化 · 草稿",
         description: "未上架的演示草稿，可编辑规格及各币种报价。",
         region: "东京 TYO",
@@ -476,11 +522,26 @@ export function createDemoClient(currentRole: () => Role) {
   function plans(code: string): Plan[] {
     const definition = currency(code, true);
     return catalog.items
-      .filter((item) => item.available)
+      .filter(
+        (item) =>
+          item.available &&
+          taxonomy.types.some(
+            (type) => type.id === item.type_id && type.enabled,
+          ) &&
+          taxonomy.regions.some(
+            (region) =>
+              region.id === item.region_id &&
+              region.type_id === item.type_id &&
+              region.enabled,
+          ),
+      )
       .map((item) => {
         const price = item.prices.find((p) => p.currency === code);
         return {
           id: item.id,
+          type_id: item.type_id,
+          region_id: item.region_id,
+          taxonomy_revision: taxonomy.revision,
           name: item.name,
           description: item.description,
           region: item.region,
@@ -568,7 +629,15 @@ export function createDemoClient(currentRole: () => Role) {
   };
 
   async function read<T>(path: string, query: Query = {}): Promise<T> {
-    if (!["/session", "/site-settings", "/currencies", "/plans"].includes(path))
+    if (
+      ![
+        "/session",
+        "/site-settings",
+        "/currencies",
+        "/plans",
+        "/catalog-taxonomy",
+      ].includes(path)
+    )
       actor();
     if (path.startsWith("/admin/")) requireAdmin();
     let value: unknown;
@@ -622,7 +691,22 @@ export function createDemoClient(currentRole: () => Role) {
             })),
           }
         : registry;
-    else if (path === "/plans") value = plans(code);
+    else if (normalized === "/catalog-taxonomy") {
+      if (Object.keys(query).length) fail("INVALID_TAXONOMY");
+      const types = sortCatalogEntries(taxonomy.types).filter(
+        (row) => admin || row.enabled,
+      );
+      value = {
+        revision: taxonomy.revision,
+        types,
+        regions: sortCatalogEntries(taxonomy.regions).filter(
+          (row) =>
+            admin ||
+            (row.enabled &&
+              types.some((type) => type.id === row.type_id && type.enabled)),
+        ),
+      };
+    } else if (path === "/plans") value = plans(code);
     else if (path === "/admin/catalog") {
       if (Object.keys(query).length) fail("INVALID_CATALOG");
       value = catalog;
@@ -884,6 +968,9 @@ export function createDemoClient(currentRole: () => Role) {
       "name",
       "description",
       "region",
+      "type_id",
+      "region_id",
+      "taxonomy_revision",
       "cpu",
       "memory_gb",
       "disk_gb",
@@ -897,9 +984,24 @@ export function createDemoClient(currentRole: () => Role) {
     if (body.revision !== catalog.revision) fail("CATALOG_CONFLICT", 409);
     if (body.currency_revision !== registry.revision)
       fail("CURRENCY_CONFLICT", 409);
+    if (body.taxonomy_revision !== taxonomy.revision)
+      fail("TAXONOMY_CONFLICT", 409);
+    const type_id = text(body.type_id, 64),
+      region_id = text(body.region_id, 64);
+    const parent = taxonomy.types.find((row) => row.id === type_id);
+    const location = taxonomy.regions.find(
+      (row) => row.id === region_id && row.type_id === type_id,
+    );
+    if (
+      !parent ||
+      !location ||
+      body.region !== location.name ||
+      (body.available && (!parent.enabled || !location.enabled))
+    )
+      fail("INVALID_CATALOG");
     const name = text(body.name, 120),
       description = text(body.description, 500, false),
-      region = text(body.region, 120),
+      region = location.name,
       reason = text(body.reason, 500);
     const cpu = positive(body.cpu, 4096),
       memory_gb = positive(body.memory_gb, 1048576),
@@ -933,6 +1035,9 @@ export function createDemoClient(currentRole: () => Role) {
     return {
       name,
       description,
+      type_id,
+      region_id,
+      taxonomy_revision: taxonomy.revision,
       region,
       cpu,
       memory_gb,
@@ -1056,6 +1161,43 @@ export function createDemoClient(currentRole: () => Role) {
       if (!invoice) fail("NOT_FOUND", 404);
       if (invoice.status !== "unpaid") fail("INVOICE_NOT_PAYABLE", 409);
       return fail("PAYMENT_NOT_CONFIGURED", 503);
+    } else if (path === "/admin/catalog-taxonomy") {
+      exact(body, ["revision", "types", "regions", "reason"]);
+      const reason = text(body.reason, 500);
+      if (body.revision !== taxonomy.revision) fail("TAXONOMY_CONFLICT", 409);
+      const candidate = {
+        revision: taxonomy.revision + 1,
+        types: body.types,
+        regions: body.regions,
+      };
+      if (!validCatalogTaxonomy(candidate)) fail("INVALID_TAXONOMY");
+      for (const row of candidate.types) {
+        exact(object(row), ["id", "name", "sort_order", "enabled"]);
+        if (row.name !== row.name.trim()) fail("INVALID_TAXONOMY");
+      }
+      for (const row of candidate.regions)
+        exact(object(row), ["id", "type_id", "name", "sort_order", "enabled"]);
+      for (const item of catalog.items) {
+        const parent = candidate.types.find((row) => row.id === item.type_id);
+        const location = candidate.regions.find(
+          (row) => row.id === item.region_id && row.type_id === item.type_id,
+        );
+        if (
+          !parent ||
+          !location ||
+          (item.available && (!parent.enabled || !location.enabled))
+        )
+          fail("TAXONOMY_IN_USE", 409);
+      }
+      taxonomy = copy(candidate);
+      for (const item of catalog.items)
+        item.region = taxonomy.regions.find(
+          (row) => row.id === item.region_id,
+        )!.name;
+      catalog.taxonomy_revision = taxonomy.revision;
+      catalog.revision++;
+      event("catalog.taxonomy_updated", "catalog-taxonomy", reason);
+      value = taxonomy;
     } else if (/^\/admin\/catalog(?:\/[^/]+)?$/.test(path)) {
       const input = checkCatalog(body),
         existingId = path.split("/")[3];
@@ -1063,7 +1205,13 @@ export function createDemoClient(currentRole: () => Role) {
         ? catalog.items.find((item) => item.id === existingId)
         : undefined;
       if (existingId && !existing) fail("NOT_FOUND", 404);
-      const { revision: _, currency_revision: _c, reason, ...fields } = input;
+      const {
+        revision: _,
+        currency_revision: _c,
+        taxonomy_revision: _t,
+        reason,
+        ...fields
+      } = input;
       const plan = {
         id: existing?.id ?? `demo-plan-${id().slice(-8)}`,
         ...fields,
@@ -1076,14 +1224,22 @@ export function createDemoClient(currentRole: () => Role) {
       value = {
         revision: catalog.revision,
         currency_revision: registry.revision,
+        taxonomy_revision: taxonomy.revision,
         plan,
       } satisfies CatalogResult;
     } else if (/^\/admin\/catalog\/[^/]+\/duplicate$/.test(path)) {
-      exact(body, ["revision", "currency_revision", "reason"]);
+      exact(body, [
+        "revision",
+        "currency_revision",
+        "taxonomy_revision",
+        "reason",
+      ]);
       const reason = text(body.reason, 500);
       if (body.revision !== catalog.revision) fail("CATALOG_CONFLICT", 409);
       if (body.currency_revision !== registry.revision)
         fail("CURRENCY_CONFLICT", 409);
+      if (body.taxonomy_revision !== taxonomy.revision)
+        fail("TAXONOMY_CONFLICT", 409);
       const original = catalog.items.find(
         (item) => item.id === path.split("/")[3],
       );
@@ -1091,7 +1247,7 @@ export function createDemoClient(currentRole: () => Role) {
       const plan = {
         ...copy(original),
         id: `demo-plan-${id().slice(-8)}`,
-        name: text(`${original.name} · 副本`, 120),
+        name: original.name,
         available: false,
       };
       catalog.items.unshift(plan);
@@ -1100,6 +1256,7 @@ export function createDemoClient(currentRole: () => Role) {
       value = {
         revision: catalog.revision,
         currency_revision: registry.revision,
+        taxonomy_revision: taxonomy.revision,
         plan,
       } satisfies CatalogResult;
     } else if (path === "/admin/customer-accounts") {

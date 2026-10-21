@@ -265,6 +265,20 @@ def extend_shape(shape, sql):
             require(table in shape and all(column in shape[table] for column in columns.split(",")), "Index migration refers to an unknown table or column.")
         elif other or insert:
             require((other or insert)[1] in shape, "Unknown migration table.")
+        elif modify := re.fullmatch(r"ALTER TABLE plans MODIFY COLUMN (type_id|region_id) VARCHAR\(64\) CHARACTER SET ascii COLLATE ascii_bin NOT NULL", statement):
+            require("plans" in shape and modify[1] in shape["plans"], "Taxonomy migration modifies an unknown column.")
+        elif relation := re.fullmatch(r"ALTER TABLE plans ADD CONSTRAINT plans_catalog_(type|region) FOREIGN KEY\((type_id|region_id)\) REFERENCES (catalog_types|catalog_regions)\(id\)", statement):
+            kind, column, target = relation.groups()
+            require((kind, column, target) in {("type", "type_id", "catalog_types"), ("region", "region_id", "catalog_regions")} and
+                    "plans" in shape and column in shape["plans"] and target in shape and "id" in shape[target], "Invalid taxonomy foreign key migration.")
+        elif " ".join(statement.split()) in {
+            "INSERT INTO catalog_types(id,name,sort_order,enabled) VALUES('generic','通用服务器',0,TRUE) ON DUPLICATE KEY UPDATE id=id",
+            "INSERT INTO catalog_regions(id,type_id,name,sort_order,enabled) SELECT CONCAT('r-',LEFT(SHA2(MIN(BINARY region),256),60)),'generic',MIN(region),0,TRUE FROM plans GROUP BY BINARY region ON DUPLICATE KEY UPDATE id=catalog_regions.id",
+            "INSERT INTO catalog_taxonomy_settings(id,revision) VALUES(1,1) ON DUPLICATE KEY UPDATE id=id",
+            "UPDATE plans SET type_id='generic',region_id=CONCAT('r-',LEFT(SHA2(BINARY region,256),60)) WHERE type_id IS NULL OR region_id IS NULL",
+        }:
+            require(all(table in shape for table in ("catalog_types", "catalog_regions", "catalog_taxonomy_settings", "plans")) and
+                    all(column in shape["plans"] for column in ("region", "type_id", "region_id")), "Taxonomy initialization requires its reviewed physical schema.")
         else:
             raise Rejected("Migration grammar needs a separately reviewed backup procedure.")
 

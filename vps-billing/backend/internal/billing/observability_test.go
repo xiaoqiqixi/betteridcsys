@@ -254,6 +254,9 @@ func TestHTTPObservabilityInternalPaymentAndCurrencyErrors(t *testing.T) {
 }
 func TestHTTPObservabilityRouteTemplates(t *testing.T) {
 	for path, want := range map[string]string{
+		"/api/v1/catalog-taxonomy":                  "/api/v1/catalog-taxonomy",
+		"/api/v1/admin/catalog-taxonomy":            "/api/v1/admin/catalog-taxonomy",
+		"/api/v1/admin/catalog-taxonomy/ID_SECRET":  "unmatched",
 		"/api/v1/invoices/ID_SECRET":                "/api/v1/invoices/{invoice_id}",
 		"/api/v1/invoices/ID_SECRET/checkout":       "/api/v1/invoices/{invoice_id}/checkout",
 		"/api/v1/admin/invoices/ID_SECRET":          "/api/v1/admin/invoices/{invoice_id}",

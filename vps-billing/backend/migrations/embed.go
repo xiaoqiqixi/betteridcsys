@@ -31,3 +31,6 @@ var AuditQueryIndexes string
 
 //go:embed 010_customer_accounts.sql
 var CustomerAccounts string
+
+//go:embed 011_catalog_taxonomy.sql
+var CatalogTaxonomy string

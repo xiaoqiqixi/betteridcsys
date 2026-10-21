@@ -43,6 +43,9 @@ func requestLocale(header string) string {
 }
 
 var englishErrors = map[string]string{
+	"INVALID_TAXONOMY":               "Check the types, regions, ordering, parent relationships and reason.",
+	"TAXONOMY_CONFLICT":              "The catalog categories changed. Reload before editing.",
+	"TAXONOMY_IN_USE":                "Products still reference these categories. Unpublish or reassign them first.",
 	"INVALID_CATALOG":                "Check the product name, specifications, prices and reason. Publishing requires a valid price in at least one enabled currency.",
 	"CATALOG_CONFLICT":               "The product, currency settings or prices changed. Reload before editing.",
 	"INVALID_ACCOUNT_QUERY":          "Invalid account filters or cursor. Start a new query.",
@@ -143,13 +146,7 @@ func localizeDemoPlans(plans []Plan) {
 				if plans[n].Description == example.Description {
 					plans[n].Description = descriptions[j]
 				}
-				if plans[n].Region == example.Region {
-					if j == 2 {
-						plans[n].Region = "Tokyo · NRT"
-					} else {
-						plans[n].Region = "Hong Kong · HKG"
-					}
-				}
+				// Regions now use operator-authored taxonomy labels in every locale.
 			}
 		}
 	}

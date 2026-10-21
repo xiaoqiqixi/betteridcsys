@@ -354,9 +354,12 @@ export async function probeResponsiveBoundaries(browser, base, adminStorage) {
         fixture(admin.state, "GET", "/admin/catalog", {
           revision: 7,
           currency_revision: 7,
+          taxonomy_revision: 7,
           items: [
             {
               id: "boundary-plan",
+              type_id: "boundary-type",
+              region_id: "boundary-region",
               name: "Synthetic boundary plan",
               description: "Read-only synthetic GET fixture",
               region: "HKG",
@@ -372,6 +375,26 @@ export async function probeResponsiveBoundaries(browser, base, adminStorage) {
                   available: true,
                 },
               ],
+            },
+          ],
+        });
+        fixture(admin.state, "GET", "/admin/catalog-taxonomy", {
+          revision: 7,
+          types: [
+            {
+              id: "boundary-type",
+              name: "Synthetic type",
+              sort_order: 0,
+              enabled: true,
+            },
+          ],
+          regions: [
+            {
+              id: "boundary-region",
+              type_id: "boundary-type",
+              name: "HKG",
+              sort_order: 0,
+              enabled: true,
             },
           ],
         });

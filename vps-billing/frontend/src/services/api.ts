@@ -1,5 +1,6 @@
 import type { Locale, Query, Session } from "../types/idc";
 import { validCurrencyFormat, validMinor } from "../types/idc";
+import { validCatalogTaxonomy } from "./catalog-taxonomy";
 
 const REQUEST_ID = /^[a-f0-9]{32}$/;
 const SAFE_ERRORS: Record<string, [string, string]> = {
@@ -273,7 +274,14 @@ function validPage(value: unknown, item: (entry: unknown) => boolean): boolean {
 }
 function validCatalogItem(value: unknown): boolean {
   return (
-    strings(value, ["id", "name", "description", "region"]) &&
+    strings(value, [
+      "id",
+      "name",
+      "description",
+      "region",
+      "type_id",
+      "region_id",
+    ]) &&
     ["cpu", "memory_gb", "disk_gb", "transfer_tb"].every((key) =>
       integer(value[key], true),
     ) &&
@@ -367,9 +375,18 @@ function validPayload(
     return list(
       value,
       (plan) =>
-        strings(plan, ["id", "name", "description", "region", "currency"]) &&
+        strings(plan, [
+          "id",
+          "name",
+          "description",
+          "region",
+          "currency",
+          "type_id",
+          "region_id",
+        ]) &&
         moneyRecord(plan, "price_minor") &&
         integer(plan.price_revision, true) &&
+        integer(plan.taxonomy_revision, true) &&
         typeof plan.available === "boolean" &&
         ["cpu", "memory_gb", "disk_gb", "transfer_tb"].every((key) =>
           integer(plan[key], true),
@@ -378,6 +395,7 @@ function validPayload(
           ? Number(plan.price_minor) > 0
           : Number(plan.price_minor) >= 0),
     );
+  if (route === "/catalog-taxonomy") return validCatalogTaxonomy(value);
   if (route === "/currencies")
     return (
       object(value) &&
@@ -398,6 +416,7 @@ function validPayload(
       object(value) &&
       integer(value.revision, true) &&
       integer(value.currency_revision, true) &&
+      integer(value.taxonomy_revision, true) &&
       list(value.items, validCatalogItem)
     );
   if (/^\/catalog(?:\/[^/]+(?:\/duplicate)?)?$/.test(route))
@@ -405,6 +424,7 @@ function validPayload(
       object(value) &&
       integer(value.revision, true) &&
       integer(value.currency_revision, true) &&
+      integer(value.taxonomy_revision, true) &&
       validCatalogItem(value.plan)
     );
   if (route === "/customer-accounts" && method === "GET")

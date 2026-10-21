@@ -68,23 +68,48 @@ async function route(target) {
   await ready();
 }
 async function chooseFirst(screen, hostname) {
-  const plans = await apiData(
-    screen.context,
-    base,
-    "/api/v1/plans?currency=CNY",
-  );
+  const [taxonomy, plans] = await Promise.all([
+    apiData(screen.context, base, "/api/v1/catalog-taxonomy"),
+    apiData(screen.context, base, "/api/v1/plans?currency=CNY"),
+  ]);
   const selected = plans.find(
     (value) => value.available && value.price_minor > 0,
   );
   assert.ok(selected, "Disposable demo needs an available positive CNY plan");
-  const region = page
-    .locator(".catalog-region button")
-    .filter({ hasText: selected.region });
+  assert.equal(selected.taxonomy_revision, taxonomy.revision);
+  const selectedType = taxonomy.types.find(
+    (value) => value.id === selected.type_id && value.enabled,
+  );
+  const selectedRegion = taxonomy.regions.find(
+    (value) =>
+      value.id === selected.region_id &&
+      value.type_id === selected.type_id &&
+      value.enabled &&
+      value.name === selected.region,
+  );
+  assert.ok(
+    selectedType && selectedRegion,
+    "Plan must reference its real enabled taxonomy",
+  );
+  for (const id of [selected.type_id, selected.region_id, selected.id])
+    assert.match(id, /^[A-Za-z0-9_.-]{1,64}$/);
+  const type = page.locator(
+    `.catalog-type button[data-type-id="${selected.type_id}"]`,
+  );
+  if (await type.count()) await type.click();
+  else
+    await expect(
+      page.locator(`.single-type[data-type-id="${selected.type_id}"]`),
+    ).toBeVisible();
+  const region = page.locator(
+    `.catalog-region button[data-region-id="${selected.region_id}"]`,
+  );
   if (await region.count()) await region.click();
-  const card = page
-    .locator(".gpc-card")
-    .filter({ has: page.locator(".gpc-title", { hasText: selected.name }) })
-    .first();
+  else
+    await expect(
+      page.locator(`.single-region[data-region-id="${selected.region_id}"]`),
+    ).toBeVisible();
+  const card = page.locator(`.gpc-card[data-plan-id="${selected.id}"]`);
   await card.locator(".gpc-btn-choose").click();
   await expect(card).toHaveClass(/is-selected/);
   await expect(page.getByRole("dialog")).toHaveCount(0);

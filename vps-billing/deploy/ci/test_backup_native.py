@@ -215,7 +215,7 @@ class BackupMetadataGrammarTest(unittest.TestCase):
 
     def test_historical_prefix_shapes_do_not_invent_future_account_columns(self):
         paths = sorted((BACKUP.parents[2] / "backend/migrations").glob("[0-9][0-9][0-9]_*.sql"))
-        self.assertEqual(len(paths), 10, "Review this fixture when a migration is added")
+        self.assertEqual(len(paths), 11, "Review this fixture when a migration is added")
         shape = {"schema_migrations": ["version", "checksum", "applied_at"]}
         prefixes = {}
         for version, path in enumerate(paths, 1):
@@ -229,12 +229,45 @@ class BackupMetadataGrammarTest(unittest.TestCase):
         self.assertEqual(prefixes[10]["users"], original + ["disabled", "revision"])
         self.assertEqual({k: v for k, v in prefixes[9].items() if k != "users"},
                          {k: v for k, v in prefixes[10].items() if k != "users"})
+        self.assertEqual(prefixes[11]["users"], prefixes[10]["users"])
+        self.assertEqual(prefixes[11]["plans"], prefixes[10]["plans"] + ["type_id", "region_id"])
+        self.assertEqual(prefixes[11]["catalog_types"], ["id", "name", "sort_order", "enabled"])
+        self.assertEqual(prefixes[11]["catalog_regions"], ["id", "type_id", "name", "sort_order", "enabled"])
+        self.assertEqual(prefixes[11]["catalog_taxonomy_settings"], ["id", "revision"])
+        self.assertEqual({k: v for k, v in prefixes[11].items() if k not in {"plans", "catalog_types", "catalog_regions", "catalog_taxonomy_settings"}},
+                         {k: v for k, v in prefixes[10].items() if k != "plans"})
         self.assertEqual(prefixes[8], prefixes[9], "Index-only migration must preserve column inventory")
         self.assertNotIn("currency_settings", prefixes[6])
         self.assertIn("currency_settings", prefixes[7])
         for table in ("payment_attempts", "payment_settlements"):
             self.assertNotIn(table, prefixes[7])
             self.assertIn(table, prefixes[8])
+
+    def test_real_eleventh_taxonomy_migration_adds_only_reviewed_catalog_shape(self):
+        original = ["id", "name", "description", "cpu", "memory_gb", "disk_gb", "transfer_tb", "region", "price_minor", "currency", "available"]
+        shape = {"plans": list(original), "orders": ["id", "plan_snapshot"], "plan_prices": ["plan_id", "currency", "amount_minor", "available"]}
+        migration = BACKUP.parents[2] / "backend/migrations/011_catalog_taxonomy.sql"
+        self.extend(shape, migration.read_text())
+        self.assertEqual(shape["plans"], original + ["type_id", "region_id"])
+        self.assertEqual(shape["orders"], ["id", "plan_snapshot"])
+        self.assertEqual(shape["plan_prices"], ["plan_id", "currency", "amount_minor", "available"])
+        self.assertEqual(set(shape), {"plans", "orders", "plan_prices", "catalog_types", "catalog_regions", "catalog_taxonomy_settings"})
+        with self.assertRaises(self.rejected):
+            self.extend(shape, migration.read_text())
+
+    def test_taxonomy_grammar_still_rejects_financial_mutations_and_unknown_relations(self):
+        shape = {"plans": ["id", "region", "type_id", "region_id"], "catalog_types": ["id"], "catalog_regions": ["id"], "catalog_taxonomy_settings": ["id", "revision"]}
+        for sql in (
+            "UPDATE plans SET price_minor=0",
+            "ALTER TABLE plans MODIFY COLUMN price_minor BIGINT NOT NULL",
+            "ALTER TABLE plans ADD CONSTRAINT plans_catalog_type FOREIGN KEY(type_id) REFERENCES catalog_regions(id)",
+            "ALTER TABLE plans ADD CONSTRAINT plans_catalog_region FOREIGN KEY(region_id) REFERENCES unreviewed(id)",
+            "UPDATE plans SET type_id='unreviewed'",
+        ):
+            with self.subTest(sql=sql), self.assertRaises(self.rejected):
+                self.extend({table: list(columns) for table, columns in shape.items()}, sql)
+        with self.assertRaises(self.rejected):
+            self.extend({"plans": ["id"]}, "ALTER TABLE plans MODIFY COLUMN region_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL")
 
     def test_index_grammar_rejects_unknown_tables_columns_and_unreviewed_sql(self):
         for sql in ("CREATE INDEX ix_bad ON unknown(id)", "CREATE INDEX ix_bad ON audit_events(unknown)",

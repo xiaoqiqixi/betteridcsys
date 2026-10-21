@@ -112,7 +112,7 @@ func TestMySQLCustomerAccountPreflightChecksPhysicalMetadata(t *testing.T) {
 	}
 }
 func TestCustomerAccountMigrationSourceContract(t *testing.T) {
-	if len(schemaVersions) != 10 {
+	if len(schemaVersions) < 10 {
 		t.Fatal("account migration not registered")
 	}
 	statements := migrationStatements(schemaVersions[9])
