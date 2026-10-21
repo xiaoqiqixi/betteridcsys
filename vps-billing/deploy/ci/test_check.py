@@ -97,8 +97,10 @@ class CheckScriptTest(unittest.TestCase):
                 output.write('go ' + sys.argv[1] + '\\n')
             if sys.argv[1] == 'test':
                 assert os.environ['ASTER_MYSQL_TEST_DSN'] == 'test-only-dsn-marker'
-                assert '-race' in sys.argv and '-count=1' in sys.argv
+                assert sys.argv[1:] == ['test', '-race', '-count=1', '-timeout=20m', '-v', './...']
                 print('--- SKIP: fixture (0.00s)' if os.environ.get('CI_TEST_GO_SKIP') == '1' else '--- PASS: fixture (0.00s)')
+                if os.environ.get('CI_TEST_GO_EXIT'):
+                    sys.exit(int(os.environ['CI_TEST_GO_EXIT']))
             else:
                 assert 'ASTER_MYSQL_TEST_DSN' not in os.environ
             if sys.argv[1] == 'list':
@@ -183,6 +185,21 @@ class CheckScriptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("A Go test was skipped", result.stderr)
         self.assertEqual(self.events.read_text(), "go test\n")
+        self.assertFalse(self.pid_file.exists())
+
+    def test_go_budget_is_fixed_bounded_and_does_not_follow_inherited_timeout(self):
+        # The fake Go tool requires the exact literal command, including all
+        # packages and no -run/-skip filter. Explicit CLI flags win over GOFLAGS.
+        result = self.run_check(GOFLAGS='-timeout=0', GO_TEST_TIMEOUT='1ns')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.events.read_text().splitlines().count('go test'), 1)
+        self.assert_api_stopped()
+
+    def test_go_failure_survives_tee_and_stops_all_later_checks(self):
+        result = self.run_check(CI_TEST_GO_EXIT='7')
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertEqual(self.events.read_text(), 'go test\n')
+        self.assertNotIn('All required checks passed', result.stdout)
         self.assertFalse(self.pid_file.exists())
 
     def test_go_skip_scanner_errors_stop_before_later_checks(self):

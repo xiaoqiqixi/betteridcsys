@@ -73,7 +73,7 @@ trap 'exit 143' TERM
 step 'Go race tests with required disposable MySQL'
 (
   cd -- "$project_root/backend"
-  go test -race -count=1 -v ./...
+  go test -race -count=1 -timeout=20m -v ./...
 ) | tee "$check_tmp/go-tests.log"
 skip_scan_status=0
 grep -E '^[[:space:]]*--- SKIP:' "$check_tmp/go-tests.log" >/dev/null 2>&1 || skip_scan_status=$?
