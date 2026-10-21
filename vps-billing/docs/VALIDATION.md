@@ -1,3 +1,11 @@
+## 0.5.8 首轮 CI 整包时限失败（待修复后完整重验）
+
+2026-10-21，精确 main `ebdbc6cea58ec5e8387cc8efd813a800b73d6519` 的 [CI 39619608793](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39619608793) 失败：Go `internal/billing` 整包触发默认 600 秒总闹钟（600.041s），已记录 1267 个 PASS 事件、0 SKIP、无 race warning；当时分类子测试仅运行 0 秒，栈在 fixture 迁移，不能称断言失败或已证明并发死锁。后续 native、浏览器等门禁未执行，不计通过；失败日志保留在本地 ignored `artifacts/release-v0.5.8-checks/ci-39619608793-ebdbc6c/`。
+
+独立 Ubuntu22 全量实库 Go race 已实际完成（billing 包 938.641s、全 scope 1317 PASS）；因此只给 CI 整包设置固定有界 `-timeout=20m`，保留 `-race -count=1 -v ./...`、pipefail、所有断言及禁止 SKIP 扫描，不修改生产或单操作时限、不添加重试。新增 fake-tools 合同测试验证固定命令、继承超时不能改写该显式参数、Go 非零退出穿透 tee；它不是新增一次真实 MySQL 验收。同 SHA 的 [performance 39619609072](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39619609072) 独立成功，不能替代失败的完整 CI。修复后必须对新的精确提交重新跑完整门禁，再考虑标签和发布；旧失败结论不改写。
+
+---
+
 ## Core 0.5.8 四层分类与默认报价（提交前检查）
 
 2026-10-21，接续 `e253440b8296c51f0413dcfa0b2a0d52eb4d7775`。用户明确改为 **类型 → 地区 → 节点 → 套餐**，覆盖此前不要节点的选择；新增节点只作购买分类，不加入真实开通、线路或库存。单选仍有完整框及勾选；初载默认当前节点列表首个套餐，摘要/手机底价同步有效报价，不报价不跳项或换汇，仍需显式确认。源码只更新 main；用户随后明确授权新 Release，目标 Core 0.5.8，SMTP 仍为 1.1.0，不覆盖旧标签。
