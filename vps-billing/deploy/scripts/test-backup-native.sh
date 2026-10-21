@@ -482,16 +482,37 @@ env ASTER_TEST_SNAPSHOT=prefix8 bash "$script" "${base_args[@]}" >/dev/null
 env ASTER_TEST_SNAPSHOT=prefix9 bash "$script" "${base_args[@]}" >/dev/null
 env ASTER_TEST_SNAPSHOT=prefix10 bash "$script" "${base_args[@]}" >/dev/null
 env ASTER_TEST_SNAPSHOT=prefix11 bash "$script" "${base_args[@]}" >/dev/null
-python3 - "$test_dir/backups" <<'PY'
+python3 - "$test_dir/backups" "$test_dir/fixtures" "$script" <<'PY'
 import json
 from pathlib import Path
 import sys
-metadata = [json.loads(path.read_bytes()) for path in Path(sys.argv[1]).glob("*/BACKUP.json")]
-assert len(metadata) == 14
-for version in (6, 7, 8, 9, 10):
+backups, fixtures, script = map(Path, sys.argv[1:])
+# Load only the existing metadata grammar functions, as test_backup_native.py
+# does; compare their shapes with the independent physical fixture inventory.
+source = script.read_text().split('metadata() {\n  python3 - "$release_directory" "$database" "$@" <<\'PY\'\n', 1)[1].split("\nPY\n}", 1)[0]
+namespace = {}
+exec(compile(source.rsplit("\ntry:\n", 1)[0], str(script), "exec"), namespace)
+expected = namespace["release"](fixtures / "release")
+metadata = [json.loads(path.read_bytes()) for path in backups.glob("*/BACKUP.json")]
+# Eight concurrent current backups + one readonly current + six old prefixes.
+assert len(metadata) == 15
+assert {item["schema_version"] for item in metadata} == set(range(6, 13))
+for version in range(6, 13):
+    rows = [line.split("\t") for line in (fixtures / ("valid.tsv" if version == 12 else f"prefix{version}.tsv")).read_text().splitlines()]
+    shape = {row[1]: [] for row in rows if row[0] == "table"}
+    for row in rows:
+        if row[0] == "column":
+            shape[row[1]].append(row[2])
+    assert shape == expected["shapes"][str(version)], f"Unexpected physical prefix {version}"
+    if version < 12:
+        assert "catalog_nodes" not in shape and "node_id" not in shape["plans"]
+    if version == 11:
+        assert len(shape) == 19
     prefix = [item for item in metadata if item["schema_version"] == version]
-    assert len(prefix) == 1 and set(prefix[0]["migration_checksums"]) == {str(number) for number in range(1, version + 1)}
-    assert prefix[0]["core_version"] == "0.5.0" and prefix[0]["source_commit"] == "a" * 40
+    assert len(prefix) == (9 if version == 12 else 1)
+    checksums = {str(number): expected["migration_checksums"][str(number)] for number in range(1, version + 1)}
+    for item in prefix:
+        assert item == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": version, "migration_checksums": checksums}
 PY
 assert_clean
 printf '%s\n' 'PASS: BACKUP.json records the actual complete applied prefix, including an older schema, without inventing unapplied migrations'
