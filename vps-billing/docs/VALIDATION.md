@@ -1,3 +1,11 @@
+## 0.5.8 第二轮 CI 旧备份 fixture 计数失败（待完整重验）
+
+提交前补验：Ubuntu22 自带 Python3.10 下，完整备份 shell 及五组主机工具编排单测 **217项（11+48+45+23+90）全部通过、0 skip**，使用隔离 fakebin/回环夹具，不是新一次真实 systemd 安装。尝试完整 CI 编排321项时，22项被CI专用MySQL包安全解包器的Python>=3.12守卫拒绝，另3项因未配置已有Go工具PATH报错；原日志保留，不放宽守卫或把该次321项算通过，补齐独立测试runtime后及最终CI仍须完整验证。生产应用/主机工具范围与CI包下载测试runtime不能混称。
+
+2026-10-21，精确 main `fe6c65707a3593da4c2cb76334c352cff5935a09` 的 [CI 39622586940](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39622586940) 已完成 Go race 全 scope 1317 PASS、0 SKIP、无 race warning（billing 488.457s），vet/静态构建及前端 914 Vitest + 27 Node、typecheck/format/build 均通过。随后 Python 首组 321 项中一项失败：`test_suite_runs_real_scans_without_ripgrep_installed` 的备份测试已新增 prefix11，却仍断言总数14及只验证prefix6–10；实际为8并发当前备份+1只读当前备份+6个旧前缀，共15。只修测试 fixture 计数并加强 prefix6–11、当前12的完整checksum/独立物理inventory对照；当前12仍必须恰好9份，旧11必须19表且无节点表/列，不改生产备份或安全扫描。后续 native/browser 等门禁仍跳过，整轮不是成功。原失败日志保留在 ignored `artifacts/release-v0.5.8-checks/ci-39622586940-fe6c657/`；修复须新提交重新完整执行，不能用已过的局部门禁代替。
+
+---
+
 ## 0.5.8 首轮 CI 整包时限失败（待修复后完整重验）
 
 2026-10-21，精确 main `ebdbc6cea58ec5e8387cc8efd813a800b73d6519` 的 [CI 39619608793](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39619608793) 失败：Go `internal/billing` 整包触发默认 600 秒总闹钟（600.041s），已记录 1267 个 PASS 事件、0 SKIP、无 race warning；当时分类子测试仅运行 0 秒，栈在 fixture 迁移，不能称断言失败或已证明并发死锁。后续 native、浏览器等门禁未执行，不计通过；失败日志保留在本地 ignored `artifacts/release-v0.5.8-checks/ci-39619608793-ebdbc6c/`。
