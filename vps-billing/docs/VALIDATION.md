@@ -6,7 +6,7 @@
 
 | 检查 | 结果与边界 |
 | --- | --- |
-| 前端完整单测 | 892 条 Vitest + 23 条 Node 数据层通过，0 skip；typecheck、format:check、生产 build 通过。新增客户22/后台33及数据层4项，既有断言保留 |
+| 前端完整单测 | 894 条 Vitest + 23 条 Node 数据层通过，0 skip；typecheck、format:check、生产 build 通过。新增客户22/后台35及数据层4项（含进行中保存不能被旧放弃提示关闭），既有断言保留 |
 | npm 依赖扫描 | 当前 lockfile 全依赖 `npm audit` 返回 0 漏洞；不据此宣称 Go 或系统依赖全部无风险 |
 | Ubuntu22 实库 | 独立非 root MySQL8.4.13、生产 API、DML-only 运行账号，首次/重复迁移及只读 schema11 preflight 通过；实际32项 HTTPS API检查通过，含权限、跨父级拒绝、上架4个合成测试商品、分类改名、在售分类停用409、旧报价409、原合法幂等200、历史订单详情完整JSON不变。没有真实销售、付款或资源开通 |
 | 源码边界 | 本机与远端211项后端/部署输入 SHA 一致；001–010十份迁移逐字与基线一致；五份生产 payment/checkout Go文件未改；PlanSnapshot模型未改 |

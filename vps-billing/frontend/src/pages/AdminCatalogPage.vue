@@ -401,6 +401,14 @@ function closeEditor() {
   }
   editorOpen.value = false;
 }
+function keepEditing() {
+  if (!saving.value) discardConfirmation.value = false;
+}
+function discardDraft() {
+  if (saving.value) return;
+  editorOpen.value = false;
+  discardConfirmation.value = false;
+}
 const preview = computed(() => ({
   cpu: Number(form.cpu) || 0,
   memory_gb: Number(form.memory_gb) || 0,
@@ -476,6 +484,7 @@ async function save() {
     return;
   saveError.value = validate();
   if (saveError.value) return;
+  discardConfirmation.value = false;
   saving.value = true;
   const identity = identityGeneration.value;
   try {
@@ -877,15 +886,14 @@ onBeforeUnmount(() => {
         <div>
           <button
             class="btn btn-secondary"
-            @click="discardConfirmation = false"
+            :disabled="saving"
+            @click="keepEditing"
           >
             {{ t("继续编辑", "Keep editing") }}</button
           ><button
             class="btn btn-danger"
-            @click="
-              editorOpen = false;
-              discardConfirmation = false;
-            "
+            :disabled="saving"
+            @click="discardDraft"
           >
             {{ t("放弃草稿", "Discard draft") }}
           </button>
