@@ -1159,6 +1159,38 @@ def publish(api, policy, archive_bytes):
                 f"[日志]({source_docs}LOGGING.md) · [安装]({source_docs}INSTALL.md) · "
                 f"[升级恢复]({source_docs}UPGRADE.md) · [宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
             )
+        if kind == "core" and provenance["version"] == "0.5.7":
+            fields["body"] = (
+                "## Core 0.5.7\n\n"
+                "以正式 Core 0.5.6 为基线，整合独立实现的新客户与管理员前端，随 Core 同版本分发。"
+                "云服务器购买、订单、账单、账户资料和管理设置保留真实认证与既有 API；"
+                "API 失败不切换为演示成功，客户与管理员导航按权限隔离。"
+                "顶部“语言与币种”只管理语言与购买/报表币种，侧栏及手机导航底部“账户”管理资料、外观和退出，"
+                "移除重复的偏好入口，保留手机导航、键盘焦点、关闭与返回操作。\n\n"
+                "修复浅色对比度：正文、状态/错误/警告、主操作、表头、表单和弹层使用统一语义颜色角色，"
+                "同时维护深色及蓝/青/紫品牌。静态 token 测量不等于实际浏览器视觉验收，"
+                "加载、空态、长金额和真实失败状态均须按对应源码与运行证据核对。"
+                "CNY 优先展示；全新安装仅启用 CNY，其他币种由运营者配置独立报价。"
+                "历史订单和账单保留原币、精度与金额格式，不自动换汇、不重算历史快照。\n\n"
+                "不改变订单报价校验、金额精度、支付幂等、认证/CSRF、角色与所有权权限边界，"
+                "最后管理员保护和脱敏审计保持。未确定的登录、退出、付款或写入结果不能当作成功，"
+                "不因界面更新而自动重放业务写入。"
+                "本次不新增数据库迁移，继续 schema 10；正式 001–010 迁移及其校验和不重写。"
+                "升级仍须核对插件、schema、备份及恢复资料，不支持自动向下迁移或自动导入数据库。\n\n"
+                "原生 Linux amd64，Go + Vue/TypeScript + MySQL；不使用 Docker，运行无需 Go 或 Node.js。"
+                "API、插件宿主、资源及 BUILD/PROVENANCE/SHA256SUMS 共六资产须来自同一版本并核验来源。"
+                "官方 SMTP 仍独立 1.1.0、aster.smtp/1、Core >=0.4.0,<0.6.0，默认关闭，仅支持管理员固定测试邮件。"
+                "支付运行时自 Core 0.5.3 已提供 aster.payment/1；不新增真实渠道、退款或真实 VPS 开通。\n\n"
+                f"[源码提交](https://github.com/{REPOSITORY}/commit/{provenance['source_sha']}) · "
+                f"[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，"
+                f"尝试 {policy['run_attempt']}。"
+                "实际执行范围和结果以本次运行及验证记录为准，不从历史绿灯推导本版已通过。"
+                "Ubuntu 22/24 与其他发行版分别记录，不宣称所有 Linux 均已支持；"
+                "合成支付/邮件、回环 HTTPS 和测试 CA 不代表真实渠道、公共证书续期或生产容量验收。\n\n"
+                f"[v0.5.7 发布说明与边界]({source_docs}RELEASE-v0.5.7.md) · "
+                f"[验证记录]({source_docs}VALIDATION.md) · [安装]({source_docs}INSTALL.md) · "
+                f"[升级恢复]({source_docs}UPGRADE.md) · [宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
+            )
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

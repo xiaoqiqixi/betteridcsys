@@ -169,6 +169,20 @@ class ManagerTest(unittest.TestCase):
         self.assertIsNotNone(declared)
         self.assertEqual(declared[1], manager.CORE_VERSION)
 
+    def test_current_release_version_and_existing_smtp_compatibility_remain_independent(self):
+        self.assertEqual(manager.CORE_VERSION, "0.5.7")
+        self.assertEqual(manager.PAYMENT_MIN_CORE_VERSION, "0.5.3")
+        version = SCRIPT.parents[2] / "backend/plugins/smtp/VERSION"
+        self.assertEqual(version.read_text().strip(), "1.1.0")
+        manifest = json.loads(contents(version="1.1.0")["manifest.json"])
+        manager.validate_manifest(manifest, manager.CORE_VERSION)
+        self.assertEqual((manifest["core_min"], manifest["core_max_exclusive"]), ("0.4.0", "0.6.0"))
+        with self.assertRaises(manager.Rejected):
+            manager.validate_manifest(manifest, "0.6.0")
+        manifest["core_max_exclusive"] = "0.5.7"
+        with self.assertRaises(manager.Rejected):
+            manager.validate_manifest(manifest, manager.CORE_VERSION)
+
     def test_payment_protocol_rejects_old_core_override_and_inaccurate_minimum(self):
         manifest = json.loads(payment_contents()["manifest.json"])
         with self.assertRaises(manager.Rejected):

@@ -43,11 +43,11 @@ API unit 中的 `SupplementaryGroups=aster-plugins` 需要该组已经存在；�
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.3 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
   verify /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
   --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.3 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
   install /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
   --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 ```
@@ -78,9 +78,9 @@ sudo systemctl restart aster-api
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.3 status
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 status
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.3 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
   select --id email.smtp --version 1.1.0 \
   --worker-uid "$(id -u aster-smtp)" --client-uid "$(id -u aster)" \
   --socket /run/aster-smtp/plugin.sock --target SMTP_HOST:SMTP_PORT --revision 0
@@ -90,7 +90,7 @@ sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.3 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
   enable --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 sudo systemctl status aster-smtp --no-pager
@@ -108,7 +108,7 @@ sudo systemctl status aster-smtp --no-pager
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.3 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
   rollback --version OLD_PLUGIN_VERSION --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 ```
@@ -125,7 +125,7 @@ Core 和 SMTP 版本不一一对应；独立补丁版可以在 manifest 声明�
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.3 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
   disable --revision CURRENT_REVISION
 sudo systemctl stop aster-smtp
 ```

@@ -1,0 +1,721 @@
+// Node standard-library tests of our independent adapter, never Gemini UI code.
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import assert from "node:assert/strict";
+import { test, after } from "node:test";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const out = mkdtempSync(join(root, "tests/.data-check-"));
+after(() => rmSync(out, { recursive: true, force: true }));
+execFileSync(
+  process.execPath,
+  [
+    join(root, "node_modules/typescript/bin/tsc"),
+    "--target",
+    "ES2022",
+    "--module",
+    "commonjs",
+    "--moduleResolution",
+    "node",
+    "--lib",
+    "ES2022,DOM",
+    "--strict",
+    "--skipLibCheck",
+    "--outDir",
+    out,
+    "src/types/idc.ts",
+    "src/services/api.ts",
+    "src/services/demo.ts",
+    "src/composables/useWorkspace.ts",
+  ],
+  { cwd: root, stdio: "inherit" },
+);
+writeFileSync(join(out, "package.json"), '{"type":"commonjs"}');
+const require = createRequire(import.meta.url);
+const money = require(join(out, "types/idc.js"));
+const { createDemoClient, DEMO_CUSTOMER_ID, DEMO_ADMIN_ID } = require(
+  join(out, "services/demo.js"),
+);
+const { createApiClient } = require(join(out, "services/api.js"));
+const { useWorkspace } = require(join(out, "composables/useWorkspace.js"));
+const rejected = (code) => (error) => error.code === code;
+function demo() {
+  let role = "customer";
+  return {
+    client: createDemoClient(() => role),
+    setRole: (value) => {
+      role = value;
+    },
+  };
+}
+async function catalogInput(client, changes = {}) {
+  const catalog = await client.read("/admin/catalog");
+  return {
+    name: "独立报价演示",
+    description: "合成示例",
+    region: "香港 HKG",
+    cpu: 2,
+    memory_gb: 4,
+    disk_gb: 80,
+    transfer_tb: 2,
+    available: false,
+    prices: [],
+    revision: catalog.revision,
+    currency_revision: catalog.currency_revision,
+    reason: "合成测试新增",
+    ...changes,
+  };
+}
+
+test("exact money: safe-integer maximum, precision 0–6 and snapshot formatting", () => {
+  assert.equal(
+    money.parseMinor("9007199254740.991", 3),
+    Number.MAX_SAFE_INTEGER,
+  );
+  assert.equal(
+    money.formatMinor(Number.MAX_SAFE_INTEGER, 3),
+    "9007199254740.991",
+  );
+  assert.equal(
+    money.formatMinor(Number.MAX_SAFE_INTEGER, 6),
+    "9007199254.740991",
+  );
+  assert.equal(money.parseMinor("0.000001", 6), 1);
+  assert.equal(money.parseMinor("39", 2), 3900);
+  assert.equal(money.parseMinor("10", 0), 10);
+  assert.equal(
+    money.formatMoney(3900, {
+      code: "CNY",
+      name: "人民币",
+      prefix: "¥",
+      suffix: "",
+      decimal_places: 2,
+    }),
+    "¥39.00 CNY",
+  );
+  assert.equal(money.formatMoney(3900, undefined), "—");
+  assert.equal(
+    money.formatMoney(Number.MAX_SAFE_INTEGER + 1, {
+      code: "CNY",
+      name: "",
+      prefix: "¥",
+      suffix: "",
+      decimal_places: 2,
+    }),
+    "—",
+  );
+});
+test("money rejects signs, float/exponent tricks, rounding, zeros and overflow", () => {
+  for (const value of [
+    "0",
+    "0.00",
+    "01.00",
+    "+1",
+    "-1",
+    "1e2",
+    ".5",
+    "1.",
+    " 1",
+    "1 ",
+    "1.001",
+    "90071992547409.92",
+    "NaN",
+  ])
+    assert.throws(() => money.parseMinor(value, 2), value);
+  assert.throws(() => money.parseMinor("1.0", 0));
+  assert.throws(() => money.parseMinor("1", 7));
+  assert.throws(() => money.formatMinor(0.1, 2));
+});
+test("public plans preserve unavailable zero quote rather than fabricate USD conversion", async () => {
+  const { client } = demo();
+  const plans = await client.read("/plans", { currency: "USD" });
+  const missing = plans.find((plan) => plan.id === "sin-studio");
+  assert.equal(missing.price_minor, 0);
+  assert.equal(missing.available, false);
+  await assert.rejects(
+    client.read("/plans", { currency: "JPY" }),
+    rejected("CURRENCY_DISABLED"),
+  );
+  await assert.rejects(client.read("/admin/catalog"), rejected("FORBIDDEN"));
+});
+test("catalog create, edit, independent prices, draft duplication and stale revisions", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const input = await catalogInput(client, {
+    available: true,
+    prices: [
+      { currency: "CNY", amount_minor: 5900, available: true },
+      { currency: "USD", amount_minor: 1100, available: true },
+    ],
+  });
+  const created = await client.write("/admin/catalog", input);
+  assert.equal(created.plan.available, true);
+  assert.equal(created.plan.prices[1].amount_minor, 1100);
+  await assert.rejects(
+    client.write("/admin/catalog", input),
+    rejected("CATALOG_CONFLICT"),
+  );
+  const duplicated = await client.write(
+    `/admin/catalog/${created.plan.id}/duplicate`,
+    {
+      revision: created.revision,
+      currency_revision: created.currency_revision,
+      reason: "复制合成商品",
+    },
+  );
+  assert.notEqual(duplicated.plan.id, created.plan.id);
+  assert.equal(duplicated.plan.available, false);
+  const edited = await client.write(
+    `/admin/catalog/${created.plan.id}`,
+    await catalogInput(client, {
+      name: "新规格",
+      cpu: 8,
+      prices: [{ currency: "CNY", amount_minor: 7900, available: true }],
+    }),
+  );
+  assert.equal(edited.plan.cpu, 8);
+  assert.equal(edited.plan.available, false);
+  await assert.rejects(
+    client.write(
+      "/admin/catalog",
+      await catalogInput(client, { available: true }),
+    ),
+    rejected("INVALID_CATALOG"),
+  );
+  await assert.rejects(
+    client.write(
+      "/admin/catalog",
+      await catalogInput(client, {
+        prices: [{ currency: "CNY", amount_minor: 1.1, available: true }],
+      }),
+    ),
+    rejected("INVALID_BODY"),
+  );
+});
+test("create order is idempotent pending only; checkout cannot become a paid result", async () => {
+  const { client } = demo();
+  const plan = (await client.read("/plans", { currency: "CNY" }))[0];
+  const input = {
+    plan_id: plan.id,
+    hostname: "demo-new",
+    currency: "CNY",
+    quote: {
+      price_minor: plan.price_minor,
+      decimal_places: 2,
+      price_revision: plan.price_revision,
+    },
+  };
+  await assert.rejects(
+    client.write("/orders", input),
+    rejected("IDEMPOTENCY_KEY_REQUIRED"),
+  );
+  await assert.rejects(
+    client.write(
+      "/orders",
+      { ...input, quote: { ...input.quote, price_minor: 1 } },
+      { "Idempotency-Key": "test-stale-quote" },
+    ),
+    rejected("PRICE_CHANGED"),
+  );
+  const created = await client.write("/orders", input, {
+    "Idempotency-Key": "test-order-once",
+  });
+  assert.equal(created.status, "pending_payment");
+  assert.equal(created.service_id, undefined);
+  assert.deepEqual(
+    await client.write("/orders", input, {
+      "Idempotency-Key": "test-order-once",
+    }),
+    created,
+  );
+  await assert.rejects(
+    client.write(
+      "/orders",
+      { ...input, hostname: "other" },
+      { "Idempotency-Key": "test-order-once" },
+    ),
+    rejected("IDEMPOTENCY_CONFLICT"),
+  );
+  const detail = await client.read(`/orders/${created.id}`);
+  assert.equal(detail.invoice.status, "unpaid");
+  assert.equal(detail.service, null);
+  await assert.rejects(
+    client.write(`/invoices/${detail.invoice.id}/checkout`, {}),
+    rejected("PAYMENT_NOT_CONFIGURED"),
+  );
+  assert.equal(
+    (await client.read(`/invoices/${detail.invoice.id}`)).status,
+    "unpaid",
+  );
+});
+test("safe cancel atomically voids invoice; repeat adds no duplicate audit or fake service", async () => {
+  const { client } = demo();
+  const order = (await client.read("/orders"))[0];
+  const before = await client.read("/audit-events");
+  const result = await client.write(`/orders/${order.id}/cancel`, {
+    reason: "取消合成测试",
+  });
+  assert.equal(result.order.status, "cancelled");
+  assert.equal(result.invoice.status, "void");
+  await client.write(`/orders/${order.id}/cancel`, {
+    reason: "重复取消合成测试",
+  });
+  const after = await client.read("/audit-events");
+  assert.equal(after.items.length, before.items.length + 1);
+  await assert.rejects(
+    client.write(`/orders/${order.id}`, { status: "paid" }),
+    rejected("NOT_FOUND"),
+  );
+});
+test("admin account version/role/disable guards and customer read ownership", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const self = await client.read(`/admin/customer-accounts/${DEMO_ADMIN_ID}`);
+  await assert.rejects(
+    client.write(`/admin/customer-accounts/${self.id}`, {
+      name: self.name,
+      role: "customer",
+      disabled: false,
+      revision: self.revision,
+      reason: "错误自降权",
+    }),
+    rejected("SELF_ACCOUNT_CHANGE"),
+  );
+  const account = await client.read(
+    `/admin/customer-accounts/${DEMO_CUSTOMER_ID}`,
+  );
+  const changed = await client.write(`/admin/customer-accounts/${account.id}`, {
+    name: "更新的合成客户",
+    role: "customer",
+    disabled: false,
+    revision: account.revision,
+    reason: "更新合成姓名",
+  });
+  assert.equal(changed.revision, 2);
+  assert.equal(changed.email, account.email);
+  await assert.rejects(
+    client.write(`/admin/customer-accounts/${account.id}`, {
+      name: "过期修改",
+      role: "admin",
+      disabled: false,
+      revision: 1,
+      reason: "过期合成版本",
+    }),
+    rejected("ACCOUNT_CONFLICT"),
+  );
+  setRole("customer");
+  assert.equal((await client.read("/orders")).length, 3);
+  assert.equal((await client.read("/services"))[0].customer_id, undefined);
+  assert.equal(
+    (await client.read(`/orders/${(await client.read("/orders"))[0].id}`))
+      .customer,
+    undefined,
+  );
+  await assert.rejects(
+    client.read("/admin/customer-accounts"),
+    rejected("FORBIDDEN"),
+  );
+});
+test("cursor pagination binds filter and identity; no owner field for client audit", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const first = await client.read("/admin/customer-accounts", { limit: 1 });
+  assert.equal(first.items.length, 1);
+  assert.equal(first.has_more, true);
+  const second = await client.read("/admin/customer-accounts", {
+    limit: 1,
+    cursor: first.next_cursor,
+  });
+  assert.notEqual(second.items[0].id, first.items[0].id);
+  await assert.rejects(
+    client.read("/admin/customer-accounts", {
+      limit: 1,
+      role: "admin",
+      cursor: first.next_cursor,
+    }),
+    rejected("INVALID_ACCOUNT_QUERY"),
+  );
+  setRole("customer");
+  const audit = await client.read("/audit-events");
+  assert.ok(audit.items.every((event) => !Object.hasOwn(event, "owner_id")));
+  await assert.rejects(
+    client.read("/audit-events", { owner_id: DEMO_CUSTOMER_ID }),
+    rejected("INVALID_AUDIT_QUERY"),
+  );
+});
+test("historical money and snapshots do not mutate with catalog changes", async () => {
+  const { client, setRole } = demo();
+  const history = await client.read("/orders");
+  setRole("admin");
+  await client.write(
+    "/admin/catalog/hkg-essential",
+    await catalogInput(client, {
+      name: "不同今日名称",
+      cpu: 32,
+      prices: [{ currency: "CNY", amount_minor: 12900, available: true }],
+    }),
+  );
+  setRole("customer");
+  assert.deepEqual(await client.read("/orders"), history);
+  const long = history.find((order) => order.currency === "KWD");
+  assert.ok(
+    money
+      .formatMoney(long.total_minor, long.currency_format)
+      .includes("9007199254740.991"),
+  );
+});
+test("real transport obtains CSRF, sends quote/idempotency and same-origin only", async () => {
+  const calls = [],
+    sessions = [];
+  const created = (await demo().client.read("/orders"))[0];
+  const client = createApiClient({
+    locale: () => "en",
+    onSession: (value) => sessions.push(value),
+    fetcher: async (url, init) => {
+      calls.push([url, init]);
+      return Response.json(
+        {
+          data:
+            url === "/api/v1/session"
+              ? {
+                  user: null,
+                  csrf_token: "synthetic-test-token",
+                  demo_mode: false,
+                }
+              : created,
+        },
+        { status: url === "/api/v1/session" ? 200 : 201 },
+      );
+    },
+  });
+  await assert.rejects(
+    client.write("/orders", {}, {}),
+    rejected("IDEMPOTENCY_KEY_REQUIRED"),
+  );
+  assert.equal(calls.length, 0);
+  const body = {
+    plan_id: "a",
+    hostname: "host",
+    currency: "CNY",
+    quote: { price_minor: 3900, decimal_places: 2, price_revision: 7 },
+  };
+  await client.write("/orders", body, {
+    "Idempotency-Key": "test-real-transport",
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1][1].headers["X-CSRF-Token"], "synthetic-test-token");
+  assert.equal(calls[1][1].headers["Idempotency-Key"], "test-real-transport");
+  assert.equal(calls[1][1].credentials, "same-origin");
+  assert.equal(calls[1][1].cache, "no-store");
+  assert.deepEqual(JSON.parse(calls[1][1].body), body);
+  assert.equal(sessions.length, 1);
+  await assert.rejects(
+    client.read("https://example.com/leak"),
+    rejected("INVALID_REQUEST"),
+  );
+  await assert.rejects(client.read("/../session"), rejected("INVALID_REQUEST"));
+});
+test("real transport preserves valid request ID, suppresses diagnostics and never retries failure", async () => {
+  let calls = 0;
+  const client = createApiClient({
+    locale: () => "zh-CN",
+    onSession: () => {},
+    fetcher: async () => {
+      calls++;
+      return Response.json(
+        {
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "/host/private-secret-path",
+            request_id: "b".repeat(32),
+          },
+        },
+        { status: 500, headers: { "X-Request-ID": "a".repeat(32) } },
+      );
+    },
+  });
+  await assert.rejects(
+    client.read("/orders"),
+    (error) =>
+      error.status === 500 &&
+      error.requestId === "a".repeat(32) &&
+      !error.message.includes("private-secret"),
+  );
+  assert.equal(calls, 1);
+});
+test("write ambiguity is preserved, no malformed success or network error becomes success", async () => {
+  let writes = 0;
+  for (const malformed of [true, false]) {
+    const client = createApiClient({
+      locale: () => "en",
+      onSession: () => {},
+      fetcher: async (url) => {
+        if (url.endsWith("/session"))
+          return Response.json({
+            data: { user: null, csrf_token: "token", demo_mode: false },
+          });
+        writes++;
+        if (malformed) return new Response("not json", { status: 201 });
+        throw new Error("disconnect");
+      },
+    });
+    await assert.rejects(
+      client.write("/auth/login", {
+        email: "x@example.invalid",
+        password: "not-real",
+      }),
+      (error) => error.uncertain === true,
+    );
+  }
+  assert.equal(writes, 2);
+});
+test("workspace starts on real API, demo requires an explicit switch and discards pre-switch responses", async () => {
+  const workspace = useWorkspace();
+  assert.equal(workspace.mode.value, "api");
+  assert.equal(workspace.session.value, null);
+  assert.equal(workspace.sessionVerified.value, false);
+  assert.equal(workspace.locale.value, "zh-CN");
+  workspace.setMode("demo");
+  assert.equal(workspace.sessionVerified.value, true);
+  const pending = workspace.read("/orders");
+  workspace.setDemoRole("admin");
+  await assert.rejects(pending, rejected("STALE_RESPONSE"));
+  assert.equal(workspace.role.value, "admin");
+  workspace.setDemoRole("customer");
+  assert.equal(workspace.currency.value, "CNY");
+  assert.equal(workspace.reportCurrency.value, "CNY");
+});
+test("runtime contracts reject malformed core data instead of typed-cast success", async () => {
+  for (const [path, value] of [
+    ["/orders", {}],
+    ["/invoices", [{ amount_minor: 3900 }]],
+    ["/plans", [{ available: true, price_minor: 0 }]],
+    ["/admin/catalog", { revision: 1, items: [] }],
+    ["/orders/id", { order: {}, invoice: null }],
+  ]) {
+    const client = createApiClient({
+      locale: () => "en",
+      onSession: () => {},
+      fetcher: async () => Response.json({ data: value }),
+    });
+    await assert.rejects(client.read(path), rejected("INVALID_RESPONSE"));
+  }
+  const plans = await demo().client.read("/plans", { currency: "USD" });
+  const client = createApiClient({
+    locale: () => "en",
+    onSession: () => {},
+    fetcher: async () => Response.json({ data: plans }),
+  });
+  assert.deepEqual(await client.read("/plans"), plans);
+});
+
+test("login rotates CSRF, refreshes the real session and logout accepts the backend anonymous DTO", async () => {
+  const calls = [],
+    sessions = [];
+  let loggedIn = false,
+    token = "anon-token";
+  const user = {
+    id: "a".repeat(32),
+    name: "Local test",
+    email: "local@example.invalid",
+    role: "admin",
+  };
+  const client = createApiClient({
+    locale: () => "zh-CN",
+    onSession: (value) => sessions.push(value),
+    fetcher: async (url, init) => {
+      calls.push([url, init]);
+      if (url.endsWith("/auth/login")) {
+        assert.equal(init.headers["X-CSRF-Token"], "anon-token");
+        loggedIn = true;
+        token = "login-token";
+      }
+      if (url.endsWith("/auth/logout")) {
+        assert.equal(init.headers["X-CSRF-Token"], "login-token");
+        loggedIn = false;
+        token = "logout-token";
+        return Response.json({ data: { user: null, csrf_token: token } });
+      }
+      return Response.json({
+        data: {
+          user: loggedIn ? user : null,
+          csrf_token: token,
+          demo_mode: false,
+        },
+      });
+    },
+  });
+  await client.write("/auth/login", {
+    email: user.email,
+    password: "test-only",
+  });
+  assert.deepEqual(
+    calls.map(([url]) => url),
+    ["/api/v1/session", "/api/v1/auth/login", "/api/v1/session"],
+  );
+  assert.equal(sessions.at(-1).user.id, user.id);
+  await client.write("/auth/logout", {});
+  assert.equal(sessions.at(-1).user, null);
+  assert.equal(sessions.at(-1).csrf_token, "logout-token");
+});
+test("FORBIDDEN verifies role without turning a still-valid customer session into logout or replaying POST", async () => {
+  let writes = 0,
+    reads = 0;
+  const sessions = [];
+  const user = {
+    id: "b".repeat(32),
+    name: "Customer",
+    email: "customer@example.invalid",
+    role: "customer",
+  };
+  const client = createApiClient({
+    locale: () => "en",
+    onSession: (value) => sessions.push(value),
+    fetcher: async (url) => {
+      if (url.endsWith("/session")) {
+        reads++;
+        return Response.json({
+          data: { user, csrf_token: "token", demo_mode: false },
+        });
+      }
+      writes++;
+      return Response.json(
+        { error: { code: "FORBIDDEN", message: "not shown" } },
+        { status: 403 },
+      );
+    },
+  });
+  await assert.rejects(
+    client.write("/admin/site-settings", {}),
+    rejected("FORBIDDEN"),
+  );
+  assert.equal(writes, 1);
+  assert.equal(reads, 2);
+  assert.equal(sessions.at(-1).user.role, "customer");
+});
+test("CSRF_INVALID clears stale identity and does not replay the rejected write", async () => {
+  let writes = 0;
+  const sessions = [],
+    invalid = [];
+  const client = createApiClient({
+    locale: () => "en",
+    onSession: (value) => sessions.push(value),
+    onSessionInvalid: (value) => invalid.push(value),
+    fetcher: async (url) => {
+      if (url.endsWith("/session"))
+        return Response.json({
+          data: {
+            user: {
+              id: "c".repeat(32),
+              name: "Admin",
+              email: "admin@example.invalid",
+              role: "admin",
+            },
+            csrf_token: "token",
+            demo_mode: false,
+          },
+        });
+      writes++;
+      return Response.json(
+        { error: { code: "CSRF_INVALID", message: "not shown" } },
+        { status: 403 },
+      );
+    },
+  });
+  await assert.rejects(
+    client.write("/admin/site-settings", {}),
+    rejected("CSRF_INVALID"),
+  );
+  assert.equal(writes, 1);
+  assert.equal(sessions.at(-1).user, null);
+  assert.equal(invalid.length, 1);
+});
+test("login fences a late anonymous session read so it cannot undo the new identity", async () => {
+  let readCount = 0,
+    resolveOld;
+  const sessions = [];
+  const user = {
+    id: "d".repeat(32),
+    name: "New user",
+    email: "new@example.invalid",
+    role: "customer",
+  };
+  const client = createApiClient({
+    locale: () => "en",
+    onSession: (value) => sessions.push(value),
+    fetcher: async (url) => {
+      if (url.endsWith("/auth/login"))
+        return Response.json({
+          data: { user, csrf_token: "new-token", demo_mode: false },
+        });
+      readCount++;
+      if (readCount === 2)
+        return new Promise((resolve) => {
+          resolveOld = resolve;
+        });
+      return Response.json({
+        data: {
+          user: readCount === 1 ? null : user,
+          csrf_token: readCount === 1 ? "anon" : "new-token",
+          demo_mode: false,
+        },
+      });
+    },
+  });
+  await client.refreshSession();
+  const oldRead = client.read("/session");
+  const oldRejected = assert.rejects(oldRead, rejected("STALE_RESPONSE"));
+  await client.write("/auth/login", {
+    email: user.email,
+    password: "test-only",
+  });
+  resolveOld(
+    Response.json({
+      data: { user: null, csrf_token: "old-anonymous", demo_mode: false },
+    }),
+  );
+  await oldRejected;
+  assert.equal(sessions.at(-1).user.id, user.id);
+  assert.equal(sessions.at(-1).csrf_token, "new-token");
+});
+test("an acknowledged auth write with failed confirmation is uncertain, never a confirmed login", async () => {
+  let reads = 0,
+    writes = 0;
+  const invalid = [];
+  const client = createApiClient({
+    locale: () => "en",
+    onSession: () => {},
+    onSessionInvalid: (value) => invalid.push(value),
+    fetcher: async (url) => {
+      if (url.endsWith("/session")) {
+        reads++;
+        if (reads > 1) throw new Error("offline");
+        return Response.json({
+          data: { user: null, csrf_token: "anon", demo_mode: false },
+        });
+      }
+      writes++;
+      return Response.json({
+        data: {
+          user: {
+            id: "e".repeat(32),
+            name: "User",
+            email: "u@example.invalid",
+            role: "customer",
+          },
+          csrf_token: "new",
+          demo_mode: false,
+        },
+      });
+    },
+  });
+  await assert.rejects(
+    client.write("/auth/login", {}),
+    (error) => error.code === "SESSION_REFRESH_FAILED" && error.uncertain,
+  );
+  assert.equal(writes, 1);
+  assert.equal(invalid.length, 1);
+});
