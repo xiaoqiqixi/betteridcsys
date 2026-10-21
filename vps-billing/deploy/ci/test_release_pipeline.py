@@ -866,6 +866,25 @@ class PatchReleaseNotesTest(unittest.TestCase):
         runtime_pipeline.publish(api, runtime_pipeline.prepare_publish(api, env, event), artifact)
         return api, api.mutations[0][2]["body"]
 
+    def test_057_notes_cover_new_frontend_contrast_and_exact_financial_release_boundaries(self):
+        api, body = self.published_notes("core", "0.5.7")
+        self.assertTrue(body.startswith("## Core 0.5.7\n\n"))
+        for text in ("正式 Core 0.5.6", "独立实现的新客户与管理员前端", "真实认证", "API 失败不切换为演示成功",
+                     "语言与币种", "账户", "浅色对比度", "深色", "CNY 优先", "全新安装仅启用 CNY",
+                     "保留原币", "不自动换汇", "历史快照", "支付幂等", "认证/CSRF", "权限边界",
+                     "不新增数据库迁移", "schema 10", "001–010", "不使用 Docker", "六资产", "SMTP 仍独立 1.1.0",
+                     "Core >=0.4.0,<0.6.0", "实际执行范围和结果", "不宣称所有 Linux 均已支持", "生产容量验收"):
+            self.assertIn(text, body)
+        for misleading in ("本版本通过该构建的", "该版本已通过流水线", "新增客户与管理员角色管理", "支付扩展新增独立运行时插槽"):
+            self.assertNotIn(misleading, body)
+        for document in ("RELEASE-v0.5.7.md", "VALIDATION.md", "INSTALL.md", "UPGRADE.md", "BAOTA.md", "PLUGINS.md"):
+            self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/blob/{SHA}/vps-billing/docs/{document}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/commit/{SHA}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/actions/runs/{RUN_ID}", body)
+        self.assertEqual(len(api.uploads), 6)
+        self.assertEqual([call[0] for call in api.mutations], ["POST", "PATCH"])
+        self.assertEqual(api.mutations[-1][2], {"draft": False, "prerelease": False, "make_latest": "true"})
+
     def test_056_notes_cover_management_and_preserve_financial_boundaries(self):
         _, body = self.published_notes("core", "0.5.6")
         for text in ("客户与管理员角色管理", "最后一个启用管理员", "单笔订单详情", "商品创建", "历史快照不变", "迁移 009", "010", "schema 10", "v0.5.5", "Go 1.27.3", "不使用 Docker", "实际验证范围分别记录"):

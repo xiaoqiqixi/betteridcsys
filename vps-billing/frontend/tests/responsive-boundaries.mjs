@@ -1,185 +1,153 @@
-// Required responsive assertions, enforced by the sandboxed browser supervisor
-// after all cases, screenshots and existing functional assertions are collected.
-// Fixtures stay in the DOM; no input/change/submit event or API write is sent.
-// Keep the 720/721 content boundary; navigation separately changes at 1024/1025.
-const widths = [320, 375, 720, 721, 768, 1440];
+// The exact 50-case supervisor contract, rebound to the new console's real controls.
+// Legacy evidence IDs describe semantic roles, not old selectors. Branding/context
+// is measured before opening the drawer; quote fields are measured inside it.
+// Fixtures are bounded GET DTOs. No DOM text/value injection or settings save occurs.
+import { expect } from "@playwright/test";
+import {
+  apiData,
+  assertBrandIdentity,
+  closePanel,
+  createScreen,
+  dialog,
+  fixture,
+  goto,
+  locale,
+  settle,
+  assertScreenSafe,
+  widths,
+} from "./e2e-support.mjs";
+
 const locales = ["zh-CN", "en"];
 const fixtures = {
-  ascii: { site: "S".repeat(120), company: "C".repeat(240) },
-  cjk: { site: "云".repeat(40), company: "公".repeat(80) },
+  ascii: {
+    site: "S".repeat(120),
+    company: "C".repeat(240),
+    prefix: "P".repeat(24),
+    suffix: "S".repeat(24),
+  },
+  cjk: {
+    site: "云".repeat(40),
+    company: "公".repeat(80),
+    prefix: "前".repeat(8),
+    suffix: "后".repeat(8),
+  },
 };
-
-async function settle(page) {
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-    // Finish only current CSS transitions, including the owned compact drawer.
-    for (const animation of document
-      .querySelector(".navigation-rail")
-      ?.getAnimations({ subtree: true }) || [])
-      if (Number.isFinite(animation.effect?.getComputedTiming().endTime))
-        animation.finish();
-    await new Promise((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(resolve)),
-    );
-  });
-}
-
-async function selectLocale(page, locale) {
-  await page
-    .locator(".preference-controls select")
-    .first()
-    .selectOption(locale);
-  await settle(page);
-}
-
-async function installFixture(page, surface, fixture) {
-  await page.evaluate(
-    ({ surface, fixture }) => {
-      if (window.__asterBoundaryFixture)
-        throw new Error("Boundary fixture was not restored");
-      const saved = [];
-      window.__asterBoundaryFixture = saved;
-      const replace = (selector, text) => {
-        const element = document.querySelector(selector);
-        if (!element) throw new Error("Required boundary fixture node missing");
-        saved.push({ element, nodes: [...element.childNodes] });
-        element.replaceChildren(document.createTextNode(text));
-      };
-      if (surface === "login") {
-        replace(".login-brand strong", fixture.site);
-        replace(".small-brand", fixture.site);
-        replace(".login-story .eyebrow", fixture.site);
-        replace(
-          ".login-footnote",
-          fixture.company +
-            (document.documentElement.lang === "en"
-              ? " · Cloud services"
-              : " · 云服务管理"),
-        );
-      } else {
-        replace(".sidebar .brand strong", fixture.site);
-        replace(".main-footer > span:first-child", fixture.company);
-        const group = document.querySelector(".price-input");
-        const input = group?.querySelector("input");
-        const code = group?.querySelector("span:last-child");
-        if (!input || !code)
-          throw new Error("Required boundary price fixture missing");
-        saved.push({ element: group, nodes: [...group.childNodes] });
-        saved.push({
-          input,
-          value: input.value,
-          scrollLeft: input.scrollLeft,
-          selectionStart: input.selectionStart,
-          selectionEnd: input.selectionEnd,
-          selectionDirection: input.selectionDirection,
-        });
-        const prefix = code.cloneNode(false);
-        const suffix = code.cloneNode(false);
-        prefix.textContent = "P".repeat(24);
-        suffix.textContent = "S".repeat(24);
-        // CSS stress fixture for a legal six-decimal format at MaxMinor.
-        // Preserve the current input/code nodes and Vue model: this does not
-        // make the selected two-decimal CNY format accept six-decimal writes.
-        input.value = "9007199254.740991";
-        group.replaceChildren(prefix, input, suffix, code);
-      }
-    },
-    { surface, fixture },
-  );
-  await settle(page);
-}
-
-async function restoreFixture(page) {
-  await page.evaluate(() => {
-    const saved = window.__asterBoundaryFixture;
-    if (!saved) return;
-    for (const item of saved.toReversed()) {
-      if (item.input) {
-        item.input.value = item.value;
-        item.input.setSelectionRange(
-          item.selectionStart,
-          item.selectionEnd,
-          item.selectionDirection,
-        );
-        item.input.scrollLeft = item.scrollLeft;
-      } else item.element.replaceChildren(...item.nodes);
-    }
-    delete window.__asterBoundaryFixture;
-  });
-}
-
-async function measurements(page, targets) {
-  return page.evaluate((targets) => {
-    const rect = (box) => ({
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      height: box.height,
-    });
-    return targets.map(({ id, selector, container }) => {
-      const element = document.querySelector(selector);
-      const parent = document.querySelector(container);
-      if (!element || !parent)
-        throw new Error("Required boundary measurement node missing");
-      const box = element.getBoundingClientRect();
-      const parentBox = parent.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      let visible = box.width > 0 && box.height > 0;
-      let left = 0;
-      let right = innerWidth;
+const roles = {
+  login: [
+    "login-brand",
+    "login-small-brand",
+    "login-eyebrow",
+    "login-footnote",
+  ],
+  financial: [
+    "sidebar-brand",
+    "workspace-context",
+    "footer-company",
+    "price-prefix",
+    "price-input",
+    "price-suffix",
+    "price-code",
+  ],
+  breadcrumb: ["breadcrumb-root", "breadcrumb-current"],
+};
+async function measure(page, id, selector, parent) {
+  const target = page.locator(selector).first();
+  if ((await target.count()) && (await target.isVisible()))
+    await target.scrollIntoViewIfNeeded();
+  return page.evaluate(
+    ({ id, selector, parent }) => {
+      const element = document.querySelector(selector),
+        container = document.querySelector(parent);
+      const rectangle = (r) => ({
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+      });
+      const zero = { x: 0, y: 0, width: 0, height: 0 };
+      if (!element || !container)
+        return {
+          id,
+          visible: false,
+          rect: zero,
+          container_rect: zero,
+          text_rect: null,
+          line_count: 0,
+          client_width: 0,
+          scroll_width: 0,
+          content_width: 0,
+          text_width: 0,
+          visible_width: 0,
+          overflow_left: 0,
+          overflow_right: 0,
+        };
+      const box = element.getBoundingClientRect(),
+        bounds = container.getBoundingClientRect(),
+        css = getComputedStyle(element);
+      let visible = box.width > 0 && box.height > 0,
+        left = Math.max(0, bounds.left),
+        right = Math.min(innerWidth, bounds.right);
       for (let node = element; node; node = node.parentElement) {
-        const css = getComputedStyle(node);
+        const style = getComputedStyle(node);
         if (
-          css.display === "none" ||
-          css.visibility !== "visible" ||
-          node.getAttribute("aria-hidden") === "true" ||
-          node.inert
+          style.display === "none" ||
+          style.visibility !== "visible" ||
+          node.getAttribute("aria-hidden") === "true"
         )
           visible = false;
-        if (/(hidden|clip|auto|scroll)/.test(css.overflowX)) {
-          const clip = node.getBoundingClientRect();
-          left = Math.max(left, clip.left + node.clientLeft);
-          right = Math.min(
-            right,
-            clip.left + node.clientLeft + node.clientWidth,
-          );
+        if (/(hidden|clip|auto|scroll)/.test(style.overflowX)) {
+          const r = node.getBoundingClientRect();
+          left = Math.max(left, r.left + node.clientLeft);
+          right = Math.min(right, r.left + node.clientLeft + node.clientWidth);
         }
       }
-      const isInput = element instanceof HTMLInputElement;
+      // Operator branding intentionally ellipsizes and exposes the complete
+      // name through title + aria-label (asserted separately). Keep its raw
+      // Range evidence, but test its rendered anchor box for layout overflow.
+      const brandTarget = id === "login-brand" || id === "sidebar-brand";
+      if (brandTarget) {
+        const label = element
+          .querySelector(":scope > span:last-child")
+          ?.getBoundingClientRect();
+        if (label) {
+          left = Math.max(left, label.left);
+          right = Math.min(right, label.right);
+        }
+      }
+      const input = element instanceof HTMLInputElement;
       const range = document.createRange();
       range.selectNodeContents(element);
-      const fragments = isInput
+      const fragments = input
         ? []
         : [...range.getClientRects()].filter(
-            (part) => part.width > 0 && part.height > 0,
+            (r) => r.width > 0 && r.height > 0,
           );
-      const textBox = fragments.length ? range.getBoundingClientRect() : null;
-      const contentWidth = Math.max(
+      const text = fragments.length ? range.getBoundingClientRect() : null;
+      const content = Math.max(
         0,
         box.width -
-          parseFloat(style.borderLeftWidth || 0) -
-          parseFloat(style.borderRightWidth || 0) -
-          parseFloat(style.paddingLeft || 0) -
-          parseFloat(style.paddingRight || 0),
+          parseFloat(css.borderLeftWidth || 0) -
+          parseFloat(css.borderRightWidth || 0) -
+          parseFloat(css.paddingLeft || 0) -
+          parseFloat(css.paddingRight || 0),
       );
-      let textWidth = textBox?.width || 0;
-      if (isInput) {
-        const canvas = document.createElement("canvas").getContext("2d");
-        canvas.font = style.font;
-        textWidth = canvas.measureText(element.value).width;
-      }
-      const extent = textBox || box;
+      const canvas = document.createElement("canvas").getContext("2d");
+      canvas.font = css.font;
+      const textWidth = input
+          ? canvas.measureText(element.value).width
+          : text?.width || 0,
+        extent = text || box;
+      const layoutExtent = brandTarget ? box : extent;
       return {
         id,
         visible,
-        rect: rect(box),
-        container_rect: rect(parentBox),
-        text_rect: textBox ? rect(textBox) : null,
-        line_count: new Set(fragments.map((part) => Math.round(part.top * 2)))
-          .size,
+        rect: rectangle(box),
+        container_rect: rectangle(bounds),
+        text_rect: text ? rectangle(text) : null,
+        line_count: new Set(fragments.map((r) => Math.round(r.top * 2))).size,
         client_width: element.clientWidth,
         scroll_width: element.scrollWidth,
-        content_width: contentWidth,
+        content_width: content,
         text_width: textWidth,
         visible_width: visible
           ? Math.max(
@@ -187,68 +155,43 @@ async function measurements(page, targets) {
               Math.min(extent.right, right) - Math.max(extent.left, left),
             )
           : 0,
-        overflow_left: visible ? Math.max(0, parentBox.left - extent.left) : 0,
+        overflow_left: visible
+          ? Math.max(0, bounds.left - layoutExtent.left)
+          : 0,
         overflow_right: visible
-          ? Math.max(0, extent.right - parentBox.right)
+          ? Math.max(0, layoutExtent.right - bounds.right)
           : 0,
       };
-    });
-  }, targets);
+    },
+    { id, selector, parent },
+  );
 }
-
-const loginTargets = [
-  ["login-brand", ".login-brand strong", ".login-brand"],
-  ["login-small-brand", ".small-brand", ".login-card"],
-  ["login-eyebrow", ".login-story .eyebrow", ".login-story"],
-  ["login-footnote", ".login-footnote", ".login-story"],
-];
-const sidebarTargets = [
-  ["sidebar-brand", ".sidebar .brand strong", ".sidebar"],
-  ["workspace-context", ".workspace-context", ".sidebar"],
-];
-const priceTargets = [
-  ["footer-company", ".main-footer > span:first-child", ".main-footer"],
-  ["price-prefix", ".price-input span:first-child", ".price-input"],
-  ["price-input", ".price-input input", ".price-input"],
-  ["price-suffix", ".price-input span:nth-last-child(2)", ".price-input"],
-  ["price-code", ".price-input span:last-child", ".price-input"],
-];
-const breadcrumbTargets = [
-  ["breadcrumb-root", ".breadcrumbs > span", ".breadcrumbs"],
-  ["breadcrumb-current", ".breadcrumbs > b", ".breadcrumbs"],
-];
-const targets = (entries) =>
-  entries.map(([id, selector, container]) => ({ id, selector, container }));
-
-async function record(page, surface, fixture, locale, measured) {
-  const documentSize = await page.evaluate(() => ({
+export async function recordBoundaryCase(
+  page,
+  surface,
+  fixtureName,
+  language,
+  measurements,
+) {
+  const document = await page.evaluate(() => ({
     viewport_width: innerWidth,
     scroll_width: Math.max(
-      document.documentElement.scrollWidth,
-      document.body.scrollWidth,
+      window.document.documentElement.scrollWidth,
+      window.document.body.scrollWidth,
     ),
   }));
   const checks = [
     {
       id: "document-no-horizontal-overflow",
-      passed: documentSize.scroll_width <= documentSize.viewport_width + 1,
+      passed: document.scroll_width <= document.viewport_width + 1,
     },
   ];
-  for (const item of measured) {
-    const intentionallyHidden =
-      surface === "login" &&
-      page.viewportSize().width <= 720 &&
-      !item.visible &&
-      ["login-eyebrow", "login-footnote"].includes(item.id);
-    checks.push({
-      id: item.id + "-visible",
-      passed: item.visible || intentionallyHidden,
-    });
+  for (const item of measurements) {
+    checks.push({ id: item.id + "-visible", passed: item.visible });
     checks.push({
       id: item.id + "-within-container",
       passed:
-        intentionallyHidden ||
-        (item.visible && item.overflow_left <= 1 && item.overflow_right <= 1),
+        item.visible && item.overflow_left <= 1 && item.overflow_right <= 1,
     });
     if (item.id.startsWith("breadcrumb-"))
       checks.push({
@@ -271,121 +214,281 @@ async function record(page, surface, fixture, locale, measured) {
       });
       checks.push({
         id: "price-input-full-value-width",
-        // Native input scrolling is authoritative. Canvas text_width remains
-        // auxiliary evidence and cannot by itself establish clipping.
         passed: item.visible && item.scroll_width <= item.client_width + 1,
       });
     }
   }
-  const entry = {
+  const value = {
     schema: "aster-responsive-boundaries-v1",
     mode: "assertion",
     surface,
-    fixture,
-    locale,
-    viewport: page.viewportSize(),
-    document: documentSize,
-    passed: checks.every((check) => check.passed),
+    fixture: fixtureName,
+    locale: language,
+    viewport: { width: page.viewportSize().width, height: 900 },
+    document,
+    passed: checks.every((c) => c.passed),
     checks,
-    measurements: measured,
+    measurements,
   };
-  console.log("BOUNDARY_PROBE_JSON " + JSON.stringify(entry));
+  if (measurements.map((m) => m.id).join() !== roles[surface].join())
+    throw new Error("Responsive semantic target inventory mismatch");
+  console.log("BOUNDARY_PROBE_JSON " + JSON.stringify(value));
+  return value;
 }
-
-export async function probeLoginBoundaries(page, screenshot) {
-  const viewport = page.viewportSize();
-  const locale = await page
-    .locator(".preference-controls select")
-    .first()
-    .inputValue();
-  try {
+async function prepare(screen, base, route, language) {
+  await goto(screen.page, base, route);
+  await expect(screen.page.locator(".ui-loading,.gh-loading")).toHaveCount(0);
+  await locale(screen.page, language);
+  await settle(screen.page);
+}
+export async function probeResponsiveBoundaries(browser, base, adminStorage) {
+  const cases = [];
+  for (const [name, data] of Object.entries(fixtures))
     for (const language of locales) {
-      await selectLocale(page, language);
-      for (const [name, fixture] of Object.entries(fixtures)) {
+      const anonymous = await createScreen(browser, base);
+      try {
+        const original = await apiData(
+          anonymous.context,
+          base,
+          "/api/v1/site-settings",
+        );
+        fixture(anonymous.state, "GET", "/site-settings", {
+          ...original,
+          site_name: data.site,
+          company_name: data.company,
+        });
+        await prepare(anonymous, base, "/catalog", language);
+        await assertBrandIdentity(anonymous.page, data.site);
         for (const width of widths) {
-          await page.setViewportSize({ width, height: 900 });
-          try {
-            await installFixture(page, "login", fixture);
-            await record(
-              page,
+          await anonymous.page.setViewportSize({ width, height: 900 });
+          await settle(anonymous.page);
+          await assertBrandIdentity(anonymous.page, data.site);
+          const metrics = [
+            await measure(
+              anonymous.page,
+              "login-brand",
+              ".idc-topbar .brand",
+              ".idc-topbar",
+            ),
+          ];
+          await anonymous.page.locator(".header-login").click();
+          await expect(
+            dialog(anonymous.page).locator(".signin-form"),
+          ).toBeVisible();
+          metrics.push(
+            await measure(
+              anonymous.page,
+              "login-small-brand",
+              "[role=dialog] .signin-trust p",
+              "[role=dialog] .panel-body",
+            ),
+          );
+          metrics.push(
+            await measure(
+              anonymous.page,
+              "login-eyebrow",
+              "[role=dialog] .signin-trust small",
+              "[role=dialog] .panel-body",
+            ),
+          );
+          metrics.push(
+            await measure(
+              anonymous.page,
+              "login-footnote",
+              "[role=dialog] .panel-description",
+              "[role=dialog] .panel-header",
+            ),
+          );
+          cases.push(
+            await recordBoundaryCase(
+              anonymous.page,
               "login",
               name,
               language,
-              await measurements(page, targets(loginTargets)),
-            );
-            // One representative screenshot per fixture/language; all six
-            // widths retain geometry. Desktop also exposes the story/footnote.
-            if (width === (language === "en" ? 721 : 320))
-              await screenshot(name, language);
-          } finally {
-            await restoreFixture(page);
-          }
+              metrics,
+            ),
+          );
+          await closePanel(anonymous.page);
         }
+        assertScreenSafe(anonymous);
+      } finally {
+        await anonymous.context.close();
+      }
+
+      const admin = await createScreen(browser, base, adminStorage);
+      try {
+        const original = await apiData(
+          admin.context,
+          base,
+          "/api/v1/site-settings",
+        );
+        fixture(admin.state, "GET", "/site-settings", {
+          ...original,
+          site_name: data.site,
+          company_name: data.company,
+        });
+        const currency = {
+          code: "CNY",
+          name: language === "en" ? "Synthetic exact CNY" : "合成精确币种",
+          prefix: data.prefix,
+          suffix: data.suffix,
+          decimal_places: 6,
+          enabled: true,
+          sort_order: 0,
+          precision_locked: true,
+          usage: {
+            plan_prices: 1,
+            orders: 0,
+            invoices: 0,
+            services: 0,
+            pending_orders: 0,
+            unpaid_invoices: 0,
+            ongoing_services: 0,
+          },
+        };
+        fixture(admin.state, "GET", "/admin/currencies", {
+          revision: 7,
+          default_currency: "CNY",
+          currencies: [currency],
+        });
+        fixture(admin.state, "GET", "/admin/catalog", {
+          revision: 7,
+          currency_revision: 7,
+          items: [
+            {
+              id: "boundary-plan",
+              name: "Synthetic boundary plan",
+              description: "Read-only synthetic GET fixture",
+              region: "HKG",
+              cpu: 2,
+              memory_gb: 4,
+              disk_gb: 40,
+              transfer_tb: 1,
+              available: true,
+              prices: [
+                {
+                  currency: "CNY",
+                  amount_minor: Number.MAX_SAFE_INTEGER,
+                  available: true,
+                },
+              ],
+            },
+          ],
+        });
+        await prepare(admin, base, "/admin/catalog", language);
+        await assertBrandIdentity(admin.page, data.site);
+        for (const width of widths) {
+          await admin.page.setViewportSize({ width, height: 900 });
+          await settle(admin.page);
+          await assertBrandIdentity(admin.page, data.site);
+          const metrics = [
+            await measure(
+              admin.page,
+              "sidebar-brand",
+              ".idc-topbar .brand",
+              ".idc-topbar",
+            ),
+            await measure(
+              admin.page,
+              "workspace-context",
+              ".content-breadcrumb",
+              "#main-content",
+            ),
+            await measure(
+              admin.page,
+              "footer-company",
+              ".workspace-footer>span",
+              ".workspace-footer",
+            ),
+          ];
+          await admin.page.locator(".edit-action").first().click();
+          await expect(
+            dialog(admin.page).locator(".price-amount input"),
+          ).toHaveValue("9007199254.740991");
+          metrics.push(
+            await measure(
+              admin.page,
+              "price-prefix",
+              "[role=dialog] .price-amount .price-affix",
+              "[role=dialog] .price-row",
+            ),
+          );
+          metrics.push(
+            await measure(
+              admin.page,
+              "price-input",
+              "[role=dialog] .price-amount input",
+              "[role=dialog] .price-row",
+            ),
+          );
+          metrics.push(
+            await measure(
+              admin.page,
+              "price-suffix",
+              "[role=dialog] .price-amount .price-affix:nth-last-of-type(2)",
+              "[role=dialog] .price-row",
+            ),
+          );
+          metrics.push(
+            await measure(
+              admin.page,
+              "price-code",
+              "[role=dialog] .price-currency strong",
+              "[role=dialog] .price-row",
+            ),
+          );
+          cases.push(
+            await recordBoundaryCase(
+              admin.page,
+              "financial",
+              name,
+              language,
+              metrics,
+            ),
+          );
+          await closePanel(admin.page);
+        }
+        assertScreenSafe(admin);
+      } finally {
+        await admin.context.close();
       }
     }
-  } finally {
-    await restoreFixture(page);
-    await page.setViewportSize(viewport);
-    await selectLocale(page, locale);
-  }
-}
-
-export async function probeFinancialBoundaries(page, screenshot) {
-  const viewport = page.viewportSize();
-  const locale = await page
-    .locator(".preference-controls select")
-    .first()
-    .inputValue();
-  const trigger = page.locator(".mobile-menu");
+  const admin = await createScreen(browser, base, adminStorage);
   try {
     for (const language of locales) {
-      await selectLocale(page, language);
-      for (const [name, fixture] of Object.entries(fixtures)) {
-        for (const width of widths) {
-          await page.setViewportSize({ width, height: 900 });
-          await settle(page);
-          try {
-            await installFixture(page, "financial", fixture);
-            if (width <= 1024) {
-              await trigger.click();
-              await settle(page);
-            }
-            const sidebar = await measurements(page, targets(sidebarTargets));
-            if (width <= 1024) {
-              await page.keyboard.press("Escape");
-              await settle(page);
-            }
-            await record(page, "financial", name, language, [
-              ...sidebar,
-              ...(await measurements(page, targets(priceTargets))),
-            ]);
-            if (width === (language === "en" ? 721 : 320))
-              await screenshot(name, language);
-          } finally {
-            if ((await trigger.getAttribute("aria-expanded")) === "true") {
-              await page.keyboard.press("Escape");
-              await settle(page);
-            }
-            await restoreFixture(page);
-          }
-        }
-      }
-      await page.setViewportSize({ width: 721, height: 900 });
-      await settle(page);
-      await record(
-        page,
-        "breadcrumb",
-        "default",
-        language,
-        await measurements(page, targets(breadcrumbTargets)),
+      await admin.page.setViewportSize({ width: 721, height: 900 });
+      await prepare(admin, base, "/admin/customers", language);
+      const metrics = [
+        await measure(
+          admin.page,
+          "breadcrumb-root",
+          ".content-breadcrumb>span:first-child",
+          ".content-breadcrumb",
+        ),
+        await measure(
+          admin.page,
+          "breadcrumb-current",
+          ".content-breadcrumb>strong",
+          ".content-breadcrumb",
+        ),
+      ];
+      cases.push(
+        await recordBoundaryCase(
+          admin.page,
+          "breadcrumb",
+          "default",
+          language,
+          metrics,
+        ),
       );
-      await screenshot("breadcrumb", language);
     }
+    assertScreenSafe(admin);
   } finally {
-    if ((await trigger.getAttribute("aria-expanded")) === "true")
-      await page.keyboard.press("Escape");
-    await restoreFixture(page);
-    await page.setViewportSize(viewport);
-    await selectLocale(page, locale);
+    await admin.context.close();
   }
+  return {
+    cases: cases.length,
+    passed: cases.every((value) => value.passed),
+    failed: cases.filter((value) => !value.passed).length,
+  };
 }

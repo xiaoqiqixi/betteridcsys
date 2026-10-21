@@ -1,38 +1,36 @@
-import { chromium, expect } from "@playwright/test";
-import { mkdir, readFile } from "node:fs/promises";
+// New production-console acceptance. Executed only by the strict Linux supervisor;
+// the user's existing browser/profile is never attached or modified by this script.
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { probePlanCheckoutBoundaries } from "./checkout-boundaries.mjs";
-import { probeOverlayBoundaries } from "./overlay-boundaries.mjs";
-import { probeAdminManagement } from "./admin-management-boundaries.mjs";
-import { probeAuditBoundaries } from "./audit-boundaries.mjs";
+import { chromium, expect } from "@playwright/test";
+import { probeResponsiveBoundaries } from "./responsive-boundaries.mjs";
 import {
-  probeManagementWorkflows,
-  exerciseManagementLive,
-} from "./management-workflows-boundaries.mjs";
-import {
-  probeFinancialBoundaries,
-  probeLoginBoundaries,
-} from "./responsive-boundaries.mjs";
+  accessiblePanel,
+  apiData,
+  appearance,
+  assertScreenSafe,
+  closePanel,
+  createScreen,
+  dialog,
+  exactMoney,
+  fixture,
+  goto,
+  locale,
+  login,
+  logout,
+  noOverflow,
+  permit,
+  probeHistoricalCheckout,
+  probePreferencePersistence,
+  selectedCoreVersion,
+  settle,
+  strictBase,
+} from "./e2e-support.mjs";
 
-const base = process.env.TEST_BASE_URL || "http://localhost:5173";
-if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname))
-  throw new Error("Browser acceptance must target a disposable loopback demo");
+const base = strictBase(process.env.TEST_BASE_URL || "http://127.0.0.1:5181");
 const output = process.env.E2E_OUTPUT_DIR || "test-results/browser";
-const versionSource = await readFile(
-  new URL("../../backend/pkg/pluginapi/protocol.go", import.meta.url),
-  "utf8",
-);
-const versionDeclarations = [
-  ...versionSource.matchAll(/^\s*CoreVersion\s*=\s*(.*)$/gm),
-];
-if (versionDeclarations.length !== 1)
-  throw new Error("Expected one CoreVersion declaration in selected source");
-const expectedCoreVersion =
-  /^"((?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5}))"\s*$/.exec(
-    versionDeclarations[0][1],
-  )?.[1];
-if (!expectedCoreVersion)
-  throw new Error("Invalid selected-source CoreVersion literal");
+const version = await selectedCoreVersion();
 const browser = await chromium.launch({
   ...(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH }
@@ -40,1329 +38,592 @@ const browser = await chromium.launch({
   headless: true,
   chromiumSandbox: true,
 });
-const context = await browser.newContext({
-  viewport: { width: 1440, height: 1100 },
-  deviceScaleFactor: 1,
-  serviceWorkers: "block",
-});
-const blockedRequests = [];
-async function allowLoopbackOnly(browserContext) {
-  await browserContext.route("**/*", async (route) => {
-    if (new URL(route.request().url()).origin !== new URL(base).origin) {
-      blockedRequests.push("cross-origin request blocked");
-      await route.abort("blockedbyclient");
-      return;
-    }
-    const requestURL = new URL(route.request().url());
-    if (
-      requestURL.pathname.startsWith("/api/v1/admin/email-settings") &&
-      route.request().method() !== "GET"
-    ) {
-      blockedRequests.push("SMTP mutation blocked");
-      await route.abort("blockedbyclient");
-      return;
-    }
-    if (
-      requestURL.pathname.startsWith("/api/v1/admin/updates") &&
-      route.request().method() !== "GET"
-    ) {
-      blockedRequests.push("Update check or handoff must be explicit");
-      await route.abort("blockedbyclient");
-      return;
-    }
-    await route.continue();
-  });
+const screens = [];
+let page,
+  stage = "start",
+  shots = 0;
+async function screen(storage) {
+  const result = await createScreen(browser, base, storage);
+  screens.push(result);
+  page = result.page;
+  return result;
 }
-await allowLoopbackOnly(context);
-const page = await context.newPage();
-page.setDefaultTimeout(15000);
-const errors = [];
-page.on("pageerror", (error) => errors.push(error.message));
-const navigationShots = new Set([
-  "dashboard-desktop",
-  "admin-desktop",
-  "financial-navigation-top",
-]);
-const shot = async (name) => {
-  await mkdir(output, { recursive: true });
-  // Assert before the screenshot reset so it cannot conceal a navigation bug.
-  if (navigationShots.has(name))
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  if (page.viewportSize().width <= 1024) {
-    await expect
-      .poll(() =>
-        page
-          .locator(".sidebar")
-          .evaluate((el) => el.getBoundingClientRect().right),
-      )
-      .toBeLessThanOrEqual(1);
-  }
-  await page.screenshot({
-    path: path.join(output, `${name}.png`),
-    fullPage: true,
-    animations: "disabled",
-  });
-};
-// Boundary screenshots retain evidence before the wrapper enforces the complete
-// required matrix. Existing shot() navigation assertions remain independent.
-const boundaryShot = async (name) => {
-  await mkdir(output, { recursive: true });
-  await page.screenshot({
-    path: path.join(output, `${name}.png`),
-    fullPage: true,
-    animations: "disabled",
-  });
-};
-const json = async (route) => {
-  const response = await context.request.get(`${base}/api/v1${route}`);
-  expect(response.ok()).toBeTruthy();
-  return (await response.json()).data;
-};
-const financialPage = page.locator(".financial-settings");
-const currencyForm = page.getByTestId("currency-form");
-const priceForm = page.getByTestId("price-form");
-const financialReady = async () => {
-  await expect(financialPage).toHaveAttribute("aria-busy", "false");
-  await expect(currencyForm).toBeVisible();
-  await expect(priceForm).toBeVisible();
-  await expect(financialPage.getByRole("alert")).toHaveCount(0);
-};
-const waitForPost = (endpoint) =>
-  page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === `/api/v1${endpoint}` &&
-      response.request().method() === "POST",
-  );
-const cancellationRequests = [];
-page.on("request", (request) => {
-  if (
-    request.method() === "POST" &&
-    /^\/api\/v1\/(?:admin\/)?orders\/[^/]+\/cancel$/.test(
-      new URL(request.url()).pathname,
-    )
-  )
-    cancellationRequests.push(request);
-});
-async function cancellationState(admin = false) {
-  const prefix = admin ? "/admin" : "";
-  const [orders, invoices, overview, otherCurrency, services, audit] =
-    await Promise.all([
-      json(`${prefix}/orders`),
-      json(`${prefix}/invoices`),
-      json(`${prefix}/overview?currency=CNY`),
-      json(`${prefix}/overview?currency=JPY`),
-      json("/services"),
-      json("/audit"),
-    ]);
-  return { orders, invoices, overview, otherCurrency, services, audit };
-}
-async function cancelThroughUI(order, invoice, reason, admin = false) {
-  const before = await cancellationState(admin);
-  expect(before.orders.find((item) => item.id === order.id)).toEqual(order);
-  expect(before.invoices.find((item) => item.id === invoice.id)).toEqual(
-    invoice,
-  );
-  expect(order.status).toBe("pending_payment");
-  expect(invoice.status).toBe("unpaid");
-  const requestCount = cancellationRequests.length;
-  const row = page.locator(`tr[data-order-id="${order.id}"]`);
-  const cancelButton = row.getByRole("button", {
-    name: "取消订单",
-    exact: true,
-  });
-  const dialog = page.getByTestId("cancellation-dialog");
-  await cancelButton.click();
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText(order.number);
-  expect(cancellationRequests).toHaveLength(requestCount);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(dialog).not.toBeVisible();
-  expect(await cancellationState(admin)).toEqual(before);
-  expect(cancellationRequests).toHaveLength(requestCount);
-
-  await cancelButton.click();
-  const reasonField = dialog.locator('[name="cancellation_reason"]');
-  const confirmation = dialog.locator('[name="confirm_cancellation"]');
-  const submit = dialog.getByRole("button", {
-    name: "确认取消订单",
-    exact: true,
-  });
-  await expect(reasonField).toBeEmpty();
-  await expect(confirmation).not.toBeChecked();
-  await expect(submit).toBeDisabled();
-  await reasonField.fill(reason);
-  await expect(submit).toBeDisabled();
-  // Exercise the form guard as well as its disabled submit button.
-  await reasonField.evaluate((field) => field.form.requestSubmit());
-  await reasonField.fill("");
-  await confirmation.check();
-  await expect(submit).toBeDisabled();
-  await reasonField.evaluate((field) => field.form.requestSubmit());
-  await reasonField.fill("   ");
-  await expect(submit).toBeDisabled();
-  await reasonField.evaluate((field) => field.form.requestSubmit());
-  expect(await cancellationState(admin)).toEqual(before);
-  expect(cancellationRequests).toHaveLength(requestCount);
-  await reasonField.fill(`  ${reason}  `);
-  await expect(submit).toBeEnabled();
-  const endpoint = `${admin ? "/admin" : ""}/orders/${order.id}/cancel`;
-  const result = waitForPost(endpoint);
-  await submit.click();
-  const response = await result;
-  expect(response.status()).toBe(200);
-  expect(response.request().postDataJSON()).toEqual({ reason });
-  const pair = (await response.json()).data;
-  expect(pair).toEqual({
-    order: { ...order, status: "cancelled" },
-    invoice: { ...invoice, status: "void" },
-  });
-  await expect(dialog).not.toBeVisible();
+async function ready() {
   await expect(
-    page.getByText(`订单 ${order.number} 已取消，关联账单已作废。`, {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(row.locator(".badge")).toHaveText("已取消");
-  await expect(cancelButton).toHaveCount(0);
-  expect(cancellationRequests).toHaveLength(requestCount + 1);
-  const after = await cancellationState(admin);
-  expect(after.orders).toEqual(
-    before.orders.map((item) => (item.id === order.id ? pair.order : item)),
-  );
-  expect(after.invoices).toEqual(
-    before.invoices.map((item) =>
-      item.id === invoice.id ? pair.invoice : item,
-    ),
-  );
-  const countField = admin ? "unpaid_invoices" : "pending_invoices";
-  expect(after.overview).toEqual({
-    ...before.overview,
-    [countField]: before.overview[countField] - 1,
-    unpaid_total_minor:
-      before.overview.unpaid_total_minor - invoice.amount_minor,
-    ...(!admin && {
-      recent_orders: before.overview.recent_orders.map((item) =>
-        item.id === order.id ? pair.order : item,
-      ),
-    }),
-  });
-  expect(after.otherCurrency).toEqual({
-    ...before.otherCurrency,
-    ...(!admin && {
-      recent_orders: before.otherCurrency.recent_orders.map((item) =>
-        item.id === order.id ? pair.order : item,
-      ),
-    }),
-  });
-  expect(after.services).toEqual(before.services);
-  const cancellationAudit = after.audit.filter(
-    (event) => event.action === "order.cancelled" && event.target === order.id,
-  );
-  expect(cancellationAudit).toHaveLength(1);
-  expect(cancellationAudit[0].detail).toContain(reason);
-  const session = await json("/session");
-  expect(cancellationAudit[0].actor_email).toBe(session.user.email);
-  expect(
-    after.audit.filter((event) => event.id !== cancellationAudit[0].id),
-  ).toEqual(before.audit);
-  // A repeated explicit request must return the original pair without another
-  // audit entry, another deduction or any snapshot changes.
-  const replay = await context.request.post(`${base}/api/v1${endpoint}`, {
-    data: { reason },
-    headers: { "X-CSRF-Token": session.csrf_token, Origin: base },
-  });
-  expect(replay.status()).toBe(200);
-  expect((await replay.json()).data).toEqual(pair);
-  expect(await cancellationState(admin)).toEqual(after);
-  await page
-    .getByRole("link", { name: admin ? /^账单管理/ : /^账单与付款/ })
-    .click();
-  const invoiceRow = page.getByRole("row").filter({ hasText: invoice.number });
-  await expect(invoiceRow.locator(".badge")).toHaveText("已作废");
-  await expect(
-    page.locator(".invoice-summary > div").nth(1).locator("b"),
-  ).toHaveText(new RegExp(`^${after.overview[countField]}\\s*笔$`));
-  await expect(page.locator(".invoice-summary > div").first()).toContainText(
-    amount({
-      price_minor: after.overview.unpaid_total_minor,
-      currency: after.overview.currency,
-      currency_format: after.overview.currency_format,
-    }),
-  );
-  await invoiceRow
-    .getByRole("button", { name: `查看账单 ${invoice.number}`, exact: true })
-    .click();
-  await expect(page.locator(".invoice-modal .badge")).toHaveText("已作废");
-  await expect(page.locator(".invoice-modal .invoice-issuer")).toContainText(
-    invoice.issuer.name,
-  );
-  await expect(
-    page.locator(".invoice-modal").getByRole("button", {
-      name: "获取支付入口",
-      exact: true,
-    }),
+    page.locator(".ui-loading,.gh-loading,.gfo-loading"),
   ).toHaveCount(0);
-  await page
-    .locator(".invoice-modal")
-    .getByRole("button", { name: "关闭", exact: true })
+  await settle(page);
+}
+async function shot(name) {
+  await ready();
+  await noOverflow(page);
+  await page.screenshot({
+    path: path.join(output, name + ".png"),
+    fullPage: false,
+  });
+  shots++;
+}
+async function route(target) {
+  await goto(page, base, target);
+  await ready();
+}
+async function chooseFirst(screen, hostname) {
+  const plans = await apiData(
+    screen.context,
+    base,
+    "/api/v1/plans?currency=CNY",
+  );
+  const selected = plans.find(
+    (value) => value.available && value.price_minor > 0,
+  );
+  assert.ok(selected, "Disposable demo needs an available positive CNY plan");
+  const region = page
+    .locator(".catalog-region button")
+    .filter({ hasText: selected.region });
+  if (await region.count()) await region.click();
+  const card = page
+    .locator(".gpc-card")
+    .filter({ has: page.locator(".gpc-title", { hasText: selected.name }) })
+    .first();
+  await card.locator(".gpc-btn-choose").click();
+  await expect(card).toHaveClass(/is-selected/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.locator(".hostname-field input").fill(hostname);
+  await expect(page.locator(".order-summary .summary-total strong")).toHaveText(
+    exactMoney(selected.price_minor, selected.currency_format, true),
+  );
+  return selected;
+}
+async function openReview() {
+  const action = page.locator(".summary-actions button");
+  await (
+    (await action.isVisible())
+      ? action
+      : page.locator(".mobile-purchase-bar button")
+  ).click();
+  await expect(dialog(page).locator(".purchase-consent")).toBeVisible();
+}
+async function orderFromUI(screen, plan, hostname) {
+  const before = screen.state.writes.length;
+  await dialog(page).locator(".purchase-consent input").check();
+  permit(screen.state, "/orders");
+  await dialog(page)
+    .getByRole("button", { name: /^(创建待付款订单|Create unpaid order)$/ })
     .click();
-  return pair;
-}
-const writableCurrency = ({
-  code,
-  name,
-  prefix,
-  suffix,
-  decimal_places,
-  enabled,
-  sort_order,
-}) => ({ code, name, prefix, suffix, decimal_places, enabled, sort_order });
-const fixtureCurrencies = [
-  {
-    code: "JPY",
-    name: "Japanese Yen",
-    prefix: "¥",
-    suffix: "",
-    decimal_places: 0,
-    enabled: true,
-    sort_order: 1,
-  },
-  {
-    code: "KWD",
-    name: "Kuwaiti Dinar",
-    prefix: "",
-    suffix: " KD",
-    decimal_places: 3,
-    enabled: true,
-    sort_order: 2,
-  },
-];
-// Disposable demo fixtures: independent prices, with no exchange-rate calculation.
-const fixturePrices = {
-  JPY: ["900", "1200", "2400"],
-  KWD: ["1.234", "2.345", "4.567"],
-};
-function minorUnits(amount, places) {
-  const [whole, fraction = ""] = amount.split(".");
-  expect(fraction.length).toBeLessThanOrEqual(places);
-  return BigInt(whole + fraction.padEnd(places, "0"));
-}
-function amount(plan) {
-  const format = plan.currency_format;
-  expect(format.code).toBe(plan.currency);
-  expect(Number.isSafeInteger(plan.price_minor)).toBe(true);
-  const minor = BigInt(plan.price_minor);
-  const units = 10n ** BigInt(format.decimal_places);
-  const whole = new Intl.NumberFormat("zh-CN", {
-    maximumFractionDigits: 0,
-  }).format(minor / units);
-  const fraction = format.decimal_places
-    ? `.${String(minor % units).padStart(format.decimal_places, "0")}`
-    : "";
-  return `${format.code}\u00a0${format.prefix}${whole}${fraction}${format.suffix}`;
-}
-async function saveFixturePrices(definition) {
-  const readResult = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return (
-      url.pathname === "/api/v1/admin/plan-prices" &&
-      url.searchParams.get("currency") === definition.code &&
-      response.request().method() === "GET"
-    );
-  });
-  await priceForm
-    .locator('[name="pricing_currency"]')
-    .selectOption(definition.code);
-  const readResponse = await readResult;
-  expect(readResponse.ok()).toBe(true);
-  const before = (await readResponse.json()).data;
-  expect(before.currency).toBe(definition.code);
-  expect(before.currency_format.decimal_places).toBe(definition.decimal_places);
-  expect(before.plans.length).toBeGreaterThan(0);
-  await financialReady();
-  await expect(priceForm.locator(".price-card")).toHaveCount(
-    before.plans.length,
-  );
-  const updates = [];
-  for (const [index, plan] of before.plans.entries()) {
-    expect(plan.amount).toBe("");
-    expect(plan.available).toBe(false);
-    const row = priceForm.locator(".price-card").nth(index);
-    await expect(row).toHaveAttribute("data-plan", plan.plan_id);
-    await expect(row).toContainText("未设置价格");
-    const amount =
-      fixturePrices[definition.code][
-        index % fixturePrices[definition.code].length
-      ];
-    await row.locator('input[name$="-amount"]').fill(amount);
-    await row.locator(`[name="price-${index}-available"]`).check();
-    await row.locator(`[name="price-${index}-plan-available"]`).check();
-    updates.push({
-      plan_id: plan.plan_id,
-      amount,
-      available: true,
-      plan_available: true,
-    });
-  }
-  const savedResult = waitForPost("/admin/plan-prices");
-  await priceForm.locator('button[type="submit"]').click();
-  const savedResponse = await savedResult;
-  expect(savedResponse.ok()).toBe(true);
-  expect(savedResponse.request().postDataJSON()).toEqual({
-    revision: before.revision,
-    currency: definition.code,
-    prices: updates,
-  });
-  const saved = (await savedResponse.json()).data;
-  expect(saved.revision).toBeGreaterThan(before.revision);
-  expect(saved.plans).toHaveLength(before.plans.length);
-  for (const expected of updates) {
-    const actual = saved.plans.find(
-      (plan) => plan.plan_id === expected.plan_id,
-    );
-    expect(actual).toMatchObject(expected);
-    expect(BigInt(actual.amount_minor)).toBe(
-      minorUnits(expected.amount, definition.decimal_places),
-    );
-  }
-  await expect(priceForm.getByRole("status")).toHaveText("套餐价格已保存");
-  await financialReady();
-  const publicPlans = await json(`/plans?currency=${definition.code}`);
-  for (const expected of updates) {
-    const actual = publicPlans.find((plan) => plan.id === expected.plan_id);
-    expect(actual.available).toBe(true);
-    expect(actual.currency_format).toMatchObject({
-      code: definition.code,
-      prefix: definition.prefix,
-      suffix: definition.suffix,
-      decimal_places: definition.decimal_places,
-    });
-    expect(BigInt(actual.price_minor)).toBe(
-      minorUnits(expected.amount, definition.decimal_places),
-    );
-  }
-}
-let originalSettings;
-let changedSettings = false;
-async function restoreSettings() {
-  if (!changedSettings || !originalSettings) return;
-  const session = await json("/session");
-  expect(session.user.role).toBe("admin");
-  const current = await json("/admin/site-settings");
-  const response = await context.request.post(
-    `${base}/api/v1/admin/site-settings`,
-    {
-      data: { ...originalSettings, revision: current.revision },
-      headers: { "X-CSRF-Token": session.csrf_token, Origin: base },
+  await expect(dialog(page).locator(".order-created")).toBeVisible();
+  const writes = screen.state.writes.slice(before);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].path, "/api/v1/orders");
+  assert.deepEqual(writes[0].body, {
+    plan_id: plan.id,
+    hostname,
+    currency: plan.currency,
+    quote: {
+      price_minor: plan.price_minor,
+      decimal_places: plan.currency_format.decimal_places,
+      price_revision: plan.price_revision,
     },
-  );
-  expect(response.ok()).toBeTruthy();
-  expect((await json("/currencies")).default_currency).toBe(
-    originalSettings.default_currency,
-  );
-  // Added currencies are retained; the harness destroys this disposable demo.
-  changedSettings = false;
+  });
+  assert.match(writes[0].headers["idempotency-key"], /^ui-[a-f0-9-]+$/);
+  const orders = await apiData(screen.context, base, "/api/v1/orders");
+  const order = orders.find((value) => value.hostname === hostname);
+  assert.ok(order);
+  assert.equal(order.status, "pending_payment");
+  assert.equal(order.total_minor, plan.price_minor);
+  assert.deepEqual(order.currency_format, plan.currency_format);
+  return order;
 }
 try {
-  expect((await json("/session")).demo_mode).toBe(true);
-  const initialRegistry = await json("/currencies");
-  expect(initialRegistry.default_currency).toBe("CNY");
-  expect(initialRegistry.currencies.map((item) => item.code)).toEqual(["CNY"]);
-  expect(initialRegistry.currencies[0]).toMatchObject({
-    enabled: true,
-    decimal_places: 2,
-  });
-  await page.goto(base);
+  await mkdir(output, { recursive: true });
+  stage = "public-and-auth-boundaries";
+  const customer = await screen();
+  await route("/catalog");
   await expect(
-    page.getByRole("heading", { name: "欢迎回来", exact: true }),
+    page.getByRole("heading", { name: "购买云服务器", exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
-  await expect(page.getByLabel("币种", { exact: true })).toHaveValue("CNY");
+  await expect(page.locator(".gpc-card").first()).toBeVisible();
+  await expect(page.locator(".hostname-field input")).toHaveCount(0);
   await expect(
-    page.getByLabel("币种", { exact: true }).locator("option"),
-  ).toHaveCount(1);
-  await expect(
-    page.getByLabel("币种", { exact: true }).locator("option"),
-  ).toHaveAttribute("value", "CNY");
-  await shot("login-desktop");
-  await probeLoginBoundaries(page, async (fixture, locale) => {
-    const shot = boundaryShot;
-    if (fixture === "ascii" && locale === "zh-CN")
-      await shot("boundary-login-ascii-zh");
-    if (fixture === "ascii" && locale === "en")
-      await shot("boundary-login-ascii-en");
-    if (fixture === "cjk" && locale === "zh-CN")
-      await shot("boundary-login-cjk-zh");
-    if (fixture === "cjk" && locale === "en")
-      await shot("boundary-login-cjk-en");
-  });
-  await page.getByLabel("语言", { exact: true }).selectOption("en");
-  await expect(
-    page.getByRole("heading", { name: "Welcome back", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel("Currency", { exact: true })).toHaveValue("CNY");
-  await page.reload();
-  await expect(page.getByLabel("Language", { exact: true })).toHaveValue("en");
-  await expect(page.getByLabel("Currency", { exact: true })).toHaveValue("CNY");
-  await page.getByLabel("Language", { exact: true }).selectOption("zh-CN");
-  await expect(page.getByLabel("币种", { exact: true })).toHaveValue("CNY");
-
-  // Prepare real independent currency prices through the administrator UI.
-  await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
-  await expect(page.locator("h1")).toHaveText("运营概况");
-  originalSettings = await json("/admin/site-settings");
-  const originalCNYPlans = await json("/plans?currency=CNY");
-  const beforeRegistry = await json("/admin/currencies");
-  await page.getByRole("link", { name: "财务设置", exact: true }).click();
-  await financialReady();
-  await expect(currencyForm.locator(".currency-card")).toHaveCount(1);
-  await probeFinancialBoundaries(page, async (fixture, locale) => {
-    const shot = boundaryShot;
-    if (fixture === "ascii" && locale === "zh-CN")
-      await shot("boundary-financial-ascii-zh");
-    if (fixture === "ascii" && locale === "en")
-      await shot("boundary-financial-ascii-en");
-    if (fixture === "cjk" && locale === "zh-CN")
-      await shot("boundary-financial-cjk-zh");
-    if (fixture === "cjk" && locale === "en")
-      await shot("boundary-financial-cjk-en");
-    if (fixture === "breadcrumb" && locale === "zh-CN")
-      await shot("boundary-breadcrumb-zh");
-    if (fixture === "breadcrumb" && locale === "en")
-      await shot("boundary-breadcrumb-en");
-  });
-
-  await expect(page.locator(".page-heading > div > p").last()).toHaveText(
-    "管理币种、金额格式和套餐独立价格。",
-  );
-  for (const language of ["zh-CN", "en"]) {
-    await page
-      .locator(".topbar .preference-controls select")
-      .first()
-      .selectOption(language);
-    await financialReady();
-    const brand = page.locator(".sidebar .brand strong");
-    const originalBrand = await brand.textContent();
-    await brand.evaluate(
-      (element, value) => {
-        element.textContent = value;
-      },
-      language === "en"
-        ? "AsterCloudLongBrandNameForResponsiveLayout"
-        : "星屿云长品牌名称用于响应式界面核对",
-    );
-    for (const width of [320, 375, 720, 721, 768, 1024, 1025]) {
-      await page.setViewportSize({ width, height: 900 });
-      await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const header = document
-              .querySelector(".topbar")
-              .getBoundingClientRect();
-            const banner = document
-              .querySelector(".demo-banner")
-              .getBoundingClientRect();
-            return (
-              banner.top >= header.bottom - 1 &&
-              [
-                ...document.querySelectorAll(
-                  ".topbar .preference-controls label > span, .topbar .preference-controls select",
-                ),
-              ].every((element) => {
-                const box = element.getBoundingClientRect();
-                return box.top >= header.top && box.bottom <= header.bottom;
-              }) &&
-              document.documentElement.scrollWidth <= innerWidth
-            );
-          }),
-        )
-        .toBe(true);
-      await expect
-        .poll(() =>
-          page
-            .locator(".price-input")
-            .first()
-            .evaluate((element) => {
-              const prefix = element.querySelector("span:first-child");
-              const code = element.querySelector("span:last-child");
-              const input = element.querySelector("input");
-              const prefixRange = document.createRange();
-              prefixRange.selectNodeContents(prefix);
-              const range = document.createRange();
-              range.selectNodeContents(code);
-              const boxes = [prefix, input, code].map((node) =>
-                node.getBoundingClientRect(),
-              );
-              const center = (box) => box.top + box.height / 2;
-              return (
-                prefixRange.getClientRects().length === 1 &&
-                range.getClientRects().length === 1 &&
-                code.getBoundingClientRect().width > 20 &&
-                input.getBoundingClientRect().width > 30 &&
-                input.scrollWidth <= input.clientWidth + 1 &&
-                boxes.every(
-                  (box) => Math.abs(center(box) - center(boxes[1])) <= 1,
-                ) &&
-                boxes[0].right <= boxes[1].left + 1 &&
-                boxes[1].right <= boxes[2].left + 1 &&
-                boxes[0].left >= element.getBoundingClientRect().left - 1 &&
-                code.getBoundingClientRect().right <=
-                  element.getBoundingClientRect().right + 1
-              );
-            }),
-        )
-        .toBe(true);
-      if (language === "zh-CN") {
-        if (width === 720) await shot("financial-width-720");
-        if (width === 721) await shot("financial-width-721");
-        if (width === 768) await shot("financial-width-768");
-      }
-    }
-    await brand.evaluate((element, value) => {
-      element.textContent = value;
-    }, originalBrand);
-    await page.setViewportSize({ width: 1440, height: 1100 });
-  }
-  await expect(page.locator(".page-heading > div > p").last()).toHaveText(
-    "Manage currencies, amount formats and independent plan prices.",
-  );
-  await page
-    .locator(".topbar .preference-controls select")
-    .first()
-    .selectOption("zh-CN");
-  await financialReady();
-  await expect(financialPage.locator("button.btn")).toHaveCount(0);
-  await expect(financialPage.locator("button.button").first()).toHaveCSS(
-    "display",
-    "inline-flex",
-  );
-
-  for (const [offset, definition] of fixtureCurrencies.entries()) {
-    const index = beforeRegistry.currencies.length + offset;
-    await page.getByTestId("add-currency").click();
-    await expect(currencyForm.locator(".currency-card")).toHaveCount(index + 1);
-    for (const field of ["code", "name", "prefix", "suffix"]) {
-      await currencyForm
-        .locator(`[name="currency-${index}-${field}"]`)
-        .fill(definition[field]);
-    }
-    await currencyForm
-      .locator(`[name="currency-${index}-decimal_places"]`)
-      .selectOption(String(definition.decimal_places));
-    await currencyForm.locator(`[name="currency-${index}-enabled"]`).check();
-  }
-  const createdResult = waitForPost("/admin/currencies");
-  await currencyForm.locator('button[type="submit"]').click();
-  const createdResponse = await createdResult;
-  expect(createdResponse.ok()).toBe(true);
-  expect(createdResponse.request().postDataJSON()).toEqual({
-    revision: beforeRegistry.revision,
-    default_currency: "CNY",
-    currencies: [
-      ...beforeRegistry.currencies.map(writableCurrency),
-      ...fixtureCurrencies,
-    ],
-  });
-  const createdRegistry = (await createdResponse.json()).data;
-  expect(createdRegistry.revision).toBeGreaterThan(beforeRegistry.revision);
-  expect(createdRegistry.default_currency).toBe("CNY");
-  await financialReady();
-  for (const definition of fixtureCurrencies)
-    await saveFixturePrices(definition);
-  const afterCNYPlans = await json("/plans?currency=CNY");
-  for (const original of originalCNYPlans)
-    expect(
-      afterCNYPlans.find((plan) => plan.id === original.id).price_minor,
-    ).toBe(original.price_minor);
-  expect(
-    (await json("/currencies")).currencies.map((item) => item.code),
-  ).toEqual(["CNY", "JPY", "KWD"]);
-  await shot("financial-prices-desktop");
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect
-    .poll(() =>
-      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-    )
-    .toBe(true);
-  await shot("financial-prices-mobile");
+    page.locator(".catalog-search,.catalog-sort,.gpc-btn-compare"),
+  ).toHaveCount(0);
+  assert.equal(await page.locator("select").count(), 0);
+  await shot("catalog-public-desktop");
+  await page.locator(".gpc-btn-choose").first().click();
+  await expect(dialog(page).locator(".signin-form")).toBeVisible();
+  await accessiblePanel(page);
+  await shot("sign-in-desktop");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.locator(".locale-trigger").click();
+  await expect(dialog(page).getByRole("combobox")).toHaveCount(2);
+  await accessiblePanel(page);
+  await shot("preferences-desktop");
+  await closePanel(page);
+  await page.setViewportSize({ width: 375, height: 844 });
+  await shot("catalog-public-mobile");
+  await page.locator(".mobile-purchase-bar button").click();
+  await expect(dialog(page).locator(".signin-form")).toBeVisible();
+  await accessiblePanel(page);
+  await shot("sign-in-mobile");
+  await closePanel(page);
   await page.setViewportSize({ width: 1440, height: 1100 });
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "欢迎回来", exact: true }),
-  ).toBeVisible();
-  await page.getByLabel("币种", { exact: true }).selectOption("JPY");
-  await page.reload();
-  await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
-  await expect(page.getByLabel("币种", { exact: true })).toHaveValue("JPY");
-  await page.getByLabel("币种", { exact: true }).selectOption("CNY");
-  await page
-    .getByRole("button", { name: "体验客户工作台", exact: true })
-    .click();
-  await expect(page.locator("h1")).toContainText("你好");
+  await login(customer, base, "customer");
+  const customerStorage = await customer.context.storageState();
+  await appearance(page, "light");
+  await route("/home");
+  await expect(page.locator(".gh-root")).toHaveAttribute("aria-busy", "false");
   await shot("dashboard-desktop");
-  await page.getByRole("link", { name: "选购服务", exact: true }).click();
-  const catalogCNY = await json("/plans?currency=CNY");
-  const catalogJPY = await json("/plans?currency=JPY");
-  const catalogKWD = await json("/plans?currency=KWD");
-  const firstPlan = catalogCNY[0];
-  const alternatePlan = catalogCNY.find(
-    (plan) => plan.region !== firstPlan.region && plan.available,
-  );
-  expect(alternatePlan).toBeTruthy();
-  const summary = page.getByRole("complementary", { name: "订单摘要" });
-  await page
-    .getByRole("button", { name: alternatePlan.region, exact: true })
-    .click();
-  await expect(page.locator(".catalog-plan")).toHaveCount(
-    catalogCNY.filter((plan) => plan.region === alternatePlan.region).length,
-  );
-  await page
-    .getByRole("button", {
-      name: `选择套餐 ${alternatePlan.name}`,
-      exact: true,
-    })
-    .click();
-  await expect(summary).toContainText(alternatePlan.name);
-  await expect(summary).toContainText(alternatePlan.region);
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(alternatePlan),
-  );
-  await page.getByLabel("币种", { exact: true }).selectOption("JPY");
-  await expect(summary).toContainText(alternatePlan.name);
-  await expect(page.locator(".catalog-plan")).toHaveCount(
-    catalogJPY.filter((plan) => plan.region === alternatePlan.region).length,
-  );
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(catalogJPY.find((plan) => plan.id === alternatePlan.id)),
-  );
-  await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
-  await page.getByLabel("币种", { exact: true }).selectOption("KWD");
-  const kwdPlan = catalogKWD.find((plan) => plan.id === alternatePlan.id);
-  expect(kwdPlan.currency_format).toMatchObject({
-    code: "KWD",
-    decimal_places: 3,
-    prefix: "",
-    suffix: " KD",
-  });
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(kwdPlan),
-  );
-  await expect(summary.locator(".purchase-total")).toContainText(/\.\d{3} KD/);
-  await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
-  await page.getByLabel("币种", { exact: true }).selectOption("CNY");
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(alternatePlan),
-  );
-  await page.getByRole("button", { name: "全部区域", exact: true }).click();
-  await page
-    .getByRole("button", { name: `选择套餐 ${firstPlan.name}`, exact: true })
-    .click();
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(firstPlan),
-  );
-  const desktopCatalog = await page.locator(".purchase-catalog").boundingBox();
-  const desktopSummary = await summary.boundingBox();
-  expect(desktopCatalog).toBeTruthy();
-  expect(desktopSummary).toBeTruthy();
-  expect(desktopSummary.x).toBeGreaterThanOrEqual(
-    desktopCatalog.x + desktopCatalog.width,
-  );
-  expect(desktopSummary.x + desktopSummary.width).toBeLessThanOrEqual(
-    page.viewportSize().width,
-  );
-  expect(desktopSummary.y).toBeGreaterThanOrEqual(0);
-  expect(desktopSummary.y + desktopSummary.height).toBeLessThanOrEqual(
-    page.viewportSize().height,
-  );
-  await shot("plans-desktop");
-  await page.getByRole("button", { name: "确认配置", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "确认你的云服务器" }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.locator("dialog[open]")).toHaveCount(0);
-  await page.getByRole("button", { name: "确认配置", exact: true }).click();
-  await page.getByLabel("服务器名称", { exact: true }).fill("qa-browser-cny");
-  await page.getByRole("checkbox").check();
-  const orderResult = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/api/v1/orders") &&
-      response.request().method() === "POST",
-  );
-  await page
-    .getByRole("button", { name: "创建待付款订单", exact: true })
-    .click();
-  const orderResponse = await orderResult;
-  expect(orderResponse.status()).toBe(201);
-  const order = (await orderResponse.json()).data;
-  expect(orderResponse.request().postDataJSON()).toEqual({
-    plan_id: firstPlan.id,
-    hostname: "qa-browser-cny",
-    currency: "CNY",
-    quote: {
-      price_minor: firstPlan.price_minor,
-      decimal_places: firstPlan.currency_format.decimal_places,
-      price_revision: firstPlan.price_revision,
-    },
-  });
-  expect(order.currency).toBe("CNY");
-  expect(order.plan_name).toBe(firstPlan.name);
-  expect(order.total_minor).toBe(firstPlan.price_minor);
-  await page.waitForURL("**/orders");
-  await page.getByLabel("币种", { exact: true }).selectOption("JPY");
-  await expect(
-    page.getByRole("row").filter({ hasText: order.number }),
-  ).toContainText("CNY");
-  await shot("orders-desktop");
-  await page.getByRole("link", { name: /^账单与付款/ }).click();
-  const invoice = (await json("/invoices")).find(
-    (item) => item.order_id === order.id,
-  );
-  expect(invoice.issuer.name).toBe("星屿云");
-  await page
-    .getByRole("button", { name: `查看账单 ${invoice.number}`, exact: true })
-    .click();
-  await expect(page.locator(".invoice-issuer")).toContainText("星屿云");
-  await expect(page.locator(".invoice-document")).toHaveAttribute(
-    "aria-busy",
-    "false",
-  );
-  await page.getByRole("button", { name: "获取支付入口", exact: true }).click();
-  await expect(
-    page
-      .locator("dialog[open]")
-      .getByText("支付渠道当前不可用", { exact: false }),
-  ).toBeVisible();
-  await shot("invoice-desktop");
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await page
-    .getByLabel("搜索记录", { exact: true })
-    .fill("impossible-no-record");
-  await expect(
-    page.getByText("没有匹配的账单", { exact: false }).first(),
-  ).toBeVisible();
-  await page.getByLabel("搜索记录", { exact: true }).fill("");
-  const navigation = page.locator("#primary-navigation");
-  const navigationTrigger = page.locator(".mobile-menu");
-  const navigationClose = navigation.locator(".sidebar-close");
-  const currentInvoiceLink = navigation.locator('nav a[aria-current="page"]');
-  await page.setViewportSize({ width: 1024, height: 844 });
-  await expect(navigation).toHaveAttribute("inert");
-  await expect(navigation).toHaveAttribute("aria-hidden", "true");
-  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
-  await expect(navigationTrigger).toHaveAttribute(
-    "aria-controls",
-    "primary-navigation",
-  );
-  await navigationTrigger.focus();
-  await page.keyboard.press("Shift+Tab");
-  expect(
-    await page.evaluate(() => !!document.activeElement?.closest(".sidebar")),
-  ).toBe(false);
-  await page.keyboard.press("Tab");
-  await expect(navigationTrigger).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "true");
-  await expect(navigation).toHaveAttribute("role", "dialog");
-  await expect(navigation).toHaveAttribute("aria-modal", "true");
-  await expect(page.locator(".main-shell")).toHaveAttribute("inert");
-  await expect(currentInvoiceLink).toBeFocused();
-  await navigationClose.focus();
-  await page.keyboard.press("Shift+Tab");
-  await expect(
-    navigation.getByRole("button", { name: "退出登录", exact: true }),
-  ).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(navigationClose).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(navigationTrigger).toBeFocused();
-  await expect(navigation).toHaveAttribute("inert");
 
-  await page.keyboard.press("Enter");
-  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "true");
-  await expect(currentInvoiceLink).toBeFocused();
-  await navigationClose.focus();
-  await expect(navigationClose).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(navigationTrigger).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(currentInvoiceLink).toBeFocused();
-  await page.setViewportSize({ width: 1025, height: 844 });
-  await expect(navigation).not.toHaveAttribute("inert");
-  await expect(navigation).not.toHaveAttribute("aria-hidden");
-  await expect(navigation).not.toHaveAttribute("role");
-  await expect(page.locator(".main-shell")).not.toHaveAttribute("inert");
-  await expect(page.locator(".sidebar-scrim")).toHaveCount(0);
-  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
-  await expect(navigationTrigger).not.toBeVisible();
-  await expect(currentInvoiceLink).toBeFocused();
-  const languageControl = page.getByLabel("语言", { exact: true });
-  await languageControl.focus();
-  await page.setViewportSize({ width: 1024, height: 844 });
-  // Retained focus is already true before matchMedia dispatches its change.
-  // Wait for the application's mobile state before sending keyboard actions.
-  await expect(navigation).toHaveAttribute("inert");
-  await expect(navigation).toHaveAttribute("aria-hidden", "true");
-  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
-  await expect(languageControl).toBeFocused();
-  await navigationTrigger.focus();
-  await page.keyboard.press("Enter");
-  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "true");
-  await expect(currentInvoiceLink).toBeFocused();
-  const overviewLink = navigation.getByRole("link", {
-    name: "工作台",
-    exact: true,
-  });
-  await overviewLink.focus();
-  await expect(overviewLink).toBeFocused();
-  await page.keyboard.press("Enter");
-  await page.waitForURL("**/overview");
-  await expect(navigationTrigger).toHaveAttribute("aria-expanded", "false");
-  await expect(navigation).toHaveAttribute("inert");
-  await expect(page.locator("#main")).toBeFocused();
-  const overviewPlanAction = page
-    .locator(".page-heading")
-    .getByRole("button", { name: "选购套餐", exact: true });
-  const emptyPlanAction = page
-    .locator(".customer-empty")
-    .getByRole("button", { name: "选购套餐", exact: true });
-  await expect(overviewPlanAction).toBeVisible();
-  await expect(emptyPlanAction).toBeVisible();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator("#main")).toBeFocused();
-  await expect
-    .poll(() =>
-      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-    )
-    .toBe(true);
-  await shot("dashboard-mobile");
-  await emptyPlanAction.click();
-  await page.waitForURL("**/plans");
-  await expect(summary).toBeVisible();
-  await page.goBack();
-  await page.waitForURL("**/overview");
-  await expect(overviewPlanAction).toBeVisible();
-  await expect(navigation).toHaveAttribute("inert");
-  await page.getByRole("button", { name: "打开导航", exact: true }).click();
-  await page.getByRole("link", { name: "选购服务", exact: true }).click();
-  await page
-    .getByRole("button", { name: alternatePlan.region, exact: true })
+  stage = "exact-pending-order";
+  const serviceBefore = await apiData(
+    customer.context,
+    base,
+    "/api/v1/services",
+  );
+  await route("/catalog");
+  const chosen = await chooseFirst(customer, "ci-new-console-order");
+  assert.equal(
+    customer.state.writes.filter((value) => value.path === "/api/v1/orders")
+      .length,
+    0,
+  );
+  await shot("catalog-selected-desktop");
+  await openReview();
+  await accessiblePanel(page);
+  await shot("order-review-desktop");
+  const created = await orderFromUI(customer, chosen, "ci-new-console-order");
+  assert.deepEqual(
+    await apiData(customer.context, base, "/api/v1/services"),
+    serviceBefore,
+    "Order creation must not provision resources",
+  );
+  await shot("order-created-desktop");
+  await dialog(page)
+    .getByRole("button", { name: "查看订单", exact: true })
     .click();
-  await expect(page.locator(".catalog-plan")).toHaveCount(
-    catalogJPY.filter((plan) => plan.region === alternatePlan.region).length,
+  await expect(page).toHaveURL(new RegExp("/orders/" + created.id + "$"));
+  await expect(dialog(page).locator(".detail-hero")).toBeVisible();
+  await expect(dialog(page)).toContainText("服务器尚未开通");
+  await shot("order-details-desktop");
+  const details = await apiData(
+    customer.context,
+    base,
+    "/api/v1/orders/" + encodeURIComponent(created.id),
   );
-  await page
-    .getByRole("button", {
-      name: `选择套餐 ${alternatePlan.name}`,
-      exact: true,
-    })
+  assert.equal(details.service, null);
+  assert.equal(details.invoice.status, "unpaid");
+  await dialog(page)
+    .getByRole("button", { name: /^查看账单/ })
     .click();
-  await expect(summary).toContainText(alternatePlan.name);
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(catalogJPY.find((plan) => plan.id === alternatePlan.id)),
+  await expect(dialog(page).locator(".detail-hero strong")).toHaveText(
+    exactMoney(created.total_minor, created.currency_format) + " CNY",
   );
-  await page.getByLabel("币种", { exact: true }).selectOption("CNY");
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(alternatePlan),
+  await shot("invoice-desktop");
+
+  stage = "disabled-and-untrusted-checkout";
+  permit(customer.state, `/invoices/${details.invoice.id}/checkout`);
+  await dialog(page)
+    .getByRole("button", { name: "前往付款", exact: true })
+    .click();
+  await expect(dialog(page)).toContainText("PAYMENT_NOT_CONFIGURED");
+  await expect(dialog(page).locator(".checkout-ready")).toHaveCount(0);
+  assert.equal(
+    (
+      await apiData(
+        customer.context,
+        base,
+        "/api/v1/invoices/" + details.invoice.id,
+      )
+    ).status,
+    "unpaid",
   );
-  await expect
-    .poll(() =>
-      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-    )
-    .toBe(true);
-  await summary.scrollIntoViewIfNeeded();
-  await expect(summary).toBeVisible();
-  await expect(summary.locator(".purchase-review")).toBeInViewport();
-  const mobileCatalog = await page.locator(".purchase-catalog").boundingBox();
-  const mobileSummary = await summary.boundingBox();
-  expect(mobileSummary.y).toBeGreaterThanOrEqual(
-    mobileCatalog.y + mobileCatalog.height,
+  await shot("payment-disabled-desktop");
+  await dialog(page)
+    .getByRole("button", { name: "重读账单", exact: true })
+    .click();
+  await expect(
+    dialog(page).getByRole("button", { name: "前往付款", exact: true }),
+  ).toBeEnabled();
+  for (const checkoutURL of [
+    "javascript:alert(1)",
+    "https://user:synthetic-secret@checkout.example.invalid/session",
+  ]) {
+    const remove = fixture(
+      customer.state,
+      "POST",
+      `/invoices/${details.invoice.id}/checkout`,
+      {
+        provider_id: "payment.synthetic",
+        session_id: "synthetic-session",
+        checkout_url: checkoutURL,
+        expires_at: new Date(Date.now() + 120000).toISOString(),
+      },
+    );
+    permit(customer.state, `/invoices/${details.invoice.id}/checkout`);
+    await dialog(page)
+      .getByRole("button", { name: "前往付款", exact: true })
+      .click();
+    await expect(dialog(page).locator(".feedback-error")).toBeVisible();
+    await expect(dialog(page).locator(".checkout-ready a")).toHaveCount(0);
+    await expect(dialog(page)).not.toContainText("synthetic-secret");
+    remove();
+    await dialog(page)
+      .getByRole("button", { name: "重读账单", exact: true })
+      .click();
+    await expect(
+      dialog(page).getByRole("button", { name: "前往付款", exact: true }),
+    ).toBeEnabled();
+  }
+  const removeCheckout = fixture(
+    customer.state,
+    "POST",
+    `/invoices/${details.invoice.id}/checkout`,
+    {
+      provider_id: "payment.synthetic",
+      session_id: "synthetic-session",
+      checkout_url: "https://checkout.example.invalid/session",
+      expires_at: new Date(Date.now() + 120000).toISOString(),
+    },
   );
-  expect(mobileSummary.x).toBeGreaterThanOrEqual(0);
-  expect(mobileSummary.x + mobileSummary.width).toBeLessThanOrEqual(
-    page.viewportSize().width,
+  permit(customer.state, `/invoices/${details.invoice.id}/checkout`);
+  await dialog(page)
+    .getByRole("button", { name: "前往付款", exact: true })
+    .click();
+  await expect(dialog(page).locator(".checkout-ready a")).toHaveAttribute(
+    "href",
+    "https://checkout.example.invalid/session",
+  );
+  await expect(dialog(page).locator(".checkout-ready a")).toHaveAttribute(
+    "rel",
+    "noopener noreferrer",
+  );
+  assert.equal(
+    (
+      await apiData(
+        customer.context,
+        base,
+        "/api/v1/invoices/" + details.invoice.id,
+      )
+    ).status,
+    "unpaid",
+  );
+  removeCheckout();
+  await closePanel(page);
+
+  stage = "customer-pages-and-owner-isolation";
+  await route("/orders");
+  await expect(page.locator(".record-row").first()).toBeVisible();
+  await shot("customer-orders-desktop");
+  await route("/invoices");
+  await expect(page.locator(".record-row").first()).toBeVisible();
+  await shot("customer-invoices-desktop");
+  await route("/audit");
+  await expect(page.locator(".cursor-pagination")).toBeVisible();
+  await shot("customer-audit-desktop");
+  await route("/services");
+  await shot("customer-services-desktop");
+  await route("/account");
+  await expect(page.locator(".account-summary")).toBeVisible();
+  await shot("customer-account-desktop");
+  const requestStart = customer.state.requests.length;
+  await route("/admin/customers");
+  await expect(page.locator("#main-content")).toContainText("需要管理员权限");
+  assert.equal(
+    customer.state.requests
+      .slice(requestStart)
+      .some((value) => value.path.startsWith("/api/v1/admin/")),
+    false,
+  );
+  const other = await screen();
+  await login(other, base, "other");
+  const denied = await other.context.request.get(
+    base + "/api/v1/orders/" + created.id,
+    { maxRedirects: 0 },
+  );
+  assert.ok([403, 404].includes(denied.status()));
+  await route("/orders/" + created.id);
+  await expect(dialog(page)).not.toContainText("ci-new-console-order");
+  assertScreenSafe(other);
+  await other.context.close();
+  screens.splice(screens.indexOf(other), 1);
+  page = customer.page;
+
+  stage = "mobile-purchase-and-history";
+  await page.setViewportSize({ width: 375, height: 844 });
+  await route("/catalog");
+  await chooseFirst(customer, "ci-mobile-review-only");
+  const geometry = await page.evaluate(() => ({
+    action: document
+      .querySelector(".mobile-purchase-bar")
+      .getBoundingClientRect()
+      .toJSON(),
+    nav: document
+      .querySelector(".mobile-bottom")
+      .getBoundingClientRect()
+      .toJSON(),
+  }));
+  assert.ok(
+    geometry.action.y + geometry.action.height <= geometry.nav.y + 1,
+    "Purchase action must not cover mobile navigation",
   );
   await shot("plans-mobile");
+  await openReview();
+  await accessiblePanel(page);
+  await shot("order-review-mobile");
+  await closePanel(page);
+  await route("/invoices");
+  await page
+    .locator(".record-row")
+    .filter({ hasText: details.invoice.number })
+    .getByRole("button")
+    .click();
+  await accessiblePanel(page);
+  await shot("invoice-mobile");
+  await closePanel(page);
+  for (const viewport of [
+    { width: 320, height: 640 },
+    { width: 375, height: 480 },
+    { width: 844, height: 375 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await route("/invoices");
+    await page
+      .locator(".record-row")
+      .filter({ hasText: details.invoice.number })
+      .getByRole("button")
+      .click();
+    await accessiblePanel(page);
+    await closePanel(page);
+  }
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await route("/orders/" + created.id);
+  await dialog(page)
+    .getByLabel("取消原因（必填）")
+    .fill("Disposable CI cancellation; no provider or resource action");
+  permit(customer.state, `/orders/${created.id}/cancel`);
+  await dialog(page)
+    .getByRole("button", { name: "确认取消并作废账单", exact: true })
+    .click();
+  await expect(page.locator(".feedback-info")).toContainText("订单已安全取消");
+  const cancelled = await apiData(
+    customer.context,
+    base,
+    "/api/v1/orders/" + created.id,
+  );
+  assert.equal(cancelled.order.status, "cancelled");
+  assert.equal(cancelled.invoice.status, "void");
+  assert.equal(cancelled.order.total_minor, created.total_minor);
+  await closePanel(page);
+
+  stage = "admin-read-scope-and-draft-conflict";
+  const admin = await screen();
+  await login(admin, base, "admin");
+  const adminStorage = await admin.context.storageState();
+  await route("/admin/catalog");
+  await expect(page.locator(".product-row").first()).toBeVisible();
+  await shot("admin-catalog-desktop");
+  const firstProductId = (
+    await page.locator(".item-id").first().textContent()
+  ).trim();
+  await page.locator(".edit-action").first().click();
+  await expect(dialog(page).locator(".price-editor")).toBeVisible();
+  await accessiblePanel(page);
+  await shot("admin-product-editor");
+  await dialog(page).getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.locator(".edit-action").first().click();
+  await dialog(page)
+    .locator(".reason-section textarea")
+    .fill("Synthetic conflict; must never dispatch to the real catalog");
+  const conflictPath = "/admin/catalog/" + firstProductId;
+  const removeConflict = fixture(admin.state, "POST", conflictPath, null, 409);
+  admin.state.fixtures.at(-1).error = { code: "CATALOG_CONFLICT" };
+  permit(admin.state, conflictPath);
+  await dialog(page)
+    .getByRole("button", { name: "保存商品", exact: true })
+    .click();
+  await expect(dialog(page)).toContainText("草稿没有保存");
+  await expect(
+    dialog(page).getByRole("button", { name: "保存商品", exact: true }),
+  ).toBeDisabled();
+  removeConflict();
+  await dialog(page)
+    .getByRole("button", { name: "关闭草稿并核对最新目录", exact: true })
+    .click();
+  await route("/admin/customers");
+  await expect(page.locator(".cursor-pagination")).toBeVisible();
+  await shot("admin-accounts-desktop");
+  await route("/admin/orders");
+  await expect(page.locator(".record-row").first()).toBeVisible();
+  await shot("admin-orders-desktop");
+  await route("/admin/finance");
+  await expect(page.locator(".gfo-root")).toBeVisible();
+  await shot("admin-finance-desktop");
+  await route("/admin/settings");
+  await expect(page.locator(".settings-form")).toBeVisible();
+  await shot("admin-site-settings");
+  await page
+    .locator(".settings-nav")
+    .getByRole("button", { name: "运营币种", exact: true })
+    .click();
+  await expect(page.locator(".gce-root")).toBeVisible();
+  await shot("admin-currency-settings");
+  await page
+    .locator(".settings-nav")
+    .getByRole("button", { name: "邮件设置", exact: true })
+    .click();
+  await expect(page.locator(".gee-root")).toBeVisible();
+  for (const credential of await page
+    .locator(".gee-root input[type=password]")
+    .all())
+    await expect(credential).toHaveValue("");
+  await expect(
+    page
+      .locator(".gee-root")
+      .getByRole("button", { name: "发送测试", exact: true }),
+  ).toBeDisabled();
+  await shot("admin-email-settings");
+  await page
+    .locator(".settings-nav")
+    .getByRole("button", { name: "版本与更新", exact: true })
+    .click();
+  await expect(page.locator(".update-facts").first()).toContainText(version);
+  assert.equal(
+    admin.state.writes.some(
+      (value) =>
+        value.path.includes("/admin/updates") ||
+        value.path.includes("/admin/email-settings"),
+    ),
+    false,
+  );
+  await shot("admin-updates-readonly");
+  await page.setViewportSize({ width: 375, height: 844 });
   await page.getByRole("button", { name: "打开导航", exact: true }).click();
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "欢迎回来", exact: true }),
-  ).toBeVisible();
-  await page.setViewportSize({ width: 1440, height: 1100 });
-  await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
-  await expect(page.locator("h1")).toHaveText("运营概况");
-  await expect(page.locator(".skeleton-grid")).toHaveCount(0);
-  await shot("admin-desktop");
-  const allAdminServices = await json("/admin/services");
-  await page.getByRole("link", { name: "服务管理", exact: true }).click();
-  await expect(page.locator("h1")).toHaveText("服务管理");
-  await expect(page.locator(".service-card")).toHaveCount(
-    allAdminServices.length,
-  );
-  for (const service of allAdminServices) {
-    const card = page.locator(`.service-card[data-service-id="${service.id}"]`);
-    await expect(card.getByTestId("service-customer")).toContainText(
-      service.customer_id,
-    );
-    await expect(card.locator(".service-card-footer")).toContainText(
-      amount(service),
-    );
-    await expect(card.locator("button")).toHaveCount(0);
-  }
-  await expect(page.getByTestId("service-limit-note")).toContainText("1,000");
-  await page.getByRole("link", { name: "运营总览", exact: true }).click();
-  await page.getByRole("link", { name: "扩展中心", exact: true }).click();
-  const smtp = page.locator(".smtp-settings");
-  await expect(smtp.getByText("已保存：禁用", { exact: true })).toBeVisible();
-  await expect(
-    smtp.getByText(
-      "服务器尚未配置凭据加密密钥。可以保存不含凭据的禁用草稿；启用和测试发送暂不可用。",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(smtp.locator('input[name="enabled"]')).not.toBeChecked();
-  await expect(smtp.locator('input[name="enabled"]')).toBeDisabled();
-  await expect(smtp.locator("#smtp-username")).toBeEmpty();
-  await expect(smtp.locator("#smtp-password")).toBeEmpty();
-  await expect(smtp.locator("#smtp-username")).toBeDisabled();
-  await expect(smtp.locator("#smtp-password")).toBeDisabled();
-  await expect(
-    smtp.locator('[data-testid="smtp-form"] button[type="submit"]'),
-  ).toBeDisabled();
-  await expect(
-    smtp.locator('[data-testid="smtp-test-form"] button[type="submit"]'),
-  ).toBeDisabled();
-  await shot("smtp-disabled-desktop");
+  await accessiblePanel(page);
+  await shot("admin-navigation-mobile");
+  await closePanel(page);
 
-  await page.getByRole("button", { name: "配置 SMTP", exact: true }).click();
-  await expect
-    .poll(() => page.evaluate(() => window.scrollY))
-    .toBeGreaterThan(100);
-  const smtpScrollY = await page.evaluate(async () => {
-    let previous = window.scrollY,
-      stableFrames = 0;
-    for (let frame = 0; frame < 120; frame++) {
-      await new Promise(requestAnimationFrame);
-      const current = window.scrollY;
-      stableFrames = Math.abs(current - previous) < 0.5 ? stableFrames + 1 : 0;
-      if (stableFrames >= 4) return current;
-      previous = current;
+  stage = "themes-languages-and-navigation";
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  const site = await apiData(admin.context, base, "/api/v1/site-settings");
+  for (const theme of ["blue", "teal", "violet"]) {
+    const removeTheme = fixture(admin.state, "GET", "/site-settings", {
+      ...site,
+      theme,
+    });
+    await route("/catalog");
+    await expect(page.locator("html")).toHaveAttribute("data-brand", theme);
+    for (const view of ["light", "dark"]) {
+      await appearance(page, view);
+      await noOverflow(page);
     }
-    throw new Error("SMTP panel scroll did not settle");
-  });
-  await page.getByRole("link", { name: "财务设置", exact: true }).click();
-  await financialReady();
-  await expect(page.locator("#main")).toBeFocused();
-  await shot("financial-navigation-top");
-  await page.goBack();
-  await expect(page.locator("h1")).toHaveText("扩展中心");
-  await expect
-    .poll(() =>
-      page.evaluate((saved) => Math.abs(window.scrollY - saved), smtpScrollY),
-    )
-    .toBeLessThan(2);
-  await page.goForward();
-  await financialReady();
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-
-  await page.getByRole("link", { name: "版本更新", exact: true }).click();
-  await expect(page.locator("h1")).toHaveText("版本更新");
-  const updateStatus = await json("/admin/updates");
-  expect(updateStatus.current.core_version).toBe(expectedCoreVersion);
-  await expect(page.locator(".updates-version").first()).toHaveText(
-    expectedCoreVersion,
-  );
-  await expect(
-    page.getByText("尚未检查官方版本。网页不会自动检查或启动安装。", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "检查官方更新", exact: true }),
-  ).toBeEnabled();
-  await expect(
-    page.getByRole("button", { name: "生成更新交接单", exact: true }),
-  ).toHaveCount(0);
-  const hostOperation = await json("/admin/updates/operation");
-  expect(hostOperation).toEqual({ state: "unconfigured" });
-  const operationPanel = page.locator(".native-operation");
-  await expect(operationPanel).toHaveAttribute(
-    "data-operation-state",
-    "unconfigured",
-  );
-  await expect(
-    operationPanel.getByText(
-      "主机回执读取未配置，无法确认安装或升级执行状态。",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  const receiptRead = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === "/api/v1/admin/updates/operation" &&
-      response.request().method() === "GET",
-  );
-  await operationPanel
-    .getByRole("button", { name: "读取主机回执", exact: true })
-    .click();
-  expect((await receiptRead).ok()).toBeTruthy();
-  await expect(operationPanel).toHaveAttribute("aria-busy", "false");
-  await expect(operationPanel).toHaveAttribute(
-    "data-operation-state",
-    "unconfigured",
-  );
-  await shot("updates-local-status-desktop");
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect
-    .poll(() =>
-      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-    )
-    .toBe(true);
-  await shot("updates-local-status-mobile");
-  await page.setViewportSize({ width: 1440, height: 1100 });
-  await page.getByRole("link", { name: "财务设置", exact: true }).click();
-  await financialReady();
-  const registryBeforeDefault = await json("/admin/currencies");
-  await currencyForm.locator('[name="default_currency"]').selectOption("JPY");
-  changedSettings = true;
-  const defaultResult = waitForPost("/admin/currencies");
-  await currencyForm.locator('button[type="submit"]').click();
-  const defaultResponse = await defaultResult;
-  expect(defaultResponse.ok()).toBe(true);
-  expect(defaultResponse.request().postDataJSON()).toEqual({
-    revision: registryBeforeDefault.revision,
-    default_currency: "JPY",
-    currencies: registryBeforeDefault.currencies.map(writableCurrency),
-  });
-  expect((await defaultResponse.json()).data.default_currency).toBe("JPY");
-  await financialReady();
-  expect((await json("/site-settings")).default_currency).toBe("JPY");
-  await page.getByRole("link", { name: "站点设置", exact: true }).click();
-  await page.locator('input[name="site_name"]').fill("验收测试云");
-  await page.locator('input[name="company_name"]').fill("验收测试公司");
-  await page.locator('input[name="theme"][value="teal"]').check();
-  await page.locator('select[name="default_locale"]').selectOption("en");
-  await expect(page.locator('input[name="default_currency"]')).toHaveValue(
-    "JPY",
-  );
-  await expect(page.locator('input[name="default_currency"]')).toHaveAttribute(
-    "readonly",
-    "",
-  );
-  await page.locator(".settings-advanced summary").click();
-  await page.locator('input[name="invoice_issuer"]').fill("新开票主体");
-  await shot("settings-preview-desktop");
-  changedSettings = true;
-  await page.getByRole("button", { name: "保存设置", exact: true }).click();
-  await expect(
-    page.getByText("设置已保存。已有账单的金额、币种和开具信息保持不变。", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(page.locator(".sidebar .brand strong")).toHaveText("验收测试云");
-  await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
-  const fresh = await browser.newContext({ serviceWorkers: "block" });
-  await allowLoopbackOnly(fresh);
-  try {
-    const visitor = await fresh.newPage();
-    await visitor.goto(base);
-    await expect(
-      visitor.getByRole("heading", { name: "Welcome back", exact: true }),
-    ).toBeVisible();
-    await expect(visitor.getByLabel("Currency", { exact: true })).toHaveValue(
-      "JPY",
-    );
-    await expect(visitor.locator(".login-brand")).toContainText("验收测试云");
-  } finally {
-    await fresh.close();
+    removeTheme();
   }
-  await page.getByRole("link", { name: /^账单管理/ }).click();
-  await page
-    .getByRole("button", { name: `查看账单 ${invoice.number}`, exact: true })
-    .click();
-  await expect(page.locator(".invoice-issuer")).toContainText("星屿云");
-  await expect(page.locator(".invoice-issuer")).not.toContainText("新开票主体");
-  await shot("invoice-snapshot-after-settings");
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.getByRole("link", { name: "站点设置", exact: true }).click();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect
-    .poll(() =>
-      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
-    )
-    .toBe(true);
-  await shot("settings-mobile");
-
-  // Preserve the screenshot fixtures before cancelling newly created orders.
-  await page.setViewportSize({ width: 1440, height: 1100 });
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
-  await page
-    .getByRole("button", { name: "体验客户工作台", exact: true })
-    .click();
-  await expect(page.locator("h1")).toContainText("你好");
-  await page.getByLabel("币种", { exact: true }).selectOption("CNY");
-  const servicesBeforeCancellation = await json("/services");
-  await page.getByRole("link", { name: "选购服务", exact: true }).click();
-  const cancellationPlan = (await json("/plans?currency=CNY")).find(
-    (plan) => plan.id === firstPlan.id,
+  await locale(page, "en");
+  await expect(page.locator("h1")).toHaveText("Buy a cloud server");
+  await locale(page, "zh-CN");
+  for (const width of [320, 375, 720, 721, 768, 960, 961, 1024, 1025, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settle(page);
+    assert.equal(await page.locator(".idc-sidebar").isVisible(), width > 960);
+    assert.equal(
+      await page.locator(".mobile-bottom").isVisible(),
+      width <= 960,
+    );
+    await noOverflow(page);
+  }
+  stage = "preference-persistence-and-account-scopes";
+  assert.equal(await probePreferencePersistence(browser, base), true);
+  stage = "historical-invoice-boundaries";
+  const historicalCases = await probeHistoricalCheckout(
+    browser,
+    base,
+    customerStorage,
   );
-  await page.getByRole("button", { name: "全部区域", exact: true }).click();
-  await page
-    .getByRole("button", {
-      name: `选择套餐 ${cancellationPlan.name}`,
-      exact: true,
-    })
-    .click();
-  await expect(summary.locator(".purchase-total strong")).toHaveText(
-    amount(cancellationPlan),
-  );
-  await page.getByRole("button", { name: "确认配置", exact: true }).click();
-  await page
-    .getByLabel("服务器名称", { exact: true })
-    .fill("qa-browser-admin-cancel");
-  await page.locator("dialog[open]").getByRole("checkbox").check();
-  const adminTargetResult = waitForPost("/orders");
-  await page
+  assert.equal(historicalCases, 28);
+  stage = "unconfirmed-order-route-recovery";
+  const unknown = await screen(customerStorage);
+  await route("/catalog");
+  await chooseFirst(unknown, "ci-unknown-order");
+  await openReview();
+  const removeUnknown = fixture(unknown.state, "POST", "/orders", null, 503);
+  unknown.state.fixtures.at(-1).error = { code: "BACKEND_UNAVAILABLE" };
+  await dialog(page).locator(".purchase-consent input").check();
+  permit(unknown.state, "/orders");
+  await dialog(page)
     .getByRole("button", { name: "创建待付款订单", exact: true })
     .click();
-  const adminTargetResponse = await adminTargetResult;
-  expect(adminTargetResponse.status()).toBe(201);
-  const adminTarget = (await adminTargetResponse.json()).data;
-  await page.waitForURL("**/orders");
-  const adminTargetInvoice = (await json("/invoices")).find(
-    (item) => item.order_id === adminTarget.id,
+  await expect(dialog(page)).toContainText("订单结果尚未确认");
+  await closePanel(page);
+  await expect(page.locator(".order-reconciliation")).toBeVisible();
+  await expect(page.locator(".gpc-btn-choose").first()).toBeDisabled();
+  await page.locator('.idc-sidebar a[href="#/orders"]').click();
+  await expect(page.locator(".operations-page")).toBeVisible();
+  await page.locator('.idc-sidebar a[href="#/catalog"]').click();
+  await expect(page.locator(".order-reconciliation")).toBeVisible();
+  assert.equal(
+    unknown.state.writes.length,
+    1,
+    "Route return must not automatically replay the uncertain request",
   );
-  const customerPair = await cancelThroughUI(
-    order,
-    invoice,
-    "浏览器客户验收取消未付款订单",
+  await page.locator(".order-reconciliation input").check();
+  permit(unknown.state, "/orders");
+  await page.getByRole("button", { name: "核对这笔订单", exact: true }).click();
+  await expect(page.locator(".inline-error")).toContainText("这笔订单仍未确认");
+  assert.equal(unknown.state.writes.length, 2);
+  assert.deepEqual(unknown.state.writes[1].body, unknown.state.writes[0].body);
+  assert.equal(
+    unknown.state.writes[1].headers["idempotency-key"],
+    unknown.state.writes[0].headers["idempotency-key"],
   );
-  await page.getByRole("link", { name: "工作台", exact: true }).click();
-  const customerOverview = await json("/overview?currency=CNY");
-  await expect(
-    page
-      .locator(".account-facts > div")
-      .filter({ hasText: "待付款账单" })
-      .locator("p"),
-  ).toHaveText(new RegExp(`^${customerOverview.pending_invoices}\\s*笔$`));
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
-  await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
-  await expect(page.locator("h1")).toHaveText("运营概况");
-  await page.getByRole("link", { name: "订单管理", exact: true }).click();
-  await expect(
-    page.locator(`tr[data-order-id="${order.id}"] .badge`),
-  ).toHaveText("已取消");
-  const adminPair = await cancelThroughUI(
-    adminTarget,
-    adminTargetInvoice,
-    "浏览器管理员验收取消未付款订单",
-    true,
+  assert.equal(
+    (await apiData(unknown.context, base, "/api/v1/orders")).some(
+      (value) => value.hostname === "ci-unknown-order",
+    ),
+    false,
+    "Synthetic failure must not create a real order",
   );
-  await page.getByRole("link", { name: "运营总览", exact: true }).click();
-  const adminOverview = await json("/admin/overview?currency=CNY");
-  await expect(
-    page
-      .locator(".stat-card")
-      .filter({ hasText: "待付款账单" })
-      .locator(".stat-value"),
-  ).toHaveText(new RegExp(`^${adminOverview.unpaid_invoices}\\s*笔$`));
-  await page.getByRole("link", { name: "审计日志", exact: true }).click();
-  await expect(page.getByTestId("audit-log-page")).toBeVisible();
-  await page.locator(".audit-query-summary").click();
-  await page.locator('[name="audit_action"]').fill("order.cancelled");
-  await page.getByRole("button", { name: "查询记录", exact: true }).click();
-  const adminAuditPage = await json(
-    "/admin/audit-events?limit=50&action=order.cancelled",
-  );
-  await expect(page.locator(".audit-event")).toHaveCount(
-    adminAuditPage.items.length,
-  );
-  const activeAdmin = await json("/session");
-  const administeredEvent = adminAuditPage.items.find(
-    (event) => event.target === adminPair.order.id,
-  );
-  expect(administeredEvent.actor_email).toBe(activeAdmin.user.email);
-  expect(administeredEvent.owner_id).toMatch(/^[a-f0-9]{32}$/);
-  expect(administeredEvent.owner_id).not.toBe(activeAdmin.user.id);
-  for (const cancelledOrder of [order, adminTarget]) {
-    const auditRow = page
-      .locator(".audit-event")
-      .filter({ hasText: cancelledOrder.id });
-    await expect(auditRow.filter({ hasText: "order.cancelled" })).toHaveCount(
-      1,
-    );
-  }
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
-  await page
-    .getByRole("button", { name: "体验客户工作台", exact: true })
-    .click();
-  await expect(page.locator("h1")).toContainText("你好");
-  const forbiddenAdminServices = await page.request.get(
-    base + "/api/v1/admin/services",
-  );
-  expect(forbiddenAdminServices.status()).toBe(403);
-  await expect(
-    page.getByRole("link", { name: "服务管理", exact: true }),
-  ).toHaveCount(0);
-  const customerHistory = await cancellationState();
-  expect(customerHistory.services).toEqual(servicesBeforeCancellation);
-  for (const pair of [customerPair, adminPair]) {
-    expect(
-      customerHistory.orders.find((item) => item.id === pair.order.id),
-    ).toEqual(pair.order);
-    expect(
-      customerHistory.invoices.find((item) => item.id === pair.invoice.id),
-    ).toEqual(pair.invoice);
-    expect(
-      customerHistory.audit.filter(
-        (event) =>
-          event.action === "order.cancelled" && event.target === pair.order.id,
-      ),
-    ).toHaveLength(1);
-  }
-  await page.getByRole("link", { name: "我的订单", exact: true }).click();
-  for (const pair of [customerPair, adminPair]) {
-    const historyRow = page.locator(`tr[data-order-id="${pair.order.id}"]`);
-    await expect(historyRow.locator(".badge")).toHaveText("已取消");
-    await expect(
-      historyRow.getByRole("button", { name: "取消订单", exact: true }),
-    ).toHaveCount(0);
-  }
-  await page.goto(base + "/audit");
-  await expect(page.getByTestId("audit-log-page")).toBeVisible();
-  const ownAuditPage = await json("/audit-events?limit=50");
-  expect(ownAuditPage.items.every((event) => !("owner_id" in event))).toBe(
-    true,
-  );
-  await expect(page.locator(".audit-event")).toHaveCount(
-    ownAuditPage.items.length,
-  );
-  await expect(page.locator('[name="audit_owner"]')).toHaveCount(0);
-  const forbiddenAdminAudit = await page.request.get(
-    base + "/api/v1/admin/audit-events?limit=50",
-  );
-  expect(forbiddenAdminAudit.status()).toBe(403);
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
-  await page.getByRole("button", { name: "体验管理后台", exact: true }).click();
-  await expect(page.locator("h1")).toHaveText("运营概况");
-  await restoreSettings();
-  await exerciseManagementLive(browser, page, base, {
-    output: process.env.MANAGEMENT_E2E_OUTPUT_DIR,
-  });
-  await probePlanCheckoutBoundaries(browser, base);
-  await probeOverlayBoundaries(browser, base);
-  await probeAdminManagement(browser, base);
-  await probeAuditBoundaries(browser, base);
-  await probeManagementWorkflows(browser, base);
-  expect(errors).toEqual([]);
-  expect(blockedRequests).toEqual([]);
+  removeUnknown();
+  assertScreenSafe(unknown);
+  await unknown.context.close();
+  screens.splice(screens.indexOf(unknown), 1);
+  page = admin.page;
+  stage = "responsive-source-boundaries";
+  assert.equal(shots, 30);
+  const matrix = await probeResponsiveBoundaries(browser, base, adminStorage);
+  assert.equal(matrix.cases, 50);
+  // Do not suppress failed geometry. The Python supervisor consumes every case,
+  // retains the complete 30-shot inventory, then fails its boundary gate.
+  assertScreenSafe(customer);
+  assertScreenSafe(admin);
+  page = admin.page;
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await logout(admin, base);
+  page = customer.page;
+  await logout(customer, base);
+  assertScreenSafe(customer);
+  assertScreenSafe(admin);
   console.log(
-    "PASS: real demo API, fresh CNY-only registry, JPY zero-decimal and KWD three-decimal currencies and independent prices saved through financial UI with exact revisioned payloads, independent persistent preferences, CNY server-priced order, unchanged history currency, payment fail-closed, dialogs/search, desktop/mobile region filters and live selection summaries, currency refresh, mobile navigation/overflow, SMTP disabled/no-key read-only state, actual core version, update status, unconfigured host receipt and explicit read-only receipt refresh without automatic check or handoff, financial default JPY and read-only site currency, admin settings save/preview, new-visitor English/JPY defaults, immutable invoice issuer, explicit customer/admin cancellation with required reason and confirmation, no mutation on opening/closing/incomplete confirmation, retained order/invoice snapshots with cancelled/void statuses, exact unpaid summary deductions and unchanged services/other-currency totals, one audit per cancellation and idempotent repeats, customer history retained across sessions, original site/default settings restored while added demo currencies remain until disposable teardown; no browser runtime errors.",
+    JSON.stringify({
+      schema: "aster-new-console-e2e-v1",
+      functional_passed: true,
+      screenshots: shots,
+      historical_invoice_cases: historicalCases,
+      responsive_cases: matrix.cases,
+      responsive_passed: matrix.passed,
+      real_provider_requests: 0,
+      automatic_payments: 0,
+      resource_provisioning: 0,
+    }),
   );
+} catch (error) {
+  console.error("E2E_FAILURE_STAGE=" + stage);
+  console.error(error.stack || String(error));
+  process.exitCode = 1;
 } finally {
-  try {
-    await restoreSettings();
-  } finally {
-    await browser.close();
-  }
+  for (const item of screens)
+    await item.context.close().catch(() => {
+      process.exitCode = 1;
+    });
+  await browser.close();
 }

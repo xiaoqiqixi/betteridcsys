@@ -68,6 +68,15 @@ class SourceVersionTest(unittest.TestCase):
         manifest.verify_version(root, "core", "0.4.0")
         manifest.verify_version(root, "smtp", "1.0.0")
 
+    def test_current_checkout_core_and_smtp_are_exact_independent_release_versions(self):
+        root = Path(__file__).resolve().parents[3]
+        self.assertEqual(manifest.selected_versions(root), {"core": "0.5.7", "smtp": "1.1.0"})
+        manifest.verify_version(root, "core", "0.5.7")
+        manifest.verify_version(root, "smtp", "1.1.0")
+        for kind, version in (("core", "0.5.6"), ("core", "v0.5.7"), ("smtp", "1.1.1")):
+            with self.subTest(kind=kind, version=version), self.assertRaises(SystemExit):
+                manifest.verify_version(root, kind, version)
+
     def test_tag_cannot_relabel_other_source_or_component(self):
         root = self.fixture()
         for kind, version in (("core", "1.0.0"), ("smtp", "0.4.0"), ("smtp", "1.0.1"), ("other", "0.4.0")):
