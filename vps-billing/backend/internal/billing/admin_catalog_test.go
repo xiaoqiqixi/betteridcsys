@@ -57,7 +57,12 @@ func catalogTestInput(t *testing.T, f catalogFixture, revision int64) CatalogInp
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CatalogInput{Revision: revision, CurrencyRevision: config.Revision, Reason: "Operator reviewed specifications and independent prices", Name: "Catalog fixture", Description: "A real product\nNo automatic provisioning", CPU: 2, MemoryGB: 4, DiskGB: 80, TransferTB: 2, Region: "Test region", Available: true, Prices: []CatalogPrice{{"CNY", 3900, true}}}
+	taxonomy := testReadTaxonomy(t, f)
+	if len(taxonomy.Regions) == 0 {
+		t.Fatal("missing fixture taxonomy region")
+	}
+	region := taxonomy.Regions[0]
+	return CatalogInput{TaxonomyRevision: taxonomy.Revision, TypeID: region.TypeID, RegionID: region.ID, Revision: revision, CurrencyRevision: config.Revision, Reason: "Operator reviewed specifications and independent prices", Name: "Catalog fixture", Description: "A real product\nNo automatic provisioning", CPU: 2, MemoryGB: 4, DiskGB: 80, TransferTB: 2, Region: region.Name, Available: true, Prices: []CatalogPrice{{"CNY", 3900, true}}}
 }
 func readCatalog(t *testing.T, f catalogFixture) CatalogView {
 	t.Helper()
@@ -157,8 +162,8 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 		if len(ordersBefore) != 3 || len(invoicesBefore) != 3 {
 			t.Fatal("incomplete history fixture")
 		}
-		edit := catalogInputFrom(published.Plan, published.Revision, published.CurrencyRevision, "Rename without rewriting history")
-		edit.Name, edit.CPU, edit.Region = "Updated catalog name", 8, "New region"
+		edit := catalogTestEditInput(t, f, published.Plan, published.Revision, published.CurrencyRevision, "Rename without rewriting history")
+		edit.Name, edit.CPU = "Updated catalog name", 8
 		edited, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, draft.Plan.ID, edit)
 		if err != nil || edited.Revision != published.Revision+1 {
 			t.Fatal(edited, err)
@@ -166,14 +171,14 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 		if _, _, err = quoted.CreateQuotedOrder(t.Context(), f.customer, draft.Plan.ID, "stale", "stale-key", "CNY", quote); !errors.Is(err, ErrPriceChanged) {
 			t.Fatal("metadata did not invalidate stale quote", err)
 		}
-		copied, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, draft.Plan.ID, CatalogDuplicateInput{Revision: edited.Revision, CurrencyRevision: edited.CurrencyRevision, Reason: "New draft from existing product"})
+		copied, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, draft.Plan.ID, CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: edited.Revision, CurrencyRevision: edited.CurrencyRevision, Reason: "New draft from existing product"})
 		if err != nil || copied.Plan.ID == draft.Plan.ID || copied.Plan.Available || !reflect.DeepEqual(copied.Plan.Prices, edited.Plan.Prices) {
 			t.Fatal(copied, err)
 		}
 		if _, _, err = f.store.CreateOrder(t.Context(), f.customer, copied.Plan.ID, "copy", "copy-key", "CNY"); !errors.Is(err, ErrUnavailable) {
 			t.Fatal("copy was published", err)
 		}
-		unpublish := catalogInputFrom(edited.Plan, copied.Revision, copied.CurrencyRevision, "Take product off sale")
+		unpublish := catalogTestEditInput(t, f, edited.Plan, copied.Revision, copied.CurrencyRevision, "Take product off sale")
 		unpublish.Available = false
 		stopped, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, draft.Plan.ID, unpublish)
 		if err != nil || stopped.Plan.Available {
@@ -193,7 +198,7 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 		if !reflect.DeepEqual(ordersBefore, ordersAfter) || !reflect.DeepEqual(invoicesBefore, invoicesAfter) || !reflect.DeepEqual(servicesBefore, servicesAfter) {
 			t.Fatal("catalog mutation rewrote historical business records")
 		}
-		republish := catalogInputFrom(stopped.Plan, stopped.Revision, stopped.CurrencyRevision, "Publish changed product again")
+		republish := catalogTestEditInput(t, f, stopped.Plan, stopped.Revision, stopped.CurrencyRevision, "Publish changed product again")
 		republish.Available = true
 		republish.Prices = []CatalogPrice{{"CNY", 6000, true}, {"USD", 999, true}}
 		fresh, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, draft.Plan.ID, republish)
@@ -201,7 +206,7 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 			t.Fatal(err)
 		}
 		current, _, err := quoted.CreateQuotedOrder(t.Context(), f.customer, draft.Plan.ID, "fresh", "fresh-key", "CNY", &PriceQuote{6000, 2, fresh.Revision})
-		if err != nil || current.TotalMinor != 6000 || current.PlanSnapshot.Name != edit.Name || current.PlanSnapshot.CPU != 8 || current.PlanSnapshot.Region != "New region" {
+		if err != nil || current.TotalMinor != 6000 || current.PlanSnapshot.Name != edit.Name || current.PlanSnapshot.CPU != 8 || current.PlanSnapshot.Region != edit.Region {
 			t.Fatal(current, err)
 		}
 		config, _ = f.store.Currencies(t.Context(), true)
@@ -244,7 +249,7 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 		}{
 			{"empty_name", func(p *CatalogInput) { p.Name = " \n " }}, {"utf8_byte_limit", func(p *CatalogInput) { p.Name = strings.Repeat("中", 41) }},
 			{"invalid_utf8", func(p *CatalogInput) { p.Name = string([]byte{0xff}) }}, {"html", func(p *CatalogInput) { p.Description = "<script>" }},
-			{"control", func(p *CatalogInput) { p.Region = "region\x00" }}, {"format_control", func(p *CatalogInput) { p.Name = "bad\u202e" }},
+			{"control", func(p *CatalogInput) { p.Description = "description\x00" }}, {"format_control", func(p *CatalogInput) { p.Name = "bad\u202e" }},
 			{"empty_reason", func(p *CatalogInput) { p.Reason = " " }}, {"long_reason", func(p *CatalogInput) { p.Reason = strings.Repeat("r", 501) }},
 			{"cpu_zero", func(p *CatalogInput) { p.CPU = 0 }}, {"cpu_large", func(p *CatalogInput) { p.CPU = 4097 }},
 			{"memory_large", func(p *CatalogInput) { p.MemoryGB = 1048577 }}, {"disk_large", func(p *CatalogInput) { p.DiskGB = 16777217 }}, {"transfer_large", func(p *CatalogInput) { p.TransferTB = 1048577 }},
@@ -269,10 +274,10 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 		if _, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, "missing", catalogTestInput(t, f, before.Revision)); !errors.Is(err, ErrNotFound) {
 			t.Fatal(err)
 		}
-		if _, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, "missing", CatalogDuplicateInput{Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: "Copy"}); !errors.Is(err, ErrNotFound) {
+		if _, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, "missing", CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: "Copy"}); !errors.Is(err, ErrNotFound) {
 			t.Fatal(err)
 		}
-		if _, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, before.Items[0].ID, CatalogDuplicateInput{Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: " "}); !errors.Is(err, ErrCatalog) {
+		if _, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, before.Items[0].ID, CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: " "}); !errors.Is(err, ErrCatalog) {
 			t.Fatal(err)
 		}
 		after := readCatalog(t, f)
@@ -304,7 +309,7 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 			if _, err := f.catalog.UpdateCatalogPlan(t.Context(), actor, before.Items[0].ID, catalogTestInput(t, f, before.Revision)); !errors.Is(err, ErrAdminRequired) {
 				t.Fatal(err)
 			}
-			if _, err := f.catalog.DuplicateCatalogPlan(t.Context(), actor, before.Items[0].ID, CatalogDuplicateInput{Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: "Copy"}); !errors.Is(err, ErrAdminRequired) {
+			if _, err := f.catalog.DuplicateCatalogPlan(t.Context(), actor, before.Items[0].ID, CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: "Copy"}); !errors.Is(err, ErrAdminRequired) {
 				t.Fatal(err)
 			}
 		}
@@ -358,7 +363,7 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 			go func(n int) {
 				defer wg.Done()
 				<-start
-				in := catalogInputFrom(created.Plan, created.Revision, created.CurrencyRevision, "Concurrent metadata update")
+				in := catalogTestEditInput(t, f, created.Plan, created.Revision, created.CurrencyRevision, "Concurrent metadata update")
 				in.Name = fmt.Sprintf("winner-%d", n)
 				_, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, created.Plan.ID, in)
 				results <- err
@@ -388,7 +393,7 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, plan.ID, catalogInputFrom(plan, view.Revision, view.CurrencyRevision, "Compete with financial editor"))
+			_, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, plan.ID, catalogTestEditInput(t, f, plan, view.Revision, view.CurrencyRevision, "Compete with financial editor"))
 			results <- err
 		}()
 		go func() {
@@ -415,7 +420,7 @@ func runCatalogSuite(t *testing.T, makeFixture func(*testing.T) catalogFixture) 
 		}
 		view = readCatalog(t, f)
 		old := catalogFind(t, view, plan.ID)
-		input := catalogInputFrom(old, view.Revision, view.CurrencyRevision, "Atomic metadata and quote edit")
+		input := catalogTestEditInput(t, f, old, view.Revision, view.CurrencyRevision, "Atomic metadata and quote edit")
 		input.Name = "After atomic edit"
 		input.CPU = 11
 		input.Prices = []CatalogPrice{{"CNY", 7777, true}}
@@ -593,12 +598,12 @@ func runCatalogHTTP(t *testing.T, f catalogFixture, adminPassword, customerPassw
 	if status != 409 || body["error"].(map[string]any)["code"] != "CATALOG_CONFLICT" {
 		t.Fatal(status, body)
 	}
-	status, body = admin.request("POST", "/api/v1/admin/catalog/"+id+"/duplicate", CatalogDuplicateInput{Revision: before.Revision + 1, CurrencyRevision: before.CurrencyRevision, Reason: "Duplicate through real endpoint"}, "")
+	status, body = admin.request("POST", "/api/v1/admin/catalog/"+id+"/duplicate", CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: before.Revision + 1, CurrencyRevision: before.CurrencyRevision, Reason: "Duplicate through real endpoint"}, "")
 	if status != 201 || body["data"].(map[string]any)["plan"].(map[string]any)["available"] != false {
 		t.Fatal(status, body)
 	}
 	view := readCatalog(t, f)
-	edit := catalogInputFrom(catalogFind(t, view, id), view.Revision, view.CurrencyRevision, "Edit through real endpoint")
+	edit := catalogTestEditInput(t, f, catalogFind(t, view, id), view.Revision, view.CurrencyRevision, "Edit through real endpoint")
 	edit.Available = false
 	if status, body = admin.request("POST", "/api/v1/admin/catalog/"+id, edit, ""); status != 200 {
 		t.Fatal(status, body)
@@ -650,7 +655,7 @@ func runCatalogHTTP(t *testing.T, f catalogFixture, adminPassword, customerPassw
 	}{
 		{"/api/v1/admin/catalog", stale},
 		{"/api/v1/admin/catalog/" + id, stale},
-		{"/api/v1/admin/catalog/" + id + "/duplicate", CatalogDuplicateInput{Revision: prior.Revision, CurrencyRevision: priorRegistry.Revision, Reason: "Stale precision must be rejected"}},
+		{"/api/v1/admin/catalog/" + id + "/duplicate", CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: prior.Revision, CurrencyRevision: priorRegistry.Revision, Reason: "Stale precision must be rejected"}},
 	} {
 		if status, body := admin.request("POST", operation.path, operation.body, ""); status != 409 || body["error"].(map[string]any)["code"] != "CATALOG_CONFLICT" {
 			t.Fatal("HTTP precision revision conflict", status, body)
@@ -686,7 +691,7 @@ func TestMySQLAdminCatalogRollback(t *testing.T) {
 	if _, err := f.catalog.UpdateCatalogPlan(ctx, f.admin, before.Items[0].ID, input); err == nil {
 		t.Fatal("late edit failure was accepted")
 	}
-	if _, err := f.catalog.DuplicateCatalogPlan(ctx, f.admin, before.Items[0].ID, CatalogDuplicateInput{Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: "Copy should roll back"}); err == nil {
+	if _, err := f.catalog.DuplicateCatalogPlan(ctx, f.admin, before.Items[0].ID, CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: before.Revision, CurrencyRevision: before.CurrencyRevision, Reason: "Copy should roll back"}); err == nil {
 		t.Fatal("late duplicate failure was accepted")
 	}
 	after := readCatalog(t, f)
@@ -699,9 +704,10 @@ func TestMySQLAdminCatalogRollback(t *testing.T) {
 func TestAdminCatalogNoSilentLimitOrAliasing(t *testing.T) {
 	f := memoryCatalogFixture(t)
 	m := f.store.(*Memory)
+	seed := m.plans[0]
 	m.mu.Lock()
 	for i := 0; i < 1005; i++ {
-		m.plans = append(m.plans, Plan{ID: fmt.Sprintf("bulk-%04d", i), Name: "Fixture", CPU: 1, MemoryGB: 1, DiskGB: 1, TransferTB: 1, Region: "fixture"})
+		m.plans = append(m.plans, Plan{ID: fmt.Sprintf("bulk-%04d", i), Name: "Fixture", CPU: 1, MemoryGB: 1, DiskGB: 1, TransferTB: 1, Region: seed.Region, TypeID: seed.TypeID, RegionID: seed.RegionID})
 	}
 	m.mu.Unlock()
 	view := readCatalog(t, f)

@@ -27,19 +27,22 @@ type User struct {
 	PasswordHash string `json:"-"`
 }
 type Plan struct {
-	PriceRevision  int64          `json:"price_revision"`
-	CurrencyFormat CurrencyFormat `json:"currency_format"`
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Description    string         `json:"description"`
-	CPU            int            `json:"cpu"`
-	MemoryGB       int            `json:"memory_gb"`
-	DiskGB         int            `json:"disk_gb"`
-	TransferTB     int            `json:"transfer_tb"`
-	Region         string         `json:"region"`
-	PriceMinor     int64          `json:"price_minor"`
-	Currency       string         `json:"currency"`
-	Available      bool           `json:"available"`
+	TypeID           string         `json:"type_id"`
+	RegionID         string         `json:"region_id"`
+	TaxonomyRevision int64          `json:"taxonomy_revision"`
+	PriceRevision    int64          `json:"price_revision"`
+	CurrencyFormat   CurrencyFormat `json:"currency_format"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Description      string         `json:"description"`
+	CPU              int            `json:"cpu"`
+	MemoryGB         int            `json:"memory_gb"`
+	DiskGB           int            `json:"disk_gb"`
+	TransferTB       int            `json:"transfer_tb"`
+	Region           string         `json:"region"`
+	PriceMinor       int64          `json:"price_minor"`
+	Currency         string         `json:"currency"`
+	Available        bool           `json:"available"`
 }
 type PlanPrice struct {
 	AmountMinor int64

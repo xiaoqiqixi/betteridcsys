@@ -14,6 +14,7 @@ type memoRequest struct {
 	Order       Order
 }
 type Memory struct {
+	taxonomy        TaxonomyConfiguration
 	currencies      CurrencyConfiguration
 	pricesRevision  int64
 	emailSettings   EmailSettingsRecord
@@ -35,6 +36,11 @@ type Memory struct {
 
 func NewMemory() *Memory {
 	m := &Memory{users: map[string]User{}, sessions: map[string]Session{}, plans: Catalog(), orders: []Order{}, invoices: []Invoice{}, services: []Service{}, audits: []Audit{}, requests: map[string]memoRequest{}}
+	m.taxonomy = initialTaxonomy(m.plans)
+	for n := range m.plans {
+		m.plans[n].TypeID = "generic"
+		m.plans[n].RegionID = legacyRegionID(m.plans[n].Region)
+	}
 	m.settings = DefaultSettings()
 	m.currencies = DefaultCurrencyConfiguration()
 	m.pricesRevision = 1
@@ -136,7 +142,7 @@ func (m *Memory) Plans(_ context.Context, currency string) ([]Plan, error) {
 	// a visible published product, so missing quotes never become fallback FX.
 	out := make([]Plan, 0, len(m.plans))
 	for _, plan := range m.plans {
-		if plan.Available {
+		if _, live := taxonomyRegion(m.taxonomy, plan.TypeID, plan.RegionID, true); plan.Available && live {
 			out = append(out, plan)
 		}
 	}
@@ -148,6 +154,7 @@ func (m *Memory) Plans(_ context.Context, currency string) ([]Plan, error) {
 		out[n].Currency, out[n].PriceMinor = currency, price.AmountMinor
 		out[n].CurrencyFormat = cur.CurrencyFormat
 		out[n].PriceRevision = m.pricesRevision
+		out[n].TaxonomyRevision = m.taxonomy.Revision
 		out[n].Available = cur.Enabled && out[n].Available && price.Available && validAmount(price.AmountMinor)
 	}
 	return out, nil
@@ -282,7 +289,7 @@ func (m *Memory) CreateQuotedOrder(_ context.Context, u User, pid, host, key, cu
 	price := m.prices[pid][currency]
 	p.PriceMinor, p.Currency = price.AmountMinor, currency
 	p.CurrencyFormat = cur.CurrencyFormat
-	if !p.Available || !price.Available || !validAmount(price.AmountMinor) {
+	if _, live := taxonomyRegion(m.taxonomy, p.TypeID, p.RegionID, true); !p.Available || !live || !price.Available || !validAmount(price.AmountMinor) {
 		return Order{}, false, ErrUnavailable
 	}
 	if quote != nil && !quote.matches(price.AmountMinor, cur.DecimalPlaces, m.pricesRevision) {

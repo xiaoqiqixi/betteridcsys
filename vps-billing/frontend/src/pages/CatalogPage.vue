@@ -33,6 +33,11 @@ import OverlayPanel from "../components/OverlayPanel.vue";
 import ProductSpecs from "../components/ProductSpecs.vue";
 import GeminiPlanCard from "../components/GeminiPlanCard.vue";
 import { useWorkspace } from "../composables/useWorkspace";
+import {
+  sortCatalogEntries,
+  validCatalogTaxonomy,
+  type CatalogTaxonomy,
+} from "../services/catalog-taxonomy";
 
 const props = defineProps<{
   locale: "zh-CN" | "en";
@@ -54,6 +59,9 @@ interface Plan {
   id: string;
   name: string;
   description: string;
+  type_id: string;
+  region_id: string;
+  taxonomy_revision: number;
   region: string;
   cpu: number;
   memory_gb: number;
@@ -81,9 +89,11 @@ const identityKey = () =>
 const en = computed(() => props.locale === "en");
 const t = (zh: string, english: string) => (en.value ? english : zh);
 const plans = ref<Plan[]>([]);
+const taxonomy = ref<CatalogTaxonomy | null>(null);
 const loading = ref(true);
 const error = ref("");
-const region = ref("");
+const typeId = ref("");
+const regionId = ref("");
 const purchasing = ref<Plan | null>(null);
 const reviewOpen = ref(false);
 const hostname = ref("");
@@ -98,16 +108,52 @@ const reconcileConsent = ref(false);
 const reconciling = ref(false);
 const reconcileError = ref("");
 let generation = 0;
-const regions = computed(() => [
-  ...new Set(
-    plans.value
-      .map((p) => p.region)
-      .filter((region) => typeof region === "string" && region.trim()),
+const types = computed(() =>
+  sortCatalogEntries(
+    (taxonomy.value?.types ?? []).filter(
+      (type) =>
+        type.enabled && plans.value.some((plan) => plan.type_id === type.id),
+    ),
   ),
-]);
-const shownPlans = computed(() =>
-  plans.value.filter((plan) => !!region.value && plan.region === region.value),
 );
+const selectedType = computed(() =>
+  types.value.find((type) => type.id === typeId.value),
+);
+const regions = computed(() =>
+  sortCatalogEntries(
+    (taxonomy.value?.regions ?? []).filter(
+      (region) =>
+        selectedType.value &&
+        region.enabled &&
+        region.type_id === typeId.value &&
+        plans.value.some(
+          (plan) =>
+            plan.type_id === typeId.value && plan.region_id === region.id,
+        ),
+    ),
+  ),
+);
+const selectedRegion = computed(() =>
+  regions.value.find((region) => region.id === regionId.value),
+);
+const shownPlans = computed(() =>
+  plans.value.filter(
+    (plan) =>
+      !!selectedType.value &&
+      !!selectedRegion.value &&
+      plan.type_id === typeId.value &&
+      plan.region_id === regionId.value,
+  ),
+);
+function selectType(id: string) {
+  if (loading.value || submitting.value || outcomeUnknown.value || error.value)
+    return;
+  if (typeId.value === id || !types.value.some((type) => type.id === id))
+    return;
+  clearSelection();
+  typeId.value = id;
+  regionId.value = regions.value[0]?.id ?? "";
+}
 function money(plan: Plan) {
   const f = plan.currency_format;
   if (
@@ -178,13 +224,38 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const result = await read<Plan[]>("/plans", { currency: props.currency });
+    const [registry, result] = await Promise.all([
+      read<CatalogTaxonomy>("/catalog-taxonomy"),
+      read<Plan[]>("/plans", { currency: props.currency }),
+    ]);
     if (id !== generation) return;
-    if (result.some((plan) => plan.currency !== props.currency))
+    if (!validCatalogTaxonomy(registry)) throw { code: "INVALID_RESPONSE" };
+    const validTypes = new Map(registry.types.map((type) => [type.id, type]));
+    const validRegions = new Map(
+      registry.regions.map((region) => [region.id, region]),
+    );
+    if (
+      result.some((plan) => {
+        const type = validTypes.get(plan.type_id);
+        const region = validRegions.get(plan.region_id);
+        return (
+          plan.currency !== props.currency ||
+          plan.taxonomy_revision !== registry.revision ||
+          !type?.enabled ||
+          !region?.enabled ||
+          region.type_id !== plan.type_id ||
+          region.name !== plan.region
+        );
+      })
+    )
       throw { code: "INVALID_RESPONSE" };
+    // Publish a mutually consistent pair; never combine different registry revisions.
+    taxonomy.value = registry;
     plans.value = result;
-    if (!regions.value.includes(region.value))
-      region.value = regions.value[0] ?? "";
+    if (!types.value.some((type) => type.id === typeId.value))
+      typeId.value = types.value[0]?.id ?? "";
+    if (!regions.value.some((region) => region.id === regionId.value))
+      regionId.value = regions.value[0]?.id ?? "";
   } catch (e) {
     if (id === generation) error.value = safeError(e);
   } finally {
@@ -256,7 +327,7 @@ function openReview() {
   accepted.value = false;
   reviewOpen.value = true;
 }
-watch(region, clearSelection);
+watch([typeId, regionId], clearSelection);
 async function createOrder() {
   const plan = purchasing.value;
   if (
@@ -459,8 +530,8 @@ onBeforeUnmount(() => {
         <p>
           {{
             t(
-              "选择地区和套餐，确认订单后前往账单付款。",
-              "Choose a region and plan, then review your order before payment.",
+              "选择类型、地区和套餐，确认订单后前往账单付款。",
+              "Choose a type, region and plan, then review your order before payment.",
             )
           }}
         </p>
@@ -541,10 +612,57 @@ onBeforeUnmount(() => {
       <div class="purchase-options">
         <section
           class="selection-section surface-card"
-          aria-labelledby="region-heading"
+          aria-labelledby="type-heading"
         >
           <div class="section-heading">
             <span class="step-number" aria-hidden="true">1</span>
+            <h2 id="type-heading">{{ t("选择类型", "Choose a type") }}</h2>
+          </div>
+          <div
+            v-if="types.length > 1"
+            class="catalog-type"
+            :aria-label="t('可选类型', 'Available types')"
+          >
+            <button
+              v-for="item in types"
+              :key="item.id"
+              :data-type-id="item.id"
+              :class="{ active: typeId === item.id }"
+              :aria-pressed="typeId === item.id"
+              :disabled="loading || submitting || outcomeUnknown || !!error"
+              @click="selectType(item.id)"
+            >
+              <Server :size="15" /><span>{{ item.name }}</span
+              ><Check
+                v-if="typeId === item.id"
+                :size="14"
+                class="region-check"
+              />
+            </button>
+          </div>
+          <div
+            v-else-if="types.length === 1"
+            class="single-type"
+            :data-type-id="selectedType?.id"
+          >
+            <Server :size="16" /><span>{{ selectedType?.name }}</span
+            ><Check :size="15" />
+          </div>
+          <p v-else class="section-hint">
+            {{
+              loading
+                ? t("正在读取类型…", "Loading types…")
+                : t("暂无可选类型", "No types available")
+            }}
+          </p>
+        </section>
+
+        <section
+          class="selection-section surface-card"
+          aria-labelledby="region-heading"
+        >
+          <div class="section-heading">
+            <span class="step-number" aria-hidden="true">2</span>
             <h2 id="region-heading">{{ t("选择地区", "Choose a region") }}</h2>
           </div>
           <div
@@ -554,18 +672,27 @@ onBeforeUnmount(() => {
           >
             <button
               v-for="item in regions"
-              :key="item"
-              :class="{ active: region === item }"
-              :aria-pressed="region === item"
-              :disabled="loading || submitting || outcomeUnknown"
-              @click="region = item"
+              :key="item.id"
+              :data-region-id="item.id"
+              :class="{ active: regionId === item.id }"
+              :aria-pressed="regionId === item.id"
+              :disabled="loading || submitting || outcomeUnknown || !!error"
+              @click="regionId = item.id"
             >
-              <MapPin :size="15" /><span>{{ item }}</span
-              ><Check v-if="region === item" :size="14" class="region-check" />
+              <MapPin :size="15" /><span>{{ item.name }}</span
+              ><Check
+                v-if="regionId === item.id"
+                :size="14"
+                class="region-check"
+              />
             </button>
           </div>
-          <div v-else-if="regions.length === 1" class="single-region">
-            <MapPin :size="16" /><span>{{ region }}</span
+          <div
+            v-else-if="regions.length === 1"
+            class="single-region"
+            :data-region-id="selectedRegion?.id"
+          >
+            <MapPin :size="16" /><span>{{ selectedRegion?.name }}</span
             ><Check :size="15" />
           </div>
           <p v-else class="section-hint">
@@ -582,7 +709,7 @@ onBeforeUnmount(() => {
           aria-labelledby="plan-heading"
         >
           <div class="section-heading">
-            <span class="step-number" aria-hidden="true">2</span>
+            <span class="step-number" aria-hidden="true">3</span>
             <h2 id="plan-heading">{{ t("选择套餐", "Choose a plan") }}</h2>
             <span class="section-meta"
               >{{ t("月付", "Monthly") }} · {{ currency }}</span
@@ -617,6 +744,7 @@ onBeforeUnmount(() => {
             <GeminiPlanCard
               v-for="plan in shownPlans"
               :key="plan.id"
+              :data-plan-id="plan.id"
               :plan="plan"
               :locale="locale"
               :selected="purchasing?.id === plan.id"
@@ -637,7 +765,7 @@ onBeforeUnmount(() => {
           aria-labelledby="hostname-heading"
         >
           <div class="section-heading">
-            <span class="step-number" aria-hidden="true">3</span>
+            <span class="step-number" aria-hidden="true">4</span>
             <h2 id="hostname-heading">{{ t("主机名称", "Hostname") }}</h2>
           </div>
           <template v-if="session?.user"
@@ -712,9 +840,13 @@ onBeforeUnmount(() => {
           }}
         </p>
         <dl class="summary-lines">
+          <div>
+            <dt>{{ t("类型", "Type") }}</dt>
+            <dd>{{ selectedType?.name || "—" }}</dd>
+          </div>
           <div v-if="!purchasing">
             <dt>{{ t("地区", "Region") }}</dt>
-            <dd>{{ region || "—" }}</dd>
+            <dd>{{ selectedRegion?.name || "—" }}</dd>
           </div>
           <div>
             <dt>{{ t("付款周期", "Billing cycle") }}</dt>
@@ -852,6 +984,10 @@ onBeforeUnmount(() => {
             <ProductSpecs :plan="purchasing" :locale="locale" />
           </div>
           <dl class="summary-lines review-lines">
+            <div>
+              <dt>{{ t("类型", "Type") }}</dt>
+              <dd>{{ selectedType?.name || "—" }}</dd>
+            </div>
             <div>
               <dt>{{ t("主机名称", "Hostname") }}</dt>
               <dd class="font-mono">{{ hostname.trim().toLowerCase() }}</dd>
@@ -1016,11 +1152,13 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--text-secondary);
 }
+.catalog-type,
 .catalog-region {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
 }
+.catalog-type button,
 .catalog-region button {
   display: flex;
   align-items: center;
@@ -1036,28 +1174,49 @@ onBeforeUnmount(() => {
   font-size: 13px;
   max-width: 100%;
   overflow-wrap: anywhere;
+  text-align: left;
 }
+.catalog-type button > span,
+.catalog-region button > span {
+  min-width: 0;
+}
+.catalog-type button > svg,
+.catalog-region button > svg {
+  flex-shrink: 0;
+}
+.catalog-type button.active,
 .catalog-region button.active {
   border-color: var(--accent-primary);
   background: var(--bg-active);
   color: var(--text-primary);
 }
+.catalog-type button.active > svg,
 .catalog-region button.active > svg {
   color: var(--accent-primary);
 }
 .region-check {
   margin-left: auto;
 }
+.single-type,
 .single-region {
   display: inline-flex;
   align-items: center;
   gap: 10px;
   min-height: 42px;
   font-size: 13px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
+.single-type span,
+.single-region span {
+  min-width: 0;
+}
+.single-type svg,
 .single-region svg {
+  flex-shrink: 0;
   color: var(--accent-primary);
 }
+.single-type svg:last-child,
 .single-region svg:last-child {
   margin-left: 12px;
 }
@@ -1478,10 +1637,12 @@ onBeforeUnmount(() => {
   .plan-grid {
     grid-template-columns: 1fr;
   }
+  .catalog-type,
   .catalog-region {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .catalog-type button,
   .catalog-region button {
     min-width: 0;
     width: 100%;

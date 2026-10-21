@@ -119,6 +119,12 @@ func (m *Memory) UpdatePlanPrices(_ context.Context, actor User, input PlanPrice
 			return PlanPricesView{}, ErrPlanPrices
 		}
 	}
+	for _, v := range input.Prices {
+		p := m.plans[planIndexes[v.PlanID]]
+		if _, live := taxonomyRegion(m.taxonomy, p.TypeID, p.RegionID, true); v.PlanAvailable && !live {
+			return PlanPricesView{}, ErrTaxonomy
+		}
+	}
 	if !cur.PrecisionLocked && m.currencies.Revision == MaxMinor {
 		return PlanPricesView{}, ErrCurrencyConflict
 	}

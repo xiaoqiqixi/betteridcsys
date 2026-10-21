@@ -486,12 +486,14 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
 
         def sql(query, *, database=None):
             if query.startswith("SELECT COUNT(*) FROM information_schema.TABLES"):
-                return str({6: 13, 7: 14, CORE.CANDIDATE_SCHEMA: 16}[state["schema"]])
+                return str({6: 13, 7: 14, CORE.CANDIDATE_SCHEMA: 19}[state["schema"]])
             if query.startswith("SELECT SUM(amount_minor)"):
                 return "1500"
             if query.startswith("SELECT TABLE_NAME"):
                 return "\n".join("table_" + letter for letter in "abcdefghijklm")
             if query.startswith("SELECT COUNT(*) FROM users WHERE disabled"):
+                return "0"
+            if query.startswith("SELECT COUNT(*) FROM plans p LEFT JOIN catalog_regions"):
                 return "0"
             if query.startswith("SELECT (SELECT COUNT(*) FROM payment_attempts)"):
                 return str(int(invented_payment))
@@ -510,15 +512,29 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
                 report = CORE.legacy_schema_migration(resources, executor, fresh, {"directory": published})
         return report, calls, candidate, published
 
+    def test_legacy_hash_projects_every_pre_taxonomy_plan_field_without_new_columns(self):
+        queries, dumps = [], []
+        def sql(query, *, database=None):
+            queries.append(query)
+            return "original-plan-bytes" if "FROM plans" in query else "original-user-bytes"
+        fixture = SimpleNamespace(resources=SimpleNamespace(sql=sql), full_data_hash=lambda database, tables: dumps.append(list(tables)) or "original-other-bytes")
+        result = CORE.Fixture.legacy_business_hash(fixture, "owned", ["users", "plans", "orders", "plan_prices"])
+        self.assertEqual(dumps, [["orders", "plan_prices"]])
+        self.assertEqual(result, CORE.sha256(b"original-other-bytes\noriginal-user-bytes\noriginal-plan-bytes"))
+        self.assertIn("SELECT HEX(id),HEX(name),HEX(description),cpu,memory_gb,disk_gb,transfer_tb,HEX(region),price_minor,HEX(currency),available FROM plans ORDER BY BINARY id;", queries)
+        self.assertFalse(any("type_id" in query or "region_id" in query or "SELECT *" in query for query in queries))
+        self.assertTrue(any("HEX(password_hash)" in query and "created_at" in query for query in queries))
+
     def test_historical_prefix_uses_actual_published_then_candidate_migration_order(self):
         report, calls, candidate, published = self.scenario()
         self.assertEqual([call for call in calls if call[1] == "-migrate"],
             [(published, "-migrate"), (candidate, "-migrate"), (candidate, "-migrate")])
         self.assertEqual((report["schema_before"], report["published_schema"], report["schema_after"]), (6, 7, CORE.CANDIDATE_SCHEMA))
-        self.assertEqual((report["tables_before"], report["tables_published"], report["tables_after"]), (13, 14, 16))
+        self.assertEqual((report["tables_before"], report["tables_published"], report["tables_after"]), (13, 14, 19))
         self.assertEqual(report["published_baseline_preflight_after_payment_migration"], "incompatible")
         self.assertTrue(report["additive_payment_migration_preserved_existing_data"])
         self.assertTrue(report["new_payment_tables_empty"])
+        self.assertTrue(report["taxonomy_tables_and_exact_legacy_relationships_added"])
         self.assertTrue(report["repeat_migration_data_unchanged"])
 
     def test_old_program_acceptance_after_current_schema_cannot_claim_success(self):

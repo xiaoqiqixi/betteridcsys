@@ -61,7 +61,7 @@ func runCatalogCurrencyRevision(t *testing.T, f catalogFixture) {
 		if _, e = f.catalog.UpdateCatalogPlan(t.Context(), f.admin, "starter", input); !errors.Is(e, want) {
 			t.Fatal("edit accepted stale/invalid currency precision", e)
 		}
-		if _, e = f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, "starter", CatalogDuplicateInput{Revision: input.Revision, CurrencyRevision: input.CurrencyRevision, Reason: input.Reason}); !errors.Is(e, want) {
+		if _, e = f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, "starter", CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: input.Revision, CurrencyRevision: input.CurrencyRevision, Reason: input.Reason}); !errors.Is(e, want) {
 			t.Fatal("copy accepted stale/invalid currency precision", e)
 		}
 		after := readCatalog(t, f)
@@ -83,7 +83,7 @@ func runCatalogCurrencyRevision(t *testing.T, f catalogFixture) {
 	// Model separately completed concurrent GETs: the catalog/global version is
 	// new while /currencies still contains the old precision used by the author.
 	standard := catalogFind(t, afterPrecision, "standard")
-	unrelated := catalogInputFrom(standard, afterPrecision.Revision, newRegistry.Revision, "Unrelated catalog metadata mutation")
+	unrelated := catalogTestEditInput(t, f, standard, afterPrecision.Revision, newRegistry.Revision, "Unrelated catalog metadata mutation")
 	unrelated.Name = "A newer catalog snapshot"
 	latest, err := f.catalog.UpdateCatalogPlan(t.Context(), f.admin, standard.ID, unrelated)
 	if err != nil {

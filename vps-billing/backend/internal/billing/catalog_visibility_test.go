@@ -52,7 +52,7 @@ func catalogVisibility(t *testing.T, f catalogFixture) {
 	if !ok || item["available"] != false || item["price_minor"] != float64(0) {
 		t.Fatal("published missing currency quote was hidden or invented", item)
 	}
-	copied, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, created.Plan.ID, CatalogDuplicateInput{Revision: readCatalog(t, f).Revision, CurrencyRevision: readCatalog(t, f).CurrencyRevision, Reason: "Copy must remain private until published"})
+	copied, err := f.catalog.DuplicateCatalogPlan(t.Context(), f.admin, created.Plan.ID, CatalogDuplicateInput{TaxonomyRevision: testReadTaxonomy(t, f).Revision, Revision: readCatalog(t, f).Revision, CurrencyRevision: readCatalog(t, f).CurrencyRevision, Reason: "Copy must remain private until published"})
 	if err != nil {
 		t.Fatal(err)
 	}

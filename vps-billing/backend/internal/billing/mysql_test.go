@@ -43,7 +43,12 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	}
 	p := Catalog()[0]
 	p.ID = "test-" + ID()
-	_, e = m.DB.ExecContext(ctx, "INSERT INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available) VALUES(?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, p.PriceMinor, p.Currency, true)
+	// Use a real migrated classification; current schema does not permit
+	// creating an unbound product through legacy fixture SQL.
+	if e = m.DB.QueryRowContext(ctx, "SELECT type_id,region_id,region FROM plans WHERE id='starter'").Scan(&p.TypeID, &p.RegionID, &p.Region); e != nil {
+		t.Fatal(e)
+	}
+	_, e = m.DB.ExecContext(ctx, "INSERT INTO plans(id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available,type_id,region_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, p.PriceMinor, p.Currency, true, p.TypeID, p.RegionID)
 	if e != nil {
 		t.Fatal(e)
 	}

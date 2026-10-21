@@ -263,12 +263,19 @@ func (m *MySQL) UpdatePlanPrices(ctx context.Context, actor User, input PlanPric
 	if err != nil {
 		return PlanPricesView{}, err
 	}
+	taxonomy, err := readTaxonomy(ctx, tx, " FOR SHARE")
+	if err != nil {
+		return PlanPricesView{}, err
+	}
 	for _, v := range input.Prices {
-		var id string
-		if err = tx.QueryRowContext(ctx, "SELECT id FROM plans WHERE id=? FOR UPDATE", v.PlanID).Scan(&id); errors.Is(err, sql.ErrNoRows) {
+		var id, typeID, regionID string
+		if err = tx.QueryRowContext(ctx, "SELECT id,type_id,region_id FROM plans WHERE id=? FOR UPDATE", v.PlanID).Scan(&id, &typeID, &regionID); errors.Is(err, sql.ErrNoRows) {
 			return PlanPricesView{}, ErrPlanPrices
 		} else if err != nil {
 			return PlanPricesView{}, err
+		}
+		if _, live := taxonomyRegion(taxonomy, typeID, regionID, true); v.PlanAvailable && !live {
+			return PlanPricesView{}, ErrTaxonomy
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO plan_prices(plan_id,currency,amount_minor,available) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE amount_minor=VALUES(amount_minor),available=VALUES(available)", v.PlanID, input.Currency, amounts[v.PlanID], v.Available); err != nil {
 			return PlanPricesView{}, err

@@ -38,8 +38,31 @@ const usd = {
   decimal_places: 2,
   enabled: true,
 };
+const taxonomy = {
+  revision: 4,
+  types: [{ id: "cloud", name: "云服务器", sort_order: 0, enabled: true }],
+  regions: [
+    {
+      id: "cloud-hkg",
+      type_id: "cloud",
+      name: "HKG",
+      sort_order: 0,
+      enabled: true,
+    },
+    {
+      id: "cloud-tyo",
+      type_id: "cloud",
+      name: "TYO",
+      sort_order: 1,
+      enabled: true,
+    },
+  ],
+};
 const plans = Array.from({ length: 4 }, (_, i) => ({
   id: `plan-${i}`,
+  type_id: "cloud",
+  region_id: i < 2 ? "cloud-hkg" : "cloud-tyo",
+  taxonomy_revision: taxonomy.revision,
   name: `Plan ${i}`,
   description: "Synthetic",
   region: i < 2 ? "HKG" : "TYO",
@@ -56,10 +79,12 @@ const plans = Array.from({ length: 4 }, (_, i) => ({
 const catalog = {
   revision: 7,
   currency_revision: 3,
+  taxonomy_revision: taxonomy.revision,
   items: plans.map(
     ({
       price_minor,
       price_revision: _,
+      taxonomy_revision: _t,
       currency: _c,
       currency_format: _f,
       ...p
@@ -74,12 +99,37 @@ function render(component: typeof CatalogPage | typeof AdminCatalogPage) {
   const wrapper = mount(component, {
     props: { locale: "zh-CN", currency: "CNY", mode: "demo" },
     global: { stubs: { OverlayPanel: panel } },
+    attachTo: document.body,
   });
   wrappers.push(wrapper);
   return wrapper;
 }
 const button = (wrapper: VueWrapper, label: string) =>
   wrapper.findAll("button").find((b) => b.text() === label)!;
+function nextPlanRead(value: unknown) {
+  const previous = mocks.read.getMockImplementation()!;
+  let pending = true;
+  mocks.read.mockImplementation((path: string, query?: unknown) => {
+    if (path === "/plans" && pending) {
+      pending = false;
+      return Promise.resolve(structuredClone(value));
+    }
+    return previous(path, query);
+  });
+}
+async function selectUi(wrapper: VueWrapper, label: string, option: string) {
+  const field = wrapper
+    .findAll(".editor-section label.form-group")
+    .find((entry) => entry.find(".form-label").text().includes(label))!;
+  await field.get('[role="combobox"]').trigger("click");
+  await flushPromises();
+  const target = [...document.querySelectorAll('[role="option"]')].find(
+    (entry) => entry.textContent?.trim() === option,
+  )!;
+  expect(target).toBeDefined();
+  target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  await flushPromises();
+}
 let identity = 0;
 beforeEach(() => {
   mocks.generation.value = 0;
@@ -94,17 +144,24 @@ beforeEach(() => {
               ? { ...mocks.session.value.user }
               : null,
           }
-        : path === "/plans"
-          ? plans
-          : path === "/admin/catalog"
-            ? catalog
-            : { revision: 3, default_currency: "CNY", currencies: [cny, usd] },
+        : path === "/catalog-taxonomy" || path === "/admin/catalog-taxonomy"
+          ? taxonomy
+          : path === "/plans"
+            ? plans
+            : path === "/admin/catalog"
+              ? catalog
+              : {
+                  revision: 3,
+                  default_currency: "CNY",
+                  currencies: [cny, usd],
+                },
     ),
   );
 });
 afterEach(() => {
   wrappers.forEach((w) => w.unmount());
   wrappers = [];
+  document.body.innerHTML = "";
 });
 
 describe("independent catalog pages", () => {
@@ -133,7 +190,9 @@ describe("independent catalog pages", () => {
                 },
               ],
             }
-          : { revision: 3, default_currency: "CNY", currencies: [currency] },
+          : path === "/admin/catalog-taxonomy"
+            ? taxonomy
+            : { revision: 3, default_currency: "CNY", currencies: [currency] },
       ),
     );
     const wrapper = render(AdminCatalogPage);
@@ -183,11 +242,11 @@ describe("independent catalog pages", () => {
     expect(wrapper.get("h1").text()).toBe("购买云服务器");
     expect(
       wrapper.findAll(".selection-section h2").map((node) => node.text()),
-    ).toEqual(["选择地区", "选择套餐", "主机名称"]);
+    ).toEqual(["选择类型", "选择地区", "选择套餐", "主机名称"]);
     expect(wrapper.get(".order-summary > h2").text()).toBe("订单详情");
   });
   it("hides redundant navigation for one region without hiding its plans or inventing an all-regions option", async () => {
-    mocks.read.mockResolvedValueOnce(plans.slice(0, 2));
+    nextPlanRead(plans.slice(0, 2));
     const wrapper = render(CatalogPage);
     await flushPromises();
     expect(wrapper.find(".catalog-region").exists()).toBe(false);
@@ -195,7 +254,7 @@ describe("independent catalog pages", () => {
     expect(wrapper.text()).not.toContain("全部地区");
   });
   it("shows an honest empty state when no valid region exists", async () => {
-    mocks.read.mockResolvedValueOnce([]);
+    nextPlanRead([]);
     const wrapper = render(CatalogPage);
     await flushPromises();
     expect(wrapper.text()).toContain("暂无可选地区");
@@ -212,7 +271,7 @@ describe("independent catalog pages", () => {
     expect(
       wrapper.get('.catalog-region button[aria-pressed="true"]').text(),
     ).toBe("TYO");
-    mocks.read.mockResolvedValueOnce(plans.slice(0, 2));
+    nextPlanRead(plans.slice(0, 2));
     await wrapper.get('[aria-label="刷新套餐"]').trigger("click");
     await flushPromises();
     expect(wrapper.findAll(".gpc-title").map((node) => node.text())).toEqual([
@@ -225,7 +284,7 @@ describe("independent catalog pages", () => {
     const wrapper = render(CatalogPage);
     await flushPromises();
     await button(wrapper, "TYO").trigger("click");
-    mocks.read.mockResolvedValueOnce(
+    nextPlanRead(
       plans
         .slice(0, 2)
         .map((plan) => ({ ...plan, currency: "USD", currency_format: usd })),
@@ -322,7 +381,7 @@ describe("independent catalog pages", () => {
     await flushPromises();
     await button(wrapper, "选择此套餐").trigger("click");
     await wrapper.get(".hostname-field input").setValue("my-cloud-01");
-    mocks.read.mockResolvedValueOnce(
+    nextPlanRead(
       plans.map((plan) => ({ ...plan, price_minor: 99999, price_revision: 8 })),
     );
     await wrapper.get('[aria-label="刷新套餐"]').trigger("click");
@@ -361,10 +420,11 @@ describe("independent catalog pages", () => {
     mocks.write.mockImplementation(
       async (
         _path: string,
-        { revision, currency_revision, reason: _, ...plan },
+        { revision, currency_revision, taxonomy_revision, reason: _, ...plan },
       ) => ({
         revision: revision + 1,
         currency_revision,
+        taxonomy_revision,
         plan: { ...plan, id: "created-product" },
       }),
     );
@@ -376,7 +436,7 @@ describe("independent catalog pages", () => {
       ".editor-section > label.form-group input",
     );
     await textFields[0]!.setValue("独立测试商品");
-    await textFields[1]!.setValue("Tokyo");
+    await selectUi(wrapper, "地区", "TYO");
     await wrapper.findAll(".price-amount input")[0]!.setValue("123456789.01");
     await wrapper.findAll(".price-amount input")[1]!.setValue("9.99");
     await wrapper.find(".reason-section textarea").setValue("合成测试新增商品");
@@ -386,6 +446,10 @@ describe("independent catalog pages", () => {
     expect(path).toBe("/admin/catalog");
     expect(body.revision).toBe(7);
     expect(body.currency_revision).toBe(3);
+    expect(body.taxonomy_revision).toBe(taxonomy.revision);
+    expect(body.type_id).toBe("cloud");
+    expect(body.region_id).toBe("cloud-tyo");
+    expect(body.region).toBe("TYO");
     expect(body.reason).toBe("合成测试新增商品");
     expect(body.prices).toEqual([
       { currency: "CNY", amount_minor: 12345678901, available: true },
@@ -411,6 +475,7 @@ describe("independent catalog pages", () => {
     mocks.write.mockResolvedValue({
       revision: 8,
       currency_revision: 3,
+      taxonomy_revision: taxonomy.revision,
       plan: { ...catalog.items[0], id: "copied-draft", available: false },
     });
     const wrapper = render(AdminCatalogPage);
@@ -422,7 +487,12 @@ describe("independent catalog pages", () => {
     await flushPromises();
     expect(mocks.write).toHaveBeenCalledWith(
       "/admin/catalog/plan-0/duplicate",
-      { revision: 7, currency_revision: 3, reason: "复制合成草稿" },
+      {
+        revision: 7,
+        currency_revision: 3,
+        taxonomy_revision: taxonomy.revision,
+        reason: "复制合成草稿",
+      },
     );
   });
   it("treats a malformed successful order as uncertain and keeps the lock across route remount", async () => {
@@ -507,11 +577,13 @@ describe("independent catalog pages", () => {
     const wrapper = render(CatalogPage);
     await flushPromises();
     let finish!: (value: unknown) => void;
-    mocks.read.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
+    const previous = mocks.read.getMockImplementation()!;
+    mocks.read.mockImplementation((path: string, query?: unknown) =>
+      path === "/plans"
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : previous(path, query),
     );
     await wrapper.setProps({ currency: "USD" });
     expect(button(wrapper, "选择此套餐").attributes("disabled")).toBeDefined();
@@ -584,6 +656,7 @@ describe("independent catalog pages", () => {
     mocks.write.mockResolvedValue({
       revision: 8,
       currency_revision: 3,
+      taxonomy_revision: taxonomy.revision,
       plan: { ...catalog.items[0], id: "other-product" },
     });
     const wrapper = render(AdminCatalogPage);

@@ -49,6 +49,9 @@ export interface CurrencyUpdate {
 }
 export interface Plan {
   id: string;
+  type_id: string;
+  region_id: string;
+  taxonomy_revision: number;
   name: string;
   description: string;
   region: string;
@@ -233,6 +236,8 @@ export interface CatalogPrice {
 }
 export interface CatalogItem {
   id: string;
+  type_id: string;
+  region_id: string;
   name: string;
   description: string;
   region: string;
@@ -246,16 +251,19 @@ export interface CatalogItem {
 export interface Catalog {
   revision: number;
   currency_revision: number;
+  taxonomy_revision: number;
   items: CatalogItem[];
 }
 export interface CatalogInput extends Omit<CatalogItem, "id"> {
   revision: number;
   currency_revision: number;
+  taxonomy_revision: number;
   reason: string;
 }
 export interface CatalogResult {
   revision: number;
   currency_revision: number;
+  taxonomy_revision: number;
   plan: CatalogItem;
 }
 export interface PlanPriceList {

@@ -256,6 +256,10 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, 200, map[string]any{"user": nil, "csrf_token": a.csrf(t)})
 		return
 	}
+	if p == "/catalog-taxonomy" && r.Method == "GET" {
+		a.taxonomyHTTP(w, r, User{}, false)
+		return
+	}
 	if p == "/currencies" && r.Method == "GET" {
 		a.currenciesHTTP(w, r, User{}, false)
 		return
@@ -326,6 +330,10 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if p == "/admin/catalog" || strings.HasPrefix(p, "/admin/catalog/") {
 		a.adminCatalogHTTP(w, r, u, p)
+		return
+	}
+	if p == "/admin/catalog-taxonomy" {
+		a.taxonomyHTTP(w, r, u, true)
 		return
 	}
 	if p == "/admin/currencies" {

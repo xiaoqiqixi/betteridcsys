@@ -56,6 +56,9 @@ async function catalogInput(client, changes = {}) {
   return {
     name: "独立报价演示",
     description: "合成示例",
+    type_id: "standard",
+    region_id: "standard-hkg",
+    taxonomy_revision: catalog.taxonomy_revision,
     region: "香港 HKG",
     cpu: 2,
     memory_gb: 4,
@@ -163,6 +166,7 @@ test("catalog create, edit, independent prices, draft duplication and stale revi
     {
       revision: created.revision,
       currency_revision: created.currency_revision,
+      taxonomy_revision: created.taxonomy_revision,
       reason: "复制合成商品",
     },
   );
@@ -718,4 +722,157 @@ test("an acknowledged auth write with failed confirmation is uncertain, never a 
   );
   assert.equal(writes, 1);
   assert.equal(invalid.length, 1);
+});
+
+test("taxonomy is a real three-level registry and catalog rejects mismatched or stale parentage", async () => {
+  const { client, setRole } = demo();
+  const publicTree = await client.read("/catalog-taxonomy");
+  assert.ok(publicTree.types.length >= 2);
+  const plans = await client.read("/plans");
+  for (const plan of plans) {
+    assert.equal(plan.taxonomy_revision, publicTree.revision);
+    assert.ok(
+      publicTree.regions.some(
+        (r) =>
+          r.id === plan.region_id &&
+          r.type_id === plan.type_id &&
+          r.name === plan.region,
+      ),
+    );
+    assert.equal(Object.hasOwn(plan, "node_id"), false);
+    assert.equal(Object.hasOwn(plan, "line_id"), false);
+  }
+  await assert.rejects(
+    client.write("/admin/catalog-taxonomy", {}),
+    rejected("FORBIDDEN"),
+  );
+  setRole("admin");
+  await assert.rejects(
+    client.write(
+      "/admin/catalog",
+      await catalogInput(client, { type_id: "compute" }),
+    ),
+    rejected("INVALID_CATALOG"),
+  );
+  await assert.rejects(
+    client.write(
+      "/admin/catalog",
+      await catalogInput(client, {
+        taxonomy_revision: publicTree.revision + 1,
+      }),
+    ),
+    rejected("TAXONOMY_CONFLICT"),
+  );
+});
+
+test("taxonomy draft edits are revisioned, audited, sorted and disabled entries stay private", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const original = await client.read("/admin/catalog-taxonomy");
+  const next = {
+    ...original,
+    types: [
+      ...original.types,
+      { id: "paused", name: "待开放", sort_order: 9, enabled: false },
+    ],
+    regions: [
+      ...original.regions,
+      {
+        id: "paused-hkg",
+        type_id: "paused",
+        name: "香港",
+        sort_order: 0,
+        enabled: true,
+      },
+    ],
+    reason: "新增停用分类",
+  };
+  const saved = await client.write("/admin/catalog-taxonomy", next);
+  assert.equal(saved.revision, original.revision + 1);
+  await assert.rejects(
+    client.write("/admin/catalog-taxonomy", next),
+    rejected("TAXONOMY_CONFLICT"),
+  );
+  assert.ok(
+    (await client.read("/admin/audit-events")).items.some(
+      (e) => e.action === "catalog.taxonomy_updated",
+    ),
+  );
+  setRole("customer");
+  const visible = await client.read("/catalog-taxonomy");
+  assert.equal(
+    visible.types.some((t) => t.id === "paused"),
+    false,
+  );
+  assert.equal(
+    visible.regions.some((r) => r.id === "paused-hkg"),
+    false,
+  );
+});
+
+test("taxonomy cannot retire or remove published parents and failed writes preserve the registry", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const tree = await client.read("/admin/catalog-taxonomy");
+  const disabled = {
+    ...tree,
+    types: tree.types.map((t) => ({ ...t, enabled: false })),
+    reason: "拒绝停用在售类型",
+  };
+  await assert.rejects(
+    client.write("/admin/catalog-taxonomy", disabled),
+    rejected("TAXONOMY_IN_USE"),
+  );
+  const removed = { ...tree, regions: [], reason: "拒绝移除引用地区" };
+  await assert.rejects(
+    client.write("/admin/catalog-taxonomy", removed),
+    rejected("TAXONOMY_IN_USE"),
+  );
+  assert.deepEqual(await client.read("/admin/catalog-taxonomy"), tree);
+});
+
+test("classification rename expires old quotes, preserves historic bytes and allows original order replay", async () => {
+  const { client, setRole } = demo();
+  const oldHistory = await client.read("/orders");
+  const plan = (await client.read("/plans"))[0];
+  const body = {
+    plan_id: plan.id,
+    hostname: "taxonomy-preserved",
+    currency: plan.currency,
+    quote: {
+      price_minor: plan.price_minor,
+      decimal_places: plan.currency_format.decimal_places,
+      price_revision: plan.price_revision,
+    },
+  };
+  const key = { "Idempotency-Key": "taxonomy-historical-replay" };
+  const created = await client.write("/orders", body, key);
+  const allHistory = await client.read("/orders");
+  setRole("admin");
+  const tree = await client.read("/admin/catalog-taxonomy");
+  await client.write("/admin/catalog-taxonomy", {
+    ...tree,
+    regions: tree.regions.map((r) =>
+      r.id === plan.region_id ? { ...r, name: "新的地区展示名称" } : r,
+    ),
+    reason: "只修改当前分类名称",
+  });
+  setRole("customer");
+  assert.deepEqual(await client.read("/orders"), allHistory);
+  assert.deepEqual((await client.read("/orders")).slice(1), oldHistory);
+  assert.deepEqual(await client.write("/orders", body, key), created);
+  await assert.rejects(
+    client.write("/orders", body, {
+      "Idempotency-Key": "taxonomy-new-attempt-key",
+    }),
+    rejected("PRICE_CHANGED"),
+  );
+  const current = (await client.read("/plans")).find((p) => p.id === plan.id);
+  assert.equal(current.price_minor, plan.price_minor);
+  assert.equal(current.currency, plan.currency);
+  assert.equal(
+    current.currency_format.decimal_places,
+    plan.currency_format.decimal_places,
+  );
+  assert.equal(current.region, "新的地区展示名称");
 });

@@ -102,9 +102,11 @@ try {
         check: "real-session-login-csrf",
         passed: true,
       });
+      let publicTaxonomy;
       for (const path of [
         "/site-settings",
         "/currencies",
+        "/catalog-taxonomy",
         "/plans",
         "/overview",
         "/orders",
@@ -118,6 +120,37 @@ try {
             ? { limit: 1 }
             : undefined;
         const value = await client.read(path, query);
+        if (path === "/catalog-taxonomy") {
+          publicTaxonomy = value;
+          assert.ok(value.types.every((entry) => entry.enabled));
+          assert.ok(
+            value.regions.every(
+              (entry) =>
+                entry.enabled &&
+                value.types.some(
+                  (parent) => parent.id === entry.type_id && parent.enabled,
+                ),
+            ),
+          );
+        }
+        if (path === "/plans") {
+          assert.ok(publicTaxonomy);
+          assert.ok(
+            value.every(
+              (plan) =>
+                plan.taxonomy_revision === publicTaxonomy.revision &&
+                publicTaxonomy.types.some(
+                  (entry) => entry.id === plan.type_id,
+                ) &&
+                publicTaxonomy.regions.some(
+                  (entry) =>
+                    entry.id === plan.region_id &&
+                    entry.type_id === plan.type_id &&
+                    entry.name === plan.region,
+                ),
+            ),
+          );
+        }
         results.push({
           role: expectedRole,
           check: `GET ${path}`,
@@ -153,10 +186,12 @@ try {
           passed: true,
         });
       } else {
+        let adminTaxonomy;
         for (const path of [
           "/admin/overview",
           "/admin/customers",
           "/admin/customer-accounts",
+          "/admin/catalog-taxonomy",
           "/admin/catalog",
           "/admin/currencies",
           "/admin/plan-prices",
@@ -176,6 +211,21 @@ try {
               ? { limit: 1 }
               : undefined;
           const value = await client.read(path, query);
+          if (path === "/admin/catalog-taxonomy") adminTaxonomy = value;
+          if (path === "/admin/catalog") {
+            assert.ok(adminTaxonomy);
+            assert.equal(value.taxonomy_revision, adminTaxonomy.revision);
+            assert.ok(
+              value.items.every((plan) =>
+                adminTaxonomy.regions.some(
+                  (entry) =>
+                    entry.id === plan.region_id &&
+                    entry.type_id === plan.type_id &&
+                    entry.name === plan.region,
+                ),
+              ),
+            );
+          }
           results.push({
             role: expectedRole,
             check: `GET ${path}`,

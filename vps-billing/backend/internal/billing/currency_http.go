@@ -85,12 +85,15 @@ func financeShape(raw json.RawMessage, t reflect.Type) bool {
 	return true
 }
 func financeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	return financeBodyLimit(w, r, v, 64<<10)
+}
+func financeBodyLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
 		fail(w, r, 415, "JSON_REQUIRED", "请使用 JSON 请求")
 		return false
 	}
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	valid := err == nil && utf8.Valid(raw)
 	if valid {
 		d := json.NewDecoder(bytes.NewReader(raw))
@@ -117,6 +120,8 @@ func financeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 func (a *App) currencyError(w http.ResponseWriter, r *http.Request, err error) {
 	var inUse *CurrencyInUse
 	switch {
+	case errors.Is(err, ErrTaxonomy), errors.Is(err, ErrTaxonomyConflict), errors.Is(err, ErrTaxonomyInUse):
+		a.taxonomyError(w, r, err)
 	case errors.As(err, &inUse):
 		observeError(r.Context(), "CURRENCY_IN_USE", "")
 		locale := requestLocale(r.Header.Get("Accept-Language"))

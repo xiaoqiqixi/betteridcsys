@@ -88,7 +88,7 @@ func loggedMethod(method string) string {
 func loggedRoute(path string) string {
 	switch path {
 	case "/healthz", "/readyz", "/api/v1/session", "/api/v1/auth/login", "/api/v1/auth/logout",
-		"/api/v1/currencies", "/api/v1/plans", "/api/v1/site-settings", "/api/v1/orders", "/api/v1/invoices",
+		"/api/v1/currencies", "/api/v1/catalog-taxonomy", "/api/v1/admin/catalog-taxonomy", "/api/v1/plans", "/api/v1/site-settings", "/api/v1/orders", "/api/v1/invoices",
 		"/api/v1/services", "/api/v1/audit", "/api/v1/audit-events", "/api/v1/admin/audit-events", "/api/v1/overview", "/api/v1/admin/overview",
 		"/api/v1/admin/customer-accounts", "/api/v1/admin/catalog", "/api/v1/admin/customers", "/api/v1/admin/services", "/api/v1/admin/orders", "/api/v1/admin/invoices",
 		"/api/v1/admin/integrations", "/api/v1/admin/currencies", "/api/v1/admin/plan-prices",

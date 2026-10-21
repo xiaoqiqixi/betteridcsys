@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import UiLoading from "../components/UiLoading.vue";
 import UiSpinner from "../components/UiSpinner.vue";
+import UiSelect from "../components/UiSelect.vue";
+import CatalogTaxonomyManager from "../components/CatalogTaxonomyManager.vue";
+import {
+  type CatalogTaxonomy,
+  sortCatalogEntries,
+  validCatalogTaxonomy,
+} from "../services/catalog-taxonomy";
 
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import {
@@ -47,6 +54,8 @@ interface CatalogPrice {
 }
 interface CatalogItem {
   id: string;
+  type_id: string;
+  region_id: string;
   name: string;
   description: string;
   region: string;
@@ -58,11 +67,13 @@ interface CatalogItem {
   prices: CatalogPrice[];
 }
 interface Catalog {
+  taxonomy_revision: number;
   revision: number;
   currency_revision: number;
   items: CatalogItem[];
 }
 interface CatalogResult {
+  taxonomy_revision: number;
   revision: number;
   currency_revision: number;
   plan: CatalogItem;
@@ -72,6 +83,10 @@ const en = computed(() => props.locale === "en");
 const t = (zh: string, english: string) => (en.value ? english : zh);
 const catalog = ref<Catalog | null>(null);
 const registry = ref<Registry | null>(null);
+const taxonomy = ref<CatalogTaxonomy | null>(null);
+const taxonomyOpen = ref(false);
+const filterType = ref("");
+const filterRegion = ref("");
 const loading = ref(true);
 const loadError = ref("");
 const query = ref("");
@@ -99,6 +114,8 @@ const form = reactive({
   name: "",
   description: "",
   region: "",
+  type_id: "",
+  region_id: "",
   cpu: "2",
   memory_gb: "4",
   disk_gb: "40",
@@ -111,13 +128,86 @@ const priceFields = ref<
 >([]);
 const draftRevision = ref(0);
 const draftCurrencyRevision = ref(0);
+const draftTaxonomyRevision = ref(0);
+const typeOptions = computed(() =>
+  sortCatalogEntries(taxonomy.value?.types || [])
+    .filter((row) => row.enabled || row.id === form.type_id)
+    .map((row) => ({
+      value: row.id,
+      label: row.name + (row.enabled ? "" : t("（已停用）", " (disabled)")),
+    })),
+);
+const regionOptions = computed(() =>
+  sortCatalogEntries(taxonomy.value?.regions || [])
+    .filter(
+      (row) =>
+        row.type_id === form.type_id &&
+        (row.enabled || row.id === form.region_id),
+    )
+    .map((row) => ({
+      value: row.id,
+      label: row.name + (row.enabled ? "" : t("（已停用）", " (disabled)")),
+    })),
+);
+const filterTypes = computed(() => [
+  { value: "", label: t("所有类型", "All types") },
+  ...sortCatalogEntries(taxonomy.value?.types || []).map((row) => ({
+    value: row.id,
+    label: row.name,
+  })),
+]);
+const filterRegions = computed(() => [
+  { value: "", label: t("不限地区", "Any region") },
+  ...sortCatalogEntries(taxonomy.value?.regions || [])
+    .filter((row) => !filterType.value || row.type_id === filterType.value)
+    .map((row) => ({ value: row.id, label: row.name })),
+]);
+const canCreate = computed(
+  () =>
+    taxonomy.value?.regions.some(
+      (row) =>
+        row.enabled &&
+        taxonomy.value?.types.some(
+          (parent) => parent.id === row.type_id && parent.enabled,
+        ),
+    ) ?? false,
+);
+const typeName = (id: string) =>
+  taxonomy.value?.types.find((row) => row.id === id)?.name || "—";
+watch(
+  () => form.type_id,
+  () => {
+    if (
+      !taxonomy.value?.regions.some(
+        (row) => row.id === form.region_id && row.type_id === form.type_id,
+      )
+    ) {
+      form.region_id = "";
+      form.region = "";
+    }
+  },
+);
+watch(
+  () => form.region_id,
+  () => {
+    form.region =
+      taxonomy.value?.regions.find(
+        (row) => row.id === form.region_id && row.type_id === form.type_id,
+      )?.name || "";
+  },
+);
+watch(filterType, () => {
+  filterRegion.value = "";
+});
 let generation = 0;
 const visibleItems = computed(() =>
   (catalog.value?.items || []).filter(
     (item) =>
+      (!filterType.value || item.type_id === filterType.value) &&
+      (!filterRegion.value || item.region_id === filterRegion.value) &&
       (filter.value === "all" ||
         item.available === (filter.value === "published")) &&
-      `${item.name} ${item.description} ${item.region} ${item.id}`
+      `${item.name} ${item.description} ${typeName(item.type_id)} ${item.region} ${item.id}`
         .toLowerCase()
         .includes(query.value.trim().toLowerCase()),
   ),
@@ -161,6 +251,10 @@ function safeError(e: unknown) {
       "币种精度或元数据已变化。不能用新版本替旧金额背书，请重新读取并核对定价。",
       "Currency metadata changed. Reload and review prices using the current precision.",
     ),
+    TAXONOMY_CONFLICT: t(
+      "类型或地区已更新，请重新读取分类并核对商品归属。",
+      "Types or regions changed. Reload and check the product category.",
+    ),
     INVALID_CATALOG: t(
       "商品信息未通过校验，请检查规格、价格和修改原因。",
       "Check the specifications, prices and change reason.",
@@ -186,9 +280,10 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const [nextCatalog, nextRegistry] = await Promise.all([
+    const [nextCatalog, nextRegistry, nextTaxonomy] = await Promise.all([
       read<Catalog>("/admin/catalog"),
       read<Registry>("/admin/currencies"),
+      read<unknown>("/admin/catalog-taxonomy"),
     ]);
     if (id !== generation) return;
     if (nextCatalog.currency_revision !== nextRegistry.revision) {
@@ -198,8 +293,28 @@ async function load() {
       );
       return;
     }
+    if (
+      !validCatalogTaxonomy(nextTaxonomy) ||
+      nextCatalog.taxonomy_revision !== nextTaxonomy.revision ||
+      nextCatalog.items.some(
+        (item) =>
+          !nextTaxonomy.regions.some(
+            (row) =>
+              row.id === item.region_id &&
+              row.type_id === item.type_id &&
+              row.name === item.region,
+          ),
+      )
+    ) {
+      loadError.value = t(
+        "类型与地区在读取期间发生变化，请重新读取后核对商品归属。",
+        "Categories changed while loading. Reload to check product categories.",
+      );
+      return;
+    }
     catalog.value = nextCatalog;
     registry.value = nextRegistry;
+    taxonomy.value = nextTaxonomy;
   } catch (e) {
     if (id === generation) loadError.value = safeError(e);
   } finally {
@@ -218,7 +333,9 @@ async function openEditor(
     loading.value ||
     loadError.value ||
     !catalog.value ||
-    !registry.value
+    !registry.value ||
+    !taxonomy.value ||
+    (mode === "create" && !canCreate.value)
   )
     return;
   const freshItem = item
@@ -235,7 +352,20 @@ async function openEditor(
   editingId.value = freshItem?.id || "";
   form.name = freshItem?.name || "";
   form.description = freshItem?.description || "";
-  form.region = freshItem?.region || "";
+  form.type_id =
+    freshItem?.type_id ||
+    filterType.value ||
+    sortCatalogEntries(taxonomy.value.types).find((row) => row.enabled)?.id ||
+    "";
+  const defaultRegion = taxonomy.value.regions.find(
+    (row) =>
+      row.id === filterRegion.value &&
+      row.type_id === form.type_id &&
+      row.enabled,
+  );
+  form.region_id = freshItem?.region_id || defaultRegion?.id || "";
+  form.region =
+    taxonomy.value.regions.find((row) => row.id === form.region_id)?.name || "";
   form.cpu = String(freshItem?.cpu || 2);
   form.memory_gb = String(freshItem?.memory_gb || 4);
   form.disk_gb = String(freshItem?.disk_gb || 40);
@@ -254,6 +384,7 @@ async function openEditor(
   });
   draftRevision.value = catalog.value.revision;
   draftCurrencyRevision.value = registry.value.revision;
+  draftTaxonomyRevision.value = taxonomy.value.revision;
   saveError.value = "";
   conflict.value = false;
   uncertain.value = false;
@@ -288,10 +419,19 @@ function validate() {
       "商品名称必填，最多 120 字节。",
       "A product name is required (up to 120 UTF-8 bytes).",
     );
-  if (!form.region.trim() || byteLength(form.region.trim()) > 120)
+  const category = taxonomy.value?.types.find((row) => row.id === form.type_id);
+  const location = taxonomy.value?.regions.find(
+    (row) => row.id === form.region_id && row.type_id === form.type_id,
+  );
+  if (!category || !location || location.name !== form.region)
     return t(
-      "地区必填，最多 120 字节。",
-      "A region is required (up to 120 UTF-8 bytes).",
+      "请选择商品所属的类型和地区。",
+      "Select the product's type and region.",
+    );
+  if (form.available && (!category.enabled || !location.enabled))
+    return t(
+      "上架前请先启用所属类型和地区。",
+      "Enable this type and region before publishing.",
     );
   if (byteLength(form.description.trim()) > 500)
     return t(
@@ -343,6 +483,7 @@ async function save() {
     const common = {
       revision: draftRevision.value,
       currency_revision: draftCurrencyRevision.value,
+      taxonomy_revision: draftTaxonomyRevision.value,
       reason: form.reason.trim(),
     };
     const expected = {
@@ -351,7 +492,9 @@ async function save() {
         editorMode.value === "duplicate"
           ? form.description
           : form.description.trim(),
-      region: form.region.trim(),
+      type_id: form.type_id,
+      region_id: form.region_id,
+      region: form.region,
       cpu: Number(form.cpu),
       memory_gb: Number(form.memory_gb),
       disk_gb: Number(form.disk_gb),
@@ -392,6 +535,7 @@ async function save() {
       !returned ||
       result.revision !== draftRevision.value + 1 ||
       result.currency_revision < draftCurrencyRevision.value ||
+      result.taxonomy_revision !== draftTaxonomyRevision.value ||
       (editorMode.value === "edit"
         ? returned.id !== editingId.value
         : !returned.id ||
@@ -428,7 +572,9 @@ async function save() {
     if (identity !== identityGeneration.value) return;
     const err = e as { status?: number; code?: string; uncertain?: boolean };
     conflict.value =
-      err.code === "CATALOG_CONFLICT" || err.code === "CURRENCY_CONFLICT";
+      err.code === "CATALOG_CONFLICT" ||
+      err.code === "CURRENCY_CONFLICT" ||
+      err.code === "TAXONOMY_CONFLICT";
     uncertain.value = !!err.uncertain || !err.status || err.status >= 500;
     saveError.value = uncertain.value
       ? t(
@@ -446,6 +592,9 @@ watch(
     editorOpen.value = false;
     catalog.value = null;
     registry.value = null;
+    taxonomy.value = null;
+    taxonomyOpen.value = false;
+    filterType.value = filterRegion.value = "";
     success.value = "";
     void load();
   },
@@ -470,14 +619,49 @@ onBeforeUnmount(() => {
           }}
         </p>
       </div>
-      <button
-        class="btn btn-admin create-button"
-        :disabled="loading || !!loadError"
-        @click="openEditor('create')"
-      >
-        <Plus :size="16" />{{ t("新增商品", "New product") }}
-      </button>
+      <div class="catalog-heading-actions">
+        <button
+          class="btn btn-secondary"
+          :disabled="loading"
+          @click="taxonomyOpen = true"
+        >
+          <Layers :size="16" />{{ t("类型与地区", "Types and regions") }}
+        </button>
+        <button
+          class="btn btn-admin create-button"
+          :disabled="loading || !!loadError || !canCreate"
+          @click="openEditor('create')"
+        >
+          <Plus :size="16" />{{ t("新增商品", "New product") }}
+        </button>
+      </div>
     </header>
+    <div v-if="!loading && !loadError" class="classification-filters">
+      <label class="form-group"
+        ><span class="form-label">{{ t("服务器类型", "Server type") }}</span
+        ><UiSelect v-model="filterType" :options="filterTypes"
+      /></label>
+      <label class="form-group"
+        ><span class="form-label">{{ t("地区", "Region") }}</span
+        ><UiSelect v-model="filterRegion" :options="filterRegions"
+      /></label>
+    </div>
+    <div
+      v-if="!loading && !loadError && !canCreate"
+      class="taxonomy-setup-note"
+    >
+      <p>
+        {{
+          t(
+            "先添加并启用服务器类型和地区，再创建商品。",
+            "Add and enable a server type and region before creating products.",
+          )
+        }}
+      </p>
+      <button class="btn btn-secondary" @click="taxonomyOpen = true">
+        {{ t("管理类型与地区", "Manage types and regions") }}
+      </button>
+    </div>
     <div class="catalog-toolbar">
       <div
         class="status-tabs"
@@ -557,6 +741,7 @@ onBeforeUnmount(() => {
       </p>
       <button
         class="btn btn-admin"
+        :disabled="loading || !!loadError || !canCreate"
         @click="
           query = '';
           filter = 'all';
@@ -588,7 +773,8 @@ onBeforeUnmount(() => {
               >
             </div>
             <p>
-              <MapPin :size="12" />{{ item.region
+              {{ typeName(item.type_id) }} · <MapPin :size="12" />{{
+                item.region
               }}<span class="item-id">{{ item.id }}</span>
             </p>
           </div>
@@ -736,15 +922,21 @@ onBeforeUnmount(() => {
                 t('例如：东京 · 均衡型', 'e.g. Tokyo · Balanced')
               " /></label
           ><label class="form-group"
-            ><span class="form-label">{{ t("地区", "Region") }} *</span
-            ><input
-              v-model="form.region"
-              class="form-input"
-              type="text"
+            ><span class="form-label"
+              >{{ t("服务器类型", "Server type") }} *</span
+            ><UiSelect
+              v-model="form.type_id"
+              :options="typeOptions"
               :disabled="saving || uncertain || conflict"
-              :placeholder="
-                t('例如：东京，日本', 'e.g. Tokyo, Japan')
-              " /></label
+              :placeholder="t('选择类型', 'Choose a type')"
+          /></label>
+          <label class="form-group"
+            ><span class="form-label">{{ t("地区", "Region") }} *</span
+            ><UiSelect
+              v-model="form.region_id"
+              :options="regionOptions"
+              :disabled="!form.type_id || saving || uncertain || conflict"
+              :placeholder="t('选择地区', 'Choose a region')" /></label
           ><label class="form-group"
             ><span class="form-label">{{ t("商品描述", "Description") }}</span
             ><textarea
@@ -963,10 +1155,53 @@ onBeforeUnmount(() => {
         </button></template
       >
     </OverlayPanel>
+    <CatalogTaxonomyManager
+      :open="taxonomyOpen"
+      :locale="locale"
+      @close="taxonomyOpen = false"
+      @changed="load"
+    />
   </section>
 </template>
 
 <style scoped>
+.catalog-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.classification-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 640px;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.classification-filters .form-group {
+  margin: 0;
+  min-width: 0;
+}
+.taxonomy-setup-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 0;
+  color: var(--text-secondary);
+}
+@media (max-width: 480px) {
+  .classification-filters {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .catalog-heading-actions {
+    width: 100%;
+  }
+  .catalog-heading-actions .btn {
+    flex: 1;
+  }
+}
+
 .admin-catalog {
   padding: 8px 0 22px;
 }

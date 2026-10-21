@@ -72,6 +72,15 @@ func currencyMigrationCheckMatches(check currencyMigrationCheck, expression stri
 	if expression == "prices_revision >= 1 AND prices_revision <= 9007199254740991" {
 		return currencyMigrationConjunction(actual, []string{"prices_revision >= 1", "prices_revision <= 9007199254740991"})
 	}
+	// These are the two exact bounded conjunctions shipped by migration11.
+	// MySQL renders operand parentheses; arbitrary expressions are not accepted.
+	if expression == "sort_order >= 0 AND sort_order <= 1000000" {
+		return currencyMigrationConjunction(actual, []string{"sort_order >= 0", "sort_order <= 1000000"})
+	}
+	if expression == "revision >= 1 AND revision <= 9007199254740991" {
+		return currencyMigrationConjunction(actual, []string{"revision >= 1", "revision <= 9007199254740991"})
+	}
+
 	return actual == expected
 }
 
