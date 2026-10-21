@@ -6,7 +6,7 @@
 | --- | --- |
 | 正式前端回归 | 837 条 Vitest、19 条 Node 数据层测试通过；typecheck、format:check、生产 build 通过 |
 | 独立依赖/产物核对 | 独立 `npm ci` 后构建产物 SHA-256 与所核对构建一致；`npm audit` 全依赖报告 0 项漏洞 |
-| 实际浏览器抽查 | root 通过 CUA 实际打开正式 dist 的浅色合成只读 fixture，完成桌面商品 89、币种 144、手机 catalog 67，共 300 项测量、0 项失败；另有 3 项 disabled/group-opacity 明确跳过，不计为通过。保存 3 张实际截图，已目视桌面/手机，浅色偏好重载后保留；不是 MySQL-backed E2E、完整浏览器矩阵或 Linux 严格 supervisor 验收 |
+| 实际浏览器抽查 | root 通过 CUA 实际打开正式 dist 的浅色合成只读 fixture，完成桌面商品 89、币种 142、手机 catalog 67，共 298 项文字测量、0 项失败；另有 3 项 disabled/group-opacity 明确跳过，不计为通过。保存 3 张实际截图，已目视桌面/手机，浅色偏好重载后保留；不是 MySQL-backed E2E、完整浏览器矩阵或 Linux 严格 supervisor 验收 |
 | 版本与发布正文 | Core 与插件管理器默认均为 0.5.7，SMTP 1.1.0 及原兼容范围不变；057 发布正文使用本次源码提交与实际 Actions run 链接，056 历史正文保留 |
 
 首次独立分支 CI [39585438889](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39585438889) 对 `17f25ef0532218103d45c16e5db577abc4562b2f` 完成真实 MySQL 全回归、原生 systemd/Nginx HTTPS、备份恢复/回滚以及 Go/npm 安全门禁；完整浏览器仍失败（public/auth 阶段等待站点响应超时），所以该运行整体不是通过。已修正 hash 同文档导航与全新 shell 等待的测试契约，并保留有界诊断，不加重试或放宽超时。另经实际 320px 浏览器发现并修复极长独立报价字段挤压（输入宽度 5→214px、原金额及 12px 字号不变），附加 5 条回归；最终完整 CI 仍须绑定修复后源码重新执行。
@@ -14,6 +14,14 @@
 抽屉 history 标记现按每次打开生成独立 token，避免整页刷新后重用 `useId` 标记。新增 5 项生命周期回归；刷新后重开抽屉，root 用实际 CUA DOM 确认首次关闭后 dialog 数量从 1 变为 0。非文字复选框的内部 `on` 值不当作可见文字测量；长报价浅色弹窗 45 项实际文字测量为 0 失败。
 
 安全扫描的含义须区分：首轮 npm 全依赖 0 项漏洞；Go 为调用与已导入包风险 0，另有 1 条未进入应用依赖调用路径的 module advisory `GO-2026-5932`（`x/crypto/openpgp`），不把门禁成功写成所有依赖绝无风险。
+
+### 控制台实现的完整主干验收
+
+UI 实现提交 `845ddc7b20d1c9b6de7fd34890c440cffa858723` 已在 [main 完整 CI 39590301919](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39590301919) 通过全部三个 job：完整真实 MySQL 回归、原生 systemd/Nginx HTTPS 与安装/升级/备份恢复/回滚、沙箱浏览器、Go/npm 安全扫描、workflow 检查，以及主干专用的正式组件元数据读取。修复前失败运行仍保留，不用本次成功改写历史失败。前一独立分支提交 `0eeb4d7` 的 [CI 39589193071](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39589193071) 也完整通过其适用门禁；其 main-only job 按设计跳过，不能混为全套 main 结论。
+
+同一实现提交的 [隔离 HTTP 性能基线 39590302094](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39590302094) 已完成并成功；它是固定合成 MySQL 数据与回环只读 HTTP 配置，不是生产容量或所有发行版验收，也不据此声称本次 UI 改动提升后端吞吐。
+
+最终文字测量已排除原生 checkbox 的内部 `on` 值，当前为 89 + 142 + 67 = 298 项计算样式文字测量（非完整 WCAG 认证），不是最初包含非文字值的 300 项计数。此后的发行文档校正不修改运行源码、依赖或财务规则；新标签的 Runtime build 仍须对精确最终提交重新执行完整门禁、双构建及独立发布。正常 Release 与六资产公共下载校验不能由上述 CI 预先代替。
 
 正式 CI、原生后端/MySQL、沙箱浏览器、原生安装升级、精确提交双构建、正常 Release 与公共六资产核验结果，以本轮最终提交对应的 Actions run/attempt、来源文件和实际下载记录为准；上述本地检查不能代替这些门禁，也不构成全 Linux 或生产就绪声明。详见 [v0.5.7 发布说明](RELEASE-v0.5.7.md)。下方原有记录及用户未提交内容原样保留，不更改历史标签或正式资产。
 

@@ -1,6 +1,6 @@
 # Core v0.5.7 发布说明
 
-状态：**本地前端接入与检查已完成，正式 CI 与发行结果按本轮 Actions 和 Release 证据确认**。前一正式版本为 Core `0.5.6`，本轮目标为 `v0.5.7`。本地检查不表示新标签、正常 Release、公共资产核验或生产安装已经成功；正式结论必须绑定本轮精确提交与实际运行。历史 [0.5.6 发布资料](RELEASE.md)、旧标签与既有正式附件不重写或覆盖。
+状态：**控制台实现的 main 完整 CI 已通过；最终标签构建、正常 Release 与六资产校验分别按实际证据确认**。前一正式版本为 Core `0.5.6`，本轮目标为 `v0.5.7`。本地检查不表示新标签、正常 Release、公共资产核验或生产安装已经成功；正式结论必须绑定本轮精确提交与实际运行。历史 [0.5.6 发布资料](RELEASE.md)、旧标签与既有正式附件不重写或覆盖。
 
 ## 范围与不变边界
 
@@ -44,9 +44,11 @@ diff -r /workspace/core-a /workspace/core-b
 
 ## 本轮本地验收记录与正式门禁
 
+控制台实现提交 `845ddc7b20d1c9b6de7fd34890c440cffa858723` 的 [main 完整 CI 39590301919](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39590301919) 已通过；本发行文档校正不改运行源码或依赖。最终标签 Runtime build 仍对精确发行提交重新验收、双构建，再由独立发布器交付，不能把前一阶段 CI 当作 Release 成功。
+
 - 正式前端实际完成 837 条 Vitest、19 条 Node 数据层测试，typecheck、format:check、生产 build 通过。
 - 独立 `npm ci` 后复核的生产产物 SHA-256 一致；本轮 `npm audit` 全依赖报告 0 项漏洞。
-- root 通过 CUA 实际打开正式 dist 的浅色合成只读 fixture：桌面商品 89、币种 144、手机 catalog 67，共 300 项测量、0 失败；3 项 disabled/group-opacity 明确跳过，不计通过。保存 3 张实际截图并目视桌面/手机，浅色偏好重载后保留。这不是 MySQL-backed E2E，也不冒充完整双语言、双外观/三品牌和浏览器矩阵验收。
+- root 通过 CUA 实际打开正式 dist 的浅色合成只读 fixture：桌面商品 89、币种 142、手机 catalog 67，共 298 项文字测量、0 失败；3 项 disabled/group-opacity 明确跳过，不计通过。保存 3 张实际截图并目视桌面/手机，浅色偏好重载后保留。这不是 MySQL-backed E2E，也不冒充完整双语言、双外观/三品牌和浏览器矩阵验收。
 - 后端/MySQL、安全与历史升级、原生 Linux amd64/systemd/Nginx HTTPS、严格 supervisor、备份恢复及插件隔离的正式结论，以本轮提交实际 Actions 证据为准；本地 Darwin 的有限入口不替代这些门禁。
 - 精确提交双构建、完整 CI、正常 Release 与匿名下载六资产核验，分别绑定实际 run/attempt、源码与来源文件；不能从本地绿灯或历史 0.5.6 发行推导本次已经通过。
 
