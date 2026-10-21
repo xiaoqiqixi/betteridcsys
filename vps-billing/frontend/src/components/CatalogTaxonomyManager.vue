@@ -89,6 +89,14 @@ function close() {
     discard.value = true;
   else emit("close");
 }
+function keepEditing() {
+  if (!saving.value) discard.value = false;
+}
+function discardChanges() {
+  if (saving.value) return;
+  discard.value = false;
+  emit("close");
+}
 function add() {
   if (!draft.value || locked.value) return;
   if (active.value === "types") {
@@ -150,6 +158,7 @@ async function save() {
   }
   const request = generation;
   const account = identity.value;
+  discard.value = false;
   saving.value = true;
   error.value = "";
   try {
@@ -223,9 +232,17 @@ onBeforeUnmount(() => {
           t("放弃未保存的分类更改？", "Discard unsaved category changes?")
         }}</strong>
         <div class="taxonomy-actions">
-          <button class="btn btn-secondary" @click="discard = false">
+          <button
+            class="btn btn-secondary"
+            :disabled="saving"
+            @click="keepEditing"
+          >
             {{ t("继续编辑", "Keep editing") }}</button
-          ><button class="btn btn-danger" @click="emit('close')">
+          ><button
+            class="btn btn-danger"
+            :disabled="saving"
+            @click="discardChanges"
+          >
             {{ t("放弃更改", "Discard changes") }}
           </button>
         </div>

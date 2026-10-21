@@ -430,6 +430,43 @@ describe("actual taxonomy manager editor", () => {
     expect(mocks.write).not.toHaveBeenCalled();
   });
 
+  it("removes a pending discard prompt when saving and guards its retained actions until taxonomy acknowledgement", async () => {
+    let acknowledge!: (value: unknown) => void;
+    mocks.write.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    const wrapper = manager();
+    await flushPromises();
+    await editName(wrapper);
+    await button(wrapper, "取消").trigger("click");
+    expect(wrapper.find(".taxonomy-alert").exists()).toBe(true);
+    const discard = button(wrapper, "放弃更改").element;
+    const keep = button(wrapper, "继续编辑").element;
+    await button(wrapper, "保存分类").trigger("click");
+    expect(wrapper.find(".taxonomy-alert").exists()).toBe(false);
+    expect(button(wrapper, "取消").attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "保存中…").attributes("disabled")).toBeDefined();
+    // A previously queued click must not bypass the handler's busy guard.
+    discard.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    keep.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(wrapper.emitted("close")).toBeUndefined();
+    expect(wrapper.emitted("changed")).toBeUndefined();
+    expect(mocks.write).toHaveBeenCalledTimes(1);
+    const sent = mocks.write.mock.calls[0]![1];
+    acknowledge({
+      revision: sent.revision + 1,
+      types: sent.types,
+      regions: sent.regions,
+    });
+    await flushPromises();
+    expect(wrapper.emitted("changed")).toHaveLength(1);
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
   it("rejects a late prior-identity read while showing only the new identity's registry", async () => {
     let finishOld!: (value: unknown) => void;
     mocks.read.mockImplementationOnce(
@@ -551,6 +588,62 @@ describe("admin products consume the same actual taxonomy", () => {
     expect(selects[0]!.attributes("value")).toBe("compute");
     expect(selects[1]!.attributes("value")).toBe("");
     expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it("does not let an existing product discard prompt close an in-flight save before its exact acknowledgement", async () => {
+    let acknowledge!: (value: unknown) => void;
+    mocks.write.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    const wrapper = products();
+    await flushPromises();
+    await button(wrapper, "编辑商品").trigger("click");
+    await flushPromises();
+    await wrapper
+      .get(".editor-section > label.form-group input")
+      .setValue("Confirmed new product name");
+    await wrapper
+      .get(".reason-section textarea")
+      .setValue("合成保存与放弃交错回归");
+    await button(wrapper, "取消").trigger("click");
+    expect(wrapper.find(".discard-confirmation").exists()).toBe(true);
+    const discard = button(wrapper, "放弃草稿").element;
+    const keep = button(wrapper, "继续编辑").element;
+    await button(wrapper, "保存商品").trigger("click");
+    expect(wrapper.find(".discard-confirmation").exists()).toBe(false);
+    expect(button(wrapper, "取消").attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "保存中…").attributes("disabled")).toBeDefined();
+    discard.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    keep.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(wrapper.find(".price-editor").exists()).toBe(true);
+    expect(wrapper.find(".saved-message").exists()).toBe(false);
+    expect(mocks.write).toHaveBeenCalledTimes(1);
+    const {
+      revision,
+      currency_revision,
+      taxonomy_revision,
+      reason: _reason,
+      ...plan
+    } = mocks.write.mock.calls[0]![1];
+    const confirmed = { ...plan, id: catalog.items[0]!.id };
+    catalog = {
+      ...catalog,
+      revision: revision + 1,
+      items: [confirmed, catalog.items[1]!],
+    };
+    acknowledge({
+      revision: revision + 1,
+      currency_revision,
+      taxonomy_revision,
+      plan: confirmed,
+    });
+    await flushPromises();
+    expect(wrapper.find(".price-editor").exists()).toBe(false);
+    expect(wrapper.get(".saved-message").text()).toContain("商品已保存");
   });
 
   it("does not offer any enabled create action when no enabled parent/region combination exists", async () => {
