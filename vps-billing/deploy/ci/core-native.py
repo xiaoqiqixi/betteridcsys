@@ -36,7 +36,7 @@ class AcceptanceFailure(RuntimeError):
 
 
 PUBLISHED_VERSION = "0.5.2"
-CANDIDATE_SCHEMA = 11
+CANDIDATE_SCHEMA = 12
 PUBLISHED_SOURCE = "9ed610a283020f50e2cfc529f8b5145b4a9c8fc3"
 PUBLISHED_RELEASE_ID = 413559379
 PUBLISHED_BUILD_RUN_ID = 38702170922
@@ -1042,13 +1042,13 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
             old["exit_code"] != 0 and old["database"]["status"] == "incompatible",
             "Payment schema migration must be current for the candidate and rejected by the published old program")
     count_after = resources.sql("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE();", database=database)
-    require(count_before == "13" and count_prefix7 == "14" and count_after == "19", "Actual migrations did not add the currency, payment and catalog taxonomy tables")
+    require(count_before == "13" and count_prefix7 == "14" and count_after == "20", "Actual migrations did not add the currency, payment and catalog taxonomy tables")
     require(fresh.legacy_business_hash(database, historical_tables) == historical_hash,
             "Additive payment migration changed existing business records")
     require(resources.sql("SELECT COUNT(*) FROM users WHERE disabled<>0 OR revision<>1;", database=database) == "0",
             "Account migration did not initialize historic users to enabled revision1")
-    require(resources.sql("SELECT COUNT(*) FROM plans p LEFT JOIN catalog_regions r ON r.id=p.region_id LEFT JOIN catalog_types t ON t.id=p.type_id WHERE p.type_id<>'generic' OR r.id IS NULL OR t.id IS NULL OR r.type_id<>p.type_id OR BINARY r.name<>BINARY p.region;", database=database) == "0",
-            "Taxonomy migration did not preserve exact legacy regions and generic type relationships")
+    require(resources.sql("SELECT COUNT(*) FROM plans p LEFT JOIN catalog_regions r ON r.id=p.region_id LEFT JOIN catalog_types t ON t.id=p.type_id LEFT JOIN catalog_nodes n ON n.id=p.node_id WHERE p.type_id<>'generic' OR r.id IS NULL OR t.id IS NULL OR r.type_id<>p.type_id OR BINARY r.name<>BINARY p.region OR n.id IS NULL OR n.region_id<>p.region_id OR BINARY n.name<>BINARY '默认节点' OR n.id<>CONCAT('n-',LEFT(SHA2(BINARY p.region_id,256),60));", database=database) == "0",
+            "Taxonomy migration did not preserve exact legacy regions, generic type and default-node relationships")
     require(resources.sql("SELECT (SELECT COUNT(*) FROM payment_attempts)+(SELECT COUNT(*) FROM payment_settlements);", database=database) == "0",
             "Migration invented a payment attempt or settlement")
     require(resources.sql("SELECT SUM(amount_minor) FROM plan_prices WHERE currency='USD';", database=database) == usd_before,
@@ -1057,7 +1057,7 @@ def legacy_schema_migration(resources, executor, fresh, baseline):
     stage("legacy-repeat-migration")
     native.api(fresh.candidate, environment, "-migrate")
     require(fresh.full_data_hash(database) == digest_before, "Repeated migration changed actual database data")
-    return {"schema_before": 6, "published_schema": 7, "schema_after": CANDIDATE_SCHEMA, "tables_before": 13, "tables_published": 14, "tables_after": 19,
+    return {"schema_before": 6, "published_schema": 7, "schema_after": CANDIDATE_SCHEMA, "tables_before": 13, "tables_published": 14, "tables_after": 20,
             "actual_candidate_binary_migrate": True, "unchanged_selected_sql_prefix": True,
             "actual_published_binary_migrate_6_to_7": True, "actual_candidate_binary_migrate_7_to_current": True,
             "audit_query_indexes_added": CANDIDATE_SCHEMA >= 9,

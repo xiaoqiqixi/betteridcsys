@@ -17,7 +17,7 @@ const emit = defineEmits<{ close: []; changed: [] }>();
 const { read, write, generation: identity } = useWorkspace();
 const t = (zh: string, en: string) => (props.locale === "en" ? en : zh);
 const draft = ref<CatalogTaxonomy | null>(null);
-const active = ref<"types" | "regions">("types");
+const active = ref<"types" | "regions" | "nodes">("types");
 const reason = ref("");
 const loading = ref(false);
 const saving = ref(false);
@@ -37,6 +37,12 @@ const typeOptions = computed(() =>
     label: item.name || t("未命名类型", "Unnamed type"),
   })),
 );
+const regionOptions = computed(() =>
+  sortCatalogEntries(draft.value?.regions || []).map((item) => ({
+    value: item.id,
+    label: `${draft.value?.types.find((type) => type.id === item.type_id)?.name || "—"} · ${item.name || t("未命名地区", "Unnamed region")}`,
+  })),
+);
 function safeError(e: unknown) {
   const code = (e as { code?: string }).code;
   if (code === "TAXONOMY_IN_USE")
@@ -51,8 +57,8 @@ function safeError(e: unknown) {
     );
   if (code === "INVALID_TAXONOMY" || code === "INVALID_BODY")
     return t(
-      "请检查名称、所属类型和排序；分类名称不可为空，排序范围为 0–1000000。",
-      "Check names, parent types and sort orders. Names are required; sort orders range from 0 to 1000000.",
+      "请检查名称、所属分类和排序；分类名称不可为空，排序范围为 0–1000000。",
+      "Check names, parent categories and sort orders. Names are required; sort orders range from 0 to 1000000.",
     );
   if (code === "FORBIDDEN" || code === "AUTH_REQUIRED")
     return t(
@@ -107,13 +113,22 @@ function add() {
       sort_order: draft.value.types.length * 10,
       enabled: true,
     });
-  } else {
+  } else if (active.value === "regions") {
     if (draft.value.regions.length >= 512 || !draft.value.types.length) return;
     draft.value.regions.push({
       id: `region-${crypto.randomUUID()}`,
       type_id: draft.value.types[0]!.id,
       name: "",
       sort_order: draft.value.regions.length * 10,
+      enabled: true,
+    });
+  } else {
+    if (draft.value.nodes.length >= 2048 || !draft.value.regions.length) return;
+    draft.value.nodes.push({
+      id: `node-${crypto.randomUUID()}`,
+      region_id: draft.value.regions[0]!.id,
+      name: "",
+      sort_order: draft.value.nodes.length * 10,
       enabled: true,
     });
   }
@@ -129,13 +144,22 @@ function remove(id: string) {
       return;
     }
     draft.value.types = draft.value.types.filter((row) => row.id !== id);
-  } else
+  } else if (active.value === "regions") {
+    if (draft.value.nodes.some((node) => node.region_id === id)) {
+      error.value = t(
+        "该地区下还有节点，请先调整节点归属或停用该地区。",
+        "This region still has nodes. Reassign them or disable the region instead.",
+      );
+      return;
+    }
     draft.value.regions = draft.value.regions.filter((row) => row.id !== id);
+  } else draft.value.nodes = draft.value.nodes.filter((row) => row.id !== id);
 }
 function canonical(value: CatalogTaxonomy) {
   return JSON.stringify({
     types: sortCatalogEntries(value.types),
     regions: sortCatalogEntries(value.regions),
+    nodes: sortCatalogEntries(value.nodes),
   });
 }
 async function save() {
@@ -144,6 +168,7 @@ async function save() {
     revision: draft.value.revision,
     types: draft.value.types.map((row) => ({ ...row, name: row.name.trim() })),
     regions: draft.value.regions.map((row) => ({ ...row })),
+    nodes: draft.value.nodes.map((row) => ({ ...row, name: row.name.trim() })),
   };
   if (
     !validCatalogTaxonomy(payload) ||
@@ -151,8 +176,8 @@ async function save() {
     new TextEncoder().encode(reason.value.trim()).length > 500
   ) {
     error.value = t(
-      "请完整填写分类名称、所属类型、有效排序及操作原因（最多 500 字节）。",
-      "Complete category names, parent types, valid sort orders and a change reason (up to 500 UTF-8 bytes).",
+      "请完整填写分类名称、所属分类、有效排序及操作原因（最多 500 字节）。",
+      "Complete category names, parent categories, valid sort orders and a change reason (up to 500 UTF-8 bytes).",
     );
     return;
   }
@@ -217,7 +242,7 @@ onBeforeUnmount(() => {
   <OverlayPanel
     :open="open"
     :busy="saving"
-    :title="t('类型与地区', 'Types and regions')"
+    :title="t('类型、地区与节点', 'Types, regions and nodes')"
     :description="
       t(
         '先整理商品归属，再添加套餐。',
@@ -268,6 +293,15 @@ onBeforeUnmount(() => {
         >
           {{ t("地区", "Regions")
           }}<span v-if="draft">{{ draft.regions.length }}</span>
+        </button>
+        <button
+          class="btn"
+          :class="active === 'nodes' ? 'btn-admin' : 'btn-secondary'"
+          :aria-pressed="active === 'nodes'"
+          @click="active = 'nodes'"
+        >
+          {{ t("节点", "Nodes")
+          }}<span v-if="draft">{{ draft.nodes.length }}</span>
         </button>
       </div>
       <UiLoading
@@ -341,7 +375,7 @@ onBeforeUnmount(() => {
             }}
           </p>
         </div>
-        <div v-else class="taxonomy-list">
+        <div v-else-if="active === 'regions'" class="taxonomy-list">
           <fieldset
             v-for="(row, index) in draft.regions"
             :key="row.id"
@@ -409,21 +443,91 @@ onBeforeUnmount(() => {
             }}
           </p>
         </div>
+        <div v-else class="taxonomy-list">
+          <fieldset
+            v-for="(row, index) in draft.nodes"
+            :key="row.id"
+            class="taxonomy-row"
+            :disabled="locked"
+          >
+            <legend>{{ t(`节点 ${index + 1}`, `Node ${index + 1}`) }}</legend>
+            <label class="form-group taxonomy-name"
+              ><span class="form-label">{{ t("节点名称", "Node name") }}</span
+              ><input
+                v-model="row.name"
+                class="form-input"
+                :aria-label="
+                  t(`节点 ${index + 1} 名称`, `Node ${index + 1} name`)
+                "
+                :placeholder="t('例如：香港一区', 'e.g. Hong Kong 1')"
+            /></label>
+            <label class="form-group taxonomy-parent"
+              ><span class="form-label">{{ t("所属地区", "Region") }}</span
+              ><UiSelect
+                v-model="row.region_id"
+                :options="regionOptions"
+                :disabled="locked"
+                :aria-label="
+                  t(`节点 ${index + 1} 所属地区`, `Node ${index + 1} region`)
+                "
+            /></label>
+            <label class="form-group taxonomy-sort"
+              ><span class="form-label">{{ t("排序", "Sort order") }}</span
+              ><input
+                v-model.number="row.sort_order"
+                class="form-input"
+                inputmode="numeric"
+                :aria-label="
+                  t(`节点 ${index + 1} 排序`, `Node ${index + 1} sort order`)
+                "
+            /></label>
+            <label class="taxonomy-enabled"
+              ><input v-model="row.enabled" type="checkbox" />{{
+                t("启用", "Enabled")
+              }}</label
+            >
+            <button
+              class="btn btn-ghost taxonomy-remove"
+              :aria-label="
+                t(
+                  `移除节点 ${row.name || index + 1}`,
+                  `Remove node ${row.name || index + 1}`,
+                )
+              "
+              @click="remove(row.id)"
+            >
+              <Trash2 :size="16" />
+            </button>
+          </fieldset>
+          <p v-if="!draft.nodes.length" class="taxonomy-help">
+            {{
+              t(
+                "为地区添加可选节点，再为节点添加套餐。",
+                "Add nodes to your regions, then assign plans to a node.",
+              )
+            }}
+          </p>
+        </div>
         <button
           class="btn btn-secondary taxonomy-add"
           :disabled="
             locked ||
             (active === 'regions' && !draft.types.length) ||
+            (active === 'nodes' && !draft.regions.length) ||
             (active === 'types'
               ? draft.types.length >= 128
-              : draft.regions.length >= 512)
+              : active === 'regions'
+                ? draft.regions.length >= 512
+                : draft.nodes.length >= 2048)
           "
           @click="add"
         >
           <Plus :size="16" />{{
             active === "types"
               ? t("新增类型", "Add type")
-              : t("新增地区", "Add region")
+              : active === "regions"
+                ? t("新增地区", "Add region")
+                : t("新增节点", "Add node")
           }}
         </button>
         <label class="form-group taxonomy-reason"

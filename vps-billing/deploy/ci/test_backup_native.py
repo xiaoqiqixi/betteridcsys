@@ -215,7 +215,7 @@ class BackupMetadataGrammarTest(unittest.TestCase):
 
     def test_historical_prefix_shapes_do_not_invent_future_account_columns(self):
         paths = sorted((BACKUP.parents[2] / "backend/migrations").glob("[0-9][0-9][0-9]_*.sql"))
-        self.assertEqual(len(paths), 11, "Review this fixture when a migration is added")
+        self.assertEqual(len(paths), 12, "Review this fixture when a migration is added")
         shape = {"schema_migrations": ["version", "checksum", "applied_at"]}
         prefixes = {}
         for version, path in enumerate(paths, 1):
@@ -236,6 +236,12 @@ class BackupMetadataGrammarTest(unittest.TestCase):
         self.assertEqual(prefixes[11]["catalog_taxonomy_settings"], ["id", "revision"])
         self.assertEqual({k: v for k, v in prefixes[11].items() if k not in {"plans", "catalog_types", "catalog_regions", "catalog_taxonomy_settings"}},
                          {k: v for k, v in prefixes[10].items() if k != "plans"})
+        self.assertEqual(prefixes[12]["plans"], prefixes[11]["plans"] + ["node_id"])
+        self.assertEqual(prefixes[12]["catalog_nodes"], ["id", "region_id", "name", "sort_order", "enabled"])
+        self.assertEqual({k: v for k, v in prefixes[12].items() if k not in {"plans", "catalog_nodes"}},
+                         {k: v for k, v in prefixes[11].items() if k != "plans"})
+        self.assertNotIn("catalog_nodes", prefixes[11])
+        self.assertNotIn("node_id", prefixes[11]["plans"])
         self.assertEqual(prefixes[8], prefixes[9], "Index-only migration must preserve column inventory")
         self.assertNotIn("currency_settings", prefixes[6])
         self.assertIn("currency_settings", prefixes[7])
@@ -254,6 +260,43 @@ class BackupMetadataGrammarTest(unittest.TestCase):
         self.assertEqual(set(shape), {"plans", "orders", "plan_prices", "catalog_types", "catalog_regions", "catalog_taxonomy_settings"})
         with self.assertRaises(self.rejected):
             self.extend(shape, migration.read_text())
+
+    def test_real_twelfth_node_migration_adds_only_node_binding(self):
+        shape = {"plans": ["id", "region_id", "type_id"],
+                 "catalog_regions": ["id", "type_id", "name", "sort_order", "enabled"],
+                 "catalog_taxonomy_settings": ["id", "revision"],
+                 "orders": ["id", "plan_snapshot"]}
+        before = {key: list(value) for key, value in shape.items()}
+        migration = BACKUP.parents[2] / "backend/migrations/012_catalog_nodes.sql"
+        self.extend(shape, migration.read_text())
+        self.assertEqual(shape["plans"], before["plans"] + ["node_id"])
+        self.assertEqual(shape["catalog_nodes"], ["id", "region_id", "name", "sort_order", "enabled"])
+        self.assertEqual({key: value for key, value in shape.items() if key not in {"plans", "catalog_nodes"}},
+                         {key: value for key, value in before.items() if key != "plans"})
+        with self.assertRaises(self.rejected):
+            self.extend(shape, migration.read_text())
+
+    def test_node_initialization_grammar_is_exact_not_a_general_data_mutation_escape(self):
+        shape = {"plans": ["id", "region_id", "node_id"],
+                 "catalog_nodes": ["id", "region_id", "name", "sort_order", "enabled"],
+                 "catalog_regions": ["id"]}
+        migration = BACKUP.parents[2] / "backend/migrations/012_catalog_nodes.sql"
+        data_statements = [part.strip() for part in migration.read_text().split(";")
+                           if part.strip().startswith(("INSERT ", "UPDATE "))]
+        self.assertEqual(len(data_statements), 2)
+        for statement in data_statements:
+            self.extend({key: list(value) for key, value in shape.items()}, statement)
+            for changed in (statement.replace("'n-'", "'unreviewed-'"),
+                            statement.replace("默认节点", "unreviewed") if statement.startswith("INSERT") else statement.replace("WHERE node_id IS NULL", "WHERE TRUE")):
+                with self.subTest(statement=changed), self.assertRaises(self.rejected):
+                    self.extend({key: list(value) for key, value in shape.items()}, changed)
+        for sql in ("UPDATE catalog_taxonomy_settings SET revision=revision+1",
+                    "ALTER TABLE plans ADD CONSTRAINT plans_catalog_node FOREIGN KEY(node_id) REFERENCES catalog_regions(id)",
+                    "UPDATE plans SET node_id='unreviewed'"):
+            with self.subTest(sql=sql), self.assertRaises(self.rejected):
+                self.extend({key: list(value) for key, value in shape.items()}, sql)
+        with self.assertRaises(self.rejected):
+            self.extend({"plans": ["id", "region_id", "node_id"], "catalog_regions": ["id"]}, data_statements[1])
 
     def test_taxonomy_grammar_still_rejects_financial_mutations_and_unknown_relations(self):
         shape = {"plans": ["id", "region", "type_id", "region_id"], "catalog_types": ["id"], "catalog_regions": ["id"], "catalog_taxonomy_settings": ["id", "revision"]}

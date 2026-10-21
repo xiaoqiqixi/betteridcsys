@@ -62,7 +62,17 @@ func catalogTestInput(t *testing.T, f catalogFixture, revision int64) CatalogInp
 		t.Fatal("missing fixture taxonomy region")
 	}
 	region := taxonomy.Regions[0]
-	return CatalogInput{TaxonomyRevision: taxonomy.Revision, TypeID: region.TypeID, RegionID: region.ID, Revision: revision, CurrencyRevision: config.Revision, Reason: "Operator reviewed specifications and independent prices", Name: "Catalog fixture", Description: "A real product\nNo automatic provisioning", CPU: 2, MemoryGB: 4, DiskGB: 80, TransferTB: 2, Region: region.Name, Available: true, Prices: []CatalogPrice{{"CNY", 3900, true}}}
+	nodeID := ""
+	for _, node := range taxonomy.Nodes {
+		if node.RegionID == region.ID {
+			nodeID = node.ID
+			break
+		}
+	}
+	if nodeID == "" {
+		t.Fatal("missing fixture taxonomy node")
+	}
+	return CatalogInput{TaxonomyRevision: taxonomy.Revision, TypeID: region.TypeID, RegionID: region.ID, NodeID: nodeID, Revision: revision, CurrencyRevision: config.Revision, Reason: "Operator reviewed specifications and independent prices", Name: "Catalog fixture", Description: "A real product\nNo automatic provisioning", CPU: 2, MemoryGB: 4, DiskGB: 80, TransferTB: 2, Region: region.Name, Available: true, Prices: []CatalogPrice{{"CNY", 3900, true}}}
 }
 func readCatalog(t *testing.T, f catalogFixture) CatalogView {
 	t.Helper()
@@ -542,7 +552,11 @@ func runCatalogHTTP(t *testing.T, f catalogFixture, adminPassword, customerPassw
 		t.Fatal("CSRF denial called catalog store")
 	}
 	raw, _ := json.Marshal(input)
-	bad := []string{
+	var missingNode map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &missingNode)
+	delete(missingNode, "node_id")
+	withoutNode, _ := json.Marshal(missingNode)
+	bad := []string{string(withoutNode),
 		strings.Replace(string(raw), `"available":true,`, "", 1), strings.Replace(string(raw), `"revision":1,`, "", 1), strings.Replace(string(raw), `"currency_revision":1,`, "", 1),
 		strings.Replace(string(raw), `"reason":`, `"reason":null,"unused":`, 1), strings.Replace(string(raw), `"name":`, `"name":"duplicate","name":`, 1), strings.Replace(string(raw), `"name":`, `"Name":`, 1),
 		strings.TrimSuffix(string(raw), "}") + `,"id":"attacker"}`, strings.Replace(string(raw), `"amount_minor":3900`, `"amount_minor":39.5`, 1),
@@ -707,7 +721,7 @@ func TestAdminCatalogNoSilentLimitOrAliasing(t *testing.T) {
 	seed := m.plans[0]
 	m.mu.Lock()
 	for i := 0; i < 1005; i++ {
-		m.plans = append(m.plans, Plan{ID: fmt.Sprintf("bulk-%04d", i), Name: "Fixture", CPU: 1, MemoryGB: 1, DiskGB: 1, TransferTB: 1, Region: seed.Region, TypeID: seed.TypeID, RegionID: seed.RegionID})
+		m.plans = append(m.plans, Plan{ID: fmt.Sprintf("bulk-%04d", i), Name: "Fixture", CPU: 1, MemoryGB: 1, DiskGB: 1, TransferTB: 1, Region: seed.Region, TypeID: seed.TypeID, RegionID: seed.RegionID, NodeID: seed.NodeID})
 	}
 	m.mu.Unlock()
 	view := readCatalog(t, f)

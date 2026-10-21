@@ -4,7 +4,7 @@ Core `0.5.3` 提供 SMTP 与支付两个独立运行时插槽。插件是单独�
 
 官方 `email.smtp` 插件版本为 `1.1.0`，使用 `aster.smtp/1`，支持 Core `>=0.4.0,<0.6.0`。Core 没有内置 SMTP 传输回退。支付采用 `aster.payment/1`，具体渠道由开发者按[支付插件接入指南](PAYMENT_PLUGINS.md)实现；官方未提供真实收款渠道，默认关闭。主控、被控、SMS 和对象存储尚无运行时安装协议。
 
-以下安装流程针对 Core `0.5.3` 与 SMTP `1.1.0`。SMTP 支持管理员配置与单封固定测试邮件；业务通知、邮箱验证、找回密码和发送队列需要各自的业务实现。
+以下安装流程针对目标 Core `0.5.8` 与 SMTP `1.1.0`。SMTP 支持管理员配置与单封固定测试邮件；业务通知、邮箱验证、找回密码和发送队列需要各自的业务实现。
 
 ## 程序、审批与服务
 
@@ -43,11 +43,11 @@ API unit 中的 `SupplementaryGroups=aster-plugins` 需要该组已经存在；�
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.8 \
   verify /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
   --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.8 \
   install /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64-resources.tar.gz --sha256 RESOURCE_SHA256 \
   --binary /var/lib/aster-install/aster-smtp-1.1.0-linux-amd64 --binary-sha256 BINARY_SHA256
 ```
@@ -78,9 +78,9 @@ sudo systemctl restart aster-api
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 status
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.8 status
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.8 \
   select --id email.smtp --version 1.1.0 \
   --worker-uid "$(id -u aster-smtp)" --client-uid "$(id -u aster)" \
   --socket /run/aster-smtp/plugin.sock --target SMTP_HOST:SMTP_PORT --revision 0
@@ -90,7 +90,7 @@ sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.8 \
   enable --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 sudo systemctl status aster-smtp --no-pager
@@ -108,7 +108,7 @@ sudo systemctl status aster-smtp --no-pager
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.8 \
   rollback --version OLD_PLUGIN_VERSION --revision CURRENT_REVISION
 sudo systemctl restart aster-smtp
 ```
@@ -125,7 +125,7 @@ Core 和 SMTP 版本不一一对应；独立补丁版可以在 manifest 声明�
 
 ```sh
 sudo python3 /opt/aster/current/deploy/scripts/plugin-manager.py \
-  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.7 \
+  --root /opt/aster/plugins --policy /etc/aster/plugins.json --core-version 0.5.8 \
   disable --revision CURRENT_REVISION
 sudo systemctl stop aster-smtp
 ```

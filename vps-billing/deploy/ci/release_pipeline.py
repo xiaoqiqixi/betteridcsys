@@ -1191,6 +1191,39 @@ def publish(api, policy, archive_bytes):
                 f"[验证记录]({source_docs}VALIDATION.md) · [安装]({source_docs}INSTALL.md) · "
                 f"[升级恢复]({source_docs}UPGRADE.md) · [宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
             )
+        if kind == "core" and provenance["version"] == "0.5.8":
+            fields["body"] = (
+                "## Core 0.5.8\n\n"
+                "以正式 Core 0.5.7 为基线，实现类型→地区→节点→套餐的真实商品目录。"
+                "管理员维护分类名称、排序、启停和商品归属；节点只是逻辑购买分类，不是实际资源或线路。"
+                "客户按完整层级选择，默认选中当前节点的首个套餐，有效报价同步显示于桌面摘要与手机底栏；"
+                "未报价不跨套餐替代，确认购买仍需明确操作。\n\n"
+                "正式 0.5.7 的 schema 10 升级需应用 011、012，最终要求 schema 12；"
+                "既有 001–011 迁移原文与校验和不改。011 保留旧商品的地区原文并映射至通用类型；"
+                "012 为每个已有地区建立确定的“默认节点”，仅回填当前商品归属，初始化不递增 taxonomy 或报价 revision。"
+                "后续分类编辑在事务内同步递增分类与报价 revision，旧报价失效，须重读后重新确认。"
+                "停用、删除或移动被引用分类须遵守商品保护；商品发布和新订单校验完整启用父链，不能用 plan_id 绕过。\n\n"
+                "默认中文/CNY，币种独立定价；不自动换汇，不改金额精度、支付幂等或历史快照。"
+                "既有合法幂等重放仍返回原订单；不从当前分类补造历史字段。"
+                "认证/CSRF、角色与所有权权限边界、最后管理员保护及脱敏审计保持；"
+                "写入冲突和不确定结果不显示成功，不自动重放业务操作。"
+                "升级前维护停写并停止旧 API，验证备份与隔离恢复，再迁移和同时切换匹配前后端。"
+                "schema 10/11 程序不能直接接回 schema 12；不自动向下迁移或导入数据库，回滚须恢复匹配备份与旧程序。\n\n"
+                "原生 Linux amd64，Go + Vue/TypeScript + MySQL，不使用 Docker。"
+                "API、插件宿主、资源及 BUILD/PROVENANCE/SHA256SUMS 共六资产须同版本并核验来源。"
+                "官方 SMTP 仍独立 1.1.0、aster.smtp/1、Core >=0.4.0,<0.6.0，默认关闭，仅支持管理员固定测试邮件。"
+                "不新增真实 VPS 开通、资源管理或新支付渠道；支付协议仍为 aster.payment/1。\n\n"
+                f"[源码提交](https://github.com/{REPOSITORY}/commit/{provenance['source_sha']}) · "
+                f"[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，"
+                f"尝试 {policy['run_attempt']}。"
+                "实际执行范围和结果以本次精确提交的运行及验证记录为准，历史绿灯不代替本版验收。"
+                "Ubuntu 22/24 与其他发行版分别记录，不宣称所有 Linux 均已支持；"
+                "合成支付/邮件、回环 HTTPS 和测试 CA 不代表真实渠道、公共证书续期或生产容量验收。\n\n"
+                f"[v0.5.8 发布说明与边界]({source_docs}RELEASE-v0.5.8.md) · "
+                f"[商品分类]({source_docs}CATALOG_TAXONOMY.md) · [验证记录]({source_docs}VALIDATION.md) · "
+                f"[安装]({source_docs}INSTALL.md) · [升级恢复]({source_docs}UPGRADE.md) · "
+                f"[宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
+            )
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

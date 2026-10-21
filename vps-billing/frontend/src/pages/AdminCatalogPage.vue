@@ -56,6 +56,7 @@ interface CatalogItem {
   id: string;
   type_id: string;
   region_id: string;
+  node_id: string;
   name: string;
   description: string;
   region: string;
@@ -87,6 +88,7 @@ const taxonomy = ref<CatalogTaxonomy | null>(null);
 const taxonomyOpen = ref(false);
 const filterType = ref("");
 const filterRegion = ref("");
+const filterNode = ref("");
 const loading = ref(true);
 const loadError = ref("");
 const query = ref("");
@@ -116,6 +118,7 @@ const form = reactive({
   region: "",
   type_id: "",
   region_id: "",
+  node_id: "",
   cpu: "2",
   memory_gb: "4",
   disk_gb: "40",
@@ -149,6 +152,33 @@ const regionOptions = computed(() =>
       label: row.name + (row.enabled ? "" : t("（已停用）", " (disabled)")),
     })),
 );
+const nodeOptions = computed(() =>
+  sortCatalogEntries(taxonomy.value?.nodes || [])
+    .filter(
+      (row) =>
+        row.region_id === form.region_id &&
+        (row.enabled || row.id === form.node_id),
+    )
+    .map((row) => ({
+      value: row.id,
+      label: row.name + (row.enabled ? "" : t("（已停用）", " (disabled)")),
+    })),
+);
+const filterNodes = computed(() => [
+  { value: "", label: t("不限节点", "Any node") },
+  ...sortCatalogEntries(taxonomy.value?.nodes || [])
+    .filter(
+      (row) =>
+        (!filterRegion.value || row.region_id === filterRegion.value) &&
+        (!filterType.value ||
+          taxonomy.value?.regions.some(
+            (region) =>
+              region.id === row.region_id &&
+              region.type_id === filterType.value,
+          )),
+    )
+    .map((row) => ({ value: row.id, label: row.name })),
+]);
 const filterTypes = computed(() => [
   { value: "", label: t("所有类型", "All types") },
   ...sortCatalogEntries(taxonomy.value?.types || []).map((row) => ({
@@ -164,14 +194,21 @@ const filterRegions = computed(() => [
 ]);
 const canCreate = computed(
   () =>
-    taxonomy.value?.regions.some(
-      (row) =>
-        row.enabled &&
-        taxonomy.value?.types.some(
-          (parent) => parent.id === row.type_id && parent.enabled,
+    taxonomy.value?.nodes.some(
+      (node) =>
+        node.enabled &&
+        taxonomy.value?.regions.some(
+          (region) =>
+            region.id === node.region_id &&
+            region.enabled &&
+            taxonomy.value?.types.some(
+              (type) => type.id === region.type_id && type.enabled,
+            ),
         ),
     ) ?? false,
 );
+const nodeName = (id: string) =>
+  taxonomy.value?.nodes.find((row) => row.id === id)?.name || "—";
 const typeName = (id: string) =>
   taxonomy.value?.types.find((row) => row.id === id)?.name || "—";
 watch(
@@ -190,6 +227,17 @@ watch(
 watch(
   () => form.region_id,
   () => {
+    if (
+      !taxonomy.value?.nodes.some(
+        (node) => node.id === form.node_id && node.region_id === form.region_id,
+      )
+    ) {
+      const available =
+        taxonomy.value?.nodes.filter(
+          (node) => node.region_id === form.region_id && node.enabled,
+        ) || [];
+      form.node_id = available.length === 1 ? available[0]!.id : "";
+    }
     form.region =
       taxonomy.value?.regions.find(
         (row) => row.id === form.region_id && row.type_id === form.type_id,
@@ -198,6 +246,10 @@ watch(
 );
 watch(filterType, () => {
   filterRegion.value = "";
+  filterNode.value = "";
+});
+watch(filterRegion, () => {
+  filterNode.value = "";
 });
 let generation = 0;
 const visibleItems = computed(() =>
@@ -205,9 +257,10 @@ const visibleItems = computed(() =>
     (item) =>
       (!filterType.value || item.type_id === filterType.value) &&
       (!filterRegion.value || item.region_id === filterRegion.value) &&
+      (!filterNode.value || item.node_id === filterNode.value) &&
       (filter.value === "all" ||
         item.available === (filter.value === "published")) &&
-      `${item.name} ${item.description} ${typeName(item.type_id)} ${item.region} ${item.id}`
+      `${item.name} ${item.description} ${typeName(item.type_id)} ${item.region} ${nodeName(item.node_id)} ${item.id}`
         .toLowerCase()
         .includes(query.value.trim().toLowerCase()),
   ),
@@ -252,8 +305,8 @@ function safeError(e: unknown) {
       "Currency metadata changed. Reload and review prices using the current precision.",
     ),
     TAXONOMY_CONFLICT: t(
-      "类型或地区已更新，请重新读取分类并核对商品归属。",
-      "Types or regions changed. Reload and check the product category.",
+      "类型、地区或节点已更新，请重新读取分类并核对商品归属。",
+      "Types, regions or nodes changed. Reload and check the product category.",
     ),
     INVALID_CATALOG: t(
       "商品信息未通过校验，请检查规格、价格和修改原因。",
@@ -303,11 +356,15 @@ async function load() {
               row.id === item.region_id &&
               row.type_id === item.type_id &&
               row.name === item.region,
+          ) ||
+          !nextTaxonomy.nodes.some(
+            (node) =>
+              node.id === item.node_id && node.region_id === item.region_id,
           ),
       )
     ) {
       loadError.value = t(
-        "类型与地区在读取期间发生变化，请重新读取后核对商品归属。",
+        "类型、地区与节点在读取期间发生变化，请重新读取后核对商品归属。",
         "Categories changed while loading. Reload to check product categories.",
       );
       return;
@@ -364,6 +421,15 @@ async function openEditor(
       row.enabled,
   );
   form.region_id = freshItem?.region_id || defaultRegion?.id || "";
+  form.node_id =
+    freshItem?.node_id ||
+    taxonomy.value.nodes.find(
+      (node) =>
+        node.id === filterNode.value &&
+        node.region_id === form.region_id &&
+        node.enabled,
+    )?.id ||
+    "";
   form.region =
     taxonomy.value.regions.find((row) => row.id === form.region_id)?.name || "";
   form.cpu = String(freshItem?.cpu || 2);
@@ -431,15 +497,21 @@ function validate() {
   const location = taxonomy.value?.regions.find(
     (row) => row.id === form.region_id && row.type_id === form.type_id,
   );
-  if (!category || !location || location.name !== form.region)
+  const node = taxonomy.value?.nodes.find(
+    (row) => row.id === form.node_id && row.region_id === form.region_id,
+  );
+  if (!category || !location || !node || location.name !== form.region)
     return t(
-      "请选择商品所属的类型和地区。",
-      "Select the product's type and region.",
+      "请选择商品所属的类型、地区和节点。",
+      "Select the product's type, region and node.",
     );
-  if (form.available && (!category.enabled || !location.enabled))
+  if (
+    form.available &&
+    (!category.enabled || !location.enabled || !node.enabled)
+  )
     return t(
-      "上架前请先启用所属类型和地区。",
-      "Enable this type and region before publishing.",
+      "上架前请先启用所属类型、地区和节点。",
+      "Enable this type, region and node before publishing.",
     );
   if (byteLength(form.description.trim()) > 500)
     return t(
@@ -503,6 +575,7 @@ async function save() {
           : form.description.trim(),
       type_id: form.type_id,
       region_id: form.region_id,
+      node_id: form.node_id,
       region: form.region,
       cpu: Number(form.cpu),
       memory_gb: Number(form.memory_gb),
@@ -603,7 +676,7 @@ watch(
     registry.value = null;
     taxonomy.value = null;
     taxonomyOpen.value = false;
-    filterType.value = filterRegion.value = "";
+    filterType.value = filterRegion.value = filterNode.value = "";
     success.value = "";
     void load();
   },
@@ -634,7 +707,9 @@ onBeforeUnmount(() => {
           :disabled="loading"
           @click="taxonomyOpen = true"
         >
-          <Layers :size="16" />{{ t("类型与地区", "Types and regions") }}
+          <Layers :size="16" />{{
+            t("类型、地区与节点", "Types, regions and nodes")
+          }}
         </button>
         <button
           class="btn btn-admin create-button"
@@ -654,6 +729,10 @@ onBeforeUnmount(() => {
         ><span class="form-label">{{ t("地区", "Region") }}</span
         ><UiSelect v-model="filterRegion" :options="filterRegions"
       /></label>
+      <label class="form-group"
+        ><span class="form-label">{{ t("节点", "Node") }}</span
+        ><UiSelect v-model="filterNode" :options="filterNodes"
+      /></label>
     </div>
     <div
       v-if="!loading && !loadError && !canCreate"
@@ -662,13 +741,13 @@ onBeforeUnmount(() => {
       <p>
         {{
           t(
-            "先添加并启用服务器类型和地区，再创建商品。",
-            "Add and enable a server type and region before creating products.",
+            "先添加并启用类型、地区和节点，再创建商品。",
+            "Add and enable a type, region and node before creating products.",
           )
         }}
       </p>
       <button class="btn btn-secondary" @click="taxonomyOpen = true">
-        {{ t("管理类型与地区", "Manage types and regions") }}
+        {{ t("管理类型、地区与节点", "Manage types, regions and nodes") }}
       </button>
     </div>
     <div class="catalog-toolbar">
@@ -784,6 +863,8 @@ onBeforeUnmount(() => {
             <p>
               {{ typeName(item.type_id) }} · <MapPin :size="12" />{{
                 item.region
+              }}
+              · {{ nodeName(item.node_id)
               }}<span class="item-id">{{ item.id }}</span>
             </p>
           </div>
@@ -944,8 +1025,17 @@ onBeforeUnmount(() => {
               v-model="form.region_id"
               :options="regionOptions"
               :disabled="!form.type_id || saving || uncertain || conflict"
-              :placeholder="t('选择地区', 'Choose a region')" /></label
-          ><label class="form-group"
+              :placeholder="t('选择地区', 'Choose a region')"
+          /></label>
+          <label class="form-group"
+            ><span class="form-label">{{ t("节点", "Node") }} *</span
+            ><UiSelect
+              v-model="form.node_id"
+              :options="nodeOptions"
+              :disabled="!form.region_id || saving || uncertain || conflict"
+              :placeholder="t('选择节点', 'Choose a node')"
+          /></label>
+          <label class="form-group"
             ><span class="form-label">{{ t("商品描述", "Description") }}</span
             ><textarea
               v-model="form.description"
@@ -1180,8 +1270,8 @@ onBeforeUnmount(() => {
 }
 .classification-filters {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  max-width: 640px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  max-width: 900px;
   gap: 16px;
   margin-bottom: 20px;
 }

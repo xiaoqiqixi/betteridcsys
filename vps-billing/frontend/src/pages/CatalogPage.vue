@@ -61,6 +61,7 @@ interface Plan {
   description: string;
   type_id: string;
   region_id: string;
+  node_id: string;
   taxonomy_revision: number;
   region: string;
   cpu: number;
@@ -94,6 +95,7 @@ const loading = ref(true);
 const error = ref("");
 const typeId = ref("");
 const regionId = ref("");
+const nodeId = ref("");
 const purchasing = ref<Plan | null>(null);
 const reviewOpen = ref(false);
 const hostname = ref("");
@@ -136,27 +138,81 @@ const regions = computed(() =>
 const selectedRegion = computed(() =>
   regions.value.find((region) => region.id === regionId.value),
 );
+const nodes = computed(() =>
+  sortCatalogEntries(
+    (taxonomy.value?.nodes ?? []).filter(
+      (node) =>
+        selectedRegion.value &&
+        node.enabled &&
+        node.region_id === regionId.value &&
+        plans.value.some(
+          (plan) =>
+            plan.type_id === typeId.value &&
+            plan.region_id === regionId.value &&
+            plan.node_id === node.id,
+        ),
+    ),
+  ),
+);
+const selectedNode = computed(() =>
+  nodes.value.find((node) => node.id === nodeId.value),
+);
 const shownPlans = computed(() =>
   plans.value.filter(
     (plan) =>
       !!selectedType.value &&
       !!selectedRegion.value &&
+      !!selectedNode.value &&
       plan.type_id === typeId.value &&
-      plan.region_id === regionId.value,
+      plan.region_id === regionId.value &&
+      plan.node_id === nodeId.value,
   ),
 );
+const selectionLocked = computed(
+  () =>
+    loading.value ||
+    submitting.value ||
+    reconciling.value ||
+    outcomeUnknown.value ||
+    !!error.value,
+);
 function selectType(id: string) {
-  if (loading.value || submitting.value || outcomeUnknown.value || error.value)
-    return;
+  if (selectionLocked.value) return;
   if (typeId.value === id || !types.value.some((type) => type.id === id))
     return;
   clearSelection();
   typeId.value = id;
   regionId.value = regions.value[0]?.id ?? "";
+  nodeId.value = nodes.value[0]?.id ?? "";
+  selectDefaultPlan();
+}
+function selectRegion(id: string) {
+  if (
+    selectionLocked.value ||
+    regionId.value === id ||
+    !regions.value.some((region) => region.id === id)
+  )
+    return;
+  clearSelection();
+  regionId.value = id;
+  nodeId.value = nodes.value[0]?.id ?? "";
+  selectDefaultPlan();
+}
+function selectNode(id: string) {
+  if (
+    selectionLocked.value ||
+    nodeId.value === id ||
+    !nodes.value.some((node) => node.id === id)
+  )
+    return;
+  clearSelection();
+  nodeId.value = id;
+  selectDefaultPlan();
 }
 function money(plan: Plan) {
   const f = plan.currency_format;
   if (
+    !plan.available ||
     !f ||
     f.code !== plan.currency ||
     !Number.isSafeInteger(plan.price_minor) ||
@@ -216,10 +272,12 @@ function clearSelection() {
   accepted.value = false;
   created.value = null;
   purchaseError.value = "";
+  // Only a local draft can be discarded. Never clear an in-flight/unknown intent.
+  if (!unconfirmedAttempts.has(identityKey())) attempt.value = null;
 }
 async function load() {
   const id = ++generation;
-  // Refreshing must not silently replace an already selected quote.
+  // A refreshed default is a new draft, never accepted or automatically submitted.
   clearSelection();
   loading.value = true;
   error.value = "";
@@ -234,16 +292,20 @@ async function load() {
     const validRegions = new Map(
       registry.regions.map((region) => [region.id, region]),
     );
+    const validNodes = new Map(registry.nodes.map((node) => [node.id, node]));
     if (
       result.some((plan) => {
         const type = validTypes.get(plan.type_id);
         const region = validRegions.get(plan.region_id);
+        const node = validNodes.get(plan.node_id);
         return (
           plan.currency !== props.currency ||
           plan.taxonomy_revision !== registry.revision ||
           !type?.enabled ||
           !region?.enabled ||
+          !node?.enabled ||
           region.type_id !== plan.type_id ||
+          node.region_id !== plan.region_id ||
           region.name !== plan.region
         );
       })
@@ -256,6 +318,9 @@ async function load() {
       typeId.value = types.value[0]?.id ?? "";
     if (!regions.value.some((region) => region.id === regionId.value))
       regionId.value = regions.value[0]?.id ?? "";
+    if (!nodes.value.some((node) => node.id === nodeId.value))
+      nodeId.value = nodes.value[0]?.id ?? "";
+    selectDefaultPlan();
   } catch (e) {
     if (id === generation) error.value = safeError(e);
   } finally {
@@ -263,17 +328,34 @@ async function load() {
   }
 }
 
+function purchasable(plan: Plan) {
+  return (
+    plan.currency === props.currency &&
+    plan.available &&
+    Number.isSafeInteger(plan.price_minor) &&
+    plan.price_minor > 0 &&
+    Number.isSafeInteger(plan.price_revision) &&
+    plan.price_revision >= 1 &&
+    money(plan) !== "—"
+  );
+}
+function selectDefaultPlan() {
+  if (
+    submitting.value ||
+    outcomeUnknown.value ||
+    unconfirmedAttempts.has(identityKey())
+  )
+    return;
+  // The first published plan is the default, even without a purchasable quote.
+  // Never silently skip it, compare prices, or move to a different parent chain.
+  const plan = shownPlans.value[0];
+  if (plan) selectPlan(plan);
+}
 function buy(plan: Plan) {
   if (
-    loading.value ||
-    error.value ||
-    plan.currency !== props.currency ||
-    !plan.available ||
-    !Number.isSafeInteger(plan.price_minor) ||
-    plan.price_minor <= 0 ||
-    !Number.isSafeInteger(plan.price_revision) ||
-    plan.price_revision < 1 ||
-    money(plan) === "—"
+    selectionLocked.value ||
+    !shownPlans.value.some((item) => item.id === plan.id) ||
+    !purchasable(plan)
   )
     return;
   if (!session.value?.user) {
@@ -284,6 +366,9 @@ function buy(plan: Plan) {
     outcomeUnknown.value = true;
     return;
   }
+  selectPlan(plan);
+}
+function selectPlan(plan: Plan) {
   if (
     purchasing.value?.id === plan.id &&
     purchasing.value.price_revision === plan.price_revision &&
@@ -310,6 +395,7 @@ const hostnameValid = computed(() =>
 const canReview = computed(
   () =>
     !!purchasing.value &&
+    purchasable(purchasing.value) &&
     hostnameValid.value &&
     !loading.value &&
     !error.value &&
@@ -327,7 +413,6 @@ function openReview() {
   accepted.value = false;
   reviewOpen.value = true;
 }
-watch([typeId, regionId], clearSelection);
 async function createOrder() {
   const plan = purchasing.value;
   if (
@@ -340,12 +425,7 @@ async function createOrder() {
     created.value
   )
     return;
-  if (
-    !plan.available ||
-    !Number.isSafeInteger(plan.price_minor) ||
-    plan.price_minor <= 0
-  )
-    return;
+  if (!purchasable(plan)) return;
   if (!attempt.value)
     attempt.value = {
       key: `ui-${crypto.randomUUID()}`,
@@ -530,8 +610,8 @@ onBeforeUnmount(() => {
         <p>
           {{
             t(
-              "选择类型、地区和套餐，确认订单后前往账单付款。",
-              "Choose a type, region and plan, then review your order before payment.",
+              "选择类型、地区、节点和套餐，确认订单后前往账单付款。",
+              "Choose a type, region, node and plan, then review your order before payment.",
             )
           }}
         </p>
@@ -619,7 +699,7 @@ onBeforeUnmount(() => {
             <h2 id="type-heading">{{ t("选择类型", "Choose a type") }}</h2>
           </div>
           <div
-            v-if="types.length > 1"
+            v-if="types.length"
             class="catalog-type"
             :aria-label="t('可选类型', 'Available types')"
           >
@@ -629,7 +709,7 @@ onBeforeUnmount(() => {
               :data-type-id="item.id"
               :class="{ active: typeId === item.id }"
               :aria-pressed="typeId === item.id"
-              :disabled="loading || submitting || outcomeUnknown || !!error"
+              :disabled="selectionLocked"
               @click="selectType(item.id)"
             >
               <Server :size="15" /><span>{{ item.name }}</span
@@ -639,14 +719,6 @@ onBeforeUnmount(() => {
                 class="region-check"
               />
             </button>
-          </div>
-          <div
-            v-else-if="types.length === 1"
-            class="single-type"
-            :data-type-id="selectedType?.id"
-          >
-            <Server :size="16" /><span>{{ selectedType?.name }}</span
-            ><Check :size="15" />
           </div>
           <p v-else class="section-hint">
             {{
@@ -666,7 +738,7 @@ onBeforeUnmount(() => {
             <h2 id="region-heading">{{ t("选择地区", "Choose a region") }}</h2>
           </div>
           <div
-            v-if="regions.length > 1"
+            v-if="regions.length"
             class="catalog-region"
             :aria-label="t('可选地区', 'Available regions')"
           >
@@ -676,8 +748,8 @@ onBeforeUnmount(() => {
               :data-region-id="item.id"
               :class="{ active: regionId === item.id }"
               :aria-pressed="regionId === item.id"
-              :disabled="loading || submitting || outcomeUnknown || !!error"
-              @click="regionId = item.id"
+              :disabled="selectionLocked"
+              @click="selectRegion(item.id)"
             >
               <MapPin :size="15" /><span>{{ item.name }}</span
               ><Check
@@ -686,14 +758,6 @@ onBeforeUnmount(() => {
                 class="region-check"
               />
             </button>
-          </div>
-          <div
-            v-else-if="regions.length === 1"
-            class="single-region"
-            :data-region-id="selectedRegion?.id"
-          >
-            <MapPin :size="16" /><span>{{ selectedRegion?.name }}</span
-            ><Check :size="15" />
           </div>
           <p v-else class="section-hint">
             {{
@@ -706,10 +770,49 @@ onBeforeUnmount(() => {
 
         <section
           class="selection-section surface-card"
-          aria-labelledby="plan-heading"
+          aria-labelledby="node-heading"
         >
           <div class="section-heading">
             <span class="step-number" aria-hidden="true">3</span>
+            <h2 id="node-heading">{{ t("选择节点", "Choose a node") }}</h2>
+          </div>
+          <div
+            v-if="nodes.length"
+            class="catalog-node"
+            :aria-label="t('可选节点', 'Available nodes')"
+          >
+            <button
+              v-for="item in nodes"
+              :key="item.id"
+              :data-node-id="item.id"
+              :class="{ active: nodeId === item.id }"
+              :aria-pressed="nodeId === item.id"
+              :disabled="selectionLocked"
+              @click="selectNode(item.id)"
+            >
+              <Server :size="15" /><span>{{ item.name }}</span
+              ><Check
+                v-if="nodeId === item.id"
+                :size="14"
+                class="region-check"
+              />
+            </button>
+          </div>
+          <p v-else class="section-hint">
+            {{
+              loading
+                ? t("正在读取节点…", "Loading nodes…")
+                : t("暂无可选节点", "No nodes available")
+            }}
+          </p>
+        </section>
+
+        <section
+          class="selection-section surface-card"
+          aria-labelledby="plan-heading"
+        >
+          <div class="section-heading">
+            <span class="step-number" aria-hidden="true">4</span>
             <h2 id="plan-heading">{{ t("选择套餐", "Choose a plan") }}</h2>
             <span class="section-meta"
               >{{ t("月付", "Monthly") }} · {{ currency }}</span
@@ -765,7 +868,7 @@ onBeforeUnmount(() => {
           aria-labelledby="hostname-heading"
         >
           <div class="section-heading">
-            <span class="step-number" aria-hidden="true">4</span>
+            <span class="step-number" aria-hidden="true">5</span>
             <h2 id="hostname-heading">{{ t("主机名称", "Hostname") }}</h2>
           </div>
           <template v-if="session?.user"
@@ -844,6 +947,10 @@ onBeforeUnmount(() => {
             <dt>{{ t("类型", "Type") }}</dt>
             <dd>{{ selectedType?.name || "—" }}</dd>
           </div>
+          <div>
+            <dt>{{ t("节点", "Node") }}</dt>
+            <dd>{{ selectedNode?.name || "—" }}</dd>
+          </div>
           <div v-if="!purchasing">
             <dt>{{ t("地区", "Region") }}</dt>
             <dd>{{ selectedRegion?.name || "—" }}</dd>
@@ -870,6 +977,18 @@ onBeforeUnmount(() => {
             >{{ purchasing?.currency || currency }} / {{ t("月", "mo") }}</small
           >
         </div>
+        <p
+          v-if="purchasing && !purchasable(purchasing)"
+          class="section-hint"
+          role="status"
+        >
+          {{
+            t(
+              "当前套餐在所选币种下暂无可购报价。",
+              "This plan has no purchasable quote in the selected currency.",
+            )
+          }}
+        </p>
         <div class="summary-actions">
           <button
             v-if="created"
@@ -989,6 +1108,10 @@ onBeforeUnmount(() => {
               <dd>{{ selectedType?.name || "—" }}</dd>
             </div>
             <div>
+              <dt>{{ t("节点", "Node") }}</dt>
+              <dd>{{ selectedNode?.name || "—" }}</dd>
+            </div>
+            <div>
               <dt>{{ t("主机名称", "Hostname") }}</dt>
               <dd class="font-mono">{{ hostname.trim().toLowerCase() }}</dd>
             </div>
@@ -1060,7 +1183,12 @@ onBeforeUnmount(() => {
             v-else
             class="btn btn-primary"
             :disabled="
-              !hostnameValid || !accepted || submitting || quotationInvalid
+              !purchasing ||
+              !purchasable(purchasing) ||
+              !hostnameValid ||
+              !accepted ||
+              submitting ||
+              quotationInvalid
             "
             @click="createOrder"
             :aria-busy="submitting"
@@ -1153,13 +1281,15 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 .catalog-type,
-.catalog-region {
+.catalog-region,
+.catalog-node {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
 }
 .catalog-type button,
-.catalog-region button {
+.catalog-region button,
+.catalog-node button {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -1177,48 +1307,40 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 .catalog-type button > span,
-.catalog-region button > span {
+.catalog-region button > span,
+.catalog-node button > span {
   min-width: 0;
 }
 .catalog-type button > svg,
-.catalog-region button > svg {
+.catalog-region button > svg,
+.catalog-node button > svg {
   flex-shrink: 0;
 }
 .catalog-type button.active,
-.catalog-region button.active {
+.catalog-region button.active,
+.catalog-node button.active {
   border-color: var(--accent-primary);
   background: var(--bg-active);
   color: var(--text-primary);
 }
 .catalog-type button.active > svg,
-.catalog-region button.active > svg {
+.catalog-region button.active > svg,
+.catalog-node button.active > svg {
   color: var(--accent-primary);
 }
 .region-check {
   margin-left: auto;
 }
-.single-type,
-.single-region {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 42px;
-  font-size: 13px;
-  max-width: 100%;
-  overflow-wrap: anywhere;
+.catalog-type,
+.catalog-node {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
 }
-.single-type span,
-.single-region span {
-  min-width: 0;
-}
-.single-type svg,
-.single-region svg {
-  flex-shrink: 0;
-  color: var(--accent-primary);
-}
-.single-type svg:last-child,
-.single-region svg:last-child {
-  margin-left: 12px;
+.catalog-type button:focus-visible,
+.catalog-region button:focus-visible,
+.catalog-node button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 3px;
 }
 .plan-grid {
   display: grid;
@@ -1637,13 +1759,17 @@ onBeforeUnmount(() => {
   .plan-grid {
     grid-template-columns: 1fr;
   }
-  .catalog-type,
   .catalog-region {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .catalog-type,
+  .catalog-node {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .catalog-type button,
-  .catalog-region button {
+  .catalog-region button,
+  .catalog-node button {
     min-width: 0;
     width: 100%;
     font-size: 13px;

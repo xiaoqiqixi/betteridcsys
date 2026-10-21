@@ -27,7 +27,7 @@ func testReadTaxonomy(t *testing.T, f catalogFixture) TaxonomyConfiguration {
 	return out
 }
 func taxonomyUpdateFrom(v TaxonomyConfiguration) TaxonomyUpdate {
-	return TaxonomyUpdate{Revision: v.Revision, Reason: "Reviewed server catalog classification", Types: append([]CatalogType{}, v.Types...), Regions: append([]CatalogRegion{}, v.Regions...)}
+	return TaxonomyUpdate{Revision: v.Revision, Reason: "Reviewed server catalog classification", Types: append([]CatalogType{}, v.Types...), Regions: append([]CatalogRegion{}, v.Regions...), Nodes: append([]CatalogNode{}, v.Nodes...)}
 }
 func catalogTestEditInput(t *testing.T, f catalogFixture, p CatalogPlan, revision, currencyRevision int64, reason string) CatalogInput {
 	t.Helper()
@@ -40,6 +40,10 @@ func taxonomyAddFixture(t *testing.T, f catalogFixture) TaxonomyConfiguration {
 	input := taxonomyUpdateFrom(testReadTaxonomy(t, f))
 	input.Types = append(input.Types, CatalogType{ID: "compute", Name: "云服务器", SortOrder: 20, Enabled: true}, CatalogType{ID: "baremetal", Name: "独立服务器", SortOrder: 10, Enabled: true})
 	input.Regions = append(input.Regions, CatalogRegion{ID: "compute-hkg", TypeID: "compute", Name: "香港", SortOrder: 20, Enabled: true}, CatalogRegion{ID: "compute-nrt", TypeID: "compute", Name: "东京", SortOrder: 10, Enabled: true}, CatalogRegion{ID: "metal-hkg", TypeID: "baremetal", Name: "香港", SortOrder: 10, Enabled: true})
+	input.Nodes = append(input.Nodes,
+		CatalogNode{ID: "compute-hkg-a", RegionID: "compute-hkg", Name: "香港 A", SortOrder: 20, Enabled: true},
+		CatalogNode{ID: "compute-nrt-a", RegionID: "compute-nrt", Name: "东京 A", SortOrder: 10, Enabled: true},
+		CatalogNode{ID: "metal-hkg-a", RegionID: "metal-hkg", Name: "独服 A", SortOrder: 10, Enabled: true})
 	out, err := f.store.(taxonomyTestStore).UpdateCatalogTaxonomy(t.Context(), f.admin, input)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +69,7 @@ func taxonomyChangeRegion(input *TaxonomyUpdate, id string, mutate func(*Catalog
 func taxonomyPlanInput(t *testing.T, f catalogFixture, available bool) CatalogInput {
 	t.Helper()
 	input := catalogTestInput(t, f, readCatalog(t, f).Revision)
-	input.TypeID, input.RegionID, input.Region, input.Available = "compute", "compute-hkg", "香港", available
+	input.TypeID, input.RegionID, input.NodeID, input.Region, input.Available = "compute", "compute-hkg", "compute-hkg-a", "香港", available
 	return input
 }
 func taxonomyContainsRegion(c TaxonomyConfiguration, id string) bool {
@@ -167,6 +171,12 @@ func runTaxonomySuite(t *testing.T, fixture func(*testing.T) catalogFixture) {
 		input = taxonomyUpdateFrom(disabled)
 		input.Types = []CatalogType{}
 		input.Regions = []CatalogRegion{}
+		input.Nodes = []CatalogNode{}
+		for _, node := range disabled.Nodes {
+			if node.RegionID != "compute-hkg" && node.RegionID != "compute-nrt" {
+				input.Nodes = append(input.Nodes, node)
+			}
+		}
 		for _, typ := range disabled.Types {
 			if typ.ID != "compute" {
 				input.Types = append(input.Types, typ)
@@ -379,6 +389,12 @@ func runTaxonomySuite(t *testing.T, fixture func(*testing.T) catalogFixture) {
 		}
 		removed := taxonomyUpdateFrom(disabled)
 		removed.Regions = nil
+		removed.Nodes = []CatalogNode{}
+		for _, node := range disabled.Nodes {
+			if node.RegionID != "compute-hkg" {
+				removed.Nodes = append(removed.Nodes, node)
+			}
+		}
 		for _, r := range disabled.Regions {
 			if r.ID != "compute-hkg" {
 				removed.Regions = append(removed.Regions, r)
@@ -549,13 +565,17 @@ func runTaxonomyHTTP(t *testing.T, f catalogFixture, adminPassword, customerPass
 		t.Fatal("CSRF denial reached taxonomy store")
 	}
 	raw, _ := json.Marshal(input)
-	bad := []string{
+	var missingNodes map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &missingNodes)
+	delete(missingNodes, "nodes")
+	withoutNodes, _ := json.Marshal(missingNodes)
+	bad := []string{string(withoutNodes),
 		strings.Replace(string(raw), `"revision":1,`, "", 1),
 		strings.Replace(string(raw), `"revision":1`, `"revision":null`, 1),
 		strings.Replace(string(raw), `"reason":`, `"Reason":`, 1),
 		strings.Replace(string(raw), `"reason":`, `"reason":"duplicate","reason":`, 1),
 		strings.Replace(string(raw), `,"enabled":true`, "", 1),
-		strings.TrimSuffix(string(raw), "}") + `,"nodes":[]}`,
+		strings.TrimSuffix(string(raw), "}") + `,"zones":[]}`,
 		strings.Replace(string(raw), `"sort_order":0`, `"sort_order":0.5`, 1),
 		string(raw) + `{}`,
 	}

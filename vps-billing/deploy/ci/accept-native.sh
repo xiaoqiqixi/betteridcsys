@@ -334,7 +334,7 @@ emit_json_fact PREFLIGHT_EMPTY_JSON preflight-empty.json
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate > "$scratch/migrate.log" 2>&1
 "${cli_env[@]}" "MYSQL_DSN_FILE=$scratch/migrator.dsn" "$opt/releases/a/bin/aster-api" -migrate >> "$scratch/migrate.log" 2>&1
 migration_count=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM schema_migrations')
-[[ $migration_count == 11 ]] || fail 'The current source did not apply exactly eleven reviewed migrations.'
+[[ $migration_count == 12 ]] || fail 'The current source did not apply exactly twelve reviewed migrations.'
 [[ $("${mysql_cmd[@]}" "$db" --execute="SELECT COUNT(*) FROM plan_prices WHERE currency='USD'") == 0 ]] || fail 'Fresh migration installed unapproved USD prices.'
 for role in admin customer second; do
   account_role=customer; [[ $role != admin ]] || account_role=admin
@@ -349,7 +349,7 @@ report = json.loads(Path(sys.argv[1]).read_text())
 database = report['database']
 assert report['read_only'] is True and report['configuration_checked'] is True
 assert database['read_only'] is True and database['status'] == 'current'
-assert database['schema_version'] == 11 and len(database['migration_checksums']) == 11
+assert database['schema_version'] == 12 and len(database['migration_checksums']) == 12
 assert database['admin_count'] == 1 and database['pending_migrations'] == []
 assert database['table_visibility_verified'] is True
 PYCURRENT
@@ -502,7 +502,7 @@ restore_finished=$(monotonic_ns)
 source_tables=$("${mysql_cmd[@]}" "$db" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
 restored_tables=$("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()')
 [[ $source_tables =~ ^[0-9]+$ && $source_tables -gt 0 && $restored_tables == "$source_tables" ]] || fail 'Restored table count does not match the nonempty source schema.'
-[[ $source_tables == 19 ]] || fail 'The current schema is missing its expected nineteen tables.'
+[[ $source_tables == 20 ]] || fail 'The current schema is missing its expected twenty tables.'
 [[ $("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM payment_attempts') == "$payment_attempts_before" && $("${mysql_cmd[@]}" "$restored" --execute='SELECT COUNT(*) FROM payment_settlements') == "$payment_settlements_before" ]] || fail 'Restore lost synthetic payment attempts or settlement replay records.'
 for target in "$db" "$restored"; do
   "$mysql_root/bin/mysqldump" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --single-transaction --no-tablespaces --set-gtid-purged=OFF --hex-blob --no-create-info --skip-comments --compact --skip-extended-insert --order-by-primary --skip-triggers "$target" 2> "$scratch/compare.log" | sha256sum | cut -d' ' -f1 > "$scratch/$target.sha256"

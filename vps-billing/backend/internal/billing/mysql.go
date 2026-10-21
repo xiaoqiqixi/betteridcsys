@@ -82,7 +82,7 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	return &MySQL{DB: db, transport: transport, database: cfg.DBName}, nil
 }
 
-var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry, migrations.PaymentRuntime, migrations.AuditQueryIndexes, migrations.CustomerAccounts, migrations.CatalogTaxonomy}
+var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry, migrations.PaymentRuntime, migrations.AuditQueryIndexes, migrations.CustomerAccounts, migrations.CatalogTaxonomy, migrations.CatalogNodes}
 
 func (m *MySQL) Ping(ctx context.Context) error {
 	rows, err := m.DB.QueryContext(ctx, "SELECT version,checksum FROM schema_migrations ORDER BY version")
@@ -199,6 +199,11 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 				if _, _, err = prepareAuditIndex(ctx, conn, q); err != nil {
 					return fmt.Errorf("migration 9 preparation failed: %w", err)
 				}
+			}
+		}
+		if version == 12 {
+			if err = prevalidateCatalogNodesMigration(ctx, conn, source); err != nil {
+				return fmt.Errorf("migration 12 preparation failed: %w", err)
 			}
 		}
 		if version == 11 {
@@ -325,11 +330,11 @@ func (m *MySQL) DeleteSession(c context.Context, k string) error {
 }
 func scanPlan(s interface{ Scan(...any) error }) (Plan, error) {
 	var p Plan
-	e := s.Scan(&p.ID, &p.Name, &p.Description, &p.CPU, &p.MemoryGB, &p.DiskGB, &p.TransferTB, &p.Region, &p.PriceMinor, &p.Currency, &p.Available, &p.TypeID, &p.RegionID)
+	e := s.Scan(&p.ID, &p.Name, &p.Description, &p.CPU, &p.MemoryGB, &p.DiskGB, &p.TransferTB, &p.Region, &p.PriceMinor, &p.Currency, &p.Available, &p.TypeID, &p.RegionID, &p.NodeID)
 	return p, e
 }
 
-const planColumns = "id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available,type_id,region_id"
+const planColumns = "id,name,description,cpu,memory_gb,disk_gb,transfer_tb,region,price_minor,currency,available,type_id,region_id,node_id"
 
 func (m *MySQL) Plans(c context.Context, currency string) ([]Plan, error) {
 	tx, err := m.DB.BeginTx(c, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
@@ -349,7 +354,7 @@ func (m *MySQL) Plans(c context.Context, currency string) ([]Plan, error) {
 	if !known {
 		return nil, ErrCurrency
 	}
-	rows, err := tx.QueryContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,COALESCE(pp.amount_minor,0),?,(p.available AND COALESCE(pp.available,FALSE) AND COALESCE(pp.amount_minor,0)>0),p.type_id,p.region_id FROM plans p LEFT JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? WHERE p.available=TRUE AND EXISTS (SELECT 1 FROM catalog_regions r JOIN catalog_types t ON t.id=r.type_id WHERE r.id=p.region_id AND t.id=p.type_id AND r.enabled=TRUE AND t.enabled=TRUE) ORDER BY COALESCE(pp.amount_minor,0),p.id", currency, currency)
+	rows, err := tx.QueryContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,COALESCE(pp.amount_minor,0),?,(p.available AND COALESCE(pp.available,FALSE) AND COALESCE(pp.amount_minor,0)>0),p.type_id,p.region_id,p.node_id FROM plans p LEFT JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? WHERE p.available=TRUE AND EXISTS (SELECT 1 FROM catalog_nodes n JOIN catalog_regions r ON r.id=n.region_id JOIN catalog_types t ON t.id=r.type_id WHERE n.id=p.node_id AND r.id=p.region_id AND t.id=p.type_id AND n.enabled=TRUE AND r.enabled=TRUE AND t.enabled=TRUE) ORDER BY COALESCE(pp.amount_minor,0),p.id", currency, currency)
 	if err != nil {
 		return nil, err
 	}
@@ -595,8 +600,8 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, curre
 	if e != nil {
 		return Order{}, false, e
 	}
-	p, e := scanPlan(tx.QueryRowContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,pp.amount_minor,pp.currency,(p.available AND pp.available),p.type_id,p.region_id FROM plans p JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? WHERE p.id=? FOR SHARE", currency, pid))
-	_, classificationLive := taxonomyRegion(taxonomy, p.TypeID, p.RegionID, true)
+	p, e := scanPlan(tx.QueryRowContext(c, "SELECT p.id,p.name,p.description,p.cpu,p.memory_gb,p.disk_gb,p.transfer_tb,p.region,pp.amount_minor,pp.currency,(p.available AND pp.available),p.type_id,p.region_id,p.node_id FROM plans p JOIN plan_prices pp ON pp.plan_id=p.id AND pp.currency=? WHERE p.id=? FOR SHARE", currency, pid))
+	_, classificationLive := taxonomyNode(taxonomy, p.TypeID, p.RegionID, p.NodeID, true)
 	if errors.Is(e, sql.ErrNoRows) || (e == nil && (!p.Available || !classificationLive || !validAmount(p.PriceMinor))) {
 		return Order{}, false, ErrUnavailable
 	}

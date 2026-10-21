@@ -265,11 +265,11 @@ def extend_shape(shape, sql):
             require(table in shape and all(column in shape[table] for column in columns.split(",")), "Index migration refers to an unknown table or column.")
         elif other or insert:
             require((other or insert)[1] in shape, "Unknown migration table.")
-        elif modify := re.fullmatch(r"ALTER TABLE plans MODIFY COLUMN (type_id|region_id) VARCHAR\(64\) CHARACTER SET ascii COLLATE ascii_bin NOT NULL", statement):
+        elif modify := re.fullmatch(r"ALTER TABLE plans MODIFY COLUMN (type_id|region_id|node_id) VARCHAR\(64\) CHARACTER SET ascii COLLATE ascii_bin NOT NULL", statement):
             require("plans" in shape and modify[1] in shape["plans"], "Taxonomy migration modifies an unknown column.")
-        elif relation := re.fullmatch(r"ALTER TABLE plans ADD CONSTRAINT plans_catalog_(type|region) FOREIGN KEY\((type_id|region_id)\) REFERENCES (catalog_types|catalog_regions)\(id\)", statement):
+        elif relation := re.fullmatch(r"ALTER TABLE plans ADD CONSTRAINT plans_catalog_(type|region|node) FOREIGN KEY\((type_id|region_id|node_id)\) REFERENCES (catalog_types|catalog_regions|catalog_nodes)\(id\)", statement):
             kind, column, target = relation.groups()
-            require((kind, column, target) in {("type", "type_id", "catalog_types"), ("region", "region_id", "catalog_regions")} and
+            require((kind, column, target) in {("type", "type_id", "catalog_types"), ("region", "region_id", "catalog_regions"), ("node", "node_id", "catalog_nodes")} and
                     "plans" in shape and column in shape["plans"] and target in shape and "id" in shape[target], "Invalid taxonomy foreign key migration.")
         elif " ".join(statement.split()) in {
             "INSERT INTO catalog_types(id,name,sort_order,enabled) VALUES('generic','通用服务器',0,TRUE) ON DUPLICATE KEY UPDATE id=id",
@@ -279,6 +279,13 @@ def extend_shape(shape, sql):
         }:
             require(all(table in shape for table in ("catalog_types", "catalog_regions", "catalog_taxonomy_settings", "plans")) and
                     all(column in shape["plans"] for column in ("region", "type_id", "region_id")), "Taxonomy initialization requires its reviewed physical schema.")
+        elif " ".join(statement.split()) in {
+            "INSERT INTO catalog_nodes(id,region_id,name,sort_order,enabled) SELECT CONCAT('n-',LEFT(SHA2(BINARY id,256),60)),id,'默认节点',0,TRUE FROM catalog_regions ON DUPLICATE KEY UPDATE id=catalog_nodes.id",
+            "UPDATE plans SET node_id=CONCAT('n-',LEFT(SHA2(BINARY region_id,256),60)) WHERE node_id IS NULL",
+        }:
+            require(all(table in shape for table in ("catalog_nodes", "catalog_regions", "plans")) and
+                    all(column in shape["plans"] for column in ("region_id", "node_id")) and
+                    all(column in shape["catalog_nodes"] for column in ("id", "region_id", "name", "sort_order", "enabled")), "Node initialization requires its reviewed physical schema.")
         else:
             raise Rejected("Migration grammar needs a separately reviewed backup procedure.")
 

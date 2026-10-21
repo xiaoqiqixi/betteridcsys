@@ -121,7 +121,7 @@ func (m *Memory) UpdatePlanPrices(_ context.Context, actor User, input PlanPrice
 	}
 	for _, v := range input.Prices {
 		p := m.plans[planIndexes[v.PlanID]]
-		if _, live := taxonomyRegion(m.taxonomy, p.TypeID, p.RegionID, true); v.PlanAvailable && !live {
+		if _, live := taxonomyNode(m.taxonomy, p.TypeID, p.RegionID, p.NodeID, true); v.PlanAvailable && !live {
 			return PlanPricesView{}, ErrTaxonomy
 		}
 	}

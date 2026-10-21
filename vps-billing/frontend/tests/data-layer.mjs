@@ -58,6 +58,7 @@ async function catalogInput(client, changes = {}) {
     description: "合成示例",
     type_id: "standard",
     region_id: "standard-hkg",
+    node_id: "standard-hkg-a",
     taxonomy_revision: catalog.taxonomy_revision,
     region: "香港 HKG",
     cpu: 2,
@@ -445,11 +446,141 @@ test("real transport preserves valid request ID, suppresses diagnostics and neve
     client.read("/orders"),
     (error) =>
       error.status === 500 &&
+      error.code === "INTERNAL_ERROR" &&
       error.requestId === "a".repeat(32) &&
       !error.message.includes("private-secret"),
   );
   assert.equal(calls, 1);
 });
+
+test("non-JSON gateway GET 502/503/504 is service unavailable, localized and never retried or exposed", async () => {
+  const privateHTML =
+    "<html><title>proxy failure</title><p>/private/upstream-secret token=synthetic-secret</p></html>";
+  for (const locale of ["zh-CN", "en"]) {
+    for (const status of [502, 503, 504]) {
+      const calls = [];
+      const client = createApiClient({
+        locale: () => locale,
+        onSession: () => {},
+        fetcher: async (...args) => {
+          calls.push(args);
+          return new Response(privateHTML, {
+            status,
+            headers: {
+              "Content-Type": "text/html",
+              "X-Request-ID": "c".repeat(32),
+            },
+          });
+        },
+      });
+      await assert.rejects(
+        client.read("/overview", { currency: "CNY" }),
+        (error) => {
+          assert.equal(error.code, "SERVICE_UNAVAILABLE");
+          assert.equal(error.status, status);
+          assert.equal(error.uncertain, false);
+          assert.equal(error.requestId, "c".repeat(32));
+          assert.equal(error.details, undefined);
+          assert.match(
+            error.message,
+            locale === "en"
+              ? /service is temporarily unavailable/i
+              : /服务暂时不可用/,
+          );
+          assert.doesNotMatch(
+            error.message,
+            /<html>|upstream-secret|synthetic-secret|token=/,
+          );
+          return true;
+        },
+      );
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0][1].method, "GET");
+    }
+  }
+});
+
+test("non-JSON POST 503 remains uncertain with its exact intent and no automatic retry", async () => {
+  const calls = [];
+  const client = createApiClient({
+    locale: () => "en",
+    onSession: () => {},
+    fetcher: async (url, init) => {
+      calls.push([url, init]);
+      if (url === "/api/v1/session")
+        return Response.json({
+          data: { user: null, csrf_token: "fixture-token", demo_mode: false },
+        });
+      return new Response("<html>private upstream diagnostic</html>", {
+        status: 503,
+        headers: {
+          "Content-Type": "text/html",
+          "X-Request-ID": "unsafe-private-diagnostic",
+        },
+      });
+    },
+  });
+  const body = {
+    plan_id: "owned-plan",
+    hostname: "owned-host",
+    currency: "CNY",
+    quote: { price_minor: 3900, decimal_places: 2, price_revision: 7 },
+  };
+  await assert.rejects(
+    client.write("/orders", body, {
+      "Idempotency-Key": "one-confirmed-intent",
+    }),
+    (error) => {
+      assert.equal(error.code, "SERVICE_UNAVAILABLE");
+      assert.equal(error.status, 503);
+      assert.equal(error.uncertain, true);
+      assert.equal(error.requestId, undefined);
+      assert.equal(error.details, undefined);
+      assert.doesNotMatch(
+        error.message,
+        /<html>|upstream diagnostic|unsafe-private/,
+      );
+      return true;
+    },
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls.filter(([, init]) => init.method === "POST").length, 1);
+  assert.deepEqual(JSON.parse(calls[1][1].body), body);
+  assert.equal(calls[1][1].headers["Idempotency-Key"], "one-confirmed-intent");
+});
+
+test("malformed successful JSON still fails the response contract, not the service-availability path", async () => {
+  for (const method of ["GET", "POST"]) {
+    const calls = [];
+    const client = createApiClient({
+      locale: () => "en",
+      onSession: () => {},
+      fetcher: async (url, init) => {
+        calls.push([url, init]);
+        if (url === "/api/v1/session")
+          return Response.json({
+            data: { user: null, csrf_token: "fixture-token", demo_mode: false },
+          });
+        return new Response("<html>not a valid success</html>", {
+          status: 200,
+        });
+      },
+    });
+    const request =
+      method === "GET"
+        ? client.read("/overview")
+        : client.write("/owned-fixture", { value: "synthetic" });
+    await assert.rejects(request, (error) => {
+      assert.equal(error.code, "INVALID_RESPONSE");
+      assert.equal(error.status, 200);
+      assert.equal(error.uncertain, method === "POST");
+      assert.doesNotMatch(error.message, /<html>|not a valid success/);
+      return true;
+    });
+    assert.equal(calls.filter(([, init]) => init.method === method).length, 1);
+  }
+});
+
 test("write ambiguity is preserved, no malformed success or network error becomes success", async () => {
   let writes = 0;
   for (const malformed of [true, false]) {
@@ -724,7 +855,7 @@ test("an acknowledged auth write with failed confirmation is uncertain, never a 
   assert.equal(invalid.length, 1);
 });
 
-test("taxonomy is a real three-level registry and catalog rejects mismatched or stale parentage", async () => {
+test("taxonomy is a real four-level registry and catalog rejects mismatched or stale parentage", async () => {
   const { client, setRole } = demo();
   const publicTree = await client.read("/catalog-taxonomy");
   assert.ok(publicTree.types.length >= 2);
@@ -739,7 +870,11 @@ test("taxonomy is a real three-level registry and catalog rejects mismatched or 
           r.name === plan.region,
       ),
     );
-    assert.equal(Object.hasOwn(plan, "node_id"), false);
+    assert.ok(
+      publicTree.nodes.some(
+        (node) => node.id === plan.node_id && node.region_id === plan.region_id,
+      ),
+    );
     assert.equal(Object.hasOwn(plan, "line_id"), false);
   }
   await assert.rejects(
@@ -823,7 +958,12 @@ test("taxonomy cannot retire or remove published parents and failed writes prese
     client.write("/admin/catalog-taxonomy", disabled),
     rejected("TAXONOMY_IN_USE"),
   );
-  const removed = { ...tree, regions: [], reason: "拒绝移除引用地区" };
+  const removed = {
+    ...tree,
+    regions: [],
+    nodes: [],
+    reason: "拒绝移除引用地区",
+  };
   await assert.rejects(
     client.write("/admin/catalog-taxonomy", removed),
     rejected("TAXONOMY_IN_USE"),
@@ -875,4 +1015,60 @@ test("classification rename expires old quotes, preserves historic bytes and all
     plan.currency_format.decimal_places,
   );
   assert.equal(current.region, "新的地区展示名称");
+});
+
+test("nodes are revisioned real parents, never a bypass around product region or history", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const tree = await client.read("/admin/catalog-taxonomy");
+  const added = await client.write("/admin/catalog-taxonomy", {
+    ...tree,
+    nodes: [
+      ...tree.nodes,
+      {
+        id: "hkg-empty-node",
+        region_id: "standard-hkg",
+        name: "香港二区",
+        sort_order: 20,
+        enabled: true,
+      },
+    ],
+    reason: "新增节点",
+  });
+  assert.equal(added.revision, tree.revision + 1);
+  await assert.rejects(
+    client.write(
+      "/admin/catalog",
+      await catalogInput(client, { node_id: "compute-tyo-a" }),
+    ),
+    rejected("INVALID_CATALOG"),
+  );
+  const moved = structuredClone(added);
+  moved.nodes.find((n) => n.id === "standard-hkg-a").region_id = "standard-sin";
+  await assert.rejects(
+    client.write("/admin/catalog-taxonomy", {
+      ...moved,
+      reason: "禁止移动在用节点",
+    }),
+    rejected("TAXONOMY_IN_USE"),
+  );
+  const disabled = await client.write("/admin/catalog-taxonomy", {
+    ...added,
+    nodes: added.nodes.map((n) =>
+      n.id === "hkg-empty-node" ? { ...n, enabled: false } : n,
+    ),
+    reason: "停用未使用节点",
+  });
+  setRole("customer");
+  const visible = await client.read("/catalog-taxonomy");
+  assert.ok(!visible.nodes.some((n) => n.id === "hkg-empty-node"));
+  const plans = await client.read("/plans");
+  assert.ok(
+    plans.every((p) =>
+      visible.nodes.some(
+        (n) => n.id === p.node_id && n.region_id === p.region_id,
+      ),
+    ),
+  );
+  assert.equal(visible.revision, disabled.revision);
 });

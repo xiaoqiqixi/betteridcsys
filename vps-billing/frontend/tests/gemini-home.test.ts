@@ -5,6 +5,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import GeminiHome from "../src/components/GeminiHome.vue";
 import HomePage from "../src/pages/HomePage.vue";
 import type { Overview, Session } from "../src/types/idc";
+import { createApiClient } from "../src/services/api";
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
@@ -66,9 +67,15 @@ function screen(props: Record<string, unknown> = {}) {
   wrappers.push(wrapper);
   return wrapper;
 }
-function adapter() {
+function adapter(props: Record<string, unknown> = {}) {
   const wrapper = mount(HomePage, {
-    props: { locale: "zh-CN", currency: "CNY", mode: "demo", role: "customer" },
+    props: {
+      locale: "zh-CN",
+      currency: "CNY",
+      mode: "demo",
+      role: "customer",
+      ...props,
+    },
   });
   wrappers.push(wrapper);
   return wrapper;
@@ -181,6 +188,61 @@ describe("received Gemini home and minimal contract fixes", () => {
         ([path]) => path === "/invoices" || String(path).startsWith("/admin/"),
       ),
     ).toBe(false);
+  });
+  it("shows a real transport gateway failure safely and reloads only after the user's retry", async () => {
+    let finishOverview!: (value: Response) => void;
+    let recovered = false;
+    const fetcher = vi.fn(
+      async (url: RequestInfo | URL, _init?: RequestInit) => {
+        if (String(url).startsWith("/api/v1/overview")) {
+          if (recovered) return Response.json({ data: summary() });
+          return new Promise<Response>((resolve) => {
+            finishOverview = resolve;
+          });
+        }
+        if (url === "/api/v1/services") return Response.json({ data: [] });
+        throw new Error("Unexpected transport path");
+      },
+    );
+    const client = createApiClient({
+      locale: () => "zh-CN",
+      onSession: () => {},
+      fetcher,
+    });
+    mocks.read.mockImplementation((path, query) => client.read(path, query));
+    mocks.session.value = { ...mocks.session.value, demo_mode: false };
+    const wrapper = adapter({ mode: "api" });
+    expect(wrapper.find(".gh-loading").exists()).toBe(true);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    finishOverview(
+      new Response("<html>/private/proxy diagnostic</html>", {
+        status: 502,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+    await flushPromises();
+    expect(wrapper.find(".gh-loading").exists()).toBe(false);
+    expect(wrapper.get('[role="alert"]').text()).toContain("服务暂时不可用");
+    expect(wrapper.text()).not.toContain("无法确认的数据");
+    expect(wrapper.text()).not.toContain("/private/proxy");
+    expect(wrapper.text()).not.toContain("<html>");
+    expect(wrapper.find(".gh-workspace").exists()).toBe(false);
+    expect(wrapper.find(".gh-empty").exists()).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    recovered = true;
+    await wrapper.get('[role="alert"] button').trigger("click");
+    await flushPromises();
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(wrapper.find(".gh-workspace").exists()).toBe(true);
+    expect(wrapper.findComponent(GeminiHome).props("overview")).toEqual(
+      summary(),
+    );
+    expect(
+      fetcher.mock.calls.every(
+        ([, options]) => !options || options.method === "GET",
+      ),
+    ).toBe(true);
   });
   it("older currency responses cannot overwrite the latest selected scope", async () => {
     let resolveOld!: (value: Overview) => void;

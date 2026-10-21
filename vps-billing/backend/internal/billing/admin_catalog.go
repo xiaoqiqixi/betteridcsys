@@ -22,6 +22,7 @@ type CatalogPrice struct {
 	Available   bool   `json:"available"`
 }
 type CatalogPlan struct {
+	NodeID      string         `json:"node_id"`
 	TypeID      string         `json:"type_id"`
 	RegionID    string         `json:"region_id"`
 	ID          string         `json:"id"`
@@ -48,6 +49,7 @@ type CatalogResult struct {
 	Plan             CatalogPlan `json:"plan"`
 }
 type CatalogInput struct {
+	NodeID           string         `json:"node_id"`
 	TypeID           string         `json:"type_id"`
 	RegionID         string         `json:"region_id"`
 	TaxonomyRevision int64          `json:"taxonomy_revision"`
@@ -134,7 +136,7 @@ func normalizeCatalog(input CatalogInput, config CurrencyConfiguration) (Catalog
 	return input, next, nil
 }
 func catalogPlan(p Plan, prices map[string]PlanPrice) CatalogPlan {
-	out := CatalogPlan{TypeID: p.TypeID, RegionID: p.RegionID, ID: p.ID, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: []CatalogPrice{}}
+	out := CatalogPlan{NodeID: p.NodeID, TypeID: p.TypeID, RegionID: p.RegionID, ID: p.ID, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: []CatalogPrice{}}
 	for code, price := range prices {
 		out.Prices = append(out.Prices, CatalogPrice{code, price.AmountMinor, price.Available})
 	}
@@ -158,10 +160,10 @@ func validateCatalogView(view CatalogView, config CurrencyConfiguration) error {
 	return nil
 }
 func catalogInputFrom(p CatalogPlan, revision, currencyRevision int64, reason string) CatalogInput {
-	return CatalogInput{TypeID: p.TypeID, RegionID: p.RegionID, Revision: revision, CurrencyRevision: currencyRevision, Reason: reason, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: p.Prices}
+	return CatalogInput{NodeID: p.NodeID, TypeID: p.TypeID, RegionID: p.RegionID, Revision: revision, CurrencyRevision: currencyRevision, Reason: reason, Name: p.Name, Description: p.Description, CPU: p.CPU, MemoryGB: p.MemoryGB, DiskGB: p.DiskGB, TransferTB: p.TransferTB, Region: p.Region, Available: p.Available, Prices: p.Prices}
 }
 func applyCatalogPlan(p Plan, input CatalogInput) Plan {
-	p.TypeID, p.RegionID = input.TypeID, input.RegionID
+	p.TypeID, p.RegionID, p.NodeID = input.TypeID, input.RegionID, input.NodeID
 	p.Name, p.Description, p.CPU, p.MemoryGB, p.DiskGB, p.TransferTB, p.Region, p.Available = input.Name, input.Description, input.CPU, input.MemoryGB, input.DiskGB, input.TransferTB, input.Region, input.Available
 	return p
 }
@@ -254,7 +256,8 @@ func (m *Memory) mutateCatalog(ctx context.Context, actor User, id string, input
 		p.ID, index, action = ID(), -1, "catalog.duplicated"
 	}
 	region, exists := taxonomyRegion(m.taxonomy, input.TypeID, input.RegionID, input.Available)
-	if !exists || input.Region != region.Name {
+	_, nodeExists := taxonomyNode(m.taxonomy, input.TypeID, input.RegionID, input.NodeID, input.Available)
+	if !exists || !nodeExists || input.Region != region.Name {
 		return CatalogResult{}, ErrTaxonomy
 	}
 	input, next, err := normalizeCatalog(input, m.currencies)
