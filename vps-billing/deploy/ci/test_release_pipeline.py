@@ -866,6 +866,25 @@ class PatchReleaseNotesTest(unittest.TestCase):
         runtime_pipeline.publish(api, runtime_pipeline.prepare_publish(api, env, event), artifact)
         return api, api.mutations[0][2]["body"]
 
+    def test_059_notes_cover_own_product_contract_schema13_and_explicit_manual_boundary(self):
+        api, body = self.published_notes("core", "0.5.9")
+        self.assertTrue(body.startswith("## Core 0.5.9\n\n"))
+        for text in ("正式 Core 0.5.8", "产品配置", "不可变订单私密配置快照", "013_product_configurations.sql",
+                     "schema 13 / 23 表", "001–012", "不回填旧单", "prices_revision", "旧合法幂等重放", "PlanSnapshot",
+                     "aster.controller/1", "backend/controllerapi", "不对接 IDCsmart API", "默认无 worker", "paid",
+                     "uncertain", "不自动重发", "HTTP 409", "认证/CSRF", "权限边界", "TLS", "六资产",
+                     "SMTP 仍独立 1.1.0", "Core >=0.4.0,<0.6.0", "不新增真实付款或新支付渠道", "不使用 Docker",
+                     "schema12 程序不能直接运行 schema13", "不宣称所有 Linux 均已支持"):
+            self.assertIn(text, body)
+        for misleading in ("不新增数据库迁移", "最终要求 schema 12", "已完成真实开通", "已对接魔方云 API", "本版本通过该构建的"):
+            self.assertNotIn(misleading, body)
+        for document in ("RELEASE-v0.5.9.md", "PRODUCT_CONFIGURATION.md", "VALIDATION.md", "INSTALL.md", "UPGRADE.md", "BAOTA.md", "PLUGINS.md"):
+            self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/blob/{SHA}/vps-billing/docs/{document}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/commit/{SHA}", body)
+        self.assertIn(f"https://github.com/{pipeline.REPOSITORY}/actions/runs/{RUN_ID}", body)
+        self.assertEqual(len(api.uploads), 6)
+        self.assertEqual([call[0] for call in api.mutations], ["POST", "PATCH"])
+
     def test_058_notes_cover_four_level_purchase_schema12_and_preserved_financial_boundaries(self):
         api, body = self.published_notes("core", "0.5.8")
         self.assertTrue(body.startswith("## Core 0.5.8\n\n"))

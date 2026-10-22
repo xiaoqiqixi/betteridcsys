@@ -1,10 +1,20 @@
 # 原生 Linux 升级、数据库兼容与回滚
 
-本文按目标 Core 0.5.8 提供升级示例，发行状态以正常 Release 为准；本轮开发对照基线为正式 0.5.7，不能据本页推断新版本门禁已通过。待正常 Release 发布并核验后，目标版本的主机执行器在管理员核对私密规格、审查计划并确认精确 SHA-256 后，执行受支持单实例的停写、备份、schema 检查/迁移、Core 与网页切换、服务启动和 HTTPS 检查。网页不取得主机执行权。目标为 Ubuntu 24.04 / amd64、systemd、Nginx 与本机 MySQL 8.4；系统组件、DNS/证书及恢复方案仍由管理员准备。没有滚动升级、向下迁移或自动数据库恢复。历史候选与正式附件不重写，实际测试范围见 [VALIDATION.md](VALIDATION.md)。
+本文按目标 Core 0.5.9 提供升级示例，发行状态以正常 Release 为准；本轮开发对照基线为正式 0.5.8，不能据本页推断新版本门禁已通过。待正常 Release 发布并核验后，目标版本的主机执行器在管理员核对私密规格、审查计划并确认精确 SHA-256 后，执行受支持单实例的停写、备份、schema 检查/迁移、Core 与网页切换、服务启动和 HTTPS 检查。网页不取得主机执行权。目标为 Ubuntu 24.04 / amd64、systemd、Nginx 与本机 MySQL 8.4；系统组件、DNS/证书及恢复方案仍由管理员准备。没有滚动升级、向下迁移或自动数据库恢复。历史候选与正式附件不重写，实际测试范围见 [VALIDATION.md](VALIDATION.md)。
 
 服务校验需要 systemd 的 `/usr/bin/busctl` JSON 支持，按 [安装前提](INSTALL.md#前置确认)核对实际工具和系统总线。执行器验证六个钩子的结构化空数组；命令行未显示某个属性不能作为“没有额外执行命令”的证明。
 
 升级前保留旧版本、源码提交、配置、秘密引用、插件策略/manifest、UID、完整数据库恢复点及备份时点。先按 [BACKUP_RECOVERY.md](BACKUP_RECOVERY.md)完成隔离恢复和业务检查；文件摘要/gzip/metadata 通过不证明数据库内容或业务可恢复。
+
+## Core 0.5.9：产品配置与 schema 13
+
+正式 0.5.8 使用 schema 12；目标 0.5.9 追加 `013_product_configurations.sql`，要求 **schema 13 / 23 表**。001–012 原文与校验和不改。新增商品产品配置、不可变订单私密配置及手动任务三个表；迁移不回填旧订单配置、不创建任务，不修改价格、金额、财务快照或支付记录。较旧来源还须依次应用其缺少的原迁移，不能跳号。
+
+新订单事务内冻结产品配置；商品配置修改提升配置及报价修订，使旧确认要求重新核对，不重新定价。旧合法幂等重放仍返回原订单且不补造快照。已付款订单只能由管理员准备唯一手动任务，Web 不读主控凭据或发送开通请求；root 一次性命令与只读远端核对见 [产品配置](PRODUCT_CONFIGURATION.md)。默认无 worker，不对接 IDCsmart API，不附带真实 VM 或独立主控/KVM 实现。
+
+升级前停写并停止旧 API，验证备份及隔离恢复，再迁移并切换匹配的程序与网页。**0.5.8/schema12 程序不能直接运行 schema13 库**；不得只换旧二进制、删除迁移记录或伪降 schema。回滚须停止写入，恢复已验证的升级前备份及匹配旧程序；执行器不自动向下迁移或导入数据库。配置、任务与审计的恢复资料须与数据库同一恢复点。
+
+本次原生升级/恢复、完整 CI 与正式资产验收待精确最终提交完成；局部测试不代表门禁成功。状态见 [v0.5.9 发布说明](RELEASE-v0.5.9.md) 及 [验证记录](VALIDATION.md)。以下 0.5.8、0.5.7 小节保留历史边界，不代表 0.5.9 使用旧 schema。
 
 ## Core 0.5.8：四层商品目录与 schema 12
 
@@ -28,21 +38,21 @@
 
 ## SMTP 与拆分发行的升级顺序
 
-目标 Core 0.5.8 继续使用六资产原始分发，SMTP 仍为独立 **1.1.0**、五资产及 `aster.smtp/1`，兼容 `>=0.4.0,<0.6.0`。SMTP 1.0.0 的上界为 `<0.5.0`，不能直接用于新 Core。先按 [PLUGINS.md](PLUGINS.md)独立核验、安装并批准兼容版本，或明确停用旧插件、停止 worker 并保留匹配恢复资料；不能伪造兼容范围。
+目标 Core 0.5.9 继续使用六资产原始分发，SMTP 仍为独立 **1.1.0**、五资产及 `aster.smtp/1`，兼容 `>=0.4.0,<0.6.0`。SMTP 1.0.0 的上界为 `<0.5.0`，不能直接用于新 Core。先按 [PLUGINS.md](PLUGINS.md)独立核验、安装并批准兼容版本，或明确停用旧插件、停止 worker 并保留匹配恢复资料；不能伪造兼容范围。
 
-升级计划核对受保护插件目录、实际策略、manifest/程序摘要和目标 Core 兼容区间；不要省略真实已配置插件来绕过。执行器不隐式更新或启用支付、SMTP 插件，不重新生成加密密钥、不主动发送邮件。独立插件升级不要求重编 Core。旧 0.4.0 工具不认识 raw 分发，旧版校验器不会自动认识后续完整策略；0.5.4 的首次引导要求仍然适用，本次须引导已核验的 0.5.8 目标工具。
+升级计划核对受保护插件目录、实际策略、manifest/程序摘要和目标 Core 兼容区间；不要省略真实已配置插件来绕过。执行器不隐式更新或启用支付、SMTP 插件，不重新生成加密密钥、不主动发送邮件。独立插件升级不要求重编 Core。旧 0.4.0 工具不认识 raw 分发，旧版校验器不会自动认识后续完整策略；0.5.4 的首次引导要求仍然适用，本次须引导已核验的 0.5.9 目标工具。
 
 ## 准备目标版本与既有实例
 
-待 `v0.5.8` 正常发布后，按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对来源、六资产和目标工具，使用明确版本准备新目录：
+待 `v0.5.9` 正常发布后，按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对来源、六资产和目标工具，使用明确版本准备新目录：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.8/core-manager.py prepare --version 0.5.8
+sudo python3 /var/lib/aster-bootstrap/0.5.9/core-manager.py prepare --version 0.5.9
 ```
 
 `prepare` 不停服、不迁移、不切链接；已有目标拒绝覆盖。候选必须为实例 `releases/` 下新的 root 保护完整目录，具有真实本地 `PREPARED.json`、匹配 BUILD 和完整文件摘要。`current` 必须是 root 管理、指向该实例已验证发行目录的链接；新版本须严格更新，已应用迁移前缀不得改动。
 
-已有 0.5.7、0.5.6、0.5.4、0.5.3 或 0.5.2 实例须保留真实准备与安装回执，通过实际门禁后才按本流程升级到 0.5.8；列为来源版本不表示本候选的跨版本验证已完成。0.5.1 经官方准备器安装的既有实例，只有 unit 字节与受支持的原版模板或执行器模板完全匹配、并满足配置、权限、schema 和插件检查时才可接纳；这不表示任意手工 0.5.1 安装均已受支持。必须保留原始准备回执，`api.env` 只使用受支持的字面非秘密配置与文件引用，origin/listener 与规格一致；运行 DSN 和独立迁移 DSN 均精确选择同一本机 socket/数据库。unit/drop-in 或秘密引用不符合支持边界时停止调查，不覆盖旧配置、伪造回执或把升级伪装成全新安装。较早手工拼装、缺少来源回执或自定义拓扑须先制定并审查迁移方案。
+已有 0.5.8、0.5.7、0.5.6、0.5.4、0.5.3 或 0.5.2 实例须保留真实准备与安装回执，通过实际门禁后才按本流程升级到 0.5.9；列为来源版本不表示本候选的跨版本验证已完成。0.5.1 经官方准备器安装的既有实例，只有 unit 字节与受支持的原版模板或执行器模板完全匹配、并满足配置、权限、schema 和插件检查时才可接纳；这不表示任意手工 0.5.1 安装均已受支持。必须保留原始准备回执，`api.env` 只使用受支持的字面非秘密配置与文件引用，origin/listener 与规格一致；运行 DSN 和独立迁移 DSN 均精确选择同一本机 socket/数据库。unit/drop-in 或秘密引用不符合支持边界时停止调查，不覆盖旧配置、伪造回执或把升级伪装成全新安装。较早手工拼装、缺少来源回执或自定义拓扑须先制定并审查迁移方案。
 
 使用现有运行身份及 unit，不重新建立首位管理员。迁移 DSN 与备份 client 文件须 root 所有、0600、单一硬链接、祖先受保护；迁移凭据在运行配置根之外。运行账号保持本库 DML，备份身份按 [备份权限说明](BACKUP_RECOVERY.md#范围与前提)提供元数据可见性。API 不获得迁移或 DBA 权限。
 
@@ -56,12 +66,12 @@ sudo python3 /var/lib/aster-bootstrap/0.5.8/core-manager.py prepare --version 0.
 | `backup_client_config`              | 本机专用备份账号的私密 `[client]` 文件                                    |
 | `acknowledge_backup_restore_limits` | 必须明确设为 `true`：确认文件备份校验不等于隔离恢复，恢复准备由管理员负责 |
 
-完整规格仍包含新 operation ID、候选目录、三个互不嵌套的根目录、原 runtime user/unit、origin/listener、`edge_listen_address`、MySQL/Nginx 真实程序路径及 Nginx 摘要、TLS 和 `edge_mode`。本次目标 `release_directory` 为 `/opt/aster/releases/0.5.8`，旧版目录（例如 `/opt/aster/releases/0.5.4`）保留作来源核对与恢复准备，实际路径须与当前运行版本一致。共享 Nginx 另提供原完整配置路径/摘要；维护门禁须预先纳入并审查，见 [BAOTA.md](BAOTA.md)。可选 `status_file` 只能是实例/配置/私密状态根之外的单独脱敏导出路径，并须与既有 `HOST_OPERATION_STATUS_FILE` 完全相同；需要新设引用时先独立审查配置和服务重启。升级不带仅适用于新安装的 `enable_at_boot` 字段。
+完整规格仍包含新 operation ID、候选目录、三个互不嵌套的根目录、原 runtime user/unit、origin/listener、`edge_listen_address`、MySQL/Nginx 真实程序路径及 Nginx 摘要、TLS 和 `edge_mode`。本次目标 `release_directory` 为 `/opt/aster/releases/0.5.9`，旧版目录（例如 `/opt/aster/releases/0.5.4`）保留作来源核对与恢复准备，实际路径须与当前运行版本一致。共享 Nginx 另提供原完整配置路径/摘要；维护门禁须预先纳入并审查，见 [BAOTA.md](BAOTA.md)。可选 `status_file` 只能是实例/配置/私密状态根之外的单独脱敏导出路径，并须与既有 `HOST_OPERATION_STATUS_FILE` 完全相同；需要新设引用时先独立审查配置和服务重启。升级不带仅适用于新安装的 `enable_at_boot` 字段。
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.8/core-operation.py plan \
+sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py plan \
   --spec /root/aster-upgrade/upgrade.json
-sudo python3 /var/lib/aster-bootstrap/0.5.8/core-operation.py apply \
+sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py apply \
   --spec /root/aster-upgrade/upgrade.json \
   --confirm-plan-sha256 REVIEWED_PLAN_SHA256
 ```
@@ -81,9 +91,9 @@ sudo python3 /var/lib/aster-bootstrap/0.5.8/core-operation.py apply \
 ## 检查点与恢复执行
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.8/core-operation.py status \
+sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py status \
   --state-directory /var/lib/aster-operations --operation-id ACTUAL_OPERATION_ID
-sudo python3 /var/lib/aster-bootstrap/0.5.8/core-operation.py resume \
+sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py resume \
   --spec /root/aster-upgrade/upgrade.json \
   --confirm-plan-sha256 ORIGINAL_REVIEWED_PLAN_SHA256
 ```

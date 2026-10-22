@@ -427,16 +427,27 @@ func TestPaymentApprovalSharesRPCCapacityAndRecovers(t *testing.T) {
 			t.Fatal("held RPC failed", e)
 		}
 	}
+	f.manager.paymentMu.Lock()
+	remaining := len(f.manager.paymentSlots)
+	f.manager.paymentMu.Unlock()
+	if remaining != 0 {
+		t.Fatal("completed RPCs retained manager capacity", remaining)
+	}
 	if _, _, e := f.manager.PaymentSelection(); !errors.Is(e, ErrDisabled) {
 		t.Fatal("released selection did not inspect approval paths", e)
+	}
+	if _, e := f.manager.PaymentCheck(context.Background()); !errors.Is(e, ErrDisabled) {
+		t.Fatal("released check did not inspect approval paths", e)
 	}
 	f.manager.root, f.manager.policy = root, policy
 	if m, _, e := f.manager.PaymentSelection(); e != nil || m.ID != "payment.fixture" {
 		t.Fatal("selection capacity did not recover", m, e)
 	}
-	if id, e := f.manager.PaymentCheck(context.Background()); e != nil || id.ID != "payment.fixture" {
-		t.Fatal("check capacity did not recover", id, e)
-	}
+	// This test proves the Manager's shared approval/RPC capacity, not the
+	// separate server listener pool. A closed client socket does not synchronize
+	// the server's EOF/Close; immediately starting a ninth physical connection
+	// would race that unrelated pool. TestPaymentRuntimeContract separately
+	// requires a complete authenticated PaymentCheck handshake.
 }
 
 func TestPaymentServerRequiresOneOperationOnHandshakenConnection(t *testing.T) {

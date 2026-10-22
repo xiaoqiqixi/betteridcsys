@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, expect } from "@playwright/test";
 import { probeResponsiveBoundaries } from "./responsive-boundaries.mjs";
+import { probeProductConfiguration } from "./product-configuration-boundaries.mjs";
 import {
   accessiblePanel,
   apiData,
@@ -646,6 +647,8 @@ try {
   await unknown.context.close();
   screens.splice(screens.indexOf(unknown), 1);
   page = admin.page;
+  stage = "product-configuration-boundaries";
+  assert.equal(await probeProductConfiguration(browser, base, adminStorage), 4);
   stage = "responsive-source-boundaries";
   assert.equal(shots, 30);
   const matrix = await probeResponsiveBoundaries(browser, base, adminStorage);

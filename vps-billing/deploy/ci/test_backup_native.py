@@ -195,7 +195,26 @@ class BackupMetadataGrammarTest(unittest.TestCase):
         source = BACKUP.read_text().split('metadata() {\n  python3 - "$release_directory" "$database" "$@" <<\'PY\'\n', 1)[1].split("\nPY\n}", 1)[0]
         namespace = {}
         exec(compile(source.rsplit("\ntry:\n", 1)[0], str(BACKUP), "exec"), namespace)
+        self.metadata = namespace
         self.extend, self.rejected = namespace["extend_shape"], namespace["Rejected"]
+
+    def test_independent_physical_fixture_validates_every_historical_prefix_and_rejects_partial_thirteenth(self):
+        builder = SCRIPT.read_text().split('python3 - "$script_dir/../../backend/migrations" "$test_dir/fixtures" <<\'PY\'\n', 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory(prefix="aster-backup-prefix-fixture-") as directory:
+            fixtures = Path(directory)
+            migrations = BACKUP.parents[2] / "backend/migrations"
+            with patch.object(sys, "argv", [str(SCRIPT), str(migrations), str(fixtures)]):
+                exec(compile(builder, str(SCRIPT), "exec"), {})
+            expected = self.metadata["release"](fixtures / "release")
+            for version in range(6, 14):
+                path = fixtures / ("valid.tsv" if version == 13 else f"prefix{version}.tsv")
+                report = self.metadata["validate"](expected, path, "aster_fixture")
+                self.assertEqual(report["schema_version"], version)
+                self.assertEqual(set(report["migration_checksums"]), {str(number) for number in range(1, version + 1)})
+            for name in ("unknown-version", "partial-product-configuration-next-migration", "missing-product-configuration-table",
+                         "missing-order-configuration-table", "missing-provisioning-table", "missing-order-configuration-column", "missing-provisioning-column"):
+                with self.subTest(fixture=name), self.assertRaises(self.rejected):
+                    self.metadata["validate"](expected, fixtures / (name + ".tsv"), "aster_fixture")
 
     def test_real_ninth_index_migration_does_not_invent_new_columns_or_tables(self):
         shape = {"audit_events": ["id", "user_id", "action", "target", "created_at", "actor_email", "detail"]}
@@ -215,7 +234,7 @@ class BackupMetadataGrammarTest(unittest.TestCase):
 
     def test_historical_prefix_shapes_do_not_invent_future_account_columns(self):
         paths = sorted((BACKUP.parents[2] / "backend/migrations").glob("[0-9][0-9][0-9]_*.sql"))
-        self.assertEqual(len(paths), 12, "Review this fixture when a migration is added")
+        self.assertEqual(len(paths), 13, "Review this fixture when a migration is added")
         shape = {"schema_migrations": ["version", "checksum", "applied_at"]}
         prefixes = {}
         for version, path in enumerate(paths, 1):
@@ -242,6 +261,18 @@ class BackupMetadataGrammarTest(unittest.TestCase):
                          {k: v for k, v in prefixes[11].items() if k != "plans"})
         self.assertNotIn("catalog_nodes", prefixes[11])
         self.assertNotIn("node_id", prefixes[11]["plans"])
+        product_shape = {
+            "product_configurations": ["plan_id", "revision", "spec", "configuration_sha256", "updated_at"],
+            "order_product_configurations": ["order_id", "plan_id", "configuration_revision", "spec", "configuration_sha256", "created_at"],
+            "provisioning_jobs": ["id", "order_id", "state", "request", "request_sha256", "claim_token", "lease_expires_at", "result", "attempts", "created_at", "updated_at"],
+        }
+        self.assertEqual(len(prefixes[12]), 20)
+        self.assertEqual(len(prefixes[13]), 23)
+        self.assertEqual({key: columns for key, columns in prefixes[13].items() if key not in product_shape}, prefixes[12])
+        for table, columns in product_shape.items():
+            self.assertEqual(prefixes[13][table], columns)
+            for version in range(1, 13):
+                self.assertNotIn(table, prefixes[version])
         self.assertEqual(prefixes[8], prefixes[9], "Index-only migration must preserve column inventory")
         self.assertNotIn("currency_settings", prefixes[6])
         self.assertIn("currency_settings", prefixes[7])
@@ -311,6 +342,24 @@ class BackupMetadataGrammarTest(unittest.TestCase):
                 self.extend({table: list(columns) for table, columns in shape.items()}, sql)
         with self.assertRaises(self.rejected):
             self.extend({"plans": ["id"]}, "ALTER TABLE plans MODIFY COLUMN region_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL")
+
+    def test_product_configuration_migration_is_additive_without_backfill_or_general_mutation_grammar(self):
+        shape = {"plans": ["id", "price_minor"], "orders": ["id", "plan_snapshot"],
+                 "plan_prices": ["plan_id", "currency", "amount_minor", "available"]}
+        before = {table: list(columns) for table, columns in shape.items()}
+        migration = BACKUP.parents[2] / "backend/migrations/013_product_configurations.sql"
+        statements = [statement.strip() for statement in migration.read_text().split(";") if statement.strip()]
+        self.assertEqual(len(statements), 3)
+        self.assertTrue(all(statement.startswith("CREATE TABLE IF NOT EXISTS ") for statement in statements))
+        self.extend(shape, migration.read_text())
+        self.assertEqual({table: shape[table] for table in before}, before)
+        self.assertEqual(set(shape) - set(before), {"product_configurations", "order_product_configurations", "provisioning_jobs"})
+        with self.assertRaises(self.rejected):
+            self.extend(shape, migration.read_text())
+        for sql in ("UPDATE orders SET plan_snapshot='{}'", "UPDATE product_configurations SET revision=revision+1",
+                    "INSERT INTO provisioning_jobs(id) SELECT id FROM orders", "DELETE FROM order_product_configurations"):
+            with self.subTest(sql=sql), self.assertRaises(self.rejected):
+                self.extend({table: list(columns) for table, columns in shape.items()}, sql)
 
     def test_index_grammar_rejects_unknown_tables_columns_and_unreviewed_sql(self):
         for sql in ("CREATE INDEX ix_bad ON unknown(id)", "CREATE INDEX ix_bad ON audit_events(unknown)",

@@ -252,6 +252,9 @@ func TestMySQLMigrationInterruptedRecovery(t *testing.T) {
 		} // Migration 7 has its own exact-resumption boundary suite.
 		statements := migrationStatements(source)
 		boundaries := []int{0, len(statements) / 2, len(statements)}
+		if index == 12 {
+			boundaries = []int{0, 1, 2, len(statements)} // Schema13 has three additive creates; test each interruption.
+		}
 		previous := -1
 		for _, boundary := range boundaries {
 			if boundary == previous {

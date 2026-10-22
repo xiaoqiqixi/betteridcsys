@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	CoreVersion               = "0.5.8"
+	CoreVersion               = "0.5.9"
 	SMTPProtocol              = "aster.smtp/1"
 	SMTPCapability            = "smtp.send"
 	PaymentProtocol           = "aster.payment/1"

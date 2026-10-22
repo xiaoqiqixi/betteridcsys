@@ -33,6 +33,14 @@ import {
   sortCatalogEntries,
 } from "./catalog-taxonomy";
 
+import {
+  type ProductConfiguration,
+  type ProductSpec,
+  disabledProductSpec,
+  validProductSpec,
+  productConfigurationSHA256,
+} from "./product-configuration";
+
 export const DEMO_CUSTOMER_ID = "11111111111111111111111111111111";
 export const DEMO_ADMIN_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const copy = <T>(value: T): T => structuredClone(value);
@@ -104,6 +112,7 @@ function format(currency: CurrencyDefinition): CurrencyFormat {
 }
 
 export function createDemoClient(currentRole: () => Role) {
+  const productConfigurations = new Map<string, ProductConfiguration>();
   let serial = 1000;
   const id = () => (++serial).toString(16).padStart(32, "0");
   const now = () => new Date().toISOString();
@@ -755,7 +764,25 @@ export function createDemoClient(currentRole: () => Role) {
         ),
       };
     } else if (path === "/plans") value = plans(code);
-    else if (path === "/admin/catalog") {
+    else if (/^\/admin\/catalog\/[^/]+\/product-configuration$/.test(path)) {
+      if (Object.keys(query).length) fail("INVALID_PRODUCT_CONFIGURATION");
+      const planId = decodeURIComponent(path.split("/").at(-2)!);
+      if (!catalog.items.some((plan) => plan.id === planId))
+        fail("NOT_FOUND", 404);
+      const defaultHash = await productConfigurationSHA256(
+        disabledProductSpec(),
+      );
+      requireAdmin();
+      const stored = productConfigurations.get(planId);
+      const spec = stored?.spec || disabledProductSpec();
+      value = {
+        plan_id: planId,
+        revision: stored?.revision || 1,
+        spec,
+        configuration_sha256: stored?.configuration_sha256 || defaultHash,
+        price_revision: catalog.revision,
+      } satisfies ProductConfiguration;
+    } else if (path === "/admin/catalog") {
       if (Object.keys(query).length) fail("INVALID_CATALOG");
       value = catalog;
     } else if (normalized === "/overview") {
@@ -991,7 +1018,7 @@ export function createDemoClient(currentRole: () => Role) {
     else if (path === "/admin/updates")
       value = {
         current: {
-          core_version: "0.5.8",
+          core_version: "0.5.9",
           smtp_version: "",
           smtp_status: "not_installed",
           plugin_policy_revision: 1,
@@ -1217,6 +1244,41 @@ export function createDemoClient(currentRole: () => Role) {
       if (!invoice) fail("NOT_FOUND", 404);
       if (invoice.status !== "unpaid") fail("INVOICE_NOT_PAYABLE", 409);
       return fail("PAYMENT_NOT_CONFIGURED", 503);
+    } else if (/^\/admin\/catalog\/[^/]+\/product-configuration$/.test(path)) {
+      exact(body, ["revision", "spec", "reason"]);
+      const planId = decodeURIComponent(path.split("/").at(-2)!);
+      if (!catalog.items.some((plan) => plan.id === planId))
+        fail("NOT_FOUND", 404);
+      if (
+        !validMinor(body.revision) ||
+        Number(body.revision) < 1 ||
+        !validProductSpec(body.spec)
+      )
+        fail("INVALID_PRODUCT_CONFIGURATION");
+      const reason = text(body.reason, 500);
+      const spec = copy(body.spec as ProductSpec);
+      const hash = await productConfigurationSHA256(spec);
+      // Hashing yields; recheck current role and revision before a single mutation.
+      requireAdmin();
+      const revision = productConfigurations.get(planId)?.revision || 1;
+      if (body.revision !== revision)
+        fail("PRODUCT_CONFIGURATION_CONFLICT", 409);
+      if (
+        revision >= Number.MAX_SAFE_INTEGER ||
+        catalog.revision >= Number.MAX_SAFE_INTEGER
+      )
+        fail("PRODUCT_CONFIGURATION_CONFLICT", 409);
+      const next: ProductConfiguration = {
+        plan_id: planId,
+        revision: revision + 1,
+        spec,
+        configuration_sha256: hash,
+        price_revision: catalog.revision + 1,
+      };
+      productConfigurations.set(planId, next);
+      catalog.revision++;
+      event("product.configuration.updated", planId, reason);
+      value = next;
     } else if (path === "/admin/catalog-taxonomy") {
       exact(body, ["revision", "types", "regions", "nodes", "reason"]);
       const reason = text(body.reason, 500);

@@ -170,7 +170,7 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(declared[1], manager.CORE_VERSION)
 
     def test_current_release_version_and_existing_smtp_compatibility_remain_independent(self):
-        self.assertEqual(manager.CORE_VERSION, "0.5.8")
+        self.assertEqual(manager.CORE_VERSION, "0.5.9")
         self.assertEqual(manager.PAYMENT_MIN_CORE_VERSION, "0.5.3")
         version = SCRIPT.parents[2] / "backend/plugins/smtp/VERSION"
         self.assertEqual(version.read_text().strip(), "1.1.0")

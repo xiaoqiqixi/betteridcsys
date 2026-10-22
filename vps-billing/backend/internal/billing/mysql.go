@@ -82,7 +82,7 @@ func OpenMySQL(ctx context.Context, dsn string, allowInsecure bool) (*MySQL, err
 	return &MySQL{DB: db, transport: transport, database: cfg.DBName}, nil
 }
 
-var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry, migrations.PaymentRuntime, migrations.AuditQueryIndexes, migrations.CustomerAccounts, migrations.CatalogTaxonomy, migrations.CatalogNodes}
+var schemaVersions = []string{migrations.Initial, migrations.SiteSettings, migrations.Currencies, migrations.BillingSnapshots, migrations.ExactCurrencyCodes, migrations.EmailSettings, migrations.CurrencyRegistry, migrations.PaymentRuntime, migrations.AuditQueryIndexes, migrations.CustomerAccounts, migrations.CatalogTaxonomy, migrations.CatalogNodes, migrations.ProductConfigurations}
 
 func (m *MySQL) Ping(ctx context.Context) error {
 	rows, err := m.DB.QueryContext(ctx, "SELECT version,checksum FROM schema_migrations ORDER BY version")
@@ -198,6 +198,15 @@ func (m *MySQL) Migrate(ctx context.Context) error {
 				}
 				if _, _, err = prepareAuditIndex(ctx, conn, q); err != nil {
 					return fmt.Errorf("migration 9 preparation failed: %w", err)
+				}
+			}
+		}
+		if version == 13 {
+			for _, q := range strings.Split(source, ";") {
+				if q = strings.TrimSpace(q); q != "" {
+					if _, _, err = prepareProductConfigurationMigration(ctx, conn, q); err != nil {
+						return fmt.Errorf("migration 13 preparation failed: %w", err)
+					}
 				}
 			}
 		}
@@ -611,6 +620,10 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, curre
 	if quote != nil && !quote.matches(p.PriceMinor, cur.DecimalPlaces, priceRevision) {
 		return Order{}, false, ErrPriceChanged
 	}
+	configuration, e := readProductConfiguration(c, tx, p.ID, " FOR SHARE")
+	if e != nil {
+		return Order{}, false, e
+	}
 	p.CurrencyFormat = cur.CurrencyFormat
 	o, i, a := newRecords(u, p, host)
 	i.Issuer = settings.Identity()
@@ -620,6 +633,9 @@ func (m *MySQL) createOrderOnce(c context.Context, u User, pid, host, key, curre
 	planRaw, _ := json.Marshal(o.PlanSnapshot)
 	_, e = tx.ExecContext(c, "INSERT INTO orders(id,number,user_id,plan_id,plan_name,hostname,status,total_minor,currency,created_at,issuer_snapshot,currency_snapshot,plan_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", o.ID, o.Number, u.ID, pid, p.Name, host, o.Status, o.TotalMinor, o.Currency, o.CreatedAt, issuerRaw, currencyRaw, planRaw)
 	if e != nil {
+		return Order{}, false, e
+	}
+	if e = insertOrderProductConfiguration(c, tx, o.ID, configuration, o.CreatedAt); e != nil {
 		return Order{}, false, e
 	}
 	_, e = tx.ExecContext(c, "INSERT INTO invoices(id,number,user_id,order_id,status,amount_minor,currency,issued_at,due_at,issuer_snapshot,currency_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?)", i.ID, i.Number, u.ID, o.ID, i.Status, i.AmountMinor, i.Currency, i.IssuedAt, i.DueAt, issuerRaw, currencyRaw)

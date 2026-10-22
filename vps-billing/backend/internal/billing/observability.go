@@ -114,9 +114,10 @@ func loggedRoute(path string) string {
 		suffixes          []string
 	}{
 		{"/api/v1/orders/", "{order_id}", []string{"/cancel"}},
-		{"/api/v1/admin/orders/", "{order_id}", []string{"/cancel"}},
+		{"/api/v1/admin/orders/", "{order_id}", []string{"/cancel", "/provisioning-jobs"}},
 		{"/api/v1/admin/customer-accounts/", "{account_id}", []string{"/password", "/revoke-sessions"}},
-		{"/api/v1/admin/catalog/", "{plan_id}", []string{"/duplicate"}},
+		{"/api/v1/admin/catalog/", "{plan_id}", []string{"/duplicate", "/product-configuration"}},
+		{"/api/v1/admin/provisioning-jobs/", "{job_id}", nil},
 	} {
 		if id, ok := strings.CutPrefix(path, route.prefix); ok {
 			suffix := ""

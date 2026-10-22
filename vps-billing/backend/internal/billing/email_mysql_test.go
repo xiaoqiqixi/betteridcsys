@@ -157,7 +157,7 @@ func TestMySQLEmailConcurrentRevision(t *testing.T) {
 		t.Fatal("audit count", audits, err)
 	}
 	var tables int
-	if err = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'").Scan(&tables); err != nil || tables != 20 {
-		t.Fatal("expected current schema with20 tables including catalog taxonomy", tables, err)
+	if err = m.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE'").Scan(&tables); err != nil || tables != 23 {
+		t.Fatal("expected current schema with23 tables including private product configurations", tables, err)
 	}
 }

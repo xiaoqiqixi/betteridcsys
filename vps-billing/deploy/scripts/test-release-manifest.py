@@ -70,8 +70,8 @@ class SourceVersionTest(unittest.TestCase):
 
     def test_current_checkout_core_and_smtp_are_exact_independent_release_versions(self):
         root = Path(__file__).resolve().parents[3]
-        self.assertEqual(manifest.selected_versions(root), {"core": "0.5.8", "smtp": "1.1.0"})
-        manifest.verify_version(root, "core", "0.5.8")
+        self.assertEqual(manifest.selected_versions(root), {"core": "0.5.9", "smtp": "1.1.0"})
+        manifest.verify_version(root, "core", "0.5.9")
         manifest.verify_version(root, "smtp", "1.1.0")
         for kind, version in (("core", "0.5.6"), ("core", "v0.5.7"), ("smtp", "1.1.1")):
             with self.subTest(kind=kind, version=version), self.assertRaises(SystemExit):
