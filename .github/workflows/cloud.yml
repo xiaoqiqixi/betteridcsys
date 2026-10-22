@@ -1,0 +1,72 @@
+name: Controller and KVM node development checks
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'aster-cloud/**'
+      - 'vps-billing/backend/controllerapi/**'
+      - 'vps-billing/backend/internal/controllers/**'
+      - '.github/workflows/cloud.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-unit:
+    name: Linux unit and build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Unit regressions (real MySQL is a separate required job)
+        working-directory: aster-cloud
+        run: |
+          set -euo pipefail
+          go test -mod=readonly -race -count=1 -v -timeout=10m ./...
+          go vet -mod=readonly ./...
+          CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false ./cmd/aster-controller ./cmd/aster-node
+      - name: Workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/cloud.yml
+
+  native-mysql:
+    name: Independent controller MySQL acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Prepare disposable native runner
+        run: bash vps-billing/deploy/ci/prepare-native-runner.sh
+      - name: Real isolated MySQL, race and static binaries
+        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash vps-billing/deploy/ci/mysql-native.sh -- bash aster-cloud/deploy/ci/check.sh
+      - name: Go vulnerability gate
+        working-directory: aster-cloud
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format=text -show=version,verbose ./...
+      - name: Remove only owned native scratch
+        if: always()
+        run: |
+          if [[ -n ${ASTER_NATIVE_FIXTURE_ROOT:-} ]]; then
+            [[ $ASTER_NATIVE_FIXTURE_ROOT =~ ^/run/aster-native\.[A-Za-z0-9]{8}$ ]]
+            sudo rm -rf -- "$ASTER_NATIVE_FIXTURE_ROOT"
+          fi

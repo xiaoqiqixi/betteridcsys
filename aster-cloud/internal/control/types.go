@@ -1,0 +1,133 @@
+package control
+
+import (
+	"aster/billing/controllerapi"
+	"aster/cloud/internal/nodeproto"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"time"
+)
+
+var (
+	ErrInput       = errors.New("invalid input")
+	ErrConflict    = errors.New("request binding conflict")
+	ErrNotFound    = errors.New("not found")
+	ErrCapacity    = errors.New("no approved healthy node capacity")
+	ErrState       = errors.New("operation state does not permit dispatch")
+	ErrUnavailable = errors.New("controller dependency unavailable")
+)
+
+type Capability nodeproto.Capabilities
+
+// No optional resource is silently ignored. Phase one deliberately rejects
+// data disks, VPCs and non-default bandwidth/traffic rather than pretending them.
+func (c Capability) Supports(r controllerapi.Resources, node NodeProfile) bool {
+	spec := controllerapi.ProductSpec{Mode: "custom", ControllerID: "check", Resources: &r}
+	return spec.Valid() && c.Protocol == nodeproto.Protocol && c.NodeID == node.ID && !c.Maintenance && c.Hypervisor == "libvirt-kvm" &&
+		r.ComputeNodeID == node.ID && r.DatacenterID == node.DatacenterID && r.NodeGroupID == node.GroupID &&
+		contains(c.ImageIDs, r.ImageID) && contains(c.StorageIDs, r.SystemStorageID) && r.NetworkType == "normal" && r.IPv4Count == 1 && r.IPv6Count == 0 && contains(c.NetworkProfiles, "normal-static-ipv4-dedicated-bridge") &&
+		r.DataDiskGiB == 0 && r.DataStorageID == "" && r.BandwidthMbps == 0 && r.InboundBandwidthMbps == 0 && r.TransferGiB == 0 &&
+		r.TrafficDirection == "all" && containsInt(c.IPv4Counts, r.IPv4Count) && containsInt(c.IPv6Counts, r.IPv6Count) &&
+		containsInt(c.BandwidthMbps, 0) && containsInt(c.TransferGiB, 0) && contains(c.Actions, "create")
+}
+func contains(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+func containsInt(xs []int, s int) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+func id() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("secure random unavailable")
+	}
+	return hex.EncodeToString(b[:])
+}
+
+type Candidate struct {
+	Node       NodeProfile
+	ProfileSHA string
+	Resources  controllerapi.Resources
+}
+type Job struct {
+	OperationID    string    `json:"operation_id"`
+	OrderID        string    `json:"order_id"`
+	ControllerID   string    `json:"controller_id"`
+	RequestSHA     string    `json:"request_sha256"`
+	RequestJSON    []byte    `json:"-"`
+	InstanceID     string    `json:"instance_id"`
+	NodeID         string    `json:"node_id"`
+	NodeProfileSHA string    `json:"-"`
+	NodeRequestSHA string    `json:"-"`
+	NodeRequest    []byte    `json:"-"`
+	State          string    `json:"state"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (j Job) Result() controllerapi.Result {
+	state, resource := "accepted", j.InstanceID
+	if j.State == "succeeded" {
+		state = "succeeded"
+	}
+	if j.State == "rejected" {
+		state = "rejected"
+		resource = ""
+	}
+	return controllerapi.Result{Protocol: controllerapi.Protocol, OperationID: j.OperationID, OrderID: j.OrderID, RequestSHA256: j.RequestSHA, Status: state, ResourceID: resource}
+}
+
+type NodeView struct {
+	Online            bool       `json:"online"`
+	ID                string     `json:"id"`
+	DatacenterID      string     `json:"datacenter_id"`
+	Maintenance       bool       `json:"maintenance"`
+	HeartbeatAt       *time.Time `json:"heartbeat_at"`
+	FreeCPU           int64      `json:"free_cpu"`
+	FreeMemoryMiB     int64      `json:"free_memory_mib"`
+	FreeDiskGiB       int64      `json:"free_disk_gib"`
+	ReservedCPU       int64      `json:"reserved_cpu"`
+	ReservedMemoryMiB int64      `json:"reserved_memory_mib"`
+	ReservedDiskGiB   int64      `json:"reserved_disk_gib"`
+}
+type Instance struct {
+	ID        string                  `json:"id"`
+	OwnerRef  string                  `json:"owner_ref"`
+	NodeID    string                  `json:"node_id"`
+	Hostname  string                  `json:"hostname"`
+	State     string                  `json:"state"`
+	Resources controllerapi.Resources `json:"resources"`
+	CreatedAt time.Time               `json:"created_at"`
+	UpdatedAt time.Time               `json:"updated_at"`
+}
+type Audit struct {
+	ID        int64     `json:"id"`
+	Actor     string    `json:"actor"`
+	Action    string    `json:"action"`
+	Target    string    `json:"target"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type Store interface {
+	Ping(context.Context) error
+	Admit(context.Context, controllerapi.Request, []Candidate, time.Time, time.Duration) (Job, bool, error)
+	Lookup(context.Context, string) (Job, error)
+	Claim(context.Context, string, string, time.Time, time.Duration) (Job, error)
+	Complete(context.Context, string, string, time.Time) (Job, error)
+	Nodes(context.Context) ([]NodeView, error)
+	Instances(context.Context) ([]Instance, error)
+	Jobs(context.Context) ([]Job, error)
+	Audits(context.Context) ([]Audit, error)
+}

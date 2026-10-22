@@ -1,0 +1,232 @@
+package control
+
+import (
+	"aster/billing/controllerapi"
+	"aster/cloud/internal/nodeproto"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
+	"time"
+)
+
+type Config struct {
+	Schema              int           `json:"schema"`
+	ControllerID        string        `json:"controller_id"`
+	Listen              string        `json:"listen"`
+	TLSCertFile         string        `json:"tls_cert_file"`
+	TLSKeyFile          string        `json:"tls_key_file"`
+	DSNFile             string        `json:"dsn_file"`
+	BillingTokenFile    string        `json:"billing_token_file"`
+	AdminReadTokenFile  string        `json:"admin_read_token_file"`
+	AdminWriteTokenFile string        `json:"admin_write_token_file"`
+	HeartbeatTTLSeconds int           `json:"heartbeat_ttl_seconds"`
+	Nodes               []NodeProfile `json:"nodes"`
+	Presets             []Preset      `json:"presets"`
+}
+type NodeProfile struct {
+	ID                      string   `json:"id"`
+	DatacenterID            string   `json:"datacenter_id"`
+	GroupID                 string   `json:"group_id"`
+	Endpoint                string   `json:"endpoint"`
+	AllowedCIDRs            []string `json:"allowed_cidrs"`
+	CAFile                  string   `json:"ca_file"`
+	ClientCertFile          string   `json:"client_cert_file"`
+	ClientKeyFile           string   `json:"client_key_file"`
+	ServerCertificateSHA256 string   `json:"server_certificate_sha256"`
+}
+type Preset struct {
+	ID        string                  `json:"id"`
+	NodeID    string                  `json:"node_id"`
+	Resources controllerapi.Resources `json:"resources"`
+}
+type Secrets struct{ Billing, AdminRead, AdminWrite string }
+
+var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+var shaRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+func ReadProtected(path string, private bool, maximum int64) ([]byte, error) {
+	return readProtected(path, private, maximum, 0)
+}
+func readProtected(path string, private bool, maximum int64, owner uint32) ([]byte, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
+		return nil, ErrInput
+	}
+	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+		info, err := os.Lstat(parent)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, ErrUnavailable
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || (st.Uid != 0 && st.Uid != owner) || info.Mode().Perm()&0022 != 0 && !(st.Uid == 0 && info.Mode()&os.ModeSticky != 0) {
+			return nil, ErrUnavailable
+		}
+		if parent == "/" {
+			break
+		}
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	f := os.NewFile(uintptr(fd), "protected-controller-file")
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil || !before.Mode().IsRegular() || before.Size() < 1 || before.Size() > maximum || before.Mode().Perm()&0022 != 0 || private && before.Mode().Perm()&0077 != 0 {
+		return nil, ErrUnavailable
+	}
+	st, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != owner || st.Nlink != 1 {
+		return nil, ErrUnavailable
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maximum+1))
+	after, e := f.Stat()
+	if err != nil || e != nil || len(raw) == 0 || int64(len(raw)) > maximum || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+		return nil, ErrUnavailable
+	}
+	return raw, nil
+}
+func LoadConfig(path string) (Config, Secrets, error) {
+	raw, err := ReadProtected(path, true, 65536)
+	var c Config
+	if err != nil || !strict(raw, &c) || !c.Valid() {
+		return Config{}, Secrets{}, ErrInput
+	}
+	token := func(path string) (string, error) {
+		b, e := ReadProtected(path, true, 4096)
+		s := strings.TrimSpace(string(b))
+		if e != nil || len(s) < 32 || len(s) > 4096 || strings.ContainsAny(s, " \t\r\n") {
+			return "", ErrInput
+		}
+		return s, nil
+	}
+	b, e1 := token(c.BillingTokenFile)
+	r, e2 := token(c.AdminReadTokenFile)
+	w, e3 := token(c.AdminWriteTokenFile)
+	if e1 != nil || e2 != nil || e3 != nil || b == r || b == w || r == w {
+		return Config{}, Secrets{}, ErrInput
+	}
+	return c, Secrets{b, r, w}, nil
+}
+func (c Config) Valid() bool {
+	if c.Schema != 1 || !nodeproto.ValidNodeID(c.ControllerID) || c.HeartbeatTTLSeconds < 10 || c.HeartbeatTTLSeconds > 300 || len(c.Nodes) > 64 || c.Nodes == nil || c.Presets == nil || len(c.Presets) > 256 {
+		return false
+	}
+	if _, _, e := net.SplitHostPort(c.Listen); e != nil {
+		return false
+	}
+	for _, p := range []string{c.TLSCertFile, c.TLSKeyFile, c.DSNFile, c.BillingTokenFile, c.AdminReadTokenFile, c.AdminWriteTokenFile} {
+		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
+			return false
+		}
+	}
+	seen := map[string]bool{}
+	for _, n := range c.Nodes {
+		if !n.Valid() || seen[n.ID] {
+			return false
+		}
+		seen[n.ID] = true
+	}
+	presetSeen := map[string]bool{}
+	for _, p := range c.Presets {
+		n, ok := c.Node(p.NodeID)
+		spec := controllerapi.ProductSpec{Mode: "custom", ControllerID: c.ControllerID, Resources: &p.Resources}
+		if !identifier.MatchString(p.ID) || presetSeen[p.ID] || !ok || !spec.Valid() || p.Resources.ComputeNodeID != n.ID || p.Resources.DatacenterID != n.DatacenterID || p.Resources.NodeGroupID != n.GroupID {
+			return false
+		}
+		presetSeen[p.ID] = true
+	}
+	return true
+}
+func (c Config) Node(id string) (NodeProfile, bool) {
+	for _, n := range c.Nodes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return NodeProfile{}, false
+}
+func (p NodeProfile) Valid() bool {
+	u, e := url.Parse(p.Endpoint)
+	if e != nil || u.Scheme != "https" || u.Hostname() == "" || strings.ToLower(u.Host) != u.Host || u.User != nil || u.Path != "" || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || strings.ContainsAny(p.Endpoint, "\x00\r\n\\") || !nodeproto.ValidNodeID(p.ID) || !identifier.MatchString(p.DatacenterID) || p.GroupID != "" && !identifier.MatchString(p.GroupID) || !shaRE.MatchString(p.ServerCertificateSHA256) || len(p.AllowedCIDRs) < 1 || len(p.AllowedCIDRs) > 16 {
+		return false
+	}
+	for _, s := range p.AllowedCIDRs {
+		x, e := netip.ParsePrefix(s)
+		if e != nil || x.Masked().String() != s || x.Addr().Is4In6() || x.Bits() < 8 || x.Addr().Is6() && x.Bits() < 32 {
+			return false
+		}
+	}
+	for _, s := range []string{p.CAFile, p.ClientCertFile, p.ClientKeyFile} {
+		if !filepath.IsAbs(s) || filepath.Clean(s) != s {
+			return false
+		}
+	}
+	return true
+}
+func (p NodeProfile) Digest() string { raw, _ := json.Marshal(p); return nodeproto.Digest(raw) }
+func (c Config) Candidates(r controllerapi.Request) []Candidate {
+	if r.Product.ControllerID != c.ControllerID {
+		return nil
+	}
+	add := func(n NodeProfile, r controllerapi.Resources) Candidate { return Candidate{n, n.Digest(), r} }
+	if r.Product.Mode == "preset" {
+		for _, p := range c.Presets {
+			if p.ID == r.Product.RemoteProductID {
+				n, ok := c.Node(p.NodeID)
+				if ok {
+					return []Candidate{add(n, p.Resources)}
+				}
+			}
+		}
+		return nil
+	}
+	if r.Product.Mode != "custom" || r.Product.Resources == nil {
+		return nil
+	}
+	wanted := *r.Product.Resources
+	// This first vertical slice requires explicit concrete IDs. It never silently
+	// maps a custom node group, storage, bandwidth or VPC to a different resource.
+	for _, n := range c.Nodes {
+		if wanted.ComputeNodeID == n.ID && wanted.DatacenterID == n.DatacenterID && wanted.NodeGroupID == n.GroupID {
+			return []Candidate{add(n, wanted)}
+		}
+	}
+	return nil
+}
+func loadNodeTLS(p NodeProfile) (*tls.Config, error) { return loadNodeTLSOwned(p, 0) }
+
+func loadNodeTLSOwned(p NodeProfile, owner uint32) (*tls.Config, error) {
+	ca, e1 := readProtected(p.CAFile, false, 65536, owner)
+	cert, e2 := readProtected(p.ClientCertFile, false, 65536, owner)
+	key, e3 := readProtected(p.ClientKeyFile, true, 65536, owner)
+	pool := x509.NewCertPool()
+	pair, e4 := tls.X509KeyPair(cert, key)
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || !pool.AppendCertsFromPEM(ca) {
+		return nil, ErrUnavailable
+	}
+	u, _ := url.Parse(p.Endpoint)
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, Certificates: []tls.Certificate{pair}, ServerName: u.Hostname(), VerifyConnection: func(cs tls.ConnectionState) error {
+		if len(cs.VerifiedChains) == 0 || len(cs.PeerCertificates) == 0 {
+			return ErrUnavailable
+		}
+		h := sha256.Sum256(cs.PeerCertificates[0].Raw)
+		if hex.EncodeToString(h[:]) != p.ServerCertificateSHA256 {
+			return ErrUnavailable
+		}
+		return nil
+	}}, nil
+}
+func heartbeatFresh(at *time.Time, now time.Time, ttl time.Duration) bool {
+	return at != nil && !at.After(now.Add(30*time.Second)) && now.Sub(*at) <= ttl
+}

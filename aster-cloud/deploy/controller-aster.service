@@ -1,0 +1,38 @@
+[Unit]
+Description=Aster independent controller (explicit provisioning dispatcher)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# First vertical slice reads root-owned private policy. It never executes VMs.
+# Privilege separation of this API is a documented follow-up, not an implicit claim.
+User=root
+Group=root
+ExecStart=/opt/aster-cloud/bin/aster-controller serve -config /etc/aster-controller/config.json
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=1024
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
