@@ -10,6 +10,12 @@
 
 已发布的 0.5.4 维护内容包括登录错误提示随界面语言更新、客户概览只读取最近五条订单，以及减少订单列表中重复的币种快照解析。历史金额、币种和套餐快照保持原记录。
 
+## 独立主控与 KVM 被控（开发中）
+
+主控与宿主机被控源码位于 [`aster-cloud/`](aster-cloud/README.md)，与财务使用独立进程、数据库和权限。被控通过本机 libvirt/QEMU/KVM 管理实际虚拟机，不是装在客户虚拟机里的普通 Agent；目标为 Ubuntu22.04 及以上的 amd64 宿主机。只借鉴行业成品的分层思路，不对接 IDCsmart API。
+
+当前是持久任务、安全派发和 KVM 执行路径的开发垂直链，不是完整云平台，也不包含在财务 v0.5.9 六资产中。真实宿主、网络及恢复验收由用户明确延后，不能从模拟执行器、XML校验或程序可编译推断已开通。当前功能、限制和后续门槛见[开发矩阵](aster-cloud/docs/ARCHITECTURE.md)与[独立验证记录](aster-cloud/docs/VALIDATION.md)。
+
 ## 安装与目录
 
 Core `0.5.9` 的交付格式为 Linux amd64 的 API、插件宿主和资源包。本轮开发对照基线为正式 `0.5.8`；本页链接的安装、升级示例已按 `0.5.9` 准备，须待该版本正式发布并核验后使用。从 [GitHub Releases](https://github.com/xiaoqiqixi/betteridcsys/releases)取得同一版本的六项资产，核对 `SHA256SUMS`、`BUILD.json` 和 `PROVENANCE.json`，再用主机准备器组装完整版本目录。服务器运行应用无需 Go 或 Node.js，单个可执行文件还不足以完成安装。
