@@ -73,6 +73,14 @@ func (a App) Handler() http.Handler {
 			return
 		}
 		path := r.URL.Path
+		if strings.HasPrefix(path, "/v1/resources/") {
+			if !billing {
+				failure(w, 403, "FORBIDDEN")
+				return
+			}
+			a.resourceView(w, r)
+			return
+		}
 		if path == "/v1/provisioning" || strings.HasPrefix(path, "/v1/provisioning/") {
 			if !billing {
 				failure(w, 403, "FORBIDDEN")

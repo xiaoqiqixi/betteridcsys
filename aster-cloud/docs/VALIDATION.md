@@ -1,4 +1,37 @@
-# 主控 / KVM 被控开发验证（非成品验收）
+# 管理台 / 权限 / 实例 / 存储 / 冷迁移开发验证
+
+2026-10-22。本轮仅更新 main，不创建或覆盖标签，不发布独立主控正式 Release。财务 v0.5.9 安装产物不变，Ubuntu22 上既有财务 v0.5.8 服务不升级。真实 KVM 宿主验收按用户要求后置。
+
+## 本轮实现范围
+
+独立 Vue 管理台与 staff RBAC、持久实例动作、停止态快照/备份、四阶段冷迁移及流式 mTLS 转运、真实节点状态只读观察、实际操作人审计、财务只读 owner 合同。详见 [功能矩阵](ARCHITECTURE.md)、[API](CONSOLE_API.md)、[主控运维](../deploy/controller-OPERATIONS.md) 和 [被控运维](../NODE_README.md)。下面历史段落的“没有管理台/存储”仅描述上一轮，不代表本轮代码现状。
+
+## 验证记账原则
+
+- 本地 Darwin race 运行未配置 MySQL 的入口和子场景会明确 SKIP；不算实库通过。Ubuntu22 独立 Unix-socket MySQL8.4.13 另跑，财务库不参与。
+- 管理 HTTP 回归确实使用 TLS、持久 MySQL、Cookie/CSRF/RBAC，节点动作使用受控 fake；迁移网络回归确实使用两端 mTLS 和真实流式 HTTP，但磁盘为合成数据、执行器为 fake。不能叫真实虚拟机开通/恢复/迁移验收。
+- 第一轮 console seed 列数错误、identity 测试 binary 相对 SQL 路径错误、后续 fixture 复用用户冲突和 fault server 迟到请求计数问题均保留失败日志。修正 fixture/同步而不是删用例、放宽状态、加业务重试。最终结果必须单列对应测试 binary SHA。
+- 既有财务 controllerapi 与传输包独立 race 回归通过；新的 resource JSON 与原六字段 Result 分离。此轮未改金额、支付、币种、历史订单快照或财务后端源码。
+
+## 冻结源码的实际结果
+
+- 本地 Go1.26.4 / Darwin arm64 全scope race：363 PASS事件，0 FAIL / race warning；13 个实库入口及子场景因未设置DSN明确SKIP。vet、固定actionlint1.7.7、Linux amd64静态构建通过。控制器binary SHA `67f581393962d08ec39214dd4072279d74e0b7526e8fd7c5f1a6c85c9a1cfe97`，节点 `4c77bf00fea0fd4e42dc8bc7c36900163f862e43fb33e5954aebd1de9f6ed523`。
+- Ubuntu22 独立MySQL8.4.13：控制器最终测试binary `0423357dd99e6c0c5e1121a142f0db3c380a9a277445770aa95aa4e168aeb338` 完整PASS，包含原financial机器API、管理HTTP/RBAC/实际审计归因、CRUD/容量回收、快照、双节点冷迁移事务及真实mTLS流式故障测试。身份测试binary `9f3db346af13688626d8266036cc9bea3e5e0a639c391209b16937bf202b8361` 全部10个MySQL子场景PASS；两包 **0 SKIP / FAIL**。这不是race binary，也不是实际VM。
+- 管理台：最终118 Vitest /4文件 /0skip，typecheck、format、production build均PASS；npm全依赖扫描0漏洞。锁定的Vue依赖由独立scratch npm ci验证可重装。实际dist为`index-D03kT9JK.js` / `index-BPDYnm5G.css`，产物不提交源码库。
+- 财务公开合同与controller传输包：48 PASS事件、0SKIP/FAIL/race。它与主控测试有合同覆盖重叠，不相加宣传独立场景数量。
+- 证据保存在ignored `vps-billing/artifacts/cloud-management-20261022/`，包含早期失败与最终实库日志、SHA及`test-receipt.json`。开发检查不等于真实宿主部署或生产安全认证。
+
+## 尚未验证 / 不包含
+
+**管理台完整桌面/手机真实 HTTPS 浏览器回归尚未完成**：本轮 localhost CA 临时信任待用户许可，原生 Mac 也处于锁屏。没有绕过浏览器安全警告、没有向钥匙串加新 CA；前端单测/构建不等于视觉验收。暂时打开的 HTTP 开发页不具备生产 Secure Cookie 会话，不能作为已联调成功截图。
+
+没有真实 libvirt/KVM VM、磁盘满/物理断电后恢复、跨物理宿主迁移、guest SSH/联网/隔离、主控生产 systemd/Nginx/TLS 安装及整机升级/回滚。本轮不在现有 1 GB 财务测试机安装虚拟化包、创建 VM、改桥接或防火墙。热迁移、HA、VNC、MFA、租户 SSO、定时异地备份等仍未实现，见矩阵明确清单。
+
+GitHub 的最终 Ubuntu22/24、原生 MySQL（禁止 SKIP）、管理台、依赖扫描结果应查对应 main 提交的 Actions；本文不提前宣称尚未结束的 CI 成功，也不把旧提交结果用于新源码。
+
+## 历史记录
+
+# 上一轮基础链验证记录（保留历史，非当前新增功能验收）
 
 2026-10-22。用户明确暂无独立 KVM 宿主机，先开发，真实宿主验收留待后续；这不代表跳过财务发行门禁或把模拟测试算成虚拟机已开通。
 
@@ -23,11 +56,11 @@
 
 完整日志与精简回执留存于ignored `vps-billing/artifacts/cloud-20261022/ci-39721676458/`。这只证明上述开发检查，不包含真实KVM、宿主安装、网络包隔离、VM恢复或主控完整产品验收。后续代码变更必须重新绑定新提交结果。
 
-## 测试环境清理
+## 上一轮测试环境清理
 
 独立测试MySQL已停止，临时DSN和mysql.cnf删除，私有停机data目录及日志保留。doctor自身临时惰性镜像/配置/程序已删除，SSH复用连接已关闭。正式财务API/Nginx/MySQL仍active，未升级或修改；未新增CA或改钥匙串。
 
-## 明确未完成
+## 上一轮当时未完成（新增开发范围以当前矩阵为准）
 
 没有真实VM启动/SSH/公网连通、实际网络隔离、安全组/VPC/IPv6、非零带宽/流量计量、数据盘/快照/备份/迁移、宿主恢复、原生systemd安装或Ubuntu24/26真机验收。被控的成功create只表示libvirt域running；不保证guest或业务可用。
 

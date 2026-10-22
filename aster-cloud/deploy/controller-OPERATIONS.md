@@ -65,3 +65,59 @@ aster-controller reconcile -config /etc/aster-controller/config.json -operation 
 本机单元和真实TLS/mTLS测试可用`go test -race ./internal/control`。真实MySQL测试优先`ASTER_CLOUD_TEST_DSN`且库名须含`_test`；缺env明确skip。CI仅在`ASTER_MYSQL_TEST_DSN`严格指向隔离`aster_ci_test`时创建随机独立`aster_cloud_test_<hex>`并最终drop；不改生产OpenDSN限制，不读取财务表。日志不可打印DSN/token内容。
 
 必须分别报告真实MySQL/目标Linux测试、真实KVM/静态IP/SSH、systemd安装/证书/备份恢复。模拟node RPC、contract-shaped TLS server和SQL状态测试不等于真实VM创建。本期没有管理UI、多用户RBAC/MFA、客户操作权限、VPC、配额/告警、跨节点迁移、快照/备份、失败补偿自动重派、完整审计留存/不可篡改日志、持续健康监控或完整集群调度。
+
+
+## 独立管理台与 staff 权限（开发版）
+
+原机器 API 的默认启动不开放管理会话。管理台只允许固定 HTTPS Origin，浏览器不得直连节点或持有 billing / admin token。构建使用锁定依赖；以下命令在有 Go / Node 的构建机运行，不在计算宿主上安装 Node：
+
+```sh
+cd aster-cloud/frontend
+npm ci --ignore-scripts
+npm run typecheck && npm run format:check && npm test && npm run build
+cd ..
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs=false -o bin/aster-controller ./cmd/aster-controller
+```
+
+将 binary 与 `frontend/dist/` 分别审核安装到 `/opt/aster-cloud/bin/`、`/opt/aster-cloud/ui/`，均 root 所有且不可被组/其他用户写入。不公开源码、配置、日志或 secrets 目录。API 保持自身 TLS；当前版本不信任转发 Header 来绕过 Origin / Host / TLS，反向代理必须保留公开 Host，后端证书应由受信链验证。
+
+先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。
+
+首个管理员仅在空用户库由 root CLI 创建；不要把密码放进 argv、unit、shell 历史、截图或日志：
+
+```sh
+# 由受保护的本地终端/秘密管理器向 stdin 输入 >=12 字符密码
+/opt/aster-cloud/bin/aster-controller bootstrap-admin \
+  -config /etc/aster-controller/config.json \
+  -console-origin https://cloud.example.com -email admin@example.com \
+  -name 管理员 -password-stdin
+```
+
+通过 systemd drop-in 显式覆盖启动项（域名、证书与审批 build 由运营者准备，不由安装器自动信任）：
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/opt/aster-cloud/bin/aster-controller serve -config /etc/aster-controller/config.json -console-origin https://cloud.example.com -ui-dir /opt/aster-cloud/ui
+TimeoutStopSec=45
+```
+
+角色、停用、密码等变更立即撤销该用户全部会话；最后管理员和自己的角色/停用受保护。staff 是全平台运营角色，并非财务客户租户。自定义角色同时授予所需 read 权限与对应 action 权限，不能只授写权限。身份审计和资源审计在页面合并，任务详情不公开请求 JSON、证书路径、fence 或凭据。具体合同见 `docs/CONSOLE_API.md`。
+
+### 快照、备份和四阶段冷迁移
+
+先在节点配置审批镜像、存储、network profile 和配额。仅停止态处理磁盘，不绕过活动 qcow2 安全约束。迁移目标必须有新鲜能力心跳、足够容量和唯一明确 storage 映射。流程为 `migrate_prepare → migrate_transfer → migrate_import → migrate_activate`：每步先接纳独立、稳定操作 ID，再明确派发。202 仅表示接纳，不表示复制/导入/开机成功。
+
+源导出先记录永久 source fence，源不能经普通 start/delete 误操作。目标转运要 root 显式开启 inbox approval 且 pin 源证书；关闭为默认。转运流不缓冲整盘、无环境代理、重定向或静默重拨，整体最多30分钟；后台最多4个转运，节点自身仍共享单执行槽。不是断点续传、热迁移或自动容灾。
+
+丢响应后仅按原任务 ID 核对，HTTP核对入口的POST只触发**节点GET**，不会再次发原动作。若只传完部分文件而未形成审批，核对保留 unknown，须root按被控运维文档核查缺少阶段；不要创建替代任务、删除partial/fence或直接启动源/目标域。服务退出先取消转运并等待worker，恢复后不自动派发。
+
+当前 schema 2 节点 journal 不能交给 schema 1-only旧binary；旧版必须拒绝读取，不得删字段降级。主控数据库新增表不能靠换旧binary完成无损回滚。回滚须停写、保留双方journals、备份独立数据库与所有制品，使用配套版本和恢复演练确认，不回退财务数据库或覆盖历史订单快照。
+
+### 财务兼容和状态
+
+`/v1/provisioning` 仍为原 `aster.controller/1` 的六字段结果。新 `/v1/resources/{id}` 仅billing scoped token+精确 `X-Aster-Owner-Ref` 的只读、最后确认资源投影；不是guest在线或当前任务结果。源/目标节点变化仅更新主控运行资源，绝不改原商品快照、金额、币种或支付状态。财务可继续使用既有开通合同，不强制启用新管理台或新只读接口。
+
+### 尚未验收
+
+管理台浏览器视觉/焦点记录、真实VM/libvirt、宿主网络隔离、跨物理机磁盘恢复/迁移、原生systemd/Nginx/TLS安装和整机升级回滚均需独立验收。单测、实库、编译与流式mTLS fault测试均不能替代这些。没有用户KVM宿主前不自动安装虚拟化包，不动现有Ubuntu22财务站。

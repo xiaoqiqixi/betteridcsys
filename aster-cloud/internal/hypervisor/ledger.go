@@ -12,18 +12,35 @@ import (
 	"time"
 )
 
+type SourceFence struct {
+	Token        string `json:"token"`
+	ArtifactID   string `json:"artifact_id"`
+	TargetNodeID string `json:"target_node_id"`
+	OperationID  string `json:"operation_id"`
+	CreatedAt    string `json:"created_at"`
+}
+type TargetBinding struct {
+	SourceNodeID      string `json:"source_node_id"`
+	SourceOperationID string `json:"source_operation_id"`
+	ArtifactID        string `json:"artifact_id"`
+	ManifestSHA256    string `json:"manifest_sha256"`
+	FenceToken        string `json:"fence_token"`
+	Activated         bool   `json:"activated"`
+}
 type Instance struct {
-	ID        string                  `json:"id"`
-	OwnerRef  string                  `json:"owner_ref"`
-	Hostname  string                  `json:"hostname"`
-	Domain    string                  `json:"domain"`
-	Directory string                  `json:"directory"`
-	Disk      string                  `json:"disk"`
-	Seed      string                  `json:"seed"`
-	IPv4      string                  `json:"ipv4"`
-	MAC       string                  `json:"mac"`
-	State     string                  `json:"state"`
-	Resources controllerapi.Resources `json:"resources"`
+	SourceFence   *SourceFence            `json:"source_fence,omitempty"`
+	TargetBinding *TargetBinding          `json:"target_binding,omitempty"`
+	ID            string                  `json:"id"`
+	OwnerRef      string                  `json:"owner_ref"`
+	Hostname      string                  `json:"hostname"`
+	Domain        string                  `json:"domain"`
+	Directory     string                  `json:"directory"`
+	Disk          string                  `json:"disk"`
+	Seed          string                  `json:"seed"`
+	IPv4          string                  `json:"ipv4"`
+	MAC           string                  `json:"mac"`
+	State         string                  `json:"state"`
+	Resources     controllerapi.Resources `json:"resources"`
 }
 type Operation struct {
 	Task      nodeproto.NodeTask   `json:"task"`
@@ -36,10 +53,13 @@ type Operation struct {
 const maxJournalBytes = 64 << 20
 
 type journal struct {
-	Schema     int                  `json:"schema"`
-	NodeID     string               `json:"node_id"`
-	Operations map[string]Operation `json:"operations"`
-	Instances  map[string]Instance  `json:"instances"`
+	InboxTransfers    map[string]InboxTransfer    `json:"inbox_transfers,omitempty"`
+	StorageOperations map[string]StorageOperation `json:"storage_operations,omitempty"`
+	Artifacts         map[string]ArtifactRecord   `json:"artifacts,omitempty"`
+	Schema            int                         `json:"schema"`
+	NodeID            string                      `json:"node_id"`
+	Operations        map[string]Operation        `json:"operations"`
+	Instances         map[string]Instance         `json:"instances"`
 }
 type Ledger struct {
 	mu        sync.Mutex
@@ -88,7 +108,7 @@ func OpenLedger(directory, nodeID string) (*Ledger, error) {
 			l.Close()
 			return nil, e
 		}
-		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || l.state.Schema != 1 || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
+		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2) || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
 			l.Close()
 			return nil, errors.New("invalid journal")
 		}
@@ -99,6 +119,33 @@ func OpenLedger(directory, nodeID string) (*Ledger, error) {
 	if err = l.validateLoaded(); err != nil {
 		l.Close()
 		return nil, err
+	}
+	if l.state.InboxTransfers == nil {
+		l.state.InboxTransfers = map[string]InboxTransfer{}
+	}
+	if l.state.StorageOperations == nil {
+		l.state.StorageOperations = map[string]StorageOperation{}
+	}
+	if l.state.Artifacts == nil {
+		l.state.Artifacts = map[string]ArtifactRecord{}
+	}
+	if len(l.state.StorageOperations) > 0 || len(l.state.Artifacts) > 0 || len(l.state.InboxTransfers) > 0 {
+		l.state.Schema = 2
+	}
+	if err = l.validateStorageState(); err != nil {
+		l.Close()
+		return nil, err
+	}
+	for id, op := range l.state.StorageOperations {
+		if !op.Result.Matches(op.Task, op.Result.RequestSHA256) || op.Task.NodeID != nodeID || id != op.Task.OperationID {
+			l.Close()
+			return nil, errors.New("invalid storage journal")
+		}
+		if op.Result.Status == "accepted" {
+			op.Result.Status = "uncertain"
+			op.ErrorCode = "INTERRUPTED_AFTER_CLAIM"
+			l.state.StorageOperations[id] = op
+		}
 	}
 	// A previous accepted claim might already have affected libvirt. Never rerun it.
 	for id, op := range l.state.Operations {
@@ -176,6 +223,9 @@ func (l *Ledger) Claim(task nodeproto.NodeTask, sha string) (nodeproto.NodeResul
 	if l.closed || l.poisoned {
 		return nodeproto.NodeResult{}, false, errors.New("journal unavailable")
 	}
+	if _, ok := l.state.StorageOperations[task.OperationID]; ok {
+		return nodeproto.NodeResult{}, false, ErrConflict
+	}
 	if op, ok := l.state.Operations[task.OperationID]; ok {
 		if op.Result.RequestSHA256 != sha {
 			return nodeproto.NodeResult{}, false, ErrConflict
@@ -198,7 +248,7 @@ func (l *Ledger) Reserve(instance Instance) error {
 			return ErrConflict
 		}
 	}
-	l.state.Instances[instance.ID] = instance
+	l.state.Instances[instance.ID] = cloneInstance(instance)
 	return l.save()
 }
 func (l *Ledger) Finish(id, status, code string, instance *Instance) (nodeproto.NodeResult, error) {
@@ -213,7 +263,17 @@ func (l *Ledger) Finish(id, status, code string, instance *Instance) (nodeproto.
 	op.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	l.state.Operations[id] = op
 	if instance != nil {
-		l.state.Instances[instance.ID] = *instance
+		l.state.Instances[instance.ID] = cloneInstance(*instance)
+		if instance.State == "deleted" {
+			for opID, storageOp := range l.state.StorageOperations {
+				if storageOp.Task.InstanceID == instance.ID && storageOp.Recovery != nil {
+					x := *storageOp.Recovery
+					x.Removed = true
+					storageOp.Recovery = &x
+					l.state.StorageOperations[opID] = storageOp
+				}
+			}
+		}
 	}
 	err := l.save()
 	if err != nil {
@@ -234,7 +294,7 @@ func (l *Ledger) Instances() []Instance {
 	defer l.mu.Unlock()
 	items := make([]Instance, 0, len(l.state.Instances))
 	for _, item := range l.state.Instances {
-		items = append(items, item)
+		items = append(items, cloneInstance(item))
 	}
 	return items
 }
@@ -242,7 +302,7 @@ func (l *Ledger) Instance(id string) (Instance, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	item, ok := l.state.Instances[id]
-	return item, ok
+	return cloneInstance(item), ok
 }
 
 func (l *Ledger) validateLoaded() error {
@@ -260,7 +320,7 @@ func (l *Ledger) validateLoaded() error {
 			return errors.New("invalid journal instance identity")
 		}
 		switch i.State {
-		case "reserved", "uncertain", "running", "shut off", "deleted":
+		case "reserved", "uncertain", "running", "shut off", "deleted", "imported":
 		default:
 			return errors.New("invalid journal instance state")
 		}
@@ -272,4 +332,16 @@ func (l *Ledger) validateLoaded() error {
 		}
 	}
 	return nil
+}
+
+func cloneInstance(i Instance) Instance {
+	if i.SourceFence != nil {
+		f := *i.SourceFence
+		i.SourceFence = &f
+	}
+	if i.TargetBinding != nil {
+		b := *i.TargetBinding
+		i.TargetBinding = &b
+	}
+	return i
 }

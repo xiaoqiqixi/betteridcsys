@@ -44,6 +44,31 @@ jobs:
       - name: Workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/cloud.yml
 
+  management-ui:
+    name: Vue management console checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Install locked console dependencies
+        working-directory: aster-cloud/frontend
+        run: npm ci --ignore-scripts
+      - name: Check, test and build the real-API console
+        working-directory: aster-cloud/frontend
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm run format:check
+          npm test
+          npm run build
+          npm audit --audit-level=high
+
   native-mysql:
     name: Independent controller MySQL acceptance
     runs-on: ubuntu-24.04

@@ -30,10 +30,27 @@
     "bridge": "asterbr0",
     "cidr": "192.0.2.0/24",
     "gateway": "192.0.2.1",
-    "addresses": ["192.0.2.10", "192.0.2.11"],
-    "dns": ["192.0.2.53"],
+    "addresses": [
+      "192.0.2.10",
+      "192.0.2.11"
+    ],
+    "dns": [
+      "192.0.2.53"
+    ],
     "filter": "aster-static-ipv4",
     "filter_sha256": "REPLACE_WITH_EXACT_VIRSH_NWFILTER_DUMPXML_STDOUT_SHA256",
-    "ssh_authorized_keys": ["REPLACE_WITH_APPROVED_ED25519_PUBLIC_KEY_NOT_A_PRIVATE_KEY"]
+    "ssh_authorized_keys": [
+      "REPLACE_WITH_APPROVED_ED25519_PUBLIC_KEY_NOT_A_PRIVATE_KEY"
+    ]
+  },
+  "storage": {
+    "enabled": false,
+    "directory": "/var/lib/aster-artifacts",
+    "inbox_directory": "/var/lib/aster-inbox",
+    "max_artifact_bytes": 34359738368,
+    "max_total_bytes": 137438953472,
+    "allow_migration": false,
+    "allow_controller_inbox_approval": false,
+    "source_certificate_pins": {}
   }
 }

@@ -30,6 +30,9 @@ type options struct {
 	doctor            bool
 	reconcile         string
 	reconcileProvided bool
+	approveImport     string
+	reviewedFence     string
+	approveProvided   bool
 }
 
 // parseArgs is side-effect free. An explicitly empty/invalid reconcile flag may
@@ -39,14 +42,23 @@ func parseArgs(args []string) (options, error) {
 	flags := flag.NewFlagSet("aster-node", flag.ContinueOnError)
 	flags.StringVar(&o.config, "config", "/etc/aster-node/node.json", "root-owned 0600 configuration")
 	flags.StringVar(&o.reconcile, "reconcile-operation", "", "root-only read-only original-domain observation; service must be stopped")
+	flags.StringVar(&o.approveImport, "approve-storage-import", "", "root approval of a protected offline handoff artifact")
+	flags.StringVar(&o.reviewedFence, "reviewed-source-fence", "", "exact source fence token independently verified by root")
 	flags.BoolVar(&o.doctor, "doctor", false, "read-only host readiness check; no mutation")
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
 	doctorProvided := false
+	reviewedProvided := false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "reconcile-operation" {
 			o.reconcileProvided = true
+		}
+		if f.Name == "approve-storage-import" {
+			o.approveProvided = true
+		}
+		if f.Name == "reviewed-source-fence" {
+			reviewedProvided = true
 		}
 		if f.Name == "doctor" {
 			doctorProvided = true
@@ -54,6 +66,21 @@ func parseArgs(args []string) (options, error) {
 	})
 	if flags.NArg() != 0 {
 		return o, fmt.Errorf("unexpected arguments")
+	}
+	if o.approveProvided && (doctorProvided || o.reconcileProvided) {
+		return o, fmt.Errorf("approval, doctor and reconcile are mutually exclusive")
+	}
+	if o.approveProvided {
+		if !nodeproto.ValidID(o.approveImport) || !reviewedProvided || len(o.reviewedFence) != 64 {
+			return o, fmt.Errorf("approval requires artifact ID and reviewed 64hex source fence")
+		}
+		for _, v := range o.reviewedFence {
+			if !((v >= '0' && v <= '9') || (v >= 'a' && v <= 'f')) {
+				return o, fmt.Errorf("invalid reviewed source fence")
+			}
+		}
+	} else if reviewedProvided {
+		return o, fmt.Errorf("reviewed source fence requires approval mode")
 	}
 	if o.reconcileProvided && doctorProvided {
 		return o, fmt.Errorf("doctor and reconcile are mutually exclusive")
@@ -94,6 +121,15 @@ func run() error {
 	defer ledger.Close()
 	defer manager.Shutdown()
 	manager.Ledger = ledger
+	if o.approveProvided {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if e := manager.ApproveInbox(ctx, o.approveImport, o.reviewedFence); e != nil {
+			return fmt.Errorf("protected import approval rejected")
+		}
+		fmt.Fprintln(os.Stdout, "root import approval durably recorded; no VM was defined or started")
+		return nil
+	}
 	if o.reconcileProvided {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

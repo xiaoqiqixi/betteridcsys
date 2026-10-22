@@ -40,3 +40,17 @@ func TestParseArgsPreservesExplicitModes(t *testing.T) {
 		t.Fatal(o, e)
 	}
 }
+
+func TestRootImportApprovalModeRequiresExactPairedFlags(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	token := strings.Repeat("b", 64)
+	for _, args := range [][]string{{"--approve-storage-import="}, {"--approve-storage-import", id}, {"--reviewed-source-fence", token}, {"--approve-storage-import", id, "--reviewed-source-fence", ""}, {"--approve-storage-import", id, "--reviewed-source-fence", strings.Repeat("G", 64)}, {"--approve-storage-import", id, "--reviewed-source-fence", token, "--doctor"}, {"--approve-storage-import", id, "--reviewed-source-fence", token, "--reconcile-operation", id}} {
+		if _, e := parseArgs(args); e == nil {
+			t.Fatal("unsafe approval entered serve", args)
+		}
+	}
+	o, e := parseArgs([]string{"--approve-storage-import", id, "--reviewed-source-fence", token})
+	if e != nil || !o.approveProvided || o.approveImport != id || o.reviewedFence != token {
+		t.Fatal(o, e)
+	}
+}

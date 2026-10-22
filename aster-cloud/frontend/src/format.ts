@@ -1,0 +1,112 @@
+import type { Locale } from "./composables/preferences";
+export function dateText(raw: string | null | undefined, locale: Locale) {
+  if (!raw) return "—";
+  const value = new Date(raw);
+  return Number.isFinite(value.valueOf())
+    ? new Intl.DateTimeFormat(locale === "en" ? "en-GB" : "zh-CN", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(value)
+    : "—";
+}
+export function sizeMiB(value: number) {
+  return value >= 1024
+    ? `${new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(value / 1024)} GiB`
+    : `${value} MiB`;
+}
+export const actionNames: Record<string, [string, string]> = {
+  create: ["创建实例", "Create instance"],
+  start: ["启动", "Start"],
+  shutdown: ["关机", "Shut down"],
+  reboot: ["重启", "Restart"],
+  force_off: ["强制关机", "Force off"],
+  delete: ["删除实例", "Delete instance"],
+  snapshot_create: ["创建快照", "Create snapshot"],
+  snapshot_restore: ["恢复快照", "Restore snapshot"],
+  snapshot_delete: ["删除快照", "Delete snapshot"],
+  backup_create: ["创建备份", "Create backup"],
+  backup_verify: ["校验备份", "Verify backup"],
+  backup_restore: ["恢复备份", "Restore backup"],
+  backup_delete: ["删除备份", "Delete backup"],
+  migrate_prepare: ["准备迁移", "Prepare migration"],
+  migrate_transfer: ["安全传输", "Transfer migration data"],
+  migrate_import: ["导入目标节点", "Import to target"],
+  migrate_activate: ["激活目标实例", "Activate target"],
+};
+export const failureNames: Record<string, [string, string]> = {
+  network: [
+    "连接失败，请检查网络后重新加载。",
+    "Connection failed. Check your connection and reload.",
+  ],
+  unknown: [
+    "结果尚未确认。请查看任务状态，不要重复提交。",
+    "The result is not yet confirmed. Check tasks before submitting again.",
+  ],
+  unauthorized: [
+    "登录已过期，请重新登录。",
+    "Your session has expired. Sign in again.",
+  ],
+  forbidden: [
+    "你没有执行此操作的权限。",
+    "You do not have permission to perform this action.",
+  ],
+  conflict: [
+    "当前状态已变化，请重新加载后确认。",
+    "The state has changed. Reload before continuing.",
+  ],
+  invalid: [
+    "无法处理请求，请检查输入后重试。",
+    "The request could not be processed. Check the input.",
+  ],
+  unavailable: [
+    "服务暂时不可用，请稍后重新加载。",
+    "The service is unavailable. Try reloading later.",
+  ],
+};
+export const permissionNames: Record<string, [string, string]> = {
+  "audit.read": ["查看审计记录", "View audit log"],
+  "instances.dangerous": [
+    "重启、强制关机与删除实例",
+    "Restart, force off and delete instances",
+  ],
+  "instances.manage": [
+    "创建、启动与关闭实例",
+    "Create, start and shut down instances",
+  ],
+  "instances.read": ["查看实例与任务", "View instances and tasks"],
+  "migration.manage": ["管理实例迁移", "Manage migrations"],
+  "nodes.manage": ["管理节点维护", "Manage node maintenance"],
+  "nodes.read": ["查看节点", "View nodes"],
+  "settings.manage": ["管理系统设置", "Manage system settings"],
+  "storage.manage": [
+    "创建、校验与删除快照备份",
+    "Create, verify and delete snapshots and backups",
+  ],
+  "storage.read": ["查看快照与备份", "View snapshots and backups"],
+  "storage.restore": ["从快照或备份恢复", "Restore snapshots or backups"],
+  "users.manage": ["管理成员与权限", "Manage members and access"],
+};
+export const auditNames: Record<string, [string, string]> = {
+  "identity.bootstrap": ["创建首位管理员", "First administrator created"],
+  "identity.user_created": ["创建成员", "Member created"],
+  "identity.user_updated": ["更新成员权限", "Member access updated"],
+  "identity.login_failed": ["登录失败", "Sign-in failed"],
+  "identity.login": ["账户登录", "Signed in"],
+  "identity.logout": ["账户退出", "Signed out"],
+  "node.maintenance_on": ["节点进入维护模式", "Node maintenance enabled"],
+  "node.maintenance_off": ["节点退出维护模式", "Node maintenance disabled"],
+  "operation.dispatch": ["派发操作任务", "Task dispatched"],
+  "operation.dispatch_requested": ["请求派发任务", "Task dispatch requested"],
+  "operation.reconcile_requested": [
+    "请求核对任务",
+    "Task reconciliation requested",
+  ],
+  "operation.dispatch_committed": ["任务派发已提交", "Task dispatch committed"],
+  "operation.succeeded": ["操作已完成", "Operation completed"],
+  "operation.rejected": ["操作已拒绝", "Operation rejected"],
+  "operation.uncertain": ["操作结果待核实", "Operation result uncertain"],
+  "operation.dispatched": ["节点已受理操作", "Node accepted operation"],
+  "provisioning.accepted": ["开通任务已受理", "Provisioning accepted"],
+  "provisioning.succeeded": ["开通任务已完成", "Provisioning completed"],
+  "provisioning.rejected": ["开通任务已拒绝", "Provisioning rejected"],
+};
