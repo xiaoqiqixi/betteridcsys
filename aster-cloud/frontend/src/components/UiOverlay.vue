@@ -29,6 +29,7 @@ const id = useId(),
   discard = shallowRef(false);
 let previous: HTMLElement | null = null,
   token = "",
+  openedURL = "",
   savedOverflow = "",
   mounted = false;
 function focusables() {
@@ -102,7 +103,14 @@ function cleanup() {
   document.removeEventListener("keydown", key);
   document.removeEventListener("focusin", focus);
   window.removeEventListener("popstate", pop);
-  if (history.state?.asterOverlay === token) history.back();
+  if (history.state?.asterOverlay === token) {
+    if (location.href === openedURL) history.back();
+    else {
+      const state = { ...history.state };
+      delete state.asterOverlay;
+      history.replaceState(state, "");
+    }
+  }
   if (previous?.isConnected) previous.focus();
   discard.value = false;
 }
@@ -124,6 +132,7 @@ watch(
     const app = document.getElementById("app");
     if (app) app.inert = true;
     token = `cloud-${key32()}`;
+    openedURL = location.href;
     history.pushState({ ...history.state, asterOverlay: token }, "");
     mounted = true;
     document.addEventListener("keydown", key);
@@ -229,6 +238,10 @@ onBeforeUnmount(cleanup);
   padding: 24px;
   border-bottom: 1px solid var(--border);
 }
+.overlay-header,
+.overlay-footer {
+  flex-shrink: 0;
+}
 .overlay-header h2 {
   font-size: 21px;
   letter-spacing: -0.025em;
@@ -266,6 +279,9 @@ onBeforeUnmount(cleanup);
   max-height: calc(100dvh - 24px);
   width: 560px;
 }
+.as-drawer .overlay-body {
+  flex: 1;
+}
 .discard-box {
   padding: 16px;
   background: var(--warning-bg);
@@ -280,6 +296,9 @@ onBeforeUnmount(cleanup);
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
+}
+.overlay-leave-active {
+  pointer-events: none;
 }
 .overlay-enter-active,
 .overlay-leave-active {

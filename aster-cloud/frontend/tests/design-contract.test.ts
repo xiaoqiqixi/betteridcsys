@@ -28,6 +28,47 @@ const themes = [
   ),
 );
 describe("design contracts (static tokens, not browser computed)", () => {
+  it("keeps mobile navigation on the overlay surface and names the compact preferences control", () => {
+    const nav = readFileSync(resolve(root, "components/NavLinks.vue"), "utf8");
+    const app = readFileSync(resolve(root, "App.vue"), "utf8");
+    const surface = nav.match(/\.nav-links\.tone-surface\s*\{([^}]+)\}/)?.[1];
+    expect(surface).toBeDefined();
+    expect(surface).toContain("--nav-text: var(--secondary)");
+    expect(surface).toContain("--nav-hover: var(--hover)");
+    expect(surface).toContain("--nav-current-text: var(--accent-text)");
+    expect(surface).toContain("--nav-current-bg: var(--accent-bg)");
+    expect(app).not.toContain("mobile-nav-surface");
+    expect(app).toContain('<NavLinks tone="surface"');
+    expect(app).toContain('<NavLinks tone="sidebar"');
+    const trigger = app.match(
+      /<button\s+class="appearance-trigger"[\s\S]+?<\/button>/,
+    )?.[0];
+    expect(trigger).toContain(
+      ":aria-label=\"tr('语言与外观', 'Language & appearance')\"",
+    );
+    expect(trigger).toContain(
+      ":title=\"tr('语言与外观', 'Language & appearance')\"",
+    );
+  });
+  it("lets drawer content fill remaining height and lets closing surfaces stop intercepting new input", () => {
+    const overlay = readFileSync(
+      resolve(root, "components/UiOverlay.vue"),
+      "utf8",
+    );
+    expect(
+      overlay.match(/\.as-drawer \.overlay-body\s*\{([^}]+)\}/)?.[1],
+    ).toContain("flex: 1");
+    expect(
+      overlay.match(/\.overlay-leave-active\s*\{([^}]+)\}/)?.[1],
+    ).toContain("pointer-events: none");
+    const chrome = overlay.match(
+      /\.overlay-header,\s*\.overlay-footer\s*\{([^}]+)\}/,
+    )?.[1];
+    expect(chrome).toContain("flex-shrink: 0");
+    const body = overlay.match(/\.overlay-body\s*\{([^}]+)\}/)?.[1];
+    expect(body).toContain("overflow: auto");
+    expect(body).toContain("min-height: 0");
+  });
   it("distinguishes staff audit requests from the controller dispatch commit", () => {
     expect(auditNames["operation.dispatch_requested"]).toEqual([
       "请求派发任务",

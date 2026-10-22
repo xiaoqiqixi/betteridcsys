@@ -93,6 +93,29 @@ export const auditNames: Record<string, [string, string]> = {
   "identity.login_failed": ["登录失败", "Sign-in failed"],
   "identity.login": ["账户登录", "Signed in"],
   "identity.logout": ["账户退出", "Signed out"],
+  "instance.create_requested": ["请求创建实例", "Instance creation requested"],
+  "node.registered": ["节点已登记", "Node registered"],
+  "node.heartbeat": ["记录节点心跳", "Node heartbeat recorded"],
+  "node.dispatch_claimed": [
+    "已锁定任务，准备派发",
+    "Task claimed for node dispatch",
+  ],
+  "node.result_dispatched": [
+    "节点已受理开通任务",
+    "Node accepted provisioning task",
+  ],
+  "node.result_succeeded": [
+    "节点开通任务已完成",
+    "Node provisioning task completed",
+  ],
+  "node.result_rejected": [
+    "节点已拒绝开通任务",
+    "Node rejected provisioning task",
+  ],
+  "node.result_uncertain": [
+    "节点开通结果待核实",
+    "Node provisioning result uncertain",
+  ],
   "node.maintenance_on": ["节点进入维护模式", "Node maintenance enabled"],
   "node.maintenance_off": ["节点退出维护模式", "Node maintenance disabled"],
   "operation.dispatch": ["派发操作任务", "Task dispatched"],

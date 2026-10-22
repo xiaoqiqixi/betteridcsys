@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { webcrypto } from "node:crypto";
+import { createMemoryHistory, createRouter } from "vue-router";
 import { consoleKey } from "../src/context";
 import { ApiError } from "../src/api/client";
 import UiButton from "../src/components/UiButton.vue";
@@ -11,6 +12,7 @@ import StatusBadge from "../src/components/StatusBadge.vue";
 import ActionDialog from "../src/components/ActionDialog.vue";
 import CreateInstanceDialog from "../src/components/CreateInstanceDialog.vue";
 import MigrationWizard from "../src/components/MigrationWizard.vue";
+import NavLinks from "../src/components/NavLinks.vue";
 import { instance, node, operation, resources } from "./fixtures";
 import { mockContext } from "./helpers";
 vi.stubGlobal("crypto", webcrypto);
@@ -36,6 +38,43 @@ afterEach(() => {
   history.replaceState(null, "");
 });
 describe("custom controls", () => {
+  it("gives surface navigation an explicit tone without changing permissions, routes or events", async () => {
+    const { context } = mockContext(() => ({}));
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: ["instances", "nodes", "operations", "audit", "users"].map(
+        (name) => ({ path: `/${name}`, component: { template: "<div />" } }),
+      ),
+    });
+    await router.push("/instances");
+    await router.isReady();
+    const wrapper = mount(NavLinks, {
+      ...options(context),
+      props: { tone: "surface" },
+      global: { ...options(context).global, plugins: [router] },
+    });
+    wrappers.push(wrapper);
+    expect(wrapper.classes()).toContain("tone-surface");
+    expect(wrapper.findAll("a")).toHaveLength(5);
+    expect(wrapper.get("a.is-current").text()).toBe("实例");
+    await wrapper.get('a[href="/nodes"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe("/nodes");
+    expect(wrapper.emitted("navigate")).toHaveLength(1);
+    await wrapper.setProps({ tone: "sidebar" });
+    expect(wrapper.classes()).toContain("tone-sidebar");
+    context.session.user.value = {
+      ...context.session.user.value!,
+      role: "custom",
+      permissions: ["instances.read"],
+    };
+    context.prefs.locale.value = "en";
+    await flushPromises();
+    expect(wrapper.findAll("a").map((link) => link.text())).toEqual([
+      "Instances",
+      "Tasks",
+    ]);
+  });
   it("button exposes busy state and cannot be activated while busy", () => {
     const wrapper = mount(UiButton, {
       props: { busy: true },
@@ -133,6 +172,47 @@ describe("custom controls", () => {
     expect(history.state.asterOverlay).not.toBe(first);
     await wrapper.get(".overlay-header button").trigger("click");
     expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+  it("releases a closed drawer before a new dialog acquires background and focus guards", async () => {
+    const app = document.createElement("div");
+    app.id = "app";
+    const trigger = document.createElement("button");
+    app.append(trigger);
+    document.body.append(app);
+    trigger.focus();
+    const drawer = mount(UiOverlay, {
+      attachTo: document.body,
+      global: { stubs: { teleport: true } },
+      props: { open: true, drawer: true, title: "导航" },
+      slots: {
+        default: "<button>实例</button>",
+        footer: "<button>退出</button>",
+      },
+    });
+    const dialog = mount(UiOverlay, {
+      attachTo: document.body,
+      global: { stubs: { teleport: true } },
+      props: { open: false, title: "语言与外观" },
+      slots: { default: "<button>简体中文</button>" },
+    });
+    wrappers.push(drawer, dialog);
+    await flushPromises();
+    expect(app.inert).toBe(true);
+    await drawer.setProps({ open: false });
+    expect(app.inert).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+    await dialog.setProps({ open: true });
+    await flushPromises();
+    expect(app.inert).toBe(true);
+    expect(document.body.style.overflow).toBe("hidden");
+    const panel = dialog.get("[role=dialog]").element;
+    expect(panel.contains(document.activeElement)).toBe(true);
+    drawer.unmount();
+    expect(app.inert).toBe(true);
+    await dialog.setProps({ open: false });
+    expect(app.inert).toBe(false);
+    expect(document.body.style.overflow).toBe("");
+    expect(document.activeElement).toBe(trigger);
   });
 });
 describe("real-operation boundaries", () => {

@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { RouterLink } from "vue-router";
+import {
+  RouterLink,
+  isNavigationFailure,
+  NavigationFailureType,
+  useRouter,
+} from "vue-router";
 import { Server, Network, ListChecks, ShieldCheck, Users } from "@lucide/vue";
 import { useConsole } from "../context";
+const { tone = "sidebar" } = defineProps<{ tone?: "sidebar" | "surface" }>();
 const emit = defineEmits<{ navigate: [] }>();
+const router = useRouter();
 const {
   session,
   prefs: { tr },
@@ -42,26 +49,64 @@ const links = computed(() =>
     },
   ].filter((item) => session.can(item.permission)),
 );
+async function follow(
+  event: MouseEvent,
+  navigate: (event: MouseEvent) => Promise<unknown>,
+  fullPath: string,
+) {
+  if (event.defaultPrevented) return;
+  const result = await navigate(event);
+  if (
+    event.defaultPrevented &&
+    router.currentRoute.value.fullPath === fullPath &&
+    (!isNavigationFailure(result) ||
+      isNavigationFailure(result, NavigationFailureType.duplicated))
+  )
+    emit("navigate");
+}
 </script>
 <template>
-  <nav class="nav-links" :aria-label="tr('主导航', 'Main navigation')">
+  <nav
+    class="nav-links"
+    :class="`tone-${tone}`"
+    :aria-label="tr('主导航', 'Main navigation')"
+  >
     <RouterLink
       v-for="link in links"
       :key="link.path"
       :to="link.path"
-      active-class="is-current"
-      @click="emit('navigate')"
-      ><component :is="link.icon" :size="19" aria-hidden="true" /><span>{{
-        link.label
-      }}</span></RouterLink
+      :replace="tone === 'surface'"
+      custom
+      v-slot="{ href, navigate, isActive, isExactActive, route }"
+      ><a
+        :href="href"
+        :class="{ 'is-current': isActive }"
+        :aria-current="isExactActive ? 'page' : undefined"
+        @click="follow($event, navigate, route.fullPath)"
+        ><component :is="link.icon" :size="19" aria-hidden="true" /><span>{{
+          link.label
+        }}</span></a
+      ></RouterLink
     >
   </nav>
 </template>
 <style scoped>
 .nav-links {
+  --nav-text: var(--sidebar-secondary);
+  --nav-hover: var(--sidebar-hover);
+  --nav-hover-text: var(--sidebar-text);
+  --nav-current-text: var(--sidebar-text);
+  --nav-current-bg: var(--sidebar-selected);
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.nav-links.tone-surface {
+  --nav-text: var(--secondary);
+  --nav-hover: var(--hover);
+  --nav-hover-text: var(--text);
+  --nav-current-text: var(--accent-text);
+  --nav-current-bg: var(--accent-bg);
 }
 .nav-links a {
   display: flex;
@@ -70,7 +115,7 @@ const links = computed(() =>
   min-height: 46px;
   padding: 12px 14px;
   border-radius: 10px;
-  color: var(--sidebar-secondary);
+  color: var(--nav-text);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
@@ -79,12 +124,12 @@ const links = computed(() =>
     color 0.12s;
 }
 .nav-links a:hover {
-  background: var(--sidebar-hover);
-  color: var(--sidebar-text);
+  background: var(--nav-hover);
+  color: var(--nav-hover-text);
 }
 .nav-links .is-current {
-  color: var(--sidebar-text);
-  background: var(--sidebar-selected);
+  color: var(--nav-current-text);
+  background: var(--nav-current-bg);
 }
 .nav-links svg {
   flex-shrink: 0;
