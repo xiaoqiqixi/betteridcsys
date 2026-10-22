@@ -17,13 +17,21 @@
 
 - 本地 Go1.26.4 / Darwin arm64 全scope race：363 PASS事件，0 FAIL / race warning；13 个实库入口及子场景因未设置DSN明确SKIP。vet、固定actionlint1.7.7、Linux amd64静态构建通过。控制器binary SHA `67f581393962d08ec39214dd4072279d74e0b7526e8fd7c5f1a6c85c9a1cfe97`，节点 `4c77bf00fea0fd4e42dc8bc7c36900163f862e43fb33e5954aebd1de9f6ed523`。
 - Ubuntu22 独立MySQL8.4.13：控制器最终测试binary `0423357dd99e6c0c5e1121a142f0db3c380a9a277445770aa95aa4e168aeb338` 完整PASS，包含原financial机器API、管理HTTP/RBAC/实际审计归因、CRUD/容量回收、快照、双节点冷迁移事务及真实mTLS流式故障测试。身份测试binary `9f3db346af13688626d8266036cc9bea3e5e0a639c391209b16937bf202b8361` 全部10个MySQL子场景PASS；两包 **0 SKIP / FAIL**。这不是race binary，也不是实际VM。
-- 管理台：最终118 Vitest /4文件 /0skip，typecheck、format、production build均PASS；npm全依赖扫描0漏洞。锁定的Vue依赖由独立scratch npm ci验证可重装。实际dist为`index-D03kT9JK.js` / `index-BPDYnm5G.css`，产物不提交源码库。
+- 管理台：浏览器问题修复后最终149 Vitest /6文件 /0skip或FAIL，typecheck、format、production build均PASS；依赖及lockfile没有改变，先前npm全依赖扫描0漏洞。锁定的Vue依赖由独立scratch npm ci验证可重装。最终实测dist为`index-B636eQE5.js` / `index-CRtaRfOu.css`，产物不提交源码库。
 - 财务公开合同与controller传输包：48 PASS事件、0SKIP/FAIL/race。它与主控测试有合同覆盖重叠，不相加宣传独立场景数量。
 - 证据保存在ignored `vps-billing/artifacts/cloud-management-20261022/`，包含早期失败与最终实库日志、SHA及`test-receipt.json`。开发检查不等于真实宿主部署或生产安全认证。
 
+## 真实浏览器补验（2026-10-22）
+
+已使用 Ubuntu22 私有 MySQL8.4.13 与实际 Go HTTPS 管理接口，在浏览器完成限定范围的桌面/手机回归，详见 [浏览器记录](BROWSER_VALIDATION.md)。修复手机导航与返回竞争、重复历史项、退出登录合法204被误判未知、抽屉浅深主题与底栏位置、离场遮罩拦截点击及8项生产审计翻译。没有改后端协议、金额、支付、币种或历史快照。
+
+页面实例是独立测试库的合成持久记录，不是真实VM；仅创建两笔accepted操作意图并验证幂等重放，没有派发节点、伪造心跳或推进迁移成功。实测截图、修前失败、最终构建与清理回执保存在ignored `aster-cloud/artifacts/cloud-browser-20261022/`，不作为生产数据/安装产物发布。
+
+扩展功能基线提交 `ceda0bbc49924317953fc5e3b9b671a872d14f37` 的 [cloud CI](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39731991017) 与 [财务 CI](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39731990977) 已成功；不能把它们当作后续浏览器修复提交的CI。最终提交另查其对应Actions结果。
+
 ## 尚未验证 / 不包含
 
-**管理台完整桌面/手机真实 HTTPS 浏览器回归尚未完成**：本轮 localhost CA 临时信任待用户许可，原生 Mac 也处于锁屏。没有绕过浏览器安全警告、没有向钥匙串加新 CA；前端单测/构建不等于视觉验收。暂时打开的 HTTP 开发页不具备生产 Secure Cookie 会话，不能作为已联调成功截图。
+**本轮浏览器补验不等于完整产品验收**：没有完整执行慢响应/丢失ACK故障矩阵、跨身份迟到响应浏览器注入、200%浏览器缩放、实际手机软键盘、Safari/Firefox和减少动态效果的实际浏览器验证。相应单测仍不能代替这些未执行的人工/浏览器项。没有绕过证书警告或放宽Secure Cookie/CSRF。
 
 没有真实 libvirt/KVM VM、磁盘满/物理断电后恢复、跨物理宿主迁移、guest SSH/联网/隔离、主控生产 systemd/Nginx/TLS 安装及整机升级/回滚。本轮不在现有 1 GB 财务测试机安装虚拟化包、创建 VM、改桥接或防火墙。热迁移、HA、VNC、MFA、租户 SSO、定时异地备份等仍未实现，见矩阵明确清单。
 

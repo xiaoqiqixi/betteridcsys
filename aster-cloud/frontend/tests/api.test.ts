@@ -73,6 +73,81 @@ describe("same-origin production transport", () => {
     ).rejects.toMatchObject({ kind: "invalid" });
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it("accepts an explicitly expected empty 204 logout without a JSON content type", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const api = createApiClient(fetcher);
+    api.setCSRF("csrf");
+    await expect(
+      api.write("POST", "/auth/logout", {}, operation.id, emptyResponse, 204),
+    ).resolves.toEqual({});
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]).toMatchObject([
+      "/console/v1/auth/logout",
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": "csrf", "Idempotency-Key": operation.id },
+      },
+    ]);
+  });
+  it("does not accept 200 JSON as confirmation of the 204 logout contract", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({}));
+    const api = createApiClient(fetcher);
+    api.setCSRF("csrf");
+    await expect(
+      api.write("POST", "/auth/logout", {}, operation.id, emptyResponse, 204),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it.each([" ", "{}"])(
+    "does not accept an unexpected body %j on a 204 logout",
+    async (body) => {
+      const response = new Response(null, { status: 204 });
+      vi.spyOn(response, "text").mockResolvedValue(body);
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response);
+      const api = createApiClient(fetcher);
+      api.setCSRF("csrf");
+      await expect(
+        api.write("POST", "/auth/logout", {}, operation.id, emptyResponse, 204),
+      ).rejects.toMatchObject({ kind: "unknown" });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("still rejects a 204 when its explicitly supplied response guard does not match", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const api = createApiClient(fetcher);
+    api.setCSRF("csrf");
+    await expect(
+      api.write(
+        "POST",
+        "/auth/logout",
+        {},
+        operation.id,
+        operationResponse,
+        204,
+      ),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("preserves an authenticated logout rejection rather than accepting its JSON error", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(json({ error: { code: "CSRF_REQUIRED" } }, 403));
+    const api = createApiClient(fetcher);
+    api.setCSRF("csrf");
+    await expect(
+      api.write("POST", "/auth/logout", {}, operation.id, emptyResponse, 204),
+    ).rejects.toMatchObject({
+      kind: "forbidden",
+      code: "CSRF_REQUIRED",
+      status: 403,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it.each([200, 201, 204])(
     "never turns unexpected ACK %i into accepted",
     async (status) => {

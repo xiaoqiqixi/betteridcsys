@@ -96,7 +96,7 @@ export function useSession(api: ApiClient) {
     error.value = "";
     try {
       pendingAuth.value = "logout";
-      await api.write("POST", "/auth/logout", {}, key32(), emptyResponse);
+      await api.write("POST", "/auth/logout", {}, key32(), emptyResponse, 204);
       pendingAuth.value = null;
       invalidate();
     } catch (cause) {

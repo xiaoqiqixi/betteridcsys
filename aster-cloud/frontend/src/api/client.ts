@@ -258,6 +258,12 @@ export function createApiClient(
           : { Accept: "application/json" },
         ...(writing ? { body: JSON.stringify(body) } : {}),
       });
+      if (expectedStatus === 204 && response.status === 204) {
+        const data: unknown = {};
+        if ((await response.text()) !== "" || !guard(data))
+          throw new ApiError(writing ? "unknown" : "invalid");
+        return data;
+      }
       if (
         !/^application\/json(?:;|$)/i.test(
           response.headers.get("Content-Type") || "",

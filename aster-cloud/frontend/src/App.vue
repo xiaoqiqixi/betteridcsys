@@ -93,6 +93,7 @@ onBeforeUnmount(() => {
         class="icon-button"
         type="button"
         :aria-label="tr('语言与外观', 'Language & appearance')"
+        :title="tr('语言与外观', 'Language & appearance')"
         @click="preferencesOpen = true"
       >
         <SlidersHorizontal :size="19" aria-hidden="true" />
@@ -110,7 +111,7 @@ onBeforeUnmount(() => {
             tr("云管理", "Cloud console")
           }}</span></span
         ></a
-      ><NavLinks />
+      ><NavLinks tone="sidebar" />
       <div class="sidebar-account">
         <div class="account-avatar">
           {{
@@ -151,6 +152,8 @@ onBeforeUnmount(() => {
         <button
           class="appearance-trigger"
           type="button"
+          :aria-label="tr('语言与外观', 'Language & appearance')"
+          :title="tr('语言与外观', 'Language & appearance')"
           @click="preferencesOpen = true"
         >
           <SlidersHorizontal :size="16" aria-hidden="true" /><span>{{
@@ -180,9 +183,7 @@ onBeforeUnmount(() => {
     drawer
     :close-label="tr('关闭导航', 'Close navigation')"
     @close="mobileOpen = false"
-    ><div class="mobile-nav-surface">
-      <NavLinks @navigate="mobileOpen = false" />
-    </div>
+    ><NavLinks tone="surface" @navigate="mobileOpen = false" />
     <template #footer
       ><UiButton
         :busy="session.busy.value"
@@ -416,11 +417,6 @@ onBeforeUnmount(() => {
 }
 .mobile-menu {
   display: none;
-}
-.mobile-nav-surface {
-  background: var(--sidebar-bg);
-  border-radius: 12px;
-  padding: 12px;
 }
 .preferences-fields {
   display: flex;

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { webcrypto } from "node:crypto";
 import {
   ApiError,
+  createApiClient,
   operationResponse,
   validPage,
   validInstance,
@@ -249,6 +250,41 @@ describe("preferences and permission gates", () => {
 });
 
 describe("uncertain authentication", () => {
+  it("confirms an empty 204 logout and clears identity without pending uncertainty", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const api = createApiClient(fetcher);
+    api.setCSRF("logout-csrf");
+    const session = useSession(api);
+    session.user.value = admin;
+    await session.logout();
+    expect(session.user.value).toBeNull();
+    expect(session.pendingAuth.value).toBeNull();
+    expect(session.error.value).toBe("");
+    expect(session.busy.value).toBe(false);
+    expect(session.epoch.value).toBe(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("keeps a mismatched logout ACK unknown and blocks another authentication write", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const api = createApiClient(fetcher);
+    api.setCSRF("logout-csrf");
+    const session = useSession(api);
+    session.user.value = admin;
+    await session.logout();
+    expect(session.user.value).toBeNull();
+    expect(session.pendingAuth.value).toBe("logout");
+    expect(session.error.value).toBe("unknown");
+    await session.logout();
+    await session.login("admin@example.invalid", "NeverPersist123!");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it("does not issue another login until a safe session read resolves the outcome", async () => {
     let uncertain = true;
     const { context, calls } = mockContext((method, path) =>
