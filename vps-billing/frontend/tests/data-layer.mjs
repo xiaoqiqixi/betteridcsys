@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 import { test, after } from "node:test";
+import { assertConfigurationWrites } from "./configuration-write-contract.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const out = mkdtempSync(join(root, "tests/.data-check-"));
@@ -1411,4 +1412,37 @@ test("demo same-revision concurrent config saves commit exactly once with indepe
   const after = await client.read(path);
   assert.equal(after.revision, 2);
   assert.equal(after.price_revision, before.price_revision + 1);
+});
+
+test("configuration browser probe binds the exact recorded API path, POST verb and write count", () => {
+  const path = "/admin/catalog/standard/product-configuration";
+  const good = Array.from({ length: 4 }, () => ({
+    method: "POST",
+    path: `/api/v1${path}`,
+  }));
+  assertConfigurationWrites(good, path, 4);
+  for (const wrong of [
+    path,
+    `/api/v1${path}/extra`,
+    "/api/v1/admin/catalog/starter/product-configuration",
+    `/api/v1/api/v1${path}`,
+  ]) {
+    assert.throws(() =>
+      assertConfigurationWrites(
+        [{ ...good[0], path: wrong }, ...good.slice(1)],
+        path,
+        4,
+      ),
+    );
+  }
+  assert.throws(() =>
+    assertConfigurationWrites(
+      [{ ...good[0], method: "GET" }, ...good.slice(1)],
+      path,
+      4,
+    ),
+  );
+  assert.throws(() => assertConfigurationWrites(good.slice(1), path, 4));
+  assert.throws(() => assertConfigurationWrites([...good, good[0]], path, 4));
+  assert.throws(() => assertConfigurationWrites([], path, 4));
 });

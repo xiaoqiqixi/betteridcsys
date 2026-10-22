@@ -1,3 +1,11 @@
+## 0.5.9 首轮 CI 浏览器探针路径合同失败（待修复后完整重验）
+
+精确 main `233314895e730807d2c618f6079644680ef07a97` 的 [CI 39717442335](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39717442335) 整体失败：真实 MySQL 必需回归、原生 systemd/TLS/业务/备份恢复与回滚、npm 和 Go 依赖扫描均已通过，但新产品配置浏览器探针在最后的写入路径比较失败。四次保存、布局、定制下拉和关闭断言已先通过；探针拿 adapter-relative `/admin/...` 比较公共 dispatcher 实际记录的 URL.pathname `/api/v1/admin/...`，不是把请求失败当成功。
+
+最小修复把精确四次、POST 方法及相同配置 endpoint 约束统一为被记录的完整 `/api/v1` 路径，并增加无浏览器路径合同回归，拒绝少/多写、其他商品、后缀、双前缀、相对路径和 GET。保留原来的四视口、全部断言及时间限制，不加重试、不删探针、不改应用 UI 或生产 API。完整原日志及失败 artifact 保留在 ignored `artifacts/release-v0.5.9-checks/ci-39717442335/`；必须对修复后精确提交重新跑完整 main CI，再考虑新标签与 Runtime build。该次独立 performance [39717442371](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39717442371) 成功，不代替失败的完整 CI。
+
+---
+
 ## 2026-10-22：Core 0.5.9 正式发行门禁启动（待 CI）
 
 用户已授权把本轮财务改动更新到 GitHub main 并正常发布新版本。Core 元数据、插件管理器默认、前端与安装示例统一为 0.5.9；SMTP 保留独立 1.1.0，不覆盖旧标签。新增公开 `backend/controllerapi` 是既有自有协议的类型别名，不暴露账务数据库或付款接口；契约测试实际通过。
