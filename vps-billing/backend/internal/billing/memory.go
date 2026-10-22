@@ -14,24 +14,27 @@ type memoRequest struct {
 	Order       Order
 }
 type Memory struct {
-	taxonomy        TaxonomyConfiguration
-	currencies      CurrencyConfiguration
-	pricesRevision  int64
-	emailSettings   EmailSettingsRecord
-	settings        SiteSettings
-	mu              sync.Mutex
-	users           map[string]User
-	sessions        map[string]Session
-	plans           []Plan
-	prices          map[string]map[string]PlanPrice
-	orders          []Order
-	invoices        []Invoice
-	services        []Service
-	audits          []Audit
-	requests        map[string]memoRequest
-	orderEvents     []orderOutboxEvent
-	paymentAttempts map[string]PaymentAttempt
-	paymentReceipts []paymentReceipt
+	productConfigurations      map[string]ProductConfiguration
+	orderProductConfigurations map[string]orderProductConfiguration
+	provisioningJobs           map[string]provisioningJobRecord
+	taxonomy                   TaxonomyConfiguration
+	currencies                 CurrencyConfiguration
+	pricesRevision             int64
+	emailSettings              EmailSettingsRecord
+	settings                   SiteSettings
+	mu                         sync.Mutex
+	users                      map[string]User
+	sessions                   map[string]Session
+	plans                      []Plan
+	prices                     map[string]map[string]PlanPrice
+	orders                     []Order
+	invoices                   []Invoice
+	services                   []Service
+	audits                     []Audit
+	requests                   map[string]memoRequest
+	orderEvents                []orderOutboxEvent
+	paymentAttempts            map[string]PaymentAttempt
+	paymentReceipts            []paymentReceipt
 }
 
 func NewMemory() *Memory {
@@ -296,9 +299,17 @@ func (m *Memory) CreateQuotedOrder(_ context.Context, u User, pid, host, key, cu
 	if quote != nil && !quote.matches(price.AmountMinor, cur.DecimalPlaces, m.pricesRevision) {
 		return Order{}, false, ErrPriceChanged
 	}
+	configuration, err := m.productConfigurationLocked(pid)
+	if err != nil {
+		return Order{}, false, err
+	}
 	o, i, a := newRecords(u, p, host)
 	i.Issuer = m.settings.Identity()
 	o.Issuer = m.settings.Identity()
+	if m.orderProductConfigurations == nil {
+		m.orderProductConfigurations = map[string]orderProductConfiguration{}
+	}
+	m.orderProductConfigurations[o.ID] = productSnapshot(configuration, o.CreatedAt)
 	m.orders = append(m.orders, o)
 	m.invoices = append(m.invoices, i)
 	m.audits = append(m.audits, a)

@@ -3,13 +3,14 @@ import UiLoading from "../components/UiLoading.vue";
 import UiSpinner from "../components/UiSpinner.vue";
 import UiSelect from "../components/UiSelect.vue";
 import CatalogTaxonomyManager from "../components/CatalogTaxonomyManager.vue";
+import ProductConfigurationPanel from "../components/ProductConfigurationPanel.vue";
 import {
   type CatalogTaxonomy,
   sortCatalogEntries,
   validCatalogTaxonomy,
 } from "../services/catalog-taxonomy";
 
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import {
   ArrowUpRight,
   Check,
@@ -86,6 +87,14 @@ const catalog = ref<Catalog | null>(null);
 const registry = ref<Registry | null>(null);
 const taxonomy = ref<CatalogTaxonomy | null>(null);
 const taxonomyOpen = ref(false);
+const configuringProduct = ref<CatalogItem | null>(null);
+const catalogElement = ref<HTMLElement | null>(null);
+const productFocus = ref<{
+  planId: string;
+  identity: number;
+  mode: "demo" | "api";
+} | null>(null);
+let mounted = true;
 const filterType = ref("");
 const filterRegion = ref("");
 const filterNode = ref("");
@@ -378,6 +387,50 @@ async function load() {
     if (id === generation) loading.value = false;
   }
 }
+function openProductConfiguration(item: CatalogItem) {
+  productFocus.value = null;
+  configuringProduct.value = item;
+}
+function closeProductConfiguration() {
+  if (!configuringProduct.value) return;
+  productFocus.value = {
+    planId: configuringProduct.value.id,
+    identity: identityGeneration.value,
+    mode: props.mode,
+  };
+  configuringProduct.value = null;
+}
+watch(
+  [loading, configuringProduct, productFocus],
+  async ([pending, product, request]) => {
+    if (pending || product || !request) return;
+    await nextTick();
+    if (
+      !mounted ||
+      productFocus.value !== request ||
+      loading.value ||
+      configuringProduct.value ||
+      identityGeneration.value !== request.identity ||
+      props.mode !== request.mode
+    )
+      return;
+    productFocus.value = null;
+    const trigger = [
+      ...(catalogElement.value?.querySelectorAll<HTMLButtonElement>(
+        "[data-product-configuration-id]",
+      ) || []),
+    ].find(
+      (button) => button.dataset.productConfigurationId === request.planId,
+    );
+    if (
+      trigger?.isConnected &&
+      !trigger.disabled &&
+      !trigger.closest("[inert]")
+    )
+      trigger.focus();
+  },
+  { flush: "post" },
+);
 async function openEditor(
   mode: "create" | "edit" | "duplicate",
   item?: CatalogItem,
@@ -676,6 +729,8 @@ watch(
     registry.value = null;
     taxonomy.value = null;
     taxonomyOpen.value = false;
+    configuringProduct.value = null;
+    productFocus.value = null;
     filterType.value = filterRegion.value = filterNode.value = "";
     success.value = "";
     void load();
@@ -683,12 +738,14 @@ watch(
   { immediate: true },
 );
 onBeforeUnmount(() => {
+  mounted = false;
+  productFocus.value = null;
   generation++;
 });
 </script>
 
 <template>
-  <section class="admin-catalog">
+  <section ref="catalogElement" class="admin-catalog">
     <header class="page-heading">
       <div>
         <h1>{{ t("商品管理", "Products") }}</h1>
@@ -905,6 +962,14 @@ onBeforeUnmount(() => {
             }}</small>
           </div>
           <div class="row-actions">
+            <button
+              class="btn btn-secondary"
+              :data-product-configuration-id="item.id"
+              :disabled="loading"
+              @click="openProductConfiguration(item)"
+            >
+              <Server :size="14" />{{ t("产品配置", "Product configuration") }}
+            </button>
             <button
               class="btn btn-secondary"
               :disabled="loading"
@@ -1253,6 +1318,17 @@ onBeforeUnmount(() => {
         </button></template
       >
     </OverlayPanel>
+    <ProductConfigurationPanel
+      v-if="configuringProduct"
+      :open="true"
+      :plan-id="configuringProduct.id"
+      :plan-name="configuringProduct.name"
+      :category="`${typeName(configuringProduct.type_id)} · ${configuringProduct.region} · ${nodeName(configuringProduct.node_id)}`"
+      :locale="locale"
+      :mode="mode"
+      @close="closeProductConfiguration"
+      @saved="load"
+    />
     <CatalogTaxonomyManager
       :open="taxonomyOpen"
       :locale="locale"
@@ -1530,6 +1606,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: flex-end;
   gap: 16px;
+  flex-wrap: wrap;
 }
 .product-quote {
   display: flex;
@@ -1557,7 +1634,9 @@ onBeforeUnmount(() => {
 .row-actions {
   display: flex;
   gap: 7px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  min-width: 0;
+  justify-content: flex-end;
 }
 .row-actions .btn {
   font-size: 10px;

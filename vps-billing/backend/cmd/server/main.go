@@ -84,12 +84,21 @@ func main() {
 	create := flag.Bool("create-user", false, "Create user from BOOTSTRAP_* environment")
 	preflight := flag.Bool("preflight", false, "Inspect configuration and MySQL schema read-only; print redacted JSON")
 	schemaStatus := flag.Bool("schema-status", false, "Alias for -preflight (never applies migrations)")
+	dispatch := flag.String("dispatch-provisioning", "", "Explicit root host command: send one paid order's prepared provisioning job once")
+	reconcile := flag.String("reconcile-provisioning", "", "Explicit root host command: query a provisioning result without repeating the mutation")
 	flag.Parse()
+	dispatchSelected, reconcileSelected := provisioningFlagsSelected(flag.CommandLine)
 	commands := 0
 	for _, selected := range []bool{*version, *migrate, *create, *preflight, *schemaStatus} {
 		if selected {
 			commands++
 		}
+	}
+	if dispatchSelected {
+		commands++
+	}
+	if reconcileSelected {
+		commands++
 	}
 	if commands > 1 || flag.NArg() != 0 {
 		fatal("select one command and no positional arguments")
@@ -100,6 +109,13 @@ func main() {
 	}
 	if *preflight || *schemaStatus {
 		os.Exit(runPreflight(os.Stdout))
+	}
+	if dispatchSelected || reconcileSelected {
+		id := *dispatch
+		if reconcileSelected {
+			id = *reconcile
+		}
+		os.Exit(runHostProvisioning(os.Stdout, id, reconcileSelected))
 	}
 	mode := os.Getenv("APP_MODE")
 	demo := mode == "demo"

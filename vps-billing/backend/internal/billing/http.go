@@ -311,6 +311,18 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.createOrder(w, r, u)
 		return
 	}
+	if planID, matched := productConfigurationPath(p); matched {
+		a.productConfigurationHTTP(w, r, u, planID)
+		return
+	}
+	if orderID, matched := provisioningOrderPath(p); matched {
+		a.provisioningHTTP(w, r, u, orderID, true)
+		return
+	}
+	if jobID, matched := provisioningJobPath(p); matched {
+		a.provisioningHTTP(w, r, u, jobID, false)
+		return
+	}
 	if cancellationID, matched := cancellationPath(p, admin); matched {
 		if !admin {
 			// The customer path always retains ownership filtering, even for an

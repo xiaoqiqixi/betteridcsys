@@ -41,6 +41,7 @@ const { createDemoClient, DEMO_CUSTOMER_ID, DEMO_ADMIN_ID } = require(
 );
 const { createApiClient } = require(join(out, "services/api.js"));
 const { useWorkspace } = require(join(out, "composables/useWorkspace.js"));
+const configuration = require(join(out, "services/product-configuration.js"));
 const rejected = (code) => (error) => error.code === code;
 function demo() {
   let role = "customer";
@@ -1071,4 +1072,343 @@ test("nodes are revisioned real parents, never a bypass around product region or
     ),
   );
   assert.equal(visible.revision, disabled.revision);
+});
+
+const resourceSpec = () => ({
+  mode: "custom",
+  controller_id: "aster-hkg",
+  remote_product_id: "",
+  resources: {
+    datacenter_id: "dc-1",
+    compute_node_id: "",
+    node_group_id: "",
+    image_id: "debian12",
+    cpu_cores: 2,
+    memory_mib: 4096,
+    system_disk_gib: 40,
+    system_storage_id: "",
+    data_disk_gib: 0,
+    data_storage_id: "",
+    network_type: "normal",
+    bandwidth_mbps: 0,
+    inbound_bandwidth_mbps: 0,
+    transfer_gib: 0,
+    traffic_direction: "out",
+    ipv4_count: 1,
+    ipv6_count: 0,
+  },
+});
+test("product configuration canonical bytes follow Go struct order, reject hidden/secret fields and preserve explicit null", async () => {
+  const disabled = configuration.disabledProductSpec();
+  assert.equal(
+    configuration.canonicalProductSpec(disabled),
+    '{"mode":"disabled","controller_id":"","remote_product_id":"","resources":null}',
+  );
+  const { createHash } = await import("node:crypto");
+  assert.equal(
+    await configuration.productConfigurationSHA256(disabled),
+    createHash("sha256")
+      .update(
+        '{"mode":"disabled","controller_id":"","remote_product_id":"","resources":null}',
+      )
+      .digest("hex"),
+  );
+  assert.equal(configuration.RESOURCE_KEYS.length, 17);
+  const custom = resourceSpec();
+  assert.equal(configuration.validProductSpec(custom), true);
+  const reversed = {
+    resources: Object.fromEntries(Object.entries(custom.resources).reverse()),
+    remote_product_id: "",
+    controller_id: "aster-hkg",
+    mode: "custom",
+  };
+  assert.equal(
+    configuration.canonicalProductSpec(reversed),
+    configuration.canonicalProductSpec(custom),
+  );
+  for (const value of [
+    { ...disabled, api_key: "secret" },
+    { ...disabled, controller_id: null },
+    { mode: "disabled", controller_id: "", remote_product_id: "" },
+    { ...disabled, resources: {} },
+    { ...custom, resources: { ...custom.resources, token: "secret" } },
+    { ...custom, remote_product_id: "product-1" },
+    { ...disabled, mode: "preset", controller_id: "aster-hkg" },
+  ])
+    assert.equal(configuration.validProductSpec(value), false);
+  for (const key of configuration.RESOURCE_KEYS) {
+    const invalid = resourceSpec();
+    delete invalid.resources[key];
+    assert.equal(configuration.validProductSpec(invalid), false, key);
+  }
+});
+test("custom resource boundaries exactly reject fractional/exponent types, invalid placement, empty IPs and unbacked data storage", () => {
+  for (const [key, value] of [
+    ["cpu_cores", 0],
+    ["cpu_cores", 4097],
+    ["cpu_cores", "2"],
+    ["memory_mib", 129],
+    ["memory_mib", 1073741952],
+    ["system_disk_gib", 0],
+    ["data_disk_gib", -1],
+    ["data_storage_id", "unbacked"],
+    ["bandwidth_mbps", 10000001],
+    ["inbound_bandwidth_mbps", 0.5],
+    ["transfer_gib", 1073741825],
+    ["network_type", "invented"],
+    ["traffic_direction", "both"],
+    ["image_id", ""],
+    ["image_id", "https://host.invalid/image"],
+    ["datacenter_id", ""],
+    ["ipv4_count", 0],
+    ["ipv4_count", 65],
+    ["ipv6_count", 257],
+  ]) {
+    const spec = resourceSpec();
+    spec.resources[key] = value;
+    assert.equal(
+      configuration.validProductSpec(spec),
+      false,
+      `${key}=${value}`,
+    );
+  }
+  const upper = resourceSpec();
+  Object.assign(upper.resources, {
+    cpu_cores: 4096,
+    memory_mib: 1073741824,
+    system_disk_gib: 16777216,
+    data_disk_gib: 16777216,
+    data_storage_id: "storage:1",
+    bandwidth_mbps: 10000000,
+    inbound_bandwidth_mbps: 10000000,
+    transfer_gib: 1073741824,
+    ipv4_count: 64,
+    ipv6_count: 256,
+  });
+  assert.equal(configuration.validProductSpec(upper), true);
+  const nodeOnly = resourceSpec();
+  nodeOnly.resources.datacenter_id = "";
+  nodeOnly.resources.compute_node_id = "compute-1";
+  assert.equal(configuration.validProductSpec(nodeOnly), true);
+});
+test("demo product configurations are private, independently revisioned and never projected into public plans", async () => {
+  const { client, setRole } = demo(),
+    path = "/admin/catalog/hkg-essential/product-configuration";
+  await assert.rejects(client.read(path), rejected("FORBIDDEN"));
+  setRole("admin");
+  const before = await client.read("/admin/catalog"),
+    initial = await client.read(path);
+  assert.deepEqual(initial.spec, configuration.disabledProductSpec());
+  assert.equal(initial.revision, 1);
+  const spec = resourceSpec();
+  const saved = await client.write(path, {
+    revision: initial.revision,
+    spec,
+    reason: "合成资源参数",
+  });
+  assert.equal(saved.revision, 2);
+  assert.equal(saved.price_revision, before.revision + 1);
+  const configurationEvents = (
+    await client.read("/admin/audit-events")
+  ).items.filter((event) => event.target === "hkg-essential");
+  assert.equal(configurationEvents[0].action, "product.configuration.updated");
+  assert.equal(configurationEvents[0].detail, "合成演示：合成资源参数");
+  assert.equal(
+    saved.configuration_sha256,
+    await configuration.productConfigurationSHA256(spec),
+  );
+  spec.resources.cpu_cores = 999;
+  assert.equal((await client.read(path)).spec.resources.cpu_cores, 2);
+  const after = await client.read("/admin/catalog");
+  assert.deepEqual(after.items, before.items);
+  assert.equal(after.currency_revision, before.currency_revision);
+  assert.equal(
+    (await client.read("/admin/catalog/hkg-balanced/product-configuration"))
+      .revision,
+    1,
+  );
+  await assert.rejects(
+    client.write(path, {
+      revision: 1,
+      spec: resourceSpec(),
+      reason: "过期版本",
+    }),
+    rejected("PRODUCT_CONFIGURATION_CONFLICT"),
+  );
+  await assert.rejects(
+    client.read("/admin/catalog/missing/product-configuration"),
+    rejected("NOT_FOUND"),
+  );
+  const record = await client.read(path);
+  record.spec.resources.cpu_cores = 888;
+  assert.equal((await client.read(path)).spec.resources.cpu_cores, 2);
+  setRole("customer");
+  const plans = await client.read("/plans", { currency: "CNY" });
+  assert.ok(
+    plans.every(
+      (plan) =>
+        !("spec" in plan) &&
+        !("controller_id" in plan) &&
+        !("configuration_sha256" in plan),
+    ),
+  );
+  await assert.rejects(
+    client.write(path, {
+      revision: 2,
+      spec: resourceSpec(),
+      reason: "不能越权",
+    }),
+    rejected("FORBIDDEN"),
+  );
+  const other = demo();
+  other.setRole("admin");
+  assert.equal((await other.client.read(path)).revision, 1);
+});
+test("demo config changes expire old quotes without modifying money or replaying historical orders", async () => {
+  const { client, setRole } = demo();
+  const before = (await client.read("/plans", { currency: "CNY" }))[0];
+  const input = {
+    plan_id: before.id,
+    hostname: "config-history",
+    currency: "CNY",
+    quote: {
+      price_minor: before.price_minor,
+      decimal_places: before.currency_format.decimal_places,
+      price_revision: before.price_revision,
+    },
+  };
+  const headers = { "Idempotency-Key": "configuration-history-original" };
+  const order = await client.write("/orders", input, headers);
+  const invoices = await client.read("/invoices"),
+    services = await client.read("/services");
+  setRole("admin");
+  const path = `/admin/catalog/${before.id}/product-configuration`;
+  const config = await client.read(path);
+  await client.write(path, {
+    revision: config.revision,
+    spec: resourceSpec(),
+    reason: "配置新版本不改历史",
+  });
+  setRole("customer");
+  const after = (await client.read("/plans", { currency: "CNY" })).find(
+    (plan) => plan.id === before.id,
+  );
+  assert.equal(after.price_minor, before.price_minor);
+  assert.equal(after.available, before.available);
+  assert.equal(after.price_revision, before.price_revision + 1);
+  assert.equal(order.status, "pending_payment");
+  assert.deepEqual(await client.write("/orders", input, headers), order);
+  await assert.rejects(
+    client.write("/orders", input, {
+      "Idempotency-Key": "configuration-stale-new",
+    }),
+    rejected("PRICE_CHANGED"),
+  );
+  assert.deepEqual(await client.read("/invoices"), invoices);
+  assert.deepEqual(await client.read("/services"), services);
+});
+test("demo rejects malformed config writes without mutation, zero-price fallback or an invented controller", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const path = "/admin/catalog/hkg-essential/product-configuration",
+    before = await client.read(path);
+  for (const body of [
+    { revision: 1, spec: resourceSpec() },
+    { revision: 1, spec: resourceSpec(), reason: "合成测试", secret: "hidden" },
+    {
+      revision: 1,
+      spec: { ...resourceSpec(), api_key: "hidden" },
+      reason: "合成测试",
+    },
+    { revision: 1, spec: resourceSpec(), reason: "" },
+    {
+      revision: 1,
+      spec: { ...resourceSpec(), resources: null },
+      reason: "合成测试",
+    },
+  ])
+    await assert.rejects(client.write(path, body));
+  assert.deepEqual(await client.read(path), before);
+  await assert.rejects(
+    client.read(path, { fallback: "demo" }),
+    rejected("INVALID_PRODUCT_CONFIGURATION"),
+  );
+});
+test("real product configuration transport binds plan and canonical digest and marks malformed write ACKs uncertain", async () => {
+  const spec = resourceSpec(),
+    path = "/admin/catalog/hkg-essential/product-configuration",
+    value = {
+      plan_id: "hkg-essential",
+      revision: 2,
+      price_revision: 9,
+      spec,
+      configuration_sha256:
+        await configuration.productConfigurationSHA256(spec),
+    };
+  let response = value,
+    requests = 0;
+  const client = createApiClient({
+    locale: () => "zh-CN",
+    onSession: () => {},
+    fetcher: async (url) => {
+      requests++;
+      return Response.json({
+        data:
+          url === "/api/v1/session"
+            ? {
+                csrf_token: "config-session-token",
+                user: null,
+                demo_mode: false,
+              }
+            : response,
+      });
+    },
+  });
+  assert.deepEqual(await client.read(path), value);
+  for (const bad of [
+    { ...value, plan_id: "other" },
+    { ...value, configuration_sha256: "a".repeat(64) },
+    { ...value, revision: 0 },
+    { ...value, unexpected: "hidden" },
+    {
+      ...value,
+      spec: { ...spec, resources: { ...spec.resources, ipv4_count: null } },
+    },
+  ]) {
+    response = bad;
+    await assert.rejects(client.read(path), rejected("INVALID_RESPONSE"));
+  }
+  response = { ...value, configuration_sha256: "b".repeat(64) };
+  const count = requests;
+  await assert.rejects(
+    client.write(path, { revision: 1, spec, reason: "Synthetic update" }),
+    (error) => error.code === "INVALID_RESPONSE" && error.uncertain === true,
+  );
+  assert.equal(requests, count + 2);
+});
+test("demo same-revision concurrent config saves commit exactly once with independent quote invalidation", async () => {
+  const { client, setRole } = demo();
+  setRole("admin");
+  const path = "/admin/catalog/hkg-essential/product-configuration",
+    before = await client.read(path);
+  const input = {
+    revision: before.revision,
+    spec: resourceSpec(),
+    reason: "并发配置测试",
+  };
+  const results = await Promise.allSettled([
+    client.write(path, input),
+    client.write(path, input),
+  ]);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  assert.equal(
+    results.find((result) => result.status === "rejected").reason.code,
+    "PRODUCT_CONFIGURATION_CONFLICT",
+  );
+  const after = await client.read(path);
+  assert.equal(after.revision, 2);
+  assert.equal(after.price_revision, before.price_revision + 1);
 });

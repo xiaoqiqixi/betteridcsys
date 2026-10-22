@@ -28,7 +28,7 @@ release = fixtures / "release"
 (release / "migrations").mkdir(parents=True)
 (release / "manifests").mkdir()
 paths = sorted(source.glob("[0-9][0-9][0-9]_*.sql"))
-assert len(paths) == 12, "Review the schema fixture for new migrations"
+assert len(paths) == 13, "Review the schema fixture for new migrations"
 for path in paths:
     (release / "migrations" / path.name).write_bytes(path.read_bytes())
 build = {"schema": 3, "distribution_format": "raw-binaries-v1", "release_kind": "core", "release_label": "0.5.0",
@@ -57,6 +57,9 @@ tables = {
     "catalog_regions": "id type_id name sort_order enabled",
     "catalog_taxonomy_settings": "id revision",
     "catalog_nodes": "id region_id name sort_order enabled",
+    "product_configurations": "plan_id revision spec configuration_sha256 updated_at",
+    "order_product_configurations": "order_id plan_id configuration_revision spec configuration_sha256 created_at",
+    "provisioning_jobs": "id order_id state request request_sha256 claim_token lease_expires_at result attempts created_at updated_at",
 }
 identity = ["identity", "8.4.11", "MySQL Community Server - GPL", "aster_fixture", "12345678-1234-1234-1234-123456789abc"]
 history = [["migration", str(number), hashlib.sha256(path.read_bytes()).hexdigest()] for number, path in enumerate(paths, 1)]
@@ -79,7 +82,7 @@ for name, contents in {
     "empty-history": [row for row in rows if row[0] != "migration"],
     "gap": [row for row in rows if row[:2] != ["migration", "2"]],
     "checksum": [[*row[:2], "0" * 64] if row[:2] == ["migration", "1"] else row for row in rows],
-    "unknown-version": rows[:2] + history + [["migration", "13", "0" * 64]] + inventory,
+    "unknown-version": rows[:2] + history + [["migration", "14", "0" * 64]] + inventory,
     "duplicate-version": rows[:2] + history[:1] + history + inventory,
     "zero-version": rows[:2] + [["migration", "0", "0" * 64]] + rows[2:],
     "negative-version": rows[:2] + [["migration", "-1", "0" * 64]] + rows[2:],
@@ -95,6 +98,12 @@ for name, contents in {
     "missing-node-column": [row for row in rows if row[:3] != ["column", "plans", "node_id"]],
     "missing-taxonomy-table": [row for row in rows if not (row[0] in {"table", "column"} and row[1] == "catalog_regions")],
     "missing-taxonomy-column": [row for row in rows if row[:3] != ["column", "plans", "region_id"]],
+    "partial-product-configuration-next-migration": [row for row in rows if row[:2] != ["migration", "13"]],
+    "missing-product-configuration-table": [row for row in rows if not (row[0] in {"table", "column"} and row[1] == "product_configurations")],
+    "missing-order-configuration-table": [row for row in rows if not (row[0] in {"table", "column"} and row[1] == "order_product_configurations")],
+    "missing-provisioning-table": [row for row in rows if not (row[0] in {"table", "column"} and row[1] == "provisioning_jobs")],
+    "missing-order-configuration-column": [row for row in rows if row[:3] != ["column", "order_product_configurations", "configuration_sha256"]],
+    "missing-provisioning-column": [row for row in rows if row[:3] != ["column", "provisioning_jobs", "claim_token"]],
     "unknown-table": rows + [["table", "unreviewed", "BASE TABLE", "InnoDB"]],
     "extra-column": rows + [["column", "orders", "unreviewed", "int", "YES", "NULL", "", "", "", "", "14", ""]],
     "wrong-engine": [[*row[:3], "MyISAM"] if row[:2] == ["table", "plans"] else row for row in rows],
@@ -106,7 +115,11 @@ for name, contents in {
     "percona": [[*row[:2], "Percona Server (GPL)", *row[3:]] if row[0] == "identity" else row for row in rows],
 }.items():
     write(name, contents)
-prefix11 = [row for row in rows if row[:2] != ["migration", "12"] and not
+product_tables = {"product_configurations", "order_product_configurations", "provisioning_jobs"}
+prefix12 = [row for row in rows if row[:2] != ["migration", "13"] and not
+            (row[0] in {"table", "column"} and row[1] in product_tables)]
+write("prefix12", prefix12)
+prefix11 = [row for row in prefix12 if row[:2] != ["migration", "12"] and not
             (row[0] in {"table", "column"} and row[1] == "catalog_nodes") and not
             (row[0] == "column" and row[1] == "plans" and row[2] == "node_id")]
 write("prefix11", prefix11)
@@ -128,14 +141,16 @@ prefix6 = [row for row in prefix7 if row[:2] != ["migration", "7"] and not
            (row[0] in {"table", "column"} and row[1] == "currency_settings") and not
            (row[0] == "column" and row[2] in {"currency_snapshot", "plan_snapshot"})]
 write("prefix6", prefix6)
-for version, prefix in ((6, prefix6), (7, prefix7), (8, prefix8), (9, prefix9), (10, prefix10), (11, prefix11)):
+for version, prefix in ((6, prefix6), (7, prefix7), (8, prefix8), (9, prefix9), (10, prefix10), (11, prefix11), (12, prefix12)):
     assert [row[1] for row in prefix if row[0] == "migration"] == [str(number) for number in range(1, version + 1)]
     assert [row[2] for row in prefix if row[:2] == ["column", "users"]] == (["id", "email", "name", "role", "password_hash", "created_at"] + (["disabled", "revision"] if version >= 10 else []))
     if version <= 10:
         assert not any(row[0] in {"table", "column"} and row[1].startswith("catalog_") for row in prefix)
         assert not any(row[:2] == ["column", "plans"] and row[2] in {"type_id", "region_id"} for row in prefix)
-    assert not any(row[0] in {"table", "column"} and row[1] == "catalog_nodes" for row in prefix)
-    assert not any(row[:3] == ["column", "plans", "node_id"] for row in prefix)
+    if version < 12:
+        assert not any(row[0] in {"table", "column"} and row[1] == "catalog_nodes" for row in prefix)
+        assert not any(row[:3] == ["column", "plans", "node_id"] for row in prefix)
+    assert not any(row[0] in {"table", "column"} and row[1] in product_tables for row in prefix)
 assert [row[2] for row in rows if row[:2] == ["column", "users"]] == tables["users"].split()
 write("partial-next-migration", [row for row in prefix8 if row[:2] != ["migration", "8"]])
 write("partial-payment-next-migration", [row for row in prefix8 if row[:2] != ["migration", "8"] and not
@@ -324,7 +339,7 @@ from pathlib import Path
 import sys
 backup, release = map(Path, sys.argv[1:])
 metadata = json.loads((backup / "BACKUP.json").read_bytes())
-assert metadata == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": 12,
+assert metadata == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": 13,
                     "migration_checksums": {str(number): hashlib.sha256(path.read_bytes()).hexdigest()
                                             for number, path in enumerate(sorted((release / "migrations").glob("*.sql")), 1)}}
 assert set(path.name for path in backup.iterdir()) == {"database.sql.gz", "BACKUP.txt", "BACKUP.json", "SHA256SUMS"}
@@ -364,7 +379,7 @@ printf '%s\n' 'PASS: dump, compression, compressed-data validation and checksum 
 expect_preflight_failure env ASTER_TEST_METADATA_FAIL=1 bash "$script" "${base_args[@]}"
 expect_preflight_failure env ASTER_TEST_SCHEMA_COUNT=1 bash "$script" "${base_args[@]}"
 expect_preflight_failure env ASTER_TEST_SCHEMA_COUNT=invalid bash "$script" "${base_args[@]}"
-for snapshot in empty-history gap checksum unknown-version duplicate-version zero-version negative-version empty-schema missing-table missing-column missing-payment-table missing-payment-column missing-account-column partial-account-next-migration missing-taxonomy-table missing-taxonomy-column partial-taxonomy-next-migration partial-node-next-migration missing-node-table missing-node-column unknown-table extra-column wrong-engine wrong-database old-mysql mariadb percona partial-next-migration partial-payment-next-migration; do
+for snapshot in empty-history gap checksum unknown-version duplicate-version zero-version negative-version empty-schema missing-table missing-column missing-payment-table missing-payment-column missing-account-column partial-account-next-migration missing-taxonomy-table missing-taxonomy-column partial-taxonomy-next-migration partial-node-next-migration missing-node-table missing-node-column partial-product-configuration-next-migration missing-product-configuration-table missing-order-configuration-table missing-provisioning-table missing-order-configuration-column missing-provisioning-column unknown-table extra-column wrong-engine wrong-database old-mysql mariadb percona partial-next-migration partial-payment-next-migration; do
   expect_preflight_failure env ASTER_TEST_SNAPSHOT="$snapshot" bash "$script" "${base_args[@]}"
 done
 printf '%s\n' 'PASS: unsupported server/database identity, empty/gapped/changed/unknown migration history and unknown/partial tables or columns stop before dumping'
@@ -482,6 +497,7 @@ env ASTER_TEST_SNAPSHOT=prefix8 bash "$script" "${base_args[@]}" >/dev/null
 env ASTER_TEST_SNAPSHOT=prefix9 bash "$script" "${base_args[@]}" >/dev/null
 env ASTER_TEST_SNAPSHOT=prefix10 bash "$script" "${base_args[@]}" >/dev/null
 env ASTER_TEST_SNAPSHOT=prefix11 bash "$script" "${base_args[@]}" >/dev/null
+env ASTER_TEST_SNAPSHOT=prefix12 bash "$script" "${base_args[@]}" >/dev/null
 python3 - "$test_dir/backups" "$test_dir/fixtures" "$script" <<'PY'
 import json
 from pathlib import Path
@@ -494,11 +510,11 @@ namespace = {}
 exec(compile(source.rsplit("\ntry:\n", 1)[0], str(script), "exec"), namespace)
 expected = namespace["release"](fixtures / "release")
 metadata = [json.loads(path.read_bytes()) for path in backups.glob("*/BACKUP.json")]
-# Eight concurrent current backups + one readonly current + six old prefixes.
-assert len(metadata) == 15
-assert {item["schema_version"] for item in metadata} == set(range(6, 13))
-for version in range(6, 13):
-    rows = [line.split("\t") for line in (fixtures / ("valid.tsv" if version == 12 else f"prefix{version}.tsv")).read_text().splitlines()]
+# Eight concurrent current backups + one readonly current + seven old prefixes.
+assert len(metadata) == 16
+assert {item["schema_version"] for item in metadata} == set(range(6, 14))
+for version in range(6, 14):
+    rows = [line.split("\t") for line in (fixtures / ("valid.tsv" if version == 13 else f"prefix{version}.tsv")).read_text().splitlines()]
     shape = {row[1]: [] for row in rows if row[0] == "table"}
     for row in rows:
         if row[0] == "column":
@@ -508,8 +524,14 @@ for version in range(6, 13):
         assert "catalog_nodes" not in shape and "node_id" not in shape["plans"]
     if version == 11:
         assert len(shape) == 19
+    if version == 12:
+        assert len(shape) == 20
+    if version < 13:
+        assert not {"product_configurations", "order_product_configurations", "provisioning_jobs"}.intersection(shape)
+    else:
+        assert len(shape) == 23
     prefix = [item for item in metadata if item["schema_version"] == version]
-    assert len(prefix) == (9 if version == 12 else 1)
+    assert len(prefix) == (9 if version == 13 else 1)
     checksums = {str(number): expected["migration_checksums"][str(number)] for number in range(1, version + 1)}
     for item in prefix:
         assert item == {"schema": 1, "source_commit": "a" * 40, "core_version": "0.5.0", "database": "aster_fixture", "schema_version": version, "migration_checksums": checksums}

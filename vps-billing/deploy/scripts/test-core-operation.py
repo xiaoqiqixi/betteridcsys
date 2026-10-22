@@ -1899,6 +1899,48 @@ class EdgeLoggingTests(unittest.TestCase):
         self.assertIn("access_log syslog:server=unix:/dev/log,tag=aster_edge,severity=info,nohostname aster_access;", text)
         self.assertNotIn("error_log stderr", text)
 
+    def test_product_configuration_and_provisioning_routes_use_fixed_private_safe_labels(self):
+        # Pure contract test of the actual allowlist, not nginx execution.
+        block = operation.nginx_logging_text()
+        routes = block.split("map $uri $aster_log_route {", 1)[1].split("\n}", 1)[0]
+        regular = []
+        exact = {}
+        for line in routes.splitlines():
+            match = re.fullmatch(r'\s*"~([^\"]+)"\s+([^;]+);', line)
+            if match:
+                regular.append((re.compile(match[1]), match[2]))
+            else:
+                fields = line.strip().removesuffix(";").split()
+                if len(fields) == 2:
+                    exact[fields[0]] = fields[1]
+        def label(uri):
+            return exact.get(uri) or next((value for pattern, value in regular if pattern.search(uri)), exact["default"])
+        identifier = "a1" * 16
+        cases = {
+            "/api/v1/admin/catalog/starter/product-configuration": "/api/v1/admin/catalog/:id/product-configuration",
+            "/api/v1/admin/catalog/" + "p" * 64 + "/product-configuration": "/api/v1/admin/catalog/:id/product-configuration",
+            "/api/v1/admin/orders/" + identifier + "/provisioning-jobs": "/api/v1/admin/orders/:id/provisioning-jobs",
+            "/api/v1/admin/provisioning-jobs/" + identifier: "/api/v1/admin/provisioning-jobs/:id",
+        }
+        for uri, expected in cases.items():
+            with self.subTest(uri=uri):
+                self.assertEqual(label(uri), expected)
+                self.assertNotIn(identifier, label(uri))
+                self.assertNotIn("starter", label(uri))
+        for uri in (
+            "/api/v1/admin/catalog/" + "p" * 65 + "/product-configuration",
+            "/api/v1/admin/catalog/" + CANARY + "/nested/product-configuration",
+            "/api/v1/admin/orders/" + identifier[:-1] + "/provisioning-jobs",
+            "/api/v1/admin/orders/" + identifier.upper() + "/provisioning-jobs",
+            "/api/v1/admin/provisioning-jobs/" + identifier + "/retry",
+            "/api/v1/admin/provisioning-jobs/" + CANARY,
+        ):
+            with self.subTest(invalid_uri=uri):
+                self.assertEqual(label(uri), "OTHER")
+        format_text = block.split("log_format aster_access", 1)[1]
+        for raw in ("$uri", "$request_uri", "$args", "$query_string", "$http_authorization", "$request_body"):
+            self.assertNotIn(raw, format_text)
+
     def test_syslog_tags_use_nginx_supported_grammar(self):
         template = (SCRIPTS.parent / "nginx.native.conf").read_text()
         for text, expected_count in ((template, 4), (operation.nginx_text(self.spec).decode(), 1)):

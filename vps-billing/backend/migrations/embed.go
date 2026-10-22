@@ -37,3 +37,6 @@ var CatalogTaxonomy string
 
 //go:embed 012_catalog_nodes.sql
 var CatalogNodes string
+
+//go:embed 013_product_configurations.sql
+var ProductConfigurations string

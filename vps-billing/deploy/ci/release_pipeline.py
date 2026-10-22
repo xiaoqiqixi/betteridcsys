@@ -1224,6 +1224,36 @@ def publish(api, policy, archive_bytes):
                 f"[安装]({source_docs}INSTALL.md) · [升级恢复]({source_docs}UPGRADE.md) · "
                 f"[宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
             )
+        if kind == "core" and provenance["version"] == "0.5.9":
+            fields["body"] = (
+                "## Core 0.5.9\n\n"
+                "以正式 Core 0.5.8 为基线，新增独立商品产品配置、不可变订单私密配置快照和已付款订单的唯一手动任务。"
+                "013_product_configurations.sql 追加三个表，最终要求 schema 13 / 23 表；001–012 原文与校验和不改，"
+                "迁移不回填旧单、不创建任务、不改价格与金额。配置保存提升配置和 prices_revision，使旧报价确认重新核对；"
+                "旧合法幂等重放仍返回原订单，原财务 PlanSnapshot、币种格式快照和支付幂等不变。\n\n"
+                "学习的是 IDCsmart 的分层思路，使用本系统自有 aster.controller/1，"
+                "公开稳定 Go 合同位于 backend/controllerapi，不含财务数据库或付款操作。"
+                "不对接 IDCsmart API，不附带独立主控/KVM、真实接收端或 VM 创建能力。"
+                "默认无 worker、无调度器，保存配置不发送请求；Web 不读取主控端点凭据或执行特权命令。"
+                "管理员仅为 paid 订单与账单准备任务，root 显式一次性下发；uncertain 必须核对，不自动重发。"
+                "HTTP 409 仅接受完整绑定原 operation、order 与请求摘要的既有结果。"
+                "认证/CSRF、角色与所有权权限边界和同事务审计保留，不提供无需付款开通或 TLS 降级。\n\n"
+                "原生 Linux amd64，Go + Vue/TypeScript + MySQL，不使用 Docker。"
+                "API、插件宿主、资源及 BUILD/PROVENANCE/SHA256SUMS 共六资产须同版本并核验来源。"
+                "SMTP 仍独立 1.1.0，aster.smtp/1、Core >=0.4.0,<0.6.0，默认关闭，仅支持管理员固定测试邮件。"
+                "不新增真实付款或新支付渠道，支付协议仍为 aster.payment/1。"
+                "升级须停写、停止旧 API、验证备份与隔离恢复后迁移和切换匹配前后端；"
+                "schema12 程序不能直接运行 schema13 库。回滚须恢复匹配备份与旧程序，不自动向下迁移或导入数据库。\n\n"
+                f"[源码提交](https://github.com/{REPOSITORY}/commit/{provenance['source_sha']}) · "
+                f"[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，"
+                f"尝试 {policy['run_attempt']}。"
+                "实际执行范围和结果以本次精确提交的运行与验证记录为准；历史绿灯和本地分组测试不代替最终完整门禁。"
+                "Ubuntu 22/24 分别记录，不宣称所有 Linux 均已支持；合成测试不代表真实 VM、渠道、公共证书续期或生产容量验收。\n\n"
+                f"[v0.5.9 发布说明与边界]({source_docs}RELEASE-v0.5.9.md) · "
+                f"[产品配置与主机命令]({source_docs}PRODUCT_CONFIGURATION.md) · [验证记录]({source_docs}VALIDATION.md) · "
+                f"[安装]({source_docs}INSTALL.md) · [升级恢复]({source_docs}UPGRADE.md) · "
+                f"[宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
+            )
     release_id = None
     try:
         created = api.request("POST", api_path("/releases"), data=fields)

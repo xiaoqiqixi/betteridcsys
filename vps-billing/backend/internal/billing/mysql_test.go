@@ -59,13 +59,16 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		for _, q := range []string{"DELETE FROM outbox_events WHERE aggregate_id IN(SELECT id FROM orders WHERE user_id=?)", "DELETE FROM order_requests WHERE user_id=?", "DELETE FROM audit_events WHERE user_id=?", "DELETE FROM invoices WHERE user_id=?", "DELETE FROM orders WHERE user_id=?", "DELETE FROM users WHERE id=?"} {
+		for _, q := range []string{"DELETE FROM provisioning_jobs WHERE order_id IN(SELECT id FROM orders WHERE user_id=?)", "DELETE FROM order_product_configurations WHERE order_id IN(SELECT id FROM orders WHERE user_id=?)", "DELETE FROM outbox_events WHERE aggregate_id IN(SELECT id FROM orders WHERE user_id=?)", "DELETE FROM order_requests WHERE user_id=?", "DELETE FROM audit_events WHERE user_id=?", "DELETE FROM invoices WHERE user_id=?", "DELETE FROM orders WHERE user_id=?", "DELETE FROM users WHERE id=?"} {
 			if _, e := m.DB.ExecContext(c, q, u.ID); e != nil {
 				t.Error("fixture cleanup", e)
 			}
 		}
-		_, _ = m.DB.ExecContext(c, "DELETE FROM plan_prices WHERE plan_id=?", p.ID)
-		_, _ = m.DB.ExecContext(c, "DELETE FROM plans WHERE id=?", p.ID)
+		for _, q := range []string{"DELETE FROM product_configurations WHERE plan_id=?", "DELETE FROM plan_prices WHERE plan_id=?", "DELETE FROM plans WHERE id=?"} {
+			if _, err := m.DB.ExecContext(c, q, p.ID); err != nil {
+				t.Error("plan fixture cleanup", err)
+			}
+		}
 	}()
 	var wg sync.WaitGroup
 	ids := make(chan string, 16)
@@ -145,8 +148,11 @@ func TestMySQLTransactionalOrders(t *testing.T) {
 		if e != nil {
 			t.Error("settings restore", e)
 		}
-		_, _ = m.DB.ExecContext(ctx, "DELETE FROM audit_events WHERE user_id=?", admin.ID)
-		_, _ = m.DB.ExecContext(ctx, "DELETE FROM users WHERE id=?", admin.ID)
+		for _, q := range []string{"DELETE FROM audit_events WHERE user_id=?", "DELETE FROM users WHERE id=?"} {
+			if _, err := m.DB.ExecContext(ctx, q, admin.ID); err != nil {
+				t.Error("administrator fixture cleanup", err)
+			}
+		}
 	}()
 	changed := original
 	changed.InvoiceIssuer = "测试开票公司"

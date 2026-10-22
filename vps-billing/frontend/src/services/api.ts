@@ -1,6 +1,10 @@
 import type { Locale, Query, Session } from "../types/idc";
 import { validCurrencyFormat, validMinor } from "../types/idc";
 import { validCatalogTaxonomy } from "./catalog-taxonomy";
+import {
+  validProductConfiguration,
+  productConfigurationSHA256,
+} from "./product-configuration";
 
 const REQUEST_ID = /^[a-f0-9]{32}$/;
 const SAFE_ERRORS: Record<string, [string, string]> = {
@@ -74,6 +78,14 @@ const SAFE_ERRORS: Record<string, [string, string]> = {
   INVALID_CATALOG: [
     "商品规格、报价或上架条件不完整，请检查。",
     "Check the product specifications, prices, and publishing requirements.",
+  ],
+  INVALID_PRODUCT_CONFIGURATION: [
+    "产品配置不完整或不符合主控参数约束，请检查。",
+    "Check the controller identifiers and resource configuration.",
+  ],
+  PRODUCT_CONFIGURATION_CONFLICT: [
+    "产品配置已变化，请重新读取并核对；未自动重试。",
+    "Product configuration changed. Reload and review; nothing was retried.",
   ],
   INVALID_ACCOUNT: [
     "账户输入不符合要求，请检查名称、邮箱、角色、密码及原因。",
@@ -417,6 +429,8 @@ function validPayload(
           integer(currency.sort_order),
       )
     );
+  if (/^\/catalog\/[^/]+\/product-configuration$/.test(route))
+    return validProductConfiguration(value);
   if (route === "/catalog" && method === "GET")
     return (
       object(value) &&
@@ -638,6 +652,29 @@ export function createApiClient(options: {
             uncertain: method === "POST",
           });
         receiveSession(data.data, controller);
+      }
+      const configurationPath =
+        /^\/admin\/catalog\/([^/]+)\/product-configuration$/.exec(path);
+      if (configurationPath) {
+        let verified = false;
+        if (
+          validProductConfiguration(data.data) &&
+          data.data.plan_id === decodeURIComponent(configurationPath[1]!)
+        ) {
+          try {
+            verified =
+              (await productConfigurationSHA256(data.data.spec)) ===
+              data.data.configuration_sha256;
+          } catch {
+            /* No digest implementation means no verified configuration, never a fallback. */
+          }
+        }
+        if (captured !== epoch) throw staleResponse(method === "POST");
+        if (!verified)
+          throw new ApiError("INVALID_RESPONSE", response.status, {
+            locale: options.locale(),
+            uncertain: method === "POST",
+          });
       }
       if (!validPayload(path, data.data, method))
         throw new ApiError("INVALID_RESPONSE", response.status, {

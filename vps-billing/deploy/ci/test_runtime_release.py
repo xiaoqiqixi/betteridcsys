@@ -31,7 +31,7 @@ def elf_bytes():
     return bytes(data)
 
 
-def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False, protocol_source=None, version=None):
+def runtime_fixture(kind='core', binary_override=None, build_override=None, remove_members=(), raw=False, protocol_source=None, version=None, migration_names=None):
     version = version or (('0.5.2' if kind == 'core' else '1.1.0') if raw else ('0.4.0' if kind == 'core' else '1.0.0'))
     core_version = version if kind == 'core' else ('0.5.2' if raw else '0.4.0')
     tag = ('v' if kind == 'core' else 'smtp-v') + version
@@ -59,7 +59,7 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
             copies['manifests/' + source.rsplit('/', 1)[-1]] = source
         inputs['vps-billing/README.md'] = b'# project fixture\n'
         if raw:
-            for name in ('001_core.sql', '007_currency_registry.sql'):
+            for name in migration_names or ('001_core.sql', '007_currency_registry.sql'):
                 copies['migrations/' + name] = 'vps-billing/backend/migrations/' + name
                 inputs[copies['migrations/' + name]] = ('-- Reviewed fixture migration ' + name + '\n').encode()
         bundle.update({path: inputs[source] for path, source in copies.items()})
@@ -108,9 +108,9 @@ def runtime_fixture(kind='core', binary_override=None, build_override=None, remo
     return tag, version, files, inputs, bundle
 
 
-def normal_flow(kind='core', raw=False, protocol_source=None, version=None):
+def normal_flow(kind='core', raw=False, protocol_source=None, version=None, migration_names=None):
     api, env, event, policy, _, _ = flow_fixture()
-    tag, version, files, inputs, _ = runtime_fixture(kind, raw=raw, protocol_source=protocol_source, version=version)
+    tag, version, files, inputs, _ = runtime_fixture(kind, raw=raw, protocol_source=protocol_source, version=version, migration_names=migration_names)
     run = api.responses[('GET', PREFIX + f'/actions/runs/{RUN_ID}')]
     old_tag = run['head_branch']
     run['head_branch'] = tag
@@ -149,6 +149,39 @@ class RuntimeReleaseTests(unittest.TestCase):
                 self.assertEqual(len(files), 3)
                 self.assertFalse(any('source.tar.gz' in name for name in files))
                 self.assertEqual(set(pipeline.validate_package(files, SHA, version, kind)), set(files))
+
+    def test_059_raw_metadata_binds_active_core_smtp_and_all_thirteen_migrations(self):
+        # Explicit active-release fixture; historical archive/raw defaults remain
+        # 0.4.0/0.5.2 and retain their original compatibility/inventory semantics.
+        migrations = tuple(path.name for path in sorted(
+            (Path(__file__).resolve().parents[2] / "backend/migrations").glob("*.sql")))
+        self.assertEqual(len(migrations), 13)
+        self.assertEqual(migrations[-1], "013_product_configurations.sql")
+        api, env, event, files, _, kind, version = normal_flow(
+            "core", raw=True, version="0.5.9", migration_names=migrations)
+        self.assertEqual((kind, version), ("core", "0.5.9"))
+        self.assertEqual(set(files), {
+            "BUILD.json", "PROVENANCE.json", "SHA256SUMS",
+            "aster-api-0.5.9-linux-amd64", "aster-plugin-host-0.5.9-linux-amd64",
+            "aster-core-0.5.9-linux-amd64-resources.tar.gz"})
+        build = pipeline.strict_json(files["BUILD.json"])
+        self.assertEqual(build["component_versions"], {"core": "0.5.9", "smtp": "1.1.0"})
+        self.assertEqual(build["release_label"], "0.5.9")
+        self.assertEqual(build["distribution_format"], "raw-binaries-v1")
+        self.assertEqual(build["smtp_core_compatibility"], {"min": "0.4.0", "max_exclusive": "0.6.0"})
+        self.assertEqual({path for path in build["source_files"] if path.startswith("migrations/")},
+                         {"migrations/" + name for name in migrations})
+        policy = pipeline.prepare_publish(api, env, event)
+        provenance = pipeline.strict_json(files["PROVENANCE.json"])
+        self.assertEqual((provenance["tag"], provenance["version"]), ("v0.5.9", "0.5.9"))
+        pipeline.verify_provenance(files, policy, api)
+        self.assertFalse(api.mutations)
+        self.assertFalse(api.uploads)
+        _, _, wrong, _, _ = runtime_fixture(
+            "core", raw=True, version="0.5.9", migration_names=migrations,
+            build_override={"component_versions": {"core": "0.5.8", "smtp": "1.1.0"}})
+        with self.assertRaises(pipeline.GuardError):
+            pipeline.validate_package(wrong, SHA, "0.5.9", "core")
 
     def test_new_main_readme_is_bound_to_selected_git_not_old_baseline(self):
         api, env, event, files, _, _, _ = normal_flow()

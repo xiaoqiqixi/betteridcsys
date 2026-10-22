@@ -8,7 +8,7 @@ import (
 )
 
 // These bounded descriptions are the physical columns shipped by migrations
-// 1–12, not an SQL interpreter. A history row alone cannot detect interrupted
+// 1–13, not an SQL interpreter. A history row alone cannot detect interrupted
 // DDL or a later manual edit. Compatible extra indexes/checks are permitted.
 func preflightColumns(version int) map[string]map[string]string {
 	specs := map[string]string{
@@ -58,6 +58,11 @@ func preflightColumns(version int) map[string]map[string]string {
 	if version >= 12 {
 		specs["plans"] += " node_id:varchar(64)!"
 		specs["catalog_nodes"] = "id:varchar(64)! region_id:varchar(64)! name:varchar(120)! sort_order:int! enabled:tinyint(1)!"
+	}
+	if version >= 13 {
+		specs["product_configurations"] = "plan_id:varchar(64)! revision:bigint! spec:json! configuration_sha256:char(64)! updated_at:datetime(6)!"
+		specs["order_product_configurations"] = "order_id:char(32)! plan_id:varchar(64)! configuration_revision:bigint! spec:json! configuration_sha256:char(64)! created_at:datetime(6)!"
+		specs["provisioning_jobs"] = "id:char(32)! order_id:char(32)! state:enum('queued','sending','accepted','succeeded','rejected','uncertain')! request:json! request_sha256:char(64)! claim_token:char(32)? lease_expires_at:datetime(6)? result:json? attempts:int! created_at:datetime(6)! updated_at:datetime(6)!"
 	}
 	result := make(map[string]map[string]string, len(specs))
 	for table, spec := range specs {
@@ -136,11 +141,17 @@ func preflightChecks(version int) map[string]map[string]string {
 	if version >= 12 {
 		checks["catalog_nodes"] = map[string]string{"catalog_nodes_sort": "sort_order >= 0 AND sort_order <= 1000000", "catalog_nodes_enabled": "enabled IN (0,1)"}
 	}
+	if version >= 13 {
+		checks["product_configurations"] = map[string]string{"product_configuration_revision": "revision >= 1 AND revision <= 9007199254740991"}
+		checks["order_product_configurations"] = map[string]string{"order_product_configuration_revision": "configuration_revision >= 1 AND configuration_revision <= 9007199254740991"}
+		checks["provisioning_jobs"] = map[string]string{"provisioning_job_attempts": "attempts >= 0 AND attempts <= 1"}
+	}
 	return checks
 }
 
 var preflightDefaults = map[string]string{
-	"users.disabled": "0", "users.revision": "1",
+	"provisioning_jobs.attempts": "0",
+	"users.disabled":             "0", "users.revision": "1",
 	"schema_migrations.applied_at": "current_timestamp(6)", "users.created_at": "current_timestamp(6)", "order_requests.created_at": "current_timestamp(6)",
 	"plans.available": "0", "plan_prices.available": "0", "services.ipv4": "", "outbox_events.attempts": "0", "currency_settings.prices_revision": "1",
 }
@@ -165,7 +176,7 @@ func preflightColumnMatches(table, name, spec, kind, nullable, extra, generated 
 		switch table + "." + name {
 		case "users.email":
 			wantCharset, wantCollation = "ascii", "ascii_general_ci"
-		case "order_requests.request_key", "plan_prices.currency":
+		case "order_requests.request_key", "plan_prices.currency", "product_configurations.configuration_sha256", "order_product_configurations.configuration_sha256", "provisioning_jobs.request_sha256", "provisioning_jobs.claim_token":
 			wantCharset, wantCollation = "ascii", "ascii_bin"
 		}
 		if (table == "catalog_types" && name == "id") || (table == "catalog_regions" && (name == "id" || name == "type_id")) || (table == "plans" && (name == "type_id" || name == "region_id" || name == "node_id")) || (table == "catalog_nodes" && (name == "id" || name == "region_id")) {
@@ -283,7 +294,12 @@ func validatePreflightTableShape(ctx context.Context, conn *sql.Conn, version in
 			}
 		}
 		if expected := checks[table][name]; expected != "" {
-			if !currencyMigrationCheckMatches(currencyMigrationCheck{"CHECK", enforced, clause}, expected) {
+			check := currencyMigrationCheck{"CHECK", enforced, clause}
+			matches := currencyMigrationCheckMatches(check, expected)
+			if version >= 13 && (table == "product_configurations" || table == "order_product_configurations" || table == "provisioning_jobs") {
+				matches = productConfigurationMigrationCheckMatches(table, name, check, expected)
+			}
+			if !matches {
 				rows.Close()
 				return errors.New("required schema check differs from applied migrations")
 			}
@@ -349,6 +365,11 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 	}
 	if version >= 12 {
 		required["catalog_nodes:id"] = true
+	}
+	if version >= 13 {
+		for _, key := range []string{"product_configurations:plan_id", "order_product_configurations:order_id", "provisioning_jobs:id", "provisioning_jobs:order_id"} {
+			required[key] = true
+		}
 	}
 	if partial {
 		for key := range required {
@@ -421,6 +442,16 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 		}
 	}
 
+	if version >= 13 {
+		for table, column := range map[string]string{"product_configurations": "plan_id", "order_product_configurations": "order_id", "provisioning_jobs": "id"} {
+			if partial && tables[table] == "" {
+				continue
+			}
+			if id := table + ":PRIMARY"; !valid[id] || keys[id] != column {
+				return errors.New("product configuration schema has an unexpected primary key")
+			}
+		}
+	}
 	fks := map[string]bool{
 		"sessions:user_id:users:id:CASCADE": true, "orders:user_id:users:id:RESTRICT": true, "orders:plan_id:plans:id:RESTRICT": true,
 		"invoices:user_id:users:id:RESTRICT": true, "invoices:order_id:orders:id:RESTRICT": true,
@@ -443,6 +474,11 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 	if version >= 12 {
 		fks["catalog_nodes:region_id:catalog_regions:id:RESTRICT"] = true
 		fks["plans:node_id:catalog_nodes:id:RESTRICT"] = true
+	}
+	if version >= 13 {
+		for _, key := range []string{"product_configurations:plan_id:plans:id:RESTRICT", "order_product_configurations:order_id:orders:id:RESTRICT", "order_product_configurations:plan_id:plans:id:RESTRICT", "provisioning_jobs:order_id:order_product_configurations:order_id:RESTRICT"} {
+			fks[key] = true
+		}
 	}
 	if partial {
 		for key := range fks {
@@ -474,6 +510,17 @@ func validatePreflightTableKeys(ctx context.Context, conn *sql.Conn, version int
 		count++
 		id := table + ":" + constraint
 		foreignKeySizes[id]++
+		if version >= 13 && (table == "product_configurations" || table == "order_product_configurations" || table == "provisioning_jobs") && (!partial || tables[table] != "") {
+			rule := deletion
+			if rule == "NO ACTION" {
+				rule = "RESTRICT"
+			}
+			signature := strings.Join([]string{table, col, refTable, refCol, rule}, ":")
+			if !sameDB || ordinal != 1 || (update != "RESTRICT" && update != "NO ACTION") || !fks[signature] {
+				rows.Close()
+				return errors.New("product configuration schema has an unexpected foreign key")
+			}
+		}
 		if version >= 12 && table == "catalog_nodes" && (!partial || tables[table] != "") {
 			rule := deletion
 			if rule == "NO ACTION" {

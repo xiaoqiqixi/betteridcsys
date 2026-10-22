@@ -1,3 +1,44 @@
+## 2026-10-22：Core 0.5.9 正式发行门禁启动（待 CI）
+
+用户已授权把本轮财务改动更新到 GitHub main 并正常发布新版本。Core 元数据、插件管理器默认、前端与安装示例统一为 0.5.9；SMTP 保留独立 1.1.0，不覆盖旧标签。新增公开 `backend/controllerapi` 是既有自有协议的类型别名，不暴露账务数据库或付款接口；契约测试实际通过。
+
+提交前最终前端 962 Vitest + 34 Node、typecheck/format/build 均通过，发布管道 67、runtime 元数据 25、manifest 11 和插件当前版本契约 2 项通过。另在 Darwin/Python3.9 环境尝试全部 CI Python 322 项，100 项失败/错误（49 failures、51 errors）：缺 GNU timeout/Go PATH、Linux /proc/renameat2 与新 Python 安全解包 runtime 等，日志保留；该次不能作为通过，也不为通过而降级 Linux 守卫。完整 Linux 真实 MySQL、原生升级/恢复、浏览器及安全扫描由精确提交的正式 CI 重新执行。
+
+此时尚未创建 v0.5.9 标签或 Release，以下为本地开发结果，不预填发行成功。独立主控/KVM 在相邻 `aster-cloud/` 开发，不混入财务六资产，不声称其功能已经完成。
+
+---
+
+## 2026-10-22：产品配置与手动任务验收记录（v0.5.9 发布准备，待最终 CI）
+
+用户已授权准备财务 **v0.5.9** 发行；以下保留提交前的实际执行范围。最终同提交完整 CI、标签 Runtime build、独立发布器及公共六资产核验均待实际运行，不能从版本号或本地结果推定成功。主控/KVM 独立开发，不混入财务发行。
+
+正式对照基线为 main `0a395970657fb89132efb666f2682b83d81cc57c` 的 **v0.5.8 / schema 12**。本轮按用户要求学习 IDCsmart 的商品、资源参数与执行策略分层思路，实现本系统自己的 `aster.controller/1` 合同，**不是对接其 API**。开发工作树追加 013，目标 **schema 13 / 23 表**，新增 `product_configurations`、`order_product_configurations`、`provisioning_jobs`；已有 001–012、金额、支付和历史快照边界保留。默认不启用 worker 或真实开通；没有创建 VM、真实付款或新增支付渠道。接口及限制见 [PRODUCT_CONFIGURATION.md](PRODUCT_CONFIGURATION.md)。
+
+### 已实际执行的范围
+
+| 检查 | 结果及精确边界 |
+| --- | --- |
+| 最终前端检查 | **962 条 Vitest + 34 条 Node 数据层测试通过，0 skip**；typecheck、format:check、生产 build 通过。当前 lockfile 的 npm **全依赖扫描 0 漏洞**，不据此推断 Go 或系统依赖风险 |
+| Ubuntu22 / MySQL8.4.13 实库过程 | 原单进程完整 billing 在固定 **256 MiB** 内存预算下 OOM 失败，失败日志保留；没有提高限制或把该次算作通过。随后冷启动分组执行 **53 组、210 个顶层测试、952 个 PASS 事件、0 skip**，该基线在最终 canonical 商品 ID 修复前完成。最终配置、迁移、任务、catalog-order 四组增量 **147 个 PASS 事件、0 skip** 通过；两批不是同一最终源码的完整重跑，不能合并宣称最终同 SHA 全套通过 |
+| Go 构建、检查与其他包 | Go **1.26.4** 的 Linux 交叉编译通过；controllers 本机 race 通过。Linux 的 cmd/server、controllers、integrations、updates、pluginapi/paymentfixture、SMTP 完整相应范围及 runtimeplugins 全套通过，Go 全 scope vet 通过。**不是最终源码全 scope race 验收** |
+| 运行时插件容量测试诊断 | 原 `TestPaymentApprovalSharesRPCCapacityAndRecovers` 同一 binary 重复 25 轮，**24 FAIL / 1 PASS**，确认 Manager RPC 槽与服务端连接槽独立、服务端异步处理 close 的测试耦合。最小修仅将该测试限定为 Manager 槽清空、空审批路径上的 `PaymentCheck == ErrDisabled`，不改生产容量或协议、不加 sleep/重试。修后 **25/25 通过**，完整 runtimeplugins 通过；实际有效握手仍由 RuntimeContract 覆盖，原 OneOperationOnHandshakenConnection 测试未删除或放宽，完整 HTTP 409 与四种重放组合约束保留 |
+| Linux 部署工具 portable 测试 | **180 项（44 + 21 + 24 + 91）通过**。范围为脚本、解析、渲染和隔离夹具合同，**不是本轮 schema13 原生安装、升级或备份恢复验收** |
+| CUA 真实浏览器与实库 | 经实际 HTTPS API 连接隔离 MySQL，以管理员身份保存自定义产品配置 **r2 / r3** 并重新读取确认；不是 demo 数据或拦截响应。实际检查 **320 / 375 / 1440 px** 无横向溢出；自定义下拉、Escape、浏览器 Back、保存后目录刷新均检查，关闭后准确恢复 `standard` 商品触发器焦点。不是完整浏览器矩阵、物理手机矩阵或 WCAG 认证 |
+| SQL 交叉核验 | 两条产品配置变更审计存在，独立价格 before/after **逐字节相同**；隔离实例订单、账单、支付尝试/结算、服务和开通任务均为 **0**。保存配置未下发任务、未制造资源或付款 |
+
+### 未验证与交付状态
+
+- **尚未完成**最终同提交的完整 CI、全 scope race 和全部浏览器矩阵。
+- **尚未验证** schema13 原生升级、备份恢复及回滚；本轮 portable 或迁移测试不能替代这些门禁。
+- **尚未完成**本轮 Go 依赖安全扫描；npm 0 漏洞不能代替 Go 扫描。
+- 没有实现或验收真实主控接收端及 VM 生命周期，不能称已真实开通或兼容第三方主控 API。
+- 正式 v0.5.8、公开 443、正式 API 18080 及其 MySQL 实例未更新。本轮**未推送、未发布**，不覆盖旧标签或资产，也不把开发工作树重新包装成正式 v0.5.8。
+- 清理回执已确认：隔离 UI 数据库、专用 SQL 用户、OS UID、8443 / 18081 测试服务及其对应目录已删除，测试 MySQL r2 已停止；原 case 权限恢复 700，`mysql.cnf`、`test-dsn` 及临时浏览器密码文件删除。**保留私有、停机的测试 data 目录及日志**，不称全部测试数据目录已删除。正式 API / Nginx / MySQL 均 active。本轮没有新增 CA 或修改钥匙串，浏览器复用并正常校验现有 IP 证书。
+
+本轮原始失败、分组结果、最终增量、前端日志、SQL 对照及实际截图在 ignored `artifacts/controller-20261022/`。以下历史记录原样保留，不用本轮局部结果改写旧失败或借用历史正式发行门禁。
+
+---
+
 ## 0.5.8 第二轮 CI 旧备份 fixture 计数失败（待完整重验）
 
 提交前补验：Ubuntu22 自带 Python3.10 下，完整备份 shell 及五组主机工具编排单测 **217项（11+48+45+23+90）全部通过、0 skip**，使用隔离 fakebin/回环夹具，不是新一次真实 systemd 安装。尝试完整 CI 编排321项时，22项被CI专用MySQL包安全解包器的Python>=3.12守卫拒绝，另3项因未配置已有Go工具PATH报错；原日志保留，不放宽守卫或把该次321项算通过，补齐独立测试runtime后及最终CI仍须完整验证。生产应用/主机工具范围与CI包下载测试runtime不能混称。

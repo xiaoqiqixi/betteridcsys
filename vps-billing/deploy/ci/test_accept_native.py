@@ -453,7 +453,7 @@ class LateSchemaFaultGuardTests(unittest.TestCase):
 class CorePaymentSchemaMigrationTests(unittest.TestCase):
     """Scenario guards with fake native/SQL calls, never deployment evidence."""
 
-    def scenario(self, *, old_accepts_new=False, changed_business=False, invented_payment=False):
+    def scenario(self, *, old_accepts_new=False, changed_business=False, invented_payment=False, invented_product_configuration=False):
         state = {"schema": 6}
         calls = []
         candidate = str(SCRIPT.parents[2] / "backend")
@@ -486,7 +486,7 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
 
         def sql(query, *, database=None):
             if query.startswith("SELECT COUNT(*) FROM information_schema.TABLES"):
-                return str({6: 13, 7: 14, CORE.CANDIDATE_SCHEMA: 20}[state["schema"]])
+                return str({6: 13, 7: 14, CORE.CANDIDATE_SCHEMA: 23}[state["schema"]])
             if query.startswith("SELECT SUM(amount_minor)"):
                 return "1500"
             if query.startswith("SELECT TABLE_NAME"):
@@ -497,6 +497,8 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
                 return "0"
             if query.startswith("SELECT (SELECT COUNT(*) FROM payment_attempts)"):
                 return str(int(invented_payment))
+            if query.startswith("SELECT (SELECT COUNT(*) FROM product_configurations)"):
+                return str(int(invented_product_configuration))
             return ""
 
         def data_hash(database=None, tables=()):
@@ -530,10 +532,11 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
         self.assertEqual([call for call in calls if call[1] == "-migrate"],
             [(published, "-migrate"), (candidate, "-migrate"), (candidate, "-migrate")])
         self.assertEqual((report["schema_before"], report["published_schema"], report["schema_after"]), (6, 7, CORE.CANDIDATE_SCHEMA))
-        self.assertEqual((report["tables_before"], report["tables_published"], report["tables_after"]), (13, 14, 20))
+        self.assertEqual((report["tables_before"], report["tables_published"], report["tables_after"]), (13, 14, 23))
         self.assertEqual(report["published_baseline_preflight_after_payment_migration"], "incompatible")
         self.assertTrue(report["additive_payment_migration_preserved_existing_data"])
         self.assertTrue(report["new_payment_tables_empty"])
+        self.assertTrue(report["new_product_configuration_tables_empty"])
         self.assertTrue(report["taxonomy_tables_and_exact_legacy_relationships_added"])
         self.assertTrue(report["repeat_migration_data_unchanged"])
 
@@ -545,6 +548,10 @@ class CorePaymentSchemaMigrationTests(unittest.TestCase):
         for changed, invented in ((True, False), (False, True)):
             with self.subTest(changed=changed, invented=invented), self.assertRaises(CORE.AcceptanceFailure):
                 self.scenario(changed_business=changed, invented_payment=invented)
+
+    def test_additive_migration_cannot_backfill_product_configuration_or_provisioning_jobs(self):
+        with self.assertRaisesRegex(CORE.AcceptanceFailure, "Migration invented product configuration"):
+            self.scenario(invented_product_configuration=True)
 
 
 class CoreExecutorEvidenceSafetyTests(unittest.TestCase):
