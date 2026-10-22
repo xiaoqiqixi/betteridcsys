@@ -1,4 +1,26 @@
-## 0.5.9 首轮 CI 浏览器探针路径合同失败（待修复后完整重验）
+## 2026-10-22：Core v0.5.9 正式发行完成
+
+正常公开 [v0.5.9 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.9)，Release ID `420315605`，源码固定 `4252fed37dfb4d4e7f621fbd0495a2cd2171c8b7`，不是后续主控开发提交。默认中文/CNY，Core 0.5.9 / SMTP 1.1.0；旧标签和资产未覆盖，财务发行不附带主控/KVM。
+
+| 最终门禁 | 实际结果 |
+| --- | --- |
+| 精确 main 完整 CI | [39719713456](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39719713456) 全部成功；不是借用首轮局部绿灯 |
+| 标签正式 Runtime build | [39721645970 / attempt 1](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39721645970) 全部成功：真实 MySQL 全范围 Go race **331顶层 / 1465含子项 PASS、0 FAIL / SKIP、无 race warning**；vet、静态构建通过 |
+| 前端与浏览器 | 正式构建执行 **962 Vitest + 35 Node**、typecheck/format/build；完整 sandboxed Chrome 合成浏览器验收通过，30张实际运行截图、cleanup=true。此套使用loopback demo，不能冒充前述真实MySQL/CUA检查或真实支付渠道 |
+| 原生部署与依赖 | Ubuntu24隔离 systemd / Nginx / HTTPS、业务、schema13升级、备份恢复和回滚门禁成功，npm与Go扫描成功；不是所有Linux或客户主机验收 |
+| 可复现包与来源 | candidate/rebuild两次完整打包及provenance封装后的两次 `diff -r` 均成功；来源、run、attempt和受信政策绑定精确源码 |
+| 独立发布器 | [39723864667](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39723864667) 自动成功，正常公开Release，恰好6个资产；不是标签推送成功即算发行 |
+| 匿名公共核验 | 2026-10-22 04:44:30 UTC，无token下载全部6资产；逐一大小/SHA256与GitHub元数据、SHA256SUMS、BUILD和PROVENANCE一致，schema13完整13份SQL与选定Git blob一致；只读21次API、不解压、不执行、不安装 |
+
+匿名核验回执 `artifacts/release-v0.5.9/public-final/VERIFICATION.json` SHA256：`a550819b90d0e6c967a02fbb3a277fe540010a8156aa411c9073aa51905a76a8`。Runtime、发布器日志及原生/浏览器artifact归档在ignored `artifacts/release-v0.5.9-checks/`。公开校验清单见 [SHA256SUMS](https://github.com/xiaoqiqixi/betteridcsys/releases/download/v0.5.9/SHA256SUMS)。
+
+**仍未验收：**真实支付渠道/客户收款、真实业务邮件、物理手机全矩阵、公共证书续期、灾备与生产容量、完整主控/KVM及真实VM/网络/恢复。现有Ubuntu22财务测试站仍为v0.5.8，本轮没有自动升级或把虚拟化安装到该小内存主机。schema13回滚必须恢复匹配备份，不能只换回schema12二进制。
+
+独立主控开发提交 `273549ca6908dab4c2eb5592c8f325ee3fbd20df` 已推main，开发CI及同提交财务完整CI成功；具体范围和真实KVM延期记录见 [主控验证](../../aster-cloud/docs/VALIDATION.md)。本节以下历史记录保持原样，失败和当时未验状态不被事后抹掉。
+
+---
+
+## 0.5.9 首轮 CI 浏览器探针路径合同失败（历史；后续已完整重验）
 
 精确 main `233314895e730807d2c618f6079644680ef07a97` 的 [CI 39717442335](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39717442335) 整体失败：真实 MySQL 必需回归、原生 systemd/TLS/业务/备份恢复与回滚、npm 和 Go 依赖扫描均已通过，但新产品配置浏览器探针在最后的写入路径比较失败。四次保存、布局、定制下拉和关闭断言已先通过；探针拿 adapter-relative `/admin/...` 比较公共 dispatcher 实际记录的 URL.pathname `/api/v1/admin/...`，不是把请求失败当成功。
 
