@@ -34,6 +34,8 @@ ProtectControlGroups=true
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=aster-node
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=1000
 
 [Install]
 WantedBy=multi-user.target

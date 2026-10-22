@@ -72,11 +72,26 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		if !errors.Is(e, sql.ErrNoRows) {
 			return e
 		}
+		var existingIndexes map[string]bool
+		if migration.Version == 4 {
+			existingIndexes, e = auditIndexMigrationPlan(ctx, conn, migration.SQL)
+			if e != nil {
+				return e
+			}
+		}
 		for _, statement := range strings.Split(migration.SQL, ";") {
 			if q := strings.TrimSpace(statement); q != "" {
+				if existingIndexes[q] {
+					continue
+				}
 				if _, e = conn.ExecContext(ctx, q); e != nil {
 					return e
 				}
+			}
+		}
+		if migration.Version == 4 {
+			if e = checkAuditQueryIndexes(ctx, conn); e != nil {
+				return e
 			}
 		}
 		if _, e = conn.ExecContext(ctx, "INSERT INTO controller_schema(version,sha256,applied_at) VALUES(?,?,?)", migration.Version, want, time.Now().UTC()); e != nil {
@@ -108,7 +123,7 @@ func (s *SQLStore) Check(ctx context.Context) error {
 		}
 		rows.Close()
 	}
-	return nil
+	return checkAuditQueryIndexes(ctx, s.DB)
 }
 func (s *SQLStore) locked(ctx context.Context) (*sql.Tx, error) {
 	// ponytail: one database gate serializes mutations; replace with ordered node/

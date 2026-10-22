@@ -36,7 +36,7 @@ ChatGPT in-app Chromium，CSS viewport 1440×1000、768×1024、375×812、320×
 
 ## 临时环境清理
 
-专用浏览器会话已退出；最终有效认证session=0。专用API/MySQL已停止，9444关闭，本轮`/run`配置/口令、`/tmp`私有数据库及`/opt`测试程序目录已移除；现有财务三个服务仍active。localhost临时CA撤销与本机凭据清理由root单列回执确认。
+专用浏览器会话已退出；最终有效认证session=0。专用API/MySQL已停止，9444关闭，本轮`/run`配置/口令、`/tmp`私有数据库及`/opt`测试程序目录已移除；现有财务三个服务仍active。2026-10-23补核：两枚上轮临时CA均已从用户钥匙串消失，用户trust设置为空，旧localhost证书返回NOT_TRUSTED；本机明文凭据与私钥均不存在。对应脱敏清理回执另存ignored operations-20261023/，未重置其它系统信任。
 
 ## 明确未执行
 

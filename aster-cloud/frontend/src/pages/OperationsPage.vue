@@ -1,124 +1,44 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue";
-import { RouterLink } from "vue-router";
-import { RefreshCw, ArrowUpRight } from "@lucide/vue";
+import { shallowRef } from "vue";
+import { RouterLink, useRouter } from "vue-router";
+import { RefreshCw, ArrowUpRight, Search } from "@lucide/vue";
 import { useConsole } from "../context";
 import { useQuery } from "../composables/query";
-import { useMutation } from "../composables/mutation";
-import {
-  ApiError,
-  operationResponse,
-  validOperation,
-  validPage,
-} from "../api/client";
-import { acknowledgeOperations } from "../composables/mutation";
+import { validOperation, validPage } from "../api/client";
 import type { Operation, Page } from "../api/types";
-import { actionPermission } from "../permissions";
 import { actionNames, dateText } from "../format";
 import UiButton from "../components/UiButton.vue";
-import UiOverlay from "../components/UiOverlay.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import StateBlock from "../components/StateBlock.vue";
-import InlineError from "../components/InlineError.vue";
+import OperationActions from "../components/OperationActions.vue";
 const {
   prefs: { tr, locale },
-  session,
-  api,
-  notify,
 } = useConsole();
+const router = useRouter();
 const cursor = shallowRef("");
+const lookup = shallowRef("");
+const lookupError = shallowRef(false);
 const list = useQuery(
   () =>
     `/operations${cursor.value ? `?cursor=${encodeURIComponent(cursor.value)}` : ""}`,
   (v): v is Page<Operation> => validPage(v, validOperation),
 );
-const selected = shallowRef<Operation | null>(null),
-  mode = shallowRef<"dispatch" | "reconcile">("dispatch"),
-  confirmation = shallowRef("");
-const mutation = useMutation();
-const reading = shallowRef("");
-const readError = shallowRef("");
-const displayName = computed(
-  () =>
-    selected.value &&
-    (actionNames[selected.value.action]
-      ? tr(...actionNames[selected.value.action]!)
-      : selected.value.action),
-);
-const canDispatch = (op: Operation) =>
-  op.state === "accepted" && session.can(actionPermission(op.action));
-const canReconcile = (op: Operation) =>
-  ["sending", "dispatched", "uncertain"].includes(op.state) &&
-  session.can(actionPermission(op.action));
-async function readOperation(op: Operation) {
-  if (reading.value) return;
-  const identity = session.epoch.value;
-  reading.value = op.id;
-  readError.value = "";
-  try {
-    const result = await api.get(
-      `/operations/${encodeURIComponent(op.id)}`,
-      operationResponse,
-    );
-    if (identity !== session.epoch.value) return;
-    if (
-      result.operation.id !== op.id ||
-      result.operation.instance_id !== op.instance_id ||
-      result.operation.action !== op.action
-    )
-      throw new ApiError("invalid");
-    if (list.data.value)
-      list.data.value = {
-        ...list.data.value,
-        items: list.data.value.items.map((value) =>
-          value.id === op.id ? result.operation : value,
-        ),
-      };
-    acknowledgeOperations(session.user.value?.id || "", [result.operation]);
-  } catch (cause) {
-    if (identity !== session.epoch.value) return;
-    readError.value = cause instanceof ApiError ? cause.kind : "network";
-    if (cause instanceof ApiError && cause.kind === "unauthorized")
-      session.invalidate();
-  } finally {
-    reading.value = "";
+function findTask() {
+  if (!/^[a-f0-9]{32}$/.test(lookup.value)) {
+    lookupError.value = true;
+    return;
   }
+  lookupError.value = false;
+  void router.push(`/operations/${lookup.value}`);
 }
-function open(op: Operation, action: "dispatch" | "reconcile") {
-  selected.value = op;
-  mode.value = action;
-  confirmation.value = "";
-  mutation.clearMessage();
-}
-async function submit() {
-  const op = selected.value;
-  if (!op || confirmation.value !== op.id) return;
-  const result = await mutation.execute(
-    "POST",
-    `/operations/${encodeURIComponent(op.id)}/${mode.value}`,
-    {},
-    operationResponse,
-    {
-      key: op.id,
-      expectedStatus: 202,
-      allowUncertainReconcile: mode.value === "reconcile",
-      bindOperation: { instanceId: op.instance_id, action: op.action },
-    },
-  );
-  if (result) {
-    notify(
-      result.operation.state === "succeeded"
-        ? tr("任务已完成。", "Task completed.")
-        : result.operation.state === "uncertain"
-          ? tr(
-              "结果仍待核实，请勿重复派发。",
-              "The result remains uncertain. Do not dispatch again.",
-            )
-          : tr("任务状态已更新。", "Task state updated."),
-    );
-    selected.value = null;
-    await list.reload();
-  }
+function updated(operation: Operation) {
+  if (list.data.value)
+    list.data.value = {
+      ...list.data.value,
+      items: list.data.value.items.map((item) =>
+        item.id === operation.id ? operation : item,
+      ),
+    };
 }
 </script>
 <template>
@@ -141,7 +61,43 @@ async function submit() {
         }}</UiButton
       >
     </header>
-    <InlineError :error="readError" />
+    <form class="task-lookup" @submit.prevent="findTask">
+      <label class="lookup-field" for="task-lookup"
+        >{{ tr("按任务 ID 查找", "Find a task by ID") }}
+        <div class="lookup-input">
+          <Search :size="18" aria-hidden="true" /><input
+            id="task-lookup"
+            v-model="lookup"
+            :aria-label="tr('任务 ID', 'Task ID')"
+            :aria-invalid="lookupError || undefined"
+            :aria-describedby="lookupError ? 'task-lookup-error' : undefined"
+            :placeholder="
+              tr('输入任务或请求编号', 'Enter a task or request reference')
+            "
+            maxlength="32"
+            autocomplete="off"
+            spellcheck="false"
+            @input="lookupError = false"
+          />
+        </div>
+      </label>
+      <UiButton type="submit" :disabled="!lookup">{{
+        tr("查找任务", "Find task")
+      }}</UiButton>
+      <p
+        v-if="lookupError"
+        id="task-lookup-error"
+        class="lookup-error"
+        role="alert"
+      >
+        {{
+          tr(
+            "请输入 32 位小写十六进制任务 ID。",
+            "Enter a 32-character lowercase hexadecimal task ID.",
+          )
+        }}
+      </p>
+    </form>
     <StateBlock
       :loading="list.loading.value"
       :error="list.error.value"
@@ -169,7 +125,12 @@ async function submit() {
               }}</strong
               ><StatusBadge :state="op.state" />
             </div>
-            <code>{{ op.id }}</code>
+            <RouterLink
+              class="operation-reference"
+              :to="`/operations/${encodeURIComponent(op.id)}`"
+              :aria-label="tr(`查看任务 ${op.id}`, `View task ${op.id}`)"
+              ><code>{{ op.id }}</code></RouterLink
+            >
             <div class="operation-context">
               <RouterLink
                 :to="`/instances/${encodeURIComponent(op.instance_id)}`"
@@ -178,29 +139,9 @@ async function submit() {
               ><span>{{ dateText(op.created_at, locale) }}</span>
             </div>
           </div>
-          <div class="operation-actions">
-            <UiButton
-              variant="quiet"
-              :busy="reading === op.id"
-              :disabled="!!reading && reading !== op.id"
-              @click="readOperation(op)"
-              >{{ tr("读取状态", "Read state") }}</UiButton
-            >
-            <UiButton v-if="canDispatch(op)" @click="open(op, 'dispatch')">{{
-              tr("派发任务", "Dispatch")
-            }}</UiButton
-            ><UiButton v-if="canReconcile(op)" @click="open(op, 'reconcile')">{{
-              tr(
-                op.state === "uncertain" ? "核对结果" : "核对进度",
-                op.state === "uncertain"
-                  ? "Reconcile result"
-                  : "Check progress",
-              )
-            }}</UiButton>
-          </div>
-        </article>
-      </div></StateBlock
-    >
+          <OperationActions :operation="op" @updated="updated" />
+        </article></div
+    ></StateBlock>
     <div v-if="list.data.value" class="pagination">
       <UiButton v-if="cursor" @click="cursor = ''">{{
         tr("回到首页", "First page")
@@ -211,72 +152,6 @@ async function submit() {
         >{{ tr("下一页", "Next page") }}</UiButton
       >
     </div>
-    <UiOverlay
-      :open="!!selected"
-      :title="
-        mode === 'dispatch'
-          ? tr('派发任务', 'Dispatch task')
-          : tr('核对任务进度', 'Check task progress')
-      "
-      :description="displayName || ''"
-      :busy="mutation.busy.value"
-      :close-label="tr('关闭', 'Close')"
-      @close="selected = null"
-      ><p class="secondary">
-        {{
-          mode === "dispatch"
-            ? tr(
-                "将向节点发送一次此任务。确认后，请勿重复派发。",
-                "Send this task to the node once. Do not dispatch it again.",
-              )
-            : tr(
-                "只查询节点已有操作的结果，不会重新执行任务。",
-                "Query the existing node operation. The task will not be executed again.",
-              )
-        }}
-      </p>
-      <dl class="detail-pairs">
-        <div>
-          <dt>{{ tr("实例", "Instance") }}</dt>
-          <dd>{{ selected?.instance_id }}</dd>
-        </div>
-        <div>
-          <dt>{{ tr("任务 ID", "Task ID") }}</dt>
-          <dd>{{ selected?.id }}</dd>
-        </div>
-      </dl>
-      <label class="field"
-        >{{ tr("输入任务 ID 以确认", "Type the task ID to confirm")
-        }}<input
-          v-model="confirmation"
-          autocomplete="off"
-          :disabled="
-            mutation.busy.value ||
-            (!!mutation.pendingKey.value && mode !== 'reconcile')
-          " /></label
-      ><InlineError
-        :error="mutation.error.value"
-        :pending-key="mutation.pendingKey.value"
-      /><template #footer
-        ><UiButton :disabled="mutation.busy.value" @click="selected = null">{{
-          tr("取消", "Cancel")
-        }}</UiButton
-        ><UiButton
-          variant="primary"
-          :busy="mutation.busy.value"
-          :disabled="
-            confirmation !== selected?.id ||
-            (!!mutation.pendingKey.value && mode !== 'reconcile')
-          "
-          @click="submit"
-          >{{
-            mode === "dispatch"
-              ? tr("确认派发", "Confirm dispatch")
-              : tr("核对进度", "Check progress")
-          }}</UiButton
-        ></template
-      ></UiOverlay
-    >
   </section>
 </template>
 <style scoped>
@@ -303,12 +178,13 @@ async function submit() {
 .operation-name strong {
   font-size: 15px;
 }
-.operation-main > code {
+.operation-reference {
   display: block;
   color: var(--secondary);
   font-size: 12px;
   overflow-wrap: anywhere;
   margin-top: 12px;
+  text-decoration: none;
 }
 .operation-context {
   display: flex;
@@ -329,12 +205,54 @@ async function submit() {
 .operation-context a svg {
   flex-shrink: 0;
 }
-.operation-actions {
+.task-lookup {
   display: flex;
-  gap: 8px;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
 }
-.field {
-  margin-top: 24px;
+.lookup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--secondary);
+  flex: 1;
+  min-width: min(100%, 240px);
+  max-width: 480px;
+}
+.lookup-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.lookup-input svg {
+  flex-shrink: 0;
+}
+.lookup-input input {
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px 10px 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+}
+.lookup-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.operation-reference:hover {
+  text-decoration: underline;
+  color: var(--accent-text);
 }
 @media (max-width: 600px) {
   .operation-row {
@@ -343,8 +261,12 @@ async function submit() {
     flex-direction: column;
     gap: 16px;
   }
-  .operation-actions {
-    width: 100%;
+  .task-lookup {
+    align-items: stretch;
+  }
+  .lookup-field {
+    max-width: none;
+    flex-basis: 100%;
   }
   .operation-context {
     gap: 8px;

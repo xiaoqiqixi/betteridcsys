@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -50,11 +49,7 @@ func (r *OperationRunner) launch(op string, reconcile bool) error {
 		} else {
 			o, e = r.run(ctx, op)
 		}
-		code := "confirmed"
-		if e != nil {
-			code = "inspect_original_operation"
-		}
-		slog.Info("aster_controller_transfer", "operation_id", op, "state", o.State, "result", code)
+		logTransferOutcome(ctx, op, o.State, e)
 		r.mu.Lock()
 		delete(r.active, op)
 		r.mu.Unlock()

@@ -195,7 +195,7 @@ func (m *Manager) executeStorage(ctx context.Context, task nodeproto.TypedStorag
 			}
 		}
 		_, e := m.Ledger.FinishStorage(task.OperationID, status, code, result, &instance, artifact, nil)
-		slog.Info("aster_node_storage_operation", "operation_id", task.OperationID, "instance_id", task.InstanceID, "action", task.Action, "status", status, "code", code, "journal_write_confirmed", e == nil)
+		m.logStorageOutcome(ctx, task, status, code, e == nil)
 	}
 	if ctx.Err() != nil {
 		finish("uncertain", "CANCELLED_AFTER_CLAIM")
@@ -347,6 +347,17 @@ func (m *Manager) executeStorage(ctx context.Context, task nodeproto.TypedStorag
 	default:
 		finish("rejected", "UNSUPPORTED_STORAGE_ACTION")
 	}
+}
+
+func (m *Manager) logStorageOutcome(ctx context.Context, task nodeproto.TypedStorageTask, status, code string, durable bool) {
+	level := slog.LevelInfo
+	if status == "uncertain" || !durable {
+		level = slog.LevelWarn
+	}
+	if !durable {
+		status, code = "uncertain", "JOURNAL_WRITE_UNCONFIRMED"
+	}
+	slog.Log(ctx, level, "aster_node_storage_operation", "node_id", m.Config.NodeID, "operation_id", task.OperationID, "instance_id", task.InstanceID, "action", task.Action, "status", status, "code", code, "journal_write_confirmed", durable)
 }
 func (m *Manager) readArtifact(ctx context.Context, a ArtifactRecord, i Instance) (nodeproto.SignedStorageManifest, string, error) {
 	dir := filepath.Join(m.Config.Storage.Directory, a.Artifact.ArtifactID)

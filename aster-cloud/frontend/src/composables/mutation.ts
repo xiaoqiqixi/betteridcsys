@@ -2,17 +2,62 @@ import { shallowRef } from "vue";
 import { ApiError, key32, record, validOperation } from "../api/client";
 import { useConsole } from "../context";
 import type { Operation } from "../api/types";
+const bindingKeys = [
+  "id",
+  "action",
+  "instance_id",
+  "node_id",
+  "artifact_id",
+  "target_node_id",
+  "actor_id",
+] as const;
+type OperationBinding = Record<(typeof bindingKeys)[number], string>;
+interface OperationIntent {
+  action?: string;
+  instanceId?: string;
+  nodeId?: string;
+  artifactId?: string;
+  targetNodeId?: string;
+  actorId?: string;
+}
+function validBinding(value: unknown): value is OperationBinding {
+  return (
+    record(value) &&
+    bindingKeys.every(
+      (key) => Object.hasOwn(value, key) && typeof value[key] === "string",
+    ) &&
+    /^[a-f0-9]{32}$/.test(value.id as string) &&
+    ["action", "instance_id", "node_id", "actor_id"].every(
+      (key) => value[key] !== "",
+    )
+  );
+}
+function copyBinding(value: OperationBinding): OperationBinding {
+  return Object.fromEntries(
+    bindingKeys.map((key) => [key, value[key]]),
+  ) as OperationBinding;
+}
+function matchesBinding(value: unknown, binding: OperationBinding) {
+  return (
+    validBinding(value) &&
+    bindingKeys.every((key) => value[key] === binding[key])
+  );
+}
+const progressed = (state: string) =>
+  ["sending", "dispatched", "uncertain", "succeeded", "rejected"].includes(
+    state,
+  );
 interface Pending {
   owner: string;
   fingerprint: string;
   key: string;
   purpose?: "creation" | "dispatch" | "reconcile" | "other";
+  binding?: OperationBinding;
 }
 const ledger = new Map<string, Pending>();
 let loaded = false;
 function loadLedger() {
-  if (loaded) return;
-  loaded = true;
+  if (loaded) return true;
   try {
     const value = JSON.parse(
       sessionStorage.getItem("aster.cloud.pending.v1") || "[]",
@@ -20,56 +65,91 @@ function loadLedger() {
     if (Array.isArray(value))
       for (const p of value.slice(0, 64))
         if (
-          p &&
+          record(p) &&
           typeof p.owner === "string" &&
+          typeof p.fingerprint === "string" &&
+          typeof p.key === "string" &&
           /^[a-f0-9]{64}$/.test(p.fingerprint) &&
           /^[a-f0-9]{32}$/.test(p.key)
-        )
-          ledger.set(`${p.owner}:${p.fingerprint}`, p);
+        ) {
+          const purpose = [
+            "creation",
+            "dispatch",
+            "reconcile",
+            "other",
+          ].includes(p.purpose as string)
+            ? (p.purpose as Pending["purpose"])
+            : undefined;
+          const binding =
+            validBinding(p.binding) && p.binding.id === p.key
+              ? copyBinding(p.binding)
+              : undefined;
+          ledger.set(`${p.owner}:${p.fingerprint}`, {
+            owner: p.owner,
+            fingerprint: p.fingerprint,
+            key: p.key,
+            ...(purpose ? { purpose } : {}),
+            ...(binding ? { binding } : {}),
+          });
+        }
+    loaded = true;
+    return true;
   } catch {
-    /* Failures never create a request. */
+    // Do not overwrite unknown entries that could not be read. A later attempt
+    // must successfully reload the original ledger before any write is sent.
+    return false;
   }
 }
-function saveLedger() {
+function saveLedger(next: Map<string, Pending>) {
+  if (!loaded) return false;
   try {
     sessionStorage.setItem(
       "aster.cloud.pending.v1",
-      JSON.stringify([...ledger.values()]),
+      JSON.stringify([...next.values()]),
     );
+    // Commit memory only after persistence. Failed inserts were never sent;
+    // failed removals retain the original uncertainty in both stores.
+    ledger.clear();
+    for (const [slot, entry] of next) ledger.set(slot, entry);
+    return true;
   } catch {
-    /* In-memory guard remains active. */
+    return false;
   }
 }
-// A read of the persisted task can resolve a lost creation acknowledgement.
-// An accepted task alone cannot prove that an uncertain dispatch was not sent.
+function removePending(slot: string) {
+  const next = new Map(ledger);
+  next.delete(slot);
+  return saveLedger(next);
+}
+// The owner is the requester of this pending write, not necessarily the task's
+// immutable creator. Legacy writes without a full binding remain unresolved.
 export function acknowledgeOperations(
   owner: string,
   operations: readonly Operation[],
 ) {
-  loadLedger();
+  if (!loadLedger()) return;
+  const next = new Map(ledger);
   let changed = false;
   for (const [slot, entry] of ledger) {
     if (entry.owner !== owner) continue;
     const operation = operations.find(
-      (value) => value.id === entry.key && value.actor_id === owner,
+      (value) =>
+        validOperation(value) &&
+        value.id === entry.key &&
+        (entry.purpose === "creation"
+          ? value.actor_id === owner
+          : (entry.purpose === "dispatch" || entry.purpose === "reconcile") &&
+            validBinding(entry.binding) &&
+            entry.binding.id === entry.key &&
+            matchesBinding(value, entry.binding) &&
+            progressed(value.state)),
     );
-    if (!operation) continue;
-    if (
-      entry.purpose === "creation" ||
-      ((entry.purpose === "dispatch" || entry.purpose === "reconcile") &&
-        [
-          "sending",
-          "dispatched",
-          "uncertain",
-          "succeeded",
-          "rejected",
-        ].includes(operation.state))
-    ) {
-      ledger.delete(slot);
+    if (operation) {
+      next.delete(slot);
       changed = true;
     }
   }
-  if (changed) saveLedger();
+  if (changed) saveLedger(next);
 }
 export async function fingerprint(path: string, body: unknown) {
   const bytes = new TextEncoder().encode(
@@ -97,12 +177,7 @@ export function useMutation() {
       key?: string;
       expectedStatus?: number;
       allowUncertainReconcile?: boolean;
-      bindOperation?: {
-        action?: string;
-        instanceId?: string;
-        artifactId?: string;
-        targetNodeId?: string;
-      };
+      bindOperation?: OperationIntent;
     } = {},
   ): Promise<T | null> {
     if (busy.value) return null;
@@ -114,17 +189,56 @@ export function useMutation() {
     }
     busy.value = true;
     error.value = "";
+    const {
+      key: requestedKey,
+      expectedStatus,
+      allowUncertainReconcile,
+    } = options;
+    const operationWrite =
+        /^\/operations\/([a-f0-9]{32})\/(dispatch|reconcile)$/.exec(path),
+      intent = options.bindOperation ? { ...options.bindOperation } : undefined;
+    const candidateBinding = operationWrite && {
+      id: requestedKey,
+      action: intent?.action,
+      instance_id: intent?.instanceId,
+      node_id: intent?.nodeId,
+      artifact_id: intent?.artifactId,
+      target_node_id: intent?.targetNodeId,
+      actor_id: intent?.actorId,
+    };
+    const binding = validBinding(candidateBinding)
+      ? copyBinding(candidateBinding)
+      : undefined;
     try {
+      if (!loadLedger()) {
+        error.value = "unavailable";
+        return null;
+      }
+      if (
+        operationWrite &&
+        (method !== "POST" ||
+          !binding ||
+          binding.id !== operationWrite[1] ||
+          !record(body) ||
+          Object.keys(body).length !== 0)
+      ) {
+        error.value = "invalid";
+        return null;
+      }
       const digest = await fingerprint(path, body),
         slot = `${owner}:${digest}`;
       const prior = ledger.get(slot);
       const allowReconcile =
-        options.allowUncertainReconcile &&
-        method === "POST" &&
-        /^\/operations\/([a-f0-9]{32})\/reconcile$/.exec(path)?.[1] ===
-          options.key &&
-        record(body) &&
-        Object.keys(body).length === 0;
+        allowUncertainReconcile &&
+        operationWrite?.[2] === "reconcile" &&
+        !!binding &&
+        (!prior ||
+          (prior.purpose === "reconcile" &&
+            prior.owner === owner &&
+            prior.key === binding.id &&
+            validBinding(prior.binding) &&
+            prior.binding.id === prior.key &&
+            matchesBinding(prior.binding, binding)));
       if (prior && !allowReconcile) {
         pendingKey.value = prior.key;
         error.value = "unknown";
@@ -136,18 +250,29 @@ export function useMutation() {
       }
       if (identity !== session.epoch.value || session.user.value?.id !== owner)
         return null;
-      const key = prior?.key || options.key || key32();
+      const key = prior?.key || requestedKey || key32();
       const purpose =
         path === "/instances" ||
         /^\/instances\/[a-f0-9]{32}\/operations$/.test(path)
           ? "creation"
-          : /\/dispatch$/.test(path)
+          : operationWrite?.[2] === "dispatch"
             ? "dispatch"
-            : /\/reconcile$/.test(path)
+            : operationWrite?.[2] === "reconcile"
               ? "reconcile"
               : "other";
-      ledger.set(slot, { owner, fingerprint: digest, key, purpose });
-      saveLedger();
+      const next = new Map(ledger);
+      next.set(slot, {
+        owner,
+        fingerprint: digest,
+        key,
+        purpose,
+        ...(binding ? { binding } : {}),
+      });
+      if (!saveLedger(next)) {
+        pendingKey.value = prior?.key || "";
+        error.value = "unavailable";
+        return null;
+      }
       pendingKey.value = key;
       try {
         const result = await api.write(
@@ -156,36 +281,60 @@ export function useMutation() {
           body,
           key,
           guard,
-          options.expectedStatus,
+          expectedStatus,
         );
-        if (options.bindOperation) {
-          const binding = options.bindOperation;
+        if (
+          binding &&
+          (!record(result) ||
+            !validOperation(result.operation) ||
+            !matchesBinding(result.operation, binding) ||
+            !progressed(result.operation.state))
+        )
+          throw new ApiError("unknown");
+        if (
+          purpose === "creation" &&
+          (!record(result) ||
+            !validOperation(result.operation) ||
+            result.operation.id !== key ||
+            result.operation.actor_id !== owner)
+        )
+          throw new ApiError("unknown");
+        if (intent) {
           if (
             !record(result) ||
             !validOperation(result.operation) ||
             result.operation.id !== key ||
-            (binding.action !== undefined &&
-              result.operation.action !== binding.action) ||
-            (binding.instanceId !== undefined &&
-              result.operation.instance_id !== binding.instanceId) ||
-            (binding.artifactId !== undefined &&
-              result.operation.artifact_id !== binding.artifactId) ||
-            (binding.targetNodeId !== undefined &&
-              result.operation.target_node_id !== binding.targetNodeId)
+            (intent.action !== undefined &&
+              result.operation.action !== intent.action) ||
+            (intent.instanceId !== undefined &&
+              result.operation.instance_id !== intent.instanceId) ||
+            (intent.artifactId !== undefined &&
+              result.operation.artifact_id !== intent.artifactId) ||
+            (intent.targetNodeId !== undefined &&
+              result.operation.target_node_id !== intent.targetNodeId)
           )
             throw new ApiError("unknown");
         }
-        ledger.delete(slot);
-        saveLedger();
-        if (identity !== session.epoch.value) return null;
-        pendingKey.value = "";
+        if (
+          identity !== session.epoch.value ||
+          session.user.value?.id !== owner
+        )
+          return null;
+        removePending(slot);
+        if (binding && record(result) && validOperation(result.operation))
+          acknowledgeOperations(owner, [result.operation]);
+        pendingKey.value = ledger.has(slot) ? key : "";
         return result;
       } catch (cause) {
         const kind = cause instanceof ApiError ? cause.kind : "unknown";
+        if (
+          identity !== session.epoch.value ||
+          session.user.value?.id !== owner
+        )
+          return null;
         if (kind !== "unknown") {
-          ledger.delete(slot);
-          saveLedger();
-          pendingKey.value = "";
+          removePending(slot);
+          pendingKey.value = ledger.has(slot) ? key : "";
         }
         if (identity === session.epoch.value) {
           error.value = kind;

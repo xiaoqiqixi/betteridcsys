@@ -2,6 +2,7 @@ package main
 
 import (
 	"aster/cloud/internal/control"
+	"aster/cloud/internal/diagnostics"
 	"aster/cloud/internal/identity"
 	"context"
 	"crypto/rand"
@@ -9,8 +10,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,8 +22,9 @@ import (
 )
 
 func main() {
+	slog.SetDefault(diagnostics.New(os.Stderr, "controller"))
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "controller command failed; inspect protected configuration and authenticated status (no automatic resend)")
+		slog.Error("aster_command_failed", "code", "COMMAND_FAILED")
 		os.Exit(1)
 	}
 }
@@ -32,6 +34,7 @@ func run(args []string) error {
 	}
 	command := args[0]
 	flags := flag.NewFlagSet("aster-controller "+command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "/etc/aster-controller/config.json", "root protected configuration")
 	operation := flags.String("operation", "", "exact operation ID")
 	node := flags.String("node", "", "approved node ID")
@@ -192,6 +195,7 @@ func run(args []string) error {
 			return control.ErrInput
 		}
 		server := &http.Server{Addr: config.Listen, Handler: handler, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 12 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+		server.ErrorLog = diagnostics.TransportLog(slog.Default())
 		sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer stop()
 		go func() {
@@ -200,8 +204,10 @@ func run(args []string) error {
 			defer done()
 			_ = server.Shutdown(c)
 		}()
+		slog.Info("aster_service_starting")
 		err = server.ListenAndServeTLS("", "")
 		if err == http.ErrServerClosed {
+			slog.Info("aster_service_stopped")
 			return nil
 		}
 		return err

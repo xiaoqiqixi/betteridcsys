@@ -347,7 +347,7 @@ function tabKey(event: KeyboardEvent) {
                 <RouterLink
                   v-for="operation in detail.data.value?.operations"
                   :key="operation.id"
-                  to="/operations"
+                  :to="`/operations/${encodeURIComponent(operation.id)}`"
                   class="compact-row"
                   ><div>
                     <strong>{{

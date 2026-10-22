@@ -97,7 +97,8 @@ func (w OperationWorker) storage(ctx context.Context, p NodeProfile) (StorageRPC
 	}
 	return NewNodeClient(ctx, p)
 }
-func (w OperationWorker) Dispatch(ctx context.Context, op string) (Operation, error) {
+func (w OperationWorker) Dispatch(ctx context.Context, op string) (out Operation, err error) {
+	defer func() { logWorkerOutcome(ctx, "aster_controller_operation", "dispatch", op, out.State, err) }()
 	o, p, e := w.binding(ctx, op)
 	if e != nil {
 		return o, e
@@ -150,7 +151,8 @@ func (w OperationWorker) Dispatch(ctx context.Context, op string) (Operation, er
 	}
 	return result, nil
 }
-func (w OperationWorker) Reconcile(ctx context.Context, op string) (Operation, error) {
+func (w OperationWorker) Reconcile(ctx context.Context, op string) (out Operation, err error) {
+	defer func() { logWorkerOutcome(ctx, "aster_controller_operation", "reconcile", op, out.State, err) }()
 	o, p, e := w.binding(ctx, op)
 	if e != nil {
 		return o, e
