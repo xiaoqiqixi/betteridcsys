@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { expect } from "@playwright/test";
+import { assertConfigurationWrites } from "./configuration-write-contract.mjs";
 import {
   accessiblePanel,
   apiData,
@@ -134,8 +135,7 @@ export async function probeProductConfiguration(browser, base, storage) {
       await closePanel(page);
       await expect(page.getByRole("dialog")).toHaveCount(0);
     }
-    assert.equal(state.writes.length, 4);
-    assert.ok(state.writes.every((entry) => entry.path === path));
+    assertConfigurationWrites(state.writes, path, 4);
     assertScreenSafe(screen);
     return 4;
   } finally {
