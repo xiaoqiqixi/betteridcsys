@@ -69,13 +69,68 @@ func (m *Manager) Handler() http.Handler {
 			respond(w, 403, map[string]any{"error": map[string]string{"code": "CONTROLLER_IDENTITY_REQUIRED"}})
 			return
 		}
+		if m.serveStorageTransport(w, r) {
+			return
+		}
 		switch {
+		case strings.HasPrefix(r.URL.Path, "/v1/instances/") && r.Method == "GET":
+			id := strings.TrimPrefix(r.URL.Path, "/v1/instances/")
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+			observed, err := m.ObserveInstance(ctx, id)
+			if err != nil {
+				status := 409
+				if errors.Is(err, ErrNotFound) {
+					status = 404
+				}
+				respond(w, status, errorBody("LIVE_INSTANCE_OBSERVATION_UNCONFIRMED"))
+				return
+			}
+			respond(w, 200, observed)
 		case r.URL.Path == "/healthz" && r.Method == "GET":
 			respond(w, 200, map[string]string{"status": "ok", "protocol": nodeproto.Protocol, "node_id": m.Config.NodeID})
 		case r.URL.Path == "/v1/capabilities" && r.Method == "GET":
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			defer cancel()
 			respond(w, 200, m.Capabilities(ctx))
+		case r.URL.Path == "/v1/storage-tasks" && r.Method == "POST":
+			media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || media != "application/json" {
+				respond(w, 415, errorBody("JSON_REQUIRED"))
+				return
+			}
+			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 65536))
+			if err != nil {
+				respond(w, 400, errorBody("INVALID_STORAGE_TASK"))
+				return
+			}
+			task, err := nodeproto.DecodeStorageTask(body)
+			if err != nil || task.NodeID != m.Config.NodeID || nodeproto.Digest(body) != r.Header.Get("X-Request-SHA256") {
+				respond(w, 400, errorBody("INVALID_STORAGE_TASK_OR_DIGEST"))
+				return
+			}
+			result, err := m.AcceptStorage(task, body)
+			if errors.Is(err, ErrConflict) {
+				respond(w, 409, errorBody("OPERATION_CONFLICT"))
+				return
+			}
+			if err != nil {
+				respond(w, 503, errorBody("OUTCOME_UNCERTAIN_QUERY_OPERATION"))
+				return
+			}
+			status := 200
+			if result.Status == "accepted" {
+				status = 202
+			}
+			respond(w, status, result)
+		case strings.HasPrefix(r.URL.Path, "/v1/storage-tasks/") && r.Method == "GET":
+			id := strings.TrimPrefix(r.URL.Path, "/v1/storage-tasks/")
+			result, ok := m.LookupStorage(id)
+			if !ok {
+				respond(w, 404, errorBody("NOT_FOUND"))
+				return
+			}
+			respond(w, 200, result)
 		case r.URL.Path == "/v1/tasks" && r.Method == "POST":
 			media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			if err != nil || media != "application/json" {

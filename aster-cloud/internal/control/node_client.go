@@ -76,9 +76,13 @@ func newNodeClientOwned(ctx context.Context, p NodeProfile, owner uint32) (*Node
 	return &NodeClient{p, net.JoinHostPort(addresses[0].String(), port), tlsConfig}, nil
 }
 func (c *NodeClient) call(ctx context.Context, method, path string, body []byte, sha string) ([]byte, error) {
+	raw, _, e := c.callStatus(ctx, method, path, body, sha)
+	return raw, e
+}
+func (c *NodeClient) callStatus(ctx context.Context, method, path string, body []byte, sha string) ([]byte, int, error) {
 	req, e := http.NewRequestWithContext(ctx, method, c.profile.Endpoint+path, bytes.NewReader(body))
 	if e != nil {
-		return nil, ErrUnavailable
+		return nil, 0, ErrUnavailable
 	}
 	req.GetBody = nil
 	req.Close = true
@@ -101,18 +105,18 @@ func (c *NodeClient) call(ctx context.Context, method, path string, body []byte,
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, e := client.Do(req)
 	if e != nil {
-		return nil, ErrUnavailable
+		return nil, 0, ErrUnavailable
 	}
 	defer response.Body.Close()
 	media, _, e := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if e != nil || media != "application/json" || response.Header.Get("Content-Encoding") != "" || response.StatusCode != 200 && response.StatusCode != 202 && response.StatusCode != 409 {
-		return nil, ErrUnavailable
+		return nil, 0, ErrUnavailable
 	}
 	raw, e := io.ReadAll(io.LimitReader(response.Body, 65537))
 	if e != nil || len(raw) > 65536 {
-		return nil, ErrUnavailable
+		return nil, 0, ErrUnavailable
 	}
-	return raw, nil
+	return raw, response.StatusCode, nil
 }
 func (c *NodeClient) Send(ctx context.Context, raw []byte, sha string) (nodeproto.NodeResult, error) {
 	task, e := nodeproto.DecodeTask(raw)

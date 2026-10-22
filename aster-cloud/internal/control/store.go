@@ -53,49 +53,55 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		return ErrUnavailable
 	}
 	defer conn.ExecContext(context.Background(), "DO RELEASE_LOCK('aster_controller_schema_v1')")
-	statements := strings.Split(migrations.SQL, ";")
-	if _, e = conn.ExecContext(ctx, strings.TrimSpace(statements[0])); e != nil {
+	// Existing prefixes are immutable. Apply only new numbered files; a partial
+	// InnoDB DDL migration is re-entered via idempotent CREATE, never fake-marked.
+	if _, e = conn.ExecContext(ctx, strings.TrimSpace(strings.Split(migrations.SQL, ";")[0])); e != nil {
 		return e
 	}
-	h := sha256.Sum256([]byte(migrations.SQL))
-	want := hex.EncodeToString(h[:])
-	var have string
-	e = conn.QueryRowContext(ctx, "SELECT sha256 FROM controller_schema WHERE version=1").Scan(&have)
-	if e == nil {
-		if have != want {
-			return ErrConflict
+	for _, migration := range migrations.All() {
+		h := sha256.Sum256([]byte(migration.SQL))
+		want := hex.EncodeToString(h[:])
+		var have string
+		e = conn.QueryRowContext(ctx, "SELECT sha256 FROM controller_schema WHERE version=?", migration.Version).Scan(&have)
+		if e == nil {
+			if have != want {
+				return ErrConflict
+			}
+			continue
 		}
-		return s.Check(ctx)
-	}
-	if !errors.Is(e, sql.ErrNoRows) {
-		return e
-	}
-	for _, statement := range statements[1:] {
-		if q := strings.TrimSpace(statement); q != "" {
-			if _, e = conn.ExecContext(ctx, q); e != nil {
-				return e
+		if !errors.Is(e, sql.ErrNoRows) {
+			return e
+		}
+		for _, statement := range strings.Split(migration.SQL, ";") {
+			if q := strings.TrimSpace(statement); q != "" {
+				if _, e = conn.ExecContext(ctx, q); e != nil {
+					return e
+				}
 			}
 		}
-	}
-	if _, e = conn.ExecContext(ctx, "INSERT INTO controller_schema(version,sha256,applied_at) VALUES(1,?,?)", want, time.Now().UTC()); e != nil {
-		return e
+		if _, e = conn.ExecContext(ctx, "INSERT INTO controller_schema(version,sha256,applied_at) VALUES(?,?,?)", migration.Version, want, time.Now().UTC()); e != nil {
+			return e
+		}
 	}
 	return s.Check(ctx)
 }
 func (s *SQLStore) Check(ctx context.Context) error {
-	h := sha256.Sum256([]byte(migrations.SQL))
-	var have string
+	all := migrations.All()
 	var n int
-	if e := s.DB.QueryRowContext(ctx, "SELECT sha256 FROM controller_schema WHERE version=1").Scan(&have); e != nil {
-		return e
-	}
-	if have != hex.EncodeToString(h[:]) {
+	if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_schema").Scan(&n); e != nil || n != len(all) {
 		return ErrConflict
 	}
-	if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_schema").Scan(&n); e != nil || n != 1 {
-		return ErrConflict
+	for _, m := range all {
+		h := sha256.Sum256([]byte(m.SQL))
+		var have string
+		if e := s.DB.QueryRowContext(ctx, "SELECT sha256 FROM controller_schema WHERE version=?", m.Version).Scan(&have); e != nil {
+			return e
+		}
+		if have != hex.EncodeToString(h[:]) {
+			return ErrConflict
+		}
 	}
-	for _, query := range []string{"SELECT id FROM controller_lock WHERE id=1", "SELECT id,profile_sha256,datacenter_id,maintenance,heartbeat_at,free_cpu,free_memory_mib,free_disk_gib,capabilities,updated_at FROM controller_nodes LIMIT 0", "SELECT " + jobColumns + " FROM controller_jobs LIMIT 0", "SELECT id,owner_ref,node_id,hostname,state,resources,created_at,updated_at FROM controller_instances LIMIT 0", "SELECT operation_id,node_id,cpu,memory_mib,disk_gib,released,created_at FROM controller_reservations LIMIT 0", "SELECT id,actor,action,target,created_at FROM controller_audit LIMIT 0"} {
+	for _, query := range []string{"SELECT id FROM controller_lock WHERE id=1", "SELECT id,profile_sha256,datacenter_id,maintenance,heartbeat_at,free_cpu,free_memory_mib,free_disk_gib,capabilities,updated_at FROM controller_nodes LIMIT 0", "SELECT " + jobColumns + " FROM controller_jobs LIMIT 0", "SELECT id,owner_ref,node_id,hostname,state,resources,created_at,updated_at FROM controller_instances LIMIT 0", "SELECT operation_id,node_id,cpu,memory_mib,disk_gib,released,created_at FROM controller_reservations LIMIT 0", "SELECT id,actor,action,target,created_at FROM controller_audit LIMIT 0", "SELECT id,state,request_json FROM controller_operations LIMIT 0", "SELECT id,instance_id FROM controller_artifacts LIMIT 0", "SELECT id,phase FROM controller_migrations LIMIT 0"} {
 		rows, e := s.DB.QueryContext(ctx, query)
 		if e != nil {
 			return e
@@ -155,6 +161,13 @@ func (s *SQLStore) Admit(ctx context.Context, r controllerapi.Request, candidate
 	}
 	if !errors.Is(e, ErrNotFound) {
 		return Job{}, false, e
+	}
+	var namespaceCount int
+	if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_operations WHERE id=?", r.OperationID).Scan(&namespaceCount); e != nil {
+		return Job{}, false, e
+	}
+	if namespaceCount != 0 {
+		return Job{}, false, ErrConflict
 	}
 	var other string
 	e = tx.QueryRowContext(ctx, "SELECT operation_id FROM controller_jobs WHERE order_id=?", r.OrderID).Scan(&other)
@@ -255,6 +268,18 @@ func (s *SQLStore) Claim(ctx context.Context, op, profile string, now time.Time,
 	// terminal; unknown future states must never accidentally free the node.
 	var occupied int
 	if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_jobs WHERE node_id=? AND operation_id<>? AND CAST(state AS BINARY) NOT IN ('accepted','succeeded','rejected')", j.NodeID, op).Scan(&occupied); e != nil {
+		return Job{}, e
+	}
+	if occupied != 0 {
+		return Job{}, ErrState
+	}
+	if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_operations WHERE node_id=? AND CAST(state AS BINARY) NOT IN ('accepted','succeeded','rejected')", j.NodeID).Scan(&occupied); e != nil {
+		return Job{}, e
+	}
+	if occupied != 0 {
+		return Job{}, ErrState
+	}
+	if e = transferOccupancy(ctx, tx, j.NodeID).Scan(&occupied); e != nil {
 		return Job{}, e
 	}
 	if occupied != 0 {

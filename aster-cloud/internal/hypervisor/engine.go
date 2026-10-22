@@ -67,6 +67,7 @@ type Manager struct {
 	workers         sync.WaitGroup
 	bridgeReady     func(string) error
 	capacityRead    func(string) (nodeproto.Capacity, error)
+	storageFS       func(string) error
 	beforeRelease   func() // deterministic test seam; production nil
 }
 
@@ -99,6 +100,9 @@ func (m *Manager) Accept(task nodeproto.NodeTask, raw []byte) (nodeproto.NodeRes
 		m.logOutcome(task, r, code, e == nil)
 		return r, e
 	}
+	if m.Ledger.HasPendingInstance(task.InstanceID, task.OperationID) {
+		return reject("UNRESOLVED_INSTANCE_OPERATION")
+	}
 	if m.stopping || m.Config.Maintenance {
 		return reject("MAINTENANCE")
 	}
@@ -120,7 +124,7 @@ func (m *Manager) Accept(task nodeproto.NodeTask, raw []byte) (nodeproto.NodeRes
 		if !ok {
 			return reject("INSTANCE_NOT_FOUND")
 		}
-		if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" {
+		if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
 			return reject("OWNERSHIP_OR_STATE_REJECTED")
 		}
 		if task.Action == "delete" && (!m.Config.AllowDelete || task.ConfirmInstanceID != instance.ID) {
@@ -247,7 +251,7 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 		return finish("uncertain", "RESERVATION_MISSING", nil)
 	}
 	instance := *prepared
-	if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" {
+	if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
 		return finish("rejected", "OWNERSHIP_OR_STATE_REJECTED", nil)
 	}
 	if task.Action == "delete" && (!m.Config.AllowDelete || task.ConfirmInstanceID != instance.ID) {
@@ -302,6 +306,14 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 	default:
 		return finish("rejected", "UNSUPPORTED_ACTION", nil)
 	}
+	var recoveryPaths []string
+	if task.Action == "delete" {
+		var preflightErr error
+		recoveryPaths, preflightErr = m.deletePreflight(ctx, instance)
+		if preflightErr != nil {
+			return finish("rejected", "DELETE_MANAGED_FILES_UNCONFIRMED", &instance)
+		}
+	}
 	if _, e = m.virsh(ctx, command, instance.Domain); e != nil {
 		instance.State = "uncertain"
 		return finish("uncertain", "POWER_OUTCOME_UNCERTAIN", &instance)
@@ -312,7 +324,9 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 	}
 	if task.Action == "delete" {
 		// Destructive disk removal only after verified ownership, explicit confirmation and undefine.
-		for _, path := range []string{instance.Disk, instance.Seed, filepath.Join(instance.Directory, "user-data"), filepath.Join(instance.Directory, "meta-data"), filepath.Join(instance.Directory, "network-config"), filepath.Join(instance.Directory, "domain.xml")} {
+		paths := []string{instance.Disk, instance.Seed, filepath.Join(instance.Directory, "user-data"), filepath.Join(instance.Directory, "meta-data"), filepath.Join(instance.Directory, "network-config"), filepath.Join(instance.Directory, "domain.xml")}
+		paths = append(paths, recoveryPaths...)
+		for _, path := range paths {
 			if path == "" {
 				continue
 			}
@@ -513,6 +527,9 @@ func (m *Manager) create(ctx context.Context, i Instance) error {
 	}
 	xmlPath := filepath.Join(i.Directory, "domain.xml")
 	if err = writeExclusive(xmlPath, definition); err != nil {
+		return err
+	}
+	if err = m.requireDomainAbsent(ctx, i.Domain); err != nil {
 		return err
 	}
 	if _, err = m.virsh(ctx, "define", xmlPath); err != nil {
@@ -844,4 +861,39 @@ func (m *Manager) logOutcome(task nodeproto.NodeTask, result nodeproto.NodeResul
 		level = slog.LevelWarn
 	}
 	slog.Log(context.Background(), level, "aster_node_operation", "node_id", m.Config.NodeID, "operation_id", task.OperationID, "instance_id", task.InstanceID, "action", task.Action, "status", result.Status, "request_sha256", result.RequestSHA256, "code", code, "journal_write_confirmed", durable)
+}
+
+func (m *Manager) deletePreflight(ctx context.Context, i Instance) ([]string, error) {
+	allowed := map[string]bool{"system.qcow2": true, "domain.xml": true}
+	if i.Seed != "" {
+		for _, name := range []string{"seed.iso", "user-data", "meta-data", "network-config"} {
+			allowed[name] = true
+		}
+	}
+	paths := []string{}
+	for _, r := range m.Ledger.Recoveries(i.ID) {
+		if !strings.HasPrefix(r.PreviousDiskName, "system.qcow2.before-") || !nodeproto.ValidID(strings.TrimPrefix(r.PreviousDiskName, "system.qcow2.before-")) {
+			return nil, ErrOwnership
+		}
+		path := filepath.Join(i.Directory, r.PreviousDiskName)
+		hash, size, e := m.hashDisk(ctx, path, (int64(i.Resources.SystemDiskGiB)+1)<<30)
+		if e != nil || hash != r.PreviousDiskSHA256 || size != r.PreviousDiskBytes {
+			return nil, ErrOwnership
+		}
+		allowed[r.PreviousDiskName] = true
+		paths = append(paths, path)
+	}
+	entries, e := os.ReadDir(i.Directory)
+	if e != nil {
+		return nil, e
+	}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] || entry.IsDir() {
+			return nil, ErrOwnership
+		}
+		if e = NoSymlinkPath(filepath.Join(i.Directory, entry.Name())); e != nil {
+			return nil, e
+		}
+	}
+	return paths, nil
 }

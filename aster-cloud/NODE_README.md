@@ -184,3 +184,186 @@ packet isolation/anti-spoofing, real reboot lifecycle, delete/recovery failure
 injection, capacity under load, systemd/TLS deployment, host backup/restore,
 upgrade/rollback or a real customer provisioning/billing activation end-to-end.
 No production release or production-grade KVM completion is asserted.
+
+## Offline storage operations and cold migration (new development implementation)
+
+The independent wire protocol is `aster.node.storage/1`; the existing
+`aster.node/1` power/create contract and strict decoder are unchanged. The new
+mTLS-only endpoints are `POST /v1/storage-tasks` and
+`GET /v1/storage-tasks/<operation_id>`. Requests contain only typed IDs, exact
+manifest/fence bindings and explicit destructive confirmations, never paths,
+URLs, shell fragments, imported XML or a `source_fenced=true` assertion. Exact
+raw-body SHA/idempotency, durable pre-execution claim, shared single worker slot,
+terminal-visibility barrier, unknown-result retention and no automatic replays
+apply across **both** protocols. File transport shares that admission slot and
+releases it before exposing its completed receipt.
+
+Implemented actions:
+
+- `snapshot_create/list/restore/delete`: independent full qcow2 copies, **not**
+  internal live QEMU snapshots, VM RAM snapshots or incremental snapshots.
+- `backup_create/verify/restore/delete` and `backup_list`: offline full-copy
+  backups, bound to the original node/instance/owner/hostname/resources/base
+  image approval. Restore targets the **same existing, owned, shut-off VM**;
+  creating a replacement VM after deleting its journal/domain is not implemented.
+- `migrate_prepare/import/activate`: explicit cold migration stages described
+  below; no hot migration, shared storage or running-guest disk copying.
+
+All disk-affecting operations freshly check complete owned XML and libvirt
+`shut off` before any qemu-img access. Snapshots/backups flatten the existing
+approved system-disk chain using qemu-img convert. The manifest records SHA256,
+physical byte length, virtual size, source identity/resources, approved image
+SHA and timestamp, signed by the node TLS signing key. Verification requires
+canonical complete metadata, expected private-journal manifest digest, exact
+bytes/size, independent qcow2 geometry and qemu-img check. Missing metadata,
+symlink/hardlink paths, unexpected backing/data files, owner mismatch and corrupt
+content are rejected. Before invoking qemu-img on storage/inbox data, a bounded
+parser of the [official qcow2 header](https://www.qemu.org/docs/master/interop/qcow2.html)
+refuses backing references (except the exact approved source base), external
+file/encryption/bitmap extensions and incompatible/dirty/corrupt features.
+**qemu-img exit 0 alone is never a recovery claim.** Guest boot/app-data recovery
+still needs real-VM acceptance.
+
+Restore records its intent and previous-disk SHA/size in the private journal,
+copies/verifies/fsyncs a replacement, durably hardlinks the previous inode, then
+atomically renames the new disk onto the active name. There is no missing-active-
+path window. Previous copies are retained and budgeted; failure at either side of
+the swap is uncertain, retains recovery information, never auto-starts a VM and
+never automatically deletes/retries/rolls back. Registered recovery copies are
+verified before an explicitly permitted later VM deletion; unknown directory
+contents cause rejection **before** undefine or disk removal. Full-copy artifact,
+transfer and preserved-disk budgets are separate from financial disk quantities.
+No retention scheduler, pruning, at-rest encryption or external backup storage is
+claimed. Operators must provision protected storage, monitor usage and preserve
+approved base images required by old retained overlays.
+
+### Safe journal upgrade / no silent downgrade
+
+The new node reads existing schema 1 journals. First durable storage or inbox use
+upgrades to **schema 2**, fsynced before further effects. Old schema-1-only node
+binaries refuse schema 2 instead of ignoring permanent source fences. Do not
+roll an active storage node back to an old binary, delete its journal or edit the
+schema number: that can discard fencing/ownership and permit double activation.
+Preserve the entire private state alongside definitions, disks and immutable
+bases. Downgrading or restoring an older state requires an independently reviewed
+host-fencing/recovery plan; it is not an automatic supported rollback.
+
+### Cold migration sequence and trust boundary
+
+1. Shut the source VM off through its original power operation and verify outcome.
+   Prepare requires owned inactive XML, successful read-only autostart inventory
+   proving the VM is **not** set to autostart, and configured storage/migration
+   approvals. The node durably records a permanent source fence/token **before**
+   exporting. Its normal power/create/storage APIs cannot clear that fence or
+   restart the source. A failed/interrupted export keeps the source fenced.
+2. Prepare writes a self-contained flat disk and signed target-bound manifest.
+   The signature covers source operation, instance/owner, full specifications,
+   disk/image hashes, target node and fence token. No external XML is used.
+3. Deliver to a target's protected inbox using one of the reviewed modes below.
+   Merely copying/uploading data never defines or starts any VM.
+4. Target independently verifies source certificate pin/signature, target/owner/
+   instance/fence/manifest bindings, protected files and target root approval.
+   Import reserves target CPU/RAM/disk/IP under its own approved profile, copies
+   and verifies the disk, generates a target-local NoCloud seed, reconstructs XML
+   from **target** configuration, defines the owned domain inactive and records
+   the imported instance/target binding in the journal. Physical placement fields
+   (node/DC/group/storage) become target-local; source history stays in the signed
+   manifest. No finance amount/currency/historical snapshot is rewritten.
+5. Activate is separate, confirmed and requires the same proof/approval, imported
+   binding, fresh owned off state, exact disk hash/geometry and target network
+   prerequisites. Only then may it start. An unknown activation blocks further
+   starts and is not automatically retried. Source resources remain retained and
+   fenced; target activation does not authorize deleting source disks.
+
+Fencing here controls **this node's APIs** and checks source autostart. It is not
+hardware power fencing against root, another orchestrator, journal rollback or
+an operator manually running virsh. Dedicated operator ownership of these domain
+names and storage is required. Root must not un-fence/start the source outside
+this protocol. Real crash/reboot/dual-start prevention remains an acceptance item;
+no distributed hardware-fencing certification is asserted.
+
+### Protected offline handoff / root CLI approval (default)
+
+`storage.enabled` and `storage.allow_migration` are explicit root configuration.
+Artifacts and inbox roots must be separate private root-owned `0700` directories;
+files are private `0600`. The source node TLS **leaf DER SHA256** must be mapped
+under the source node ID in the target's `storage.source_certificate_pins`.
+Choose unique node signing identities and preserve/plan certificate rotation.
+
+After verifying source off state, permanent fence, no autostart and exclusive
+operator ownership, an operator securely delivers only `manifest.json` and
+`disk.qcow2` to `<approved-inbox>/<artifact_id>/` (a private `0700` directory).
+Never copy or execute foreign domain XML. Stop the target service/exclusively lock
+its journal and explicitly attest the independently inspected source fence:
+
+```sh
+/usr/local/sbin/aster-node --config /etc/aster-node/node.json \
+  --approve-storage-import 0123456789abcdef0123456789abcdef \
+  --reviewed-source-fence 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+The root CLI validates the source proof and actual flat disk, signs a protected
+**target-bound** `approval.json`, fsyncs it, and does **not** define/start a VM.
+Empty/malformed/partial approval flags are rejected before configuration or I/O;
+approval, doctor and reconciliation modes are mutually exclusive. The token is a
+binding, not a substitute for independent source-fence verification.
+
+### Opt-in pinned-mTLS controller relay (no arbitrary network endpoint)
+
+The same fixed approved controller TLS certificate is required for every route:
+
+- Source `GET /v1/storage-artifacts/<id>/manifest|disk`: only available migration
+  exports with matching persistent source fence and fresh owned off/no-autostart
+  state. Streams exact `Content-Length`, `X-Content-SHA256` for raw file bytes and
+  `X-Manifest-SHA256` for canonical manifest identity.
+- Target `PUT /v1/storage-inbox/<id>/manifest|disk`: manifest first; requires exact
+  Content-Length, `X-Content-SHA256` and a 32-hex `X-Transfer-ID` permanently bound
+  to the artifact. No chunked/unknown-size uploads, URLs, user paths or overwrite
+  of other bytes. Source pins/target identity/image/file budgets are checked.
+  Private O_EXCL partial files are hashed/fsynced, disks independently checked,
+  and final names committed atomically without clobbering existing files.
+- Target `GET /v1/storage-inbox/<id>/manifest|disk` with the same transfer header:
+  returns a typed file receipt, not disk bytes. Only a genuinely absent file
+  record is 404; a receiving/partial/uncertain file remains a 200 uncertain receipt.
+  Wrong transfer binding is 409, never absence. Same ID/digest cannot silently
+  replace partial or different content. A lost response is followed only by GET
+  verification; a complete committed exact file can be recognized, while partial
+  data requires explicit operator inspection, not automatic upload retries.
+- Target `POST /v1/storage-inbox/<id>/approve`: disabled by default. Only root's
+  `storage.allow_controller_inbox_approval=true`, migration enablement and approved
+  source pins permit this mode. Typed body binds transfer/artifact/source op/
+  instance/owner/target/manifest/fence. Target rechecks both full files and source
+  proof, persists an approval-in-progress marker before signing, and issues a
+  distinct controller-attested target approval. **No VM import/start occurs.**
+- Target `GET /v1/storage-inbox/<id>/approval`: read-only proof/receipt query.
+  Missing and never-requested approval is 404; an approval-in-progress marker or
+  invalid/incomplete approval is uncertain, never disguised as absence. GET
+  cannot sign or create an approval. Success reports file=approval/status=approved
+  and the verified disk SHA/length bindings.
+
+The fixed controller's relay must use its approved source/target endpoints and
+certificates, no redirects/proxy/arbitrary URLs, and the dedicated bounded stream
+client rather than a 10-second metadata RPC timeout. Transfers have bounded
+20-minute stream deadlines and size budgets. Explicit controller approval is a
+root trust-policy opt-in, not a web user's `source_fenced` assertion. Default mode
+continues requiring the independently reviewed root CLI handoff.
+
+### Fresh instance observation
+
+`GET /v1/instances/<32hex-id>` is pinned-mTLS read-only and returns protocol
+`aster.node.instance/1`, node/instance/owner/hostname, fresh libvirt state,
+verified configured IPv4/MAC, observed UTC time, source_fenced and target_pending.
+It holds admission against new writers, checks complete owned XML and fresh
+libvirt state, and refuses busy/reserved/uncertain/unresolved instances rather
+than presenting cached state as current. No paths, seeds, private keys or fence
+tokens are returned. Observation never resolves a pending operation or changes
+billing/financial status.
+
+**Storage/relay/migration are implemented and fake/filesystem/TLS regression
+verified, not real KVM acceptance.** Required future tests include actual flat
+image validity, VM/application recovery after restore, disk ownership/AppArmor,
+NoCloud and target IP/network behavior, source host reboot/autostart/fencing,
+mid-copy disk-full/fsync/crash cases, large real mTLS transfer interruption,
+certificate rotation, cold migration activation/dual-start checks and schema-2
+backup/upgrade/recovery. Do not claim a copied file or green unit test proves a
+recoverable production VM.

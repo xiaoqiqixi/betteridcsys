@@ -2,6 +2,7 @@ package main
 
 import (
 	"aster/cloud/internal/control"
+	"aster/cloud/internal/identity"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,6 +36,11 @@ func run(args []string) error {
 	operation := flags.String("operation", "", "exact operation ID")
 	node := flags.String("node", "", "approved node ID")
 	on := flags.Bool("on", true, "maintenance enabled")
+	consoleOrigin := flags.String("console-origin", "", "fixed HTTPS console origin (explicitly enables staff sessions)")
+	uiDirectory := flags.String("ui-dir", "", "reviewed root-owned built console directory")
+	email := flags.String("email", "", "bootstrap administrator email")
+	name := flags.String("name", "Administrator", "bootstrap administrator name")
+	passwordStdin := flags.Bool("password-stdin", false, "read bootstrap password from stdin, never arguments")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
 		return control.ErrInput
 	}
@@ -66,6 +73,45 @@ func run(args []string) error {
 		return err
 	}
 	switch command {
+	case "bootstrap-admin":
+		if !*passwordStdin || *consoleOrigin == "" || *email == "" {
+			return control.ErrInput
+		}
+		auth, e := identity.New(store.DB, identity.Config{Origin: *consoleOrigin})
+		if e != nil {
+			return e
+		}
+		password, e := io.ReadAll(io.LimitReader(os.Stdin, 1026))
+		if e != nil || len(password) > 1025 {
+			return control.ErrInput
+		}
+		password = []byte(strings.TrimSuffix(strings.TrimSuffix(string(password), "\n"), "\r"))
+		defer clear(password)
+		user, e := auth.Bootstrap(ctx, *email, *name, password)
+		if e != nil {
+			return e
+		}
+		return write(map[string]any{"user": user})
+	case "operation-dispatch", "operation-reconcile":
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		worker := control.OperationWorker{Store: store, Config: config}
+		action := strings.TrimPrefix(command, "operation-")
+		if err = store.AuditOperationRequest(ctx, "host-operator", *operation, action, time.Now().UTC()); err != nil {
+			return err
+		}
+		var op control.Operation
+		if command == "operation-dispatch" {
+			op, err = worker.Dispatch(ctx, *operation)
+		} else {
+			op, err = worker.Reconcile(ctx, *operation)
+		}
+		if op.ID != "" {
+			if e := write(map[string]any{"operation": op}); e != nil {
+				return e
+			}
+		}
+		return err
 	case "check":
 		return write(map[string]string{"status": "ready", "controller_id": config.ControllerID})
 	case "register-nodes":
@@ -122,7 +168,30 @@ func run(args []string) error {
 			return control.ErrUnavailable
 		}
 		app := control.App{Store: store, Config: config, Secrets: secrets}
-		server := &http.Server{Addr: config.Listen, Handler: app.Handler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 12 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+		var handler http.Handler = app.Handler()
+		if *consoleOrigin != "" {
+			auth, e := identity.New(store.DB, identity.Config{Origin: *consoleOrigin})
+			if e != nil {
+				return e
+			}
+			mux := http.NewServeMux()
+			mux.Handle("/v1/", app.Handler())
+			worker := control.OperationWorker{Store: store, Config: config}
+			runner := control.NewOperationRunner(worker)
+			defer runner.Close()
+			mux.Handle("/console/v1/", (control.Console{Store: store, Config: config, Identity: auth, Worker: &worker, Runner: runner}).Handler())
+			if *uiDirectory != "" {
+				web, e := control.Web(*uiDirectory)
+				if e != nil {
+					return e
+				}
+				mux.Handle("/", web)
+			}
+			handler = mux
+		} else if *uiDirectory != "" {
+			return control.ErrInput
+		}
+		server := &http.Server{Addr: config.Listen, Handler: handler, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 12 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 		sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer stop()
 		go func() {

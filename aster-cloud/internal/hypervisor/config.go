@@ -43,7 +43,19 @@ type Network struct {
 	FilterSHA256                string   `json:"filter_sha256"`
 	SSHAuthorizedKeys           []string `json:"ssh_authorized_keys"`
 }
+type StorageConfig struct {
+	Enabled                      bool              `json:"enabled"`
+	Directory                    string            `json:"directory"`
+	InboxDirectory               string            `json:"inbox_directory"`
+	MaxArtifactBytes             int64             `json:"max_artifact_bytes"`
+	MaxTotalBytes                int64             `json:"max_total_bytes"`
+	AllowControllerInboxApproval bool              `json:"allow_controller_inbox_approval"`
+	AllowMigration               bool              `json:"allow_migration"`
+	SourceCertificatePins        map[string]string `json:"source_certificate_pins"`
+}
+
 type Config struct {
+	Storage                             StorageConfig    `json:"storage"`
 	NodeID                              string           `json:"node_id"`
 	DatacenterID                        string           `json:"datacenter_id"`
 	NodeGroupID                         string           `json:"node_group_id"`
@@ -176,7 +188,10 @@ func (c Config) Validate() error {
 	if !c.AllowUnmeteredDefault {
 		return errors.New("zero-bandwidth/transfer default requires explicit operator approval")
 	}
-	return c.Network.Validate()
+	if err := c.Network.Validate(); err != nil {
+		return err
+	}
+	return c.validateStorage()
 }
 func (n Network) Validate() error {
 	if !n.Enabled {
@@ -258,4 +273,34 @@ func readApproved(path string, private bool, max int64) ([]byte, error) {
 		return nil, errors.New("approved file exceeds limit")
 	}
 	return raw, nil
+}
+
+func (c Config) validateStorage() error {
+	st := c.Storage
+	if st.AllowControllerInboxApproval && (!st.Enabled || !st.AllowMigration || len(st.SourceCertificatePins) == 0) {
+		return errors.New("controller inbox approval requires explicit migration/source approvals")
+	}
+	if !st.Enabled {
+		return nil
+	}
+	if st.MaxArtifactBytes < 1 || st.MaxArtifactBytes > 1<<44 || st.MaxTotalBytes < st.MaxArtifactBytes || st.MaxTotalBytes > 1<<48 {
+		return errors.New("explicit bounded artifact budgets required")
+	}
+	paths := []string{st.Directory, st.InboxDirectory, c.StateDirectory, c.StorageDirectory}
+	for n, p := range paths {
+		if err := NoSymlinkPath(p); err != nil {
+			return err
+		}
+		for k, q := range paths {
+			if k != n && (p == q || strings.HasPrefix(p, q+"/")) {
+				return errors.New("storage/state/inbox/artifact roots must be separate")
+			}
+		}
+	}
+	for node, pin := range st.SourceCertificatePins {
+		if !nodeproto.ValidNodeID(node) || node == c.NodeID || !hashString(pin) {
+			return errors.New("invalid migration source certificate approval")
+		}
+	}
+	return nil
 }

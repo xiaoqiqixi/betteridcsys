@@ -43,6 +43,10 @@ func (c *claimConn) QueryContext(_ context.Context, q string, args []driver.Name
 	switch {
 	case strings.Contains(q, "FROM controller_lock"):
 		return &claimRows{columns: []string{"id"}, values: []driver.Value{int64(1)}}, nil
+	case strings.Contains(q, "SELECT COUNT(*) FROM controller_operations o JOIN controller_migrations"):
+		return &claimRows{columns: []string{"count"}, values: []driver.Value{int64(0)}}, nil
+	case strings.Contains(q, "SELECT COUNT(*) FROM controller_operations"):
+		return &claimRows{columns: []string{"count"}, values: []driver.Value{int64(0)}}, nil
 	case strings.Contains(q, "SELECT COUNT(*) FROM controller_jobs"):
 		if !strings.Contains(q, "node_id=? AND operation_id<>? AND CAST(state AS BINARY) NOT IN ('accepted','succeeded','rejected')") || len(args) != 2 || args[0].Value != c.s.job.NodeID || args[1].Value != c.s.job.OperationID {
 			return nil, ErrInput

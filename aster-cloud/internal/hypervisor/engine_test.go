@@ -18,15 +18,16 @@ import (
 )
 
 type fakeRunner struct {
-	mu       sync.Mutex
-	commands []string
-	domains  map[string][]byte
-	states   map[string]string
-	filter   []byte
-	fail     string
-	info     string
-	before   func(string)
-	block    <-chan struct{}
+	mu        sync.Mutex
+	commands  []string
+	domains   map[string][]byte
+	states    map[string]string
+	autostart map[string]bool
+	filter    []byte
+	fail      string
+	info      string
+	before    func(string)
+	block     <-chan struct{}
 }
 
 func (f *fakeRunner) Run(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -64,6 +65,16 @@ func (f *fakeRunner) Run(ctx context.Context, binary string, args ...string) ([]
 			return []byte(`{"format":"qcow2","virtual-size":1073741824}`), nil
 		}
 		if verb == "create" {
+			return nil, os.WriteFile(args[len(args)-2], fakeQcowBytes(), 0600)
+		}
+		if verb == "convert" {
+			raw, e := os.ReadFile(args[len(args)-2])
+			if e != nil {
+				return nil, e
+			}
+			return nil, os.WriteFile(args[len(args)-1], raw, 0600)
+		}
+		if verb == "check" {
 			return nil, nil
 		}
 	}
@@ -78,6 +89,9 @@ func (f *fakeRunner) Run(ctx context.Context, binary string, args ...string) ([]
 	case "list":
 		var names []string
 		for name := range f.domains {
+			if strings.Contains(cmd, "--autostart") && !f.autostart[name] {
+				continue
+			}
 			names = append(names, name)
 		}
 		return []byte(strings.Join(names, "\n")), nil
@@ -605,4 +619,15 @@ func TestAlreadyDesiredLiveStateCorrectsStaleLedgerWithoutPowerCommand(t *testin
 			}
 		})
 	}
+}
+
+func fakeQcowBytes() []byte {
+	header := make([]byte, 512)
+	copy(header, "QFI\xfb")
+	binary.BigEndian.PutUint32(header[4:8], 3)
+	binary.BigEndian.PutUint32(header[20:24], 16)
+	binary.BigEndian.PutUint64(header[24:32], 1<<30)
+	binary.BigEndian.PutUint32(header[96:100], 4)
+	binary.BigEndian.PutUint32(header[100:104], 104)
+	return append(header, []byte("synthetic fake-runner payload; not a real valid qcow2")...)
 }

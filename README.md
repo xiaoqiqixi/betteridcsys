@@ -14,7 +14,7 @@
 
 主控与宿主机被控源码位于 [`aster-cloud/`](aster-cloud/README.md)，与财务使用独立进程、数据库和权限。被控通过本机 libvirt/QEMU/KVM 管理实际虚拟机，不是装在客户虚拟机里的普通 Agent；目标为 Ubuntu22.04 及以上的 amd64 宿主机。只借鉴行业成品的分层思路，不对接 IDCsmart API。
 
-当前是持久任务、安全派发和 KVM 执行路径的开发垂直链，不是完整云平台，也不包含在财务 v0.5.9 六资产中。真实宿主、网络及恢复验收由用户明确延后，不能从模拟执行器、XML校验或程序可编译推断已开通。当前功能、限制和后续门槛见[开发矩阵](aster-cloud/docs/ARCHITECTURE.md)与[独立验证记录](aster-cloud/docs/VALIDATION.md)。
+当前包含独立 Vue 管理台、staff RBAC、实例动作、停止态快照/备份和四阶段冷迁移的开发实现；不是已完成全部生产验收的云平台，也不包含在财务 v0.5.9 六资产中。真实宿主、网络及恢复验收由用户明确延后，不能从模拟执行器、XML校验或程序可编译推断已开通。当前功能、限制和后续门槛见[开发矩阵](aster-cloud/docs/ARCHITECTURE.md)与[独立验证记录](aster-cloud/docs/VALIDATION.md)。
 
 ## 安装与目录
 
