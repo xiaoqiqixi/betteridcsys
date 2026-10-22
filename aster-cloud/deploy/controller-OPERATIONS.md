@@ -1,6 +1,6 @@
-# 独立主控：首条安全垂直链（非完整云平台）
+# 独立主控：原生部署与运行（开发版）
 
-此程序与财务使用独立进程、独立数据库/账号、独立权限和审计。它只接收财务的不可变开通请求，不读取金额、不签收付款、不修改财务表，也不把 accepted 画成已开机。当前外部效果仅为显式主机操作员调用 `dispatch`；HTTP接单不会同步创建VM。节点必须另行root审批mTLS策略、image/storage/network和静态IP资源。
+此程序与财务使用独立进程、独立数据库/账号、独立权限和审计。它只接收财务的不可变开通请求，不读取金额、不签收付款、不修改财务表，也不把 accepted 画成已开机。资源执行必须由主机操作员或具备对应权限的staff明确派发；HTTP接纳意图不会自动创建VM。节点必须另行root审批mTLS策略、image/storage/network和静态IP资源。
 
 ## 初始化与启动
 
@@ -36,7 +36,7 @@ preset字段：id、node_id、resources（公开controllerapi.Resources全部字
 
 ## HTTP合同
 
-所有响应no-store。服务直连TLS，Bearer认证；不接受浏览器Origin/CORS，不使用Cookie。三个token须不同：billing只可访问财务桥，admin-read/admin-write仅可只读管理投影。**本期没有网页管理写API、用户登录或多用户RBAC**；所有配置/心跳/维护/派发仍为root CLI。
+所有响应no-store。服务直连TLS，Bearer认证；不接受浏览器Origin/CORS，不使用Cookie。三个token须不同：billing只可访问财务桥，admin-read/admin-write仅可只读管理投影。此段只描述机器API；另有显式启用的`/console/v1`管理会话、CSRF与staff RBAC，见后文。节点endpoint/证书/preset信任根仍由root私有配置审批，网页不能任意上传或改写。
 
 - POST `/v1/provisioning`：公开controllerapi.Request，带`Idempotency-Key`=operation_id与`X-Aster-Request-SHA256`=canonical JSON digest。新成功接纳202；完全相同重放409，返回已持久状态；不相同operation/order绑定409 `IDEMPOTENCY_CONFLICT`。全部成功/已绑定业务拒绝均直接controllerapi.Result精确6键，**无data信封**。
 - GET `/v1/provisioning/{operation_id}`：相同billing token、Idempotency-Key与digest header，200当前绑定Result；未知404，不同digest409。
@@ -64,7 +64,7 @@ aster-controller reconcile -config /etc/aster-controller/config.json -operation 
 
 本机单元和真实TLS/mTLS测试可用`go test -race ./internal/control`。真实MySQL测试优先`ASTER_CLOUD_TEST_DSN`且库名须含`_test`；缺env明确skip。CI仅在`ASTER_MYSQL_TEST_DSN`严格指向隔离`aster_ci_test`时创建随机独立`aster_cloud_test_<hex>`并最终drop；不改生产OpenDSN限制，不读取财务表。日志不可打印DSN/token内容。
 
-必须分别报告真实MySQL/目标Linux测试、真实KVM/静态IP/SSH、systemd安装/证书/备份恢复。模拟node RPC、contract-shaped TLS server和SQL状态测试不等于真实VM创建。本期没有管理UI、多用户RBAC/MFA、客户操作权限、VPC、配额/告警、跨节点迁移、快照/备份、失败补偿自动重派、完整审计留存/不可篡改日志、持续健康监控或完整集群调度。
+必须分别报告真实MySQL/目标Linux测试、真实KVM/静态IP/SSH、systemd安装/证书/备份恢复。模拟node RPC、contract-shaped TLS server和SQL状态测试不等于真实VM创建。本期已包含管理UI、staff RBAC、停止态快照/备份、四阶段冷迁移和查询型审计；仍没有MFA/租户SSO、VPC、完整配额告警、热迁移、自动重派、不可篡改外部归档或完整集群调度。
 
 
 ## 独立管理台与 staff 权限（开发版）
@@ -81,7 +81,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs
 
 将 binary 与 `frontend/dist/` 分别审核安装到 `/opt/aster-cloud/bin/`、`/opt/aster-cloud/ui/`，均 root 所有且不可被组/其他用户写入。不公开源码、配置、日志或 secrets 目录。API 保持自身 TLS；当前版本不信任转发 Header 来绕过 Origin / Host / TLS，反向代理必须保留公开 Host，后端证书应由受信链验证。
 
-先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。
+先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表，004添加审计精确查询索引；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。
+
+004确认后，只认识前三版迁移的旧binary会拒绝该schema，不能仅替换binary回退。升级须停写并备份独立主控库；恢复还须保留和核对节点journal、制品及升级后已发生的资源操作，禁止删除迁移记录或自动重派来“修复”版本不匹配。具体未验收范围见 [增量验收](../docs/OPERATIONS_VALIDATION.md)。
 
 首个管理员仅在空用户库由 root CLI 创建；不要把密码放进 argv、unit、shell 历史、截图或日志：
 
@@ -120,4 +122,8 @@ TimeoutStopSec=45
 
 ### 尚未验收
 
-管理台浏览器视觉/焦点记录、真实VM/libvirt、宿主网络隔离、跨物理机磁盘恢复/迁移、原生systemd/Nginx/TLS安装和整机升级回滚均需独立验收。单测、实库、编译与流式mTLS fault测试均不能替代这些。没有用户KVM宿主前不自动安装虚拟化包，不动现有Ubuntu22财务站。
+管理台已有范围受限的真实HTTPS/实库浏览器记录；新页面、多浏览器和故障注入仍须另验，不沿用旧截图。真实VM/libvirt、宿主网络隔离、跨物理机磁盘恢复/迁移、原生systemd/Nginx/TLS安装和整机升级回滚均需独立验收。单测、实库、编译与流式mTLS fault测试均不能替代这些。没有用户KVM宿主前不自动安装虚拟化包，不动现有Ubuntu22财务站。
+
+### 运行事件与审计定位
+
+主控/被控stderr统一JSON白名单事件，独立CLI stdout保持原合同。节点未知结果或journal未确认使用WARN，绝不按日志成功自动重发。管理台支持按原任务ID查看独立详情、明确派发/核对及审计精确筛选；查询不会推进资源状态。限流、可选独立journald保留模板与恢复journal边界见 [LOGGING.md](../docs/LOGGING.md)。本轮未安装或启用这些unit模板，没有生产生命周期安装/升级/备份恢复工具；不能把手工部署说明称为已验收安装器。

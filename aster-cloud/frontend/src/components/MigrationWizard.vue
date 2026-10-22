@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue";
+import { RouterLink } from "vue-router";
 import { useConsole } from "../context";
 import { useQuery } from "../composables/query";
 import { useMutation } from "../composables/mutation";
@@ -28,6 +29,7 @@ const mutation = useMutation(),
   target = shallowRef(""),
   confirmation = shallowRef(""),
   accepted = shallowRef(false),
+  acceptedID = shallowRef(""),
   phaseAtOpen = shallowRef("");
 const existing = computed(() =>
   props.migrations.find((m) => !["active", "rejected"].includes(m.phase)),
@@ -70,6 +72,7 @@ watch(
       target.value = existing.value?.target_node_id || "";
       confirmation.value = "";
       accepted.value = false;
+      acceptedID.value = "";
       mutation.clearMessage();
     }
   },
@@ -114,6 +117,7 @@ async function submit() {
   );
   if (result) {
     accepted.value = true;
+    acceptedID.value = result.operation.id;
     notify(tr("迁移任务已受理。", "Migration task accepted."));
     emit("accepted");
   }
@@ -145,6 +149,12 @@ async function submit() {
           "This stage has been accepted. Review and dispatch the task, then return after it completes.",
         )
       }}
+      <RouterLink
+        class="task-link"
+        :replace="true"
+        :to="`/operations/${acceptedID}`"
+        >{{ tr("查看原任务", "View original task") }}</RouterLink
+      >
     </div>
     <template v-else
       ><p class="wizard-explanation">
@@ -218,7 +228,14 @@ async function submit() {
           " /></label
       ><InlineError
         :error="mutation.error.value"
-        :pending-key="mutation.pendingKey.value" /></template
+        :pending-key="mutation.pendingKey.value"
+      /><RouterLink
+        v-if="mutation.error.value === 'unknown' && mutation.pendingKey.value"
+        class="task-link"
+        :replace="true"
+        :to="`/operations/${mutation.pendingKey.value}`"
+        >{{ tr("查看原任务", "View original task") }}</RouterLink
+      ></template
     ><template #footer
       ><UiButton :disabled="mutation.busy.value" @click="emit('close')">{{
         tr("关闭", "Close")
@@ -286,5 +303,11 @@ async function submit() {
 }
 .confirmation-field {
   margin-top: 24px;
+}
+.task-link {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  overflow-wrap: anywhere;
 }
 </style>

@@ -93,6 +93,10 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/console/v1/"), "/")
+	if r.Method == http.MethodGet && len(parts) == 1 && parts[0] == "audit" {
+		c.audits(w, r)
+		return
+	}
 	if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {
 		failure(w, 400, "INVALID_QUERY")
 		return
@@ -534,38 +538,12 @@ type ConsoleAudit struct {
 }
 
 func (c Console) audits(w http.ResponseWriter, r *http.Request) {
-	// Two independent monotonic IDs are encoded as source:id cursors per page.
-	// Ordering is stable UTC microseconds + source + ID, not an unbounded OFFSET.
-	cursor := r.URL.Query().Get("cursor")
-	var at time.Time
-	source := ""
-	var id int64
-	if cursor != "" {
-		parts := strings.Split(cursor, "~")
-		if len(parts) != 3 {
-			failure(w, 400, "INVALID_QUERY")
-			return
-		}
-		var e error
-		at, e = time.Parse(time.RFC3339Nano, parts[0])
-		if e != nil || (parts[1] != "resource" && parts[1] != "identity") {
-			failure(w, 400, "INVALID_QUERY")
-			return
-		}
-		source = parts[1]
-		id, e = strconv.ParseInt(parts[2], 10, 64)
-		if e != nil || id < 1 {
-			failure(w, 400, "INVALID_QUERY")
-			return
-		}
+	q, e := parseAuditQuery(r.URL.RawQuery)
+	if e != nil {
+		failure(w, 400, "INVALID_QUERY")
+		return
 	}
-	query := "SELECT id,source,actor,action,target,created_at FROM (SELECT id,'resource' AS source,actor,action,target,created_at FROM controller_audit UNION ALL SELECT id,'identity' AS source,actor,action,target,created_at FROM controller_identity_audit) events"
-	args := []any{}
-	if cursor != "" {
-		query += " WHERE (created_at,source,id)<(?,?,?)"
-		args = append(args, at, source, id)
-	}
-	query += " ORDER BY created_at DESC,source DESC,id DESC LIMIT 101"
+	query, args := q.sql()
 	rows, e := c.Store.DB.QueryContext(r.Context(), query, args...)
 	if e != nil {
 		consoleError(w, e)
@@ -589,7 +567,7 @@ func (c Console) audits(w http.ResponseWriter, r *http.Request) {
 	if len(out) > 100 {
 		out = out[:100]
 		v := out[len(out)-1]
-		next = v.CreatedAt.UTC().Format(time.RFC3339Nano) + "~" + v.Source + "~" + strconv.FormatInt(v.ID, 10)
+		next = q.next(v)
 	}
 	output(w, 200, map[string]any{"items": out, "next_cursor": next})
 }

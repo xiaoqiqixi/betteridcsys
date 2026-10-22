@@ -860,6 +860,10 @@ func (m *Manager) logOutcome(task nodeproto.NodeTask, result nodeproto.NodeResul
 	if result.Status == "uncertain" || !durable {
 		level = slog.LevelWarn
 	}
+	if !durable {
+		result.Status = "uncertain"
+		code = "JOURNAL_WRITE_UNCONFIRMED"
+	}
 	slog.Log(context.Background(), level, "aster_node_operation", "node_id", m.Config.NodeID, "operation_id", task.OperationID, "instance_id", task.InstanceID, "action", task.Action, "status", result.Status, "request_sha256", result.RequestSHA256, "code", code, "journal_write_confirmed", durable)
 }
 

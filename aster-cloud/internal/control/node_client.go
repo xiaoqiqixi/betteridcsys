@@ -178,7 +178,8 @@ func (w Worker) rpc(ctx context.Context, p NodeProfile) (NodeRPC, error) {
 	}
 	return NewNodeClient(ctx, p)
 }
-func (w Worker) Dispatch(ctx context.Context, op string) (Job, error) {
+func (w Worker) Dispatch(ctx context.Context, op string) (out Job, err error) {
+	defer func() { logWorkerOutcome(ctx, "aster_controller_provisioning", "dispatch", op, out.State, err) }()
 	j, e := w.Store.Lookup(ctx, op)
 	if e != nil {
 		return Job{}, e
@@ -215,7 +216,8 @@ func (w Worker) Dispatch(ctx context.Context, op string) (Job, error) {
 	}
 	return saved, nil
 }
-func (w Worker) Reconcile(ctx context.Context, op string) (Job, error) {
+func (w Worker) Reconcile(ctx context.Context, op string) (out Job, err error) {
+	defer func() { logWorkerOutcome(ctx, "aster_controller_provisioning", "reconcile", op, out.State, err) }()
 	j, e := w.Store.Lookup(ctx, op)
 	if e != nil {
 		return Job{}, e

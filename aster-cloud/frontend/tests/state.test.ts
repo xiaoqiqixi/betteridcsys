@@ -15,7 +15,7 @@ import { consoleKey } from "../src/context";
 import { useSession } from "../src/composables/session";
 import { readPreferences } from "../src/composables/preferences";
 import { actionAllowed, actionPermission } from "../src/permissions";
-import type { Instance, Page } from "../src/api/types";
+import type { Instance, Page, Operation } from "../src/api/types";
 import { admin, instance, operation } from "./fixtures";
 import { deferred, mockContext } from "./helpers";
 vi.stubGlobal("crypto", webcrypto);
@@ -189,8 +189,7 @@ describe("stable mutation intent", () => {
       {},
       operationResponse,
       {
-        key: operation.id,
-        bindOperation: { action: "start", instanceId: instance.id },
+        ...boundOptions(operation),
         allowUncertainReconcile: true,
       },
     );
@@ -378,17 +377,859 @@ describe("read-confirmed recovery", () => {
       { global: { provide: { [consoleKey as symbol]: context } } },
     );
     const path = `/operations/${operation.id}/dispatch`;
-    await mutation.execute("POST", path, {}, operationResponse, {
-      key: operation.id,
-    });
+    await mutation.execute(
+      "POST",
+      path,
+      {},
+      operationResponse,
+      boundOptions(operation),
+    );
     acknowledgeOperations(admin.id, [operation]);
     mutation.clearMessage();
     await mutation.execute("POST", path, {}, operationResponse, {
-      key: operation.id,
+      ...boundOptions(operation),
       allowUncertainReconcile: true,
     });
     expect(calls).toHaveLength(1);
     expect(mutation.pendingKey.value).toBe(operation.id);
     wrapper.unmount();
+  });
+});
+
+const pendingStorage = "aster.cloud.pending.v1";
+const operatorID = "e".repeat(32);
+const operationBinding = (value: Operation) => ({
+  id: value.id,
+  action: value.action,
+  instance_id: value.instance_id,
+  node_id: value.node_id,
+  artifact_id: value.artifact_id,
+  target_node_id: value.target_node_id,
+  actor_id: value.actor_id,
+});
+const boundOptions = (value: Operation) => ({
+  key: value.id,
+  bindOperation: {
+    action: value.action,
+    instanceId: value.instance_id,
+    nodeId: value.node_id,
+    artifactId: value.artifact_id,
+    targetNodeId: value.target_node_id,
+    actorId: value.actor_id,
+  },
+});
+async function pendingFixture(
+  resolver: Parameters<typeof mockContext>[0],
+  stored: unknown[] = [],
+  beforeLoad?: () => void,
+) {
+  vi.resetModules();
+  sessionStorage.setItem(pendingStorage, JSON.stringify(stored));
+  beforeLoad?.();
+  const module = await import("../src/composables/mutation");
+  const freshContext = await import("../src/context");
+  const { context, calls } = mockContext(resolver);
+  context.session.user.value = { ...admin, id: operatorID, role: "operator" };
+  let mutation!: ReturnType<typeof module.useMutation>;
+  const wrapper = mount(
+    defineComponent({
+      setup() {
+        mutation = module.useMutation();
+        return () => h("div");
+      },
+    }),
+    { global: { provide: { [freshContext.consoleKey as symbol]: context } } },
+  );
+  return {
+    ...module,
+    mutation,
+    wrapper,
+    context,
+    calls,
+    entries: () =>
+      JSON.parse(sessionStorage.getItem(pendingStorage) || "[]") as Array<
+        Record<string, unknown>
+      >,
+  };
+}
+describe("immutable task recovery belongs to the current operator, not its creator", () => {
+  it.each(
+    ["dispatch", "reconcile"].flatMap((purpose) =>
+      ["sending", "dispatched", "uncertain", "succeeded", "rejected"].map(
+        (state) => [purpose, state] as const,
+      ),
+    ),
+  )(
+    "clears a lost %s ACK from a bound %s GET without redispatching",
+    async (purpose, state) => {
+      const fixture = await pendingFixture(() => {
+        throw new ApiError("unknown");
+      });
+      try {
+        await fixture.mutation.execute(
+          "POST",
+          `/operations/${operation.id}/${purpose}`,
+          {},
+          operationResponse,
+          boundOptions(operation),
+        );
+        expect(fixture.calls).toHaveLength(1);
+        expect(fixture.entries()[0]).toMatchObject({
+          owner: operatorID,
+          key: operation.id,
+          purpose,
+          binding: operationBinding(operation),
+        });
+        fixture.acknowledgeOperations(operatorID, [{ ...operation, state }]);
+        expect(fixture.entries()).toEqual([]);
+        expect(fixture.calls).toHaveLength(1);
+      } finally {
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it("a successful bound reconcile also resolves the same operator's older uncertain dispatch slot", async () => {
+    const fixture = await pendingFixture((_m, path) => {
+      if (path.endsWith("/dispatch")) throw new ApiError("unknown");
+      return { operation: { ...operation, state: "dispatched" } };
+    });
+    try {
+      await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      fixture.mutation.clearMessage();
+      const result = await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/reconcile`,
+        {},
+        operationResponse,
+        { ...boundOptions(operation), allowUncertainReconcile: true },
+      );
+      expect(result?.operation.state).toBe("dispatched");
+      expect(fixture.calls.map((call) => [call.path, call.key])).toEqual([
+        [`/operations/${operation.id}/dispatch`, operation.id],
+        [`/operations/${operation.id}/reconcile`, operation.id],
+      ]);
+      expect(fixture.entries()).toEqual([]);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it.each([
+    "id",
+    "action",
+    "instance_id",
+    "node_id",
+    "artifact_id",
+    "target_node_id",
+    "actor_id",
+  ] as const)("never clears a read with mismatched %s", async (field) => {
+    const fixture = await pendingFixture(() => {
+      throw new ApiError("unknown");
+    });
+    try {
+      await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      const pending = fixture.entries();
+      fixture.acknowledgeOperations(operatorID, [
+        {
+          ...operation,
+          [field]: field === "action" ? "delete" : "f".repeat(32),
+          state: "succeeded",
+        },
+      ]);
+      expect(fixture.entries()).toEqual(pending);
+      expect(fixture.calls).toHaveLength(1);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it.each([
+    "id",
+    "action",
+    "instance_id",
+    "node_id",
+    "artifact_id",
+    "target_node_id",
+    "actor_id",
+  ] as const)(
+    "validates %s inside execute before clearing an ACK",
+    async (field) => {
+      const fixture = await pendingFixture(() => ({
+        operation: {
+          ...operation,
+          [field]: field === "action" ? "delete" : "f".repeat(32),
+          state: "dispatched",
+        },
+      }));
+      try {
+        const result = await fixture.mutation.execute(
+          "POST",
+          `/operations/${operation.id}/dispatch`,
+          {},
+          operationResponse,
+          boundOptions(operation),
+        );
+        expect(result).toBeNull();
+        expect(fixture.mutation.error.value).toBe("unknown");
+        expect(fixture.entries()).toHaveLength(1);
+        expect(fixture.mutation.pendingKey.value).toBe(operation.id);
+        expect(fixture.calls).toHaveLength(1);
+      } finally {
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it("does not regard accepted as proof of progress, even in a successful HTTP ACK", async () => {
+    const fixture = await pendingFixture(() => ({ operation }));
+    try {
+      const result = await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(result).toBeNull();
+      expect(fixture.mutation.error.value).toBe("unknown");
+      const pending = fixture.entries();
+      fixture.acknowledgeOperations(operatorID, [operation]);
+      expect(fixture.entries()).toEqual(pending);
+      fixture.mutation.clearMessage();
+      await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(1);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it.each(["dispatch", "reconcile"])(
+    "keeps legacy %s entries without upgrading their missing binding",
+    async (purpose) => {
+      const path = `/operations/${operation.id}/${purpose}`;
+      const stored = [
+        {
+          owner: operatorID,
+          fingerprint: await fingerprint(path, {}),
+          key: operation.id,
+          purpose,
+        },
+      ];
+      const fixture = await pendingFixture(
+        () => ({ operation: { ...operation, state: "succeeded" } }),
+        stored,
+      );
+      try {
+        fixture.acknowledgeOperations(operatorID, [
+          { ...operation, state: "succeeded" },
+        ]);
+        await fixture.mutation.execute("POST", path, {}, operationResponse, {
+          ...boundOptions(operation),
+          allowUncertainReconcile: true,
+        });
+        expect(fixture.calls).toHaveLength(0);
+        expect(fixture.entries()).toEqual(stored);
+        expect(fixture.mutation.pendingKey.value).toBe(operation.id);
+        expect(fixture.mutation.error.value).toBe("unknown");
+      } finally {
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it.each(["node_id", "actor_id", "id"] as const)(
+    "treats incomplete or corrupt stored %s binding as legacy, not recovery evidence",
+    async (field) => {
+      const path = `/operations/${operation.id}/reconcile`;
+      const binding: Record<string, unknown> = operationBinding(operation);
+      if (field === "id") binding.id = "f".repeat(32);
+      else delete binding[field];
+      const stored = [
+        {
+          owner: operatorID,
+          fingerprint: await fingerprint(path, {}),
+          key: operation.id,
+          purpose: "reconcile",
+          binding,
+        },
+      ];
+      const fixture = await pendingFixture(
+        () => ({ operation: { ...operation, state: "succeeded" } }),
+        stored,
+      );
+      try {
+        fixture.acknowledgeOperations(operatorID, [
+          { ...operation, state: "succeeded" },
+        ]);
+        await fixture.mutation.execute("POST", path, {}, operationResponse, {
+          ...boundOptions(operation),
+          allowUncertainReconcile: true,
+        });
+        expect(fixture.calls).toHaveLength(0);
+        expect(fixture.entries()).toHaveLength(1);
+        expect(fixture.entries()[0]?.key).toBe(operation.id);
+        expect(fixture.mutation.error.value).toBe("unknown");
+      } finally {
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it("requires a complete binding before issuing either operation write", async () => {
+    const fixture = await pendingFixture(() => ({ operation }));
+    try {
+      for (const action of ["dispatch", "reconcile"])
+        await fixture.mutation.execute(
+          "POST",
+          `/operations/${operation.id}/${action}`,
+          {},
+          operationResponse,
+          {
+            key: operation.id,
+            bindOperation: {
+              action: operation.action,
+              instanceId: operation.instance_id,
+            },
+            allowUncertainReconcile: true,
+          },
+        );
+      expect(fixture.calls).toHaveLength(0);
+      expect(fixture.entries()).toEqual([]);
+      expect(fixture.mutation.error.value).toBe("invalid");
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it("does not cross-clear another operator's entries for the same immutable task", async () => {
+    const fixture = await pendingFixture(() => {
+      throw new ApiError("unknown");
+    });
+    try {
+      const path = `/operations/${operation.id}/dispatch`;
+      await fixture.mutation.execute(
+        "POST",
+        path,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      fixture.acknowledgeOperations(admin.id, [
+        { ...operation, state: "dispatched" },
+      ]);
+      expect(fixture.entries()).toHaveLength(1);
+      fixture.context.session.user.value = admin;
+      fixture.context.session.epoch.value++;
+      await fixture.mutation.execute(
+        "POST",
+        path,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(2);
+      expect(fixture.entries()).toHaveLength(2);
+      fixture.acknowledgeOperations(admin.id, [
+        { ...operation, state: "dispatched" },
+      ]);
+      expect(fixture.entries().map((entry) => entry.owner)).toEqual([
+        operatorID,
+      ]);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it("a late ACK after an identity switch cannot clear the original owner's uncertainty", async () => {
+    const reply = deferred<unknown>();
+    const fixture = await pendingFixture(() => reply.promise);
+    try {
+      const pending = fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      await vi.waitFor(() => expect(fixture.calls).toHaveLength(1));
+      fixture.context.session.invalidate();
+      fixture.context.session.user.value = admin;
+      reply.resolve({ operation: { ...operation, state: "dispatched" } });
+      expect(await pending).toBeNull();
+      expect(fixture.entries()).toHaveLength(1);
+      expect(fixture.entries()[0]?.owner).toBe(operatorID);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it("preserves the 64-entry bound and never sends or evicts to make room", async () => {
+    const stored = Array.from({ length: 64 }, (_, index) => ({
+      owner: operatorID,
+      fingerprint: index.toString(16).padStart(64, "0"),
+      key: index.toString(16).padStart(32, "0"),
+      purpose: "dispatch",
+    }));
+    const fixture = await pendingFixture(() => ({ operation }), stored);
+    try {
+      await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(0);
+      expect(fixture.entries()).toEqual(stored);
+      expect(fixture.mutation.error.value).toBe("unavailable");
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+});
+
+describe("durable recovery validates prior bindings and identity", () => {
+  it("rehydrates a complete binding without persisting unrelated properties", async () => {
+    const path = `/operations/${operation.id}/dispatch`;
+    const stored = [
+      {
+        owner: operatorID,
+        fingerprint: await fingerprint(path, {}),
+        key: operation.id,
+        purpose: "dispatch",
+        binding: { ...operationBinding(operation), ignored: "not-binding" },
+      },
+    ];
+    const fixture = await pendingFixture(() => {
+      throw new ApiError("unknown");
+    }, stored);
+    try {
+      fixture.acknowledgeOperations(operatorID, [
+        { ...operation, state: "dispatched" },
+      ]);
+      expect(fixture.entries()).toEqual([]);
+      expect(fixture.calls).toHaveLength(0);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it("successful reconcile cannot clear a legacy dispatch entry or another task", async () => {
+    const path = `/operations/${operation.id}/dispatch`;
+    const other = { ...operation, id: "6".repeat(32) };
+    const stored = [
+      {
+        owner: operatorID,
+        fingerprint: await fingerprint(path, {}),
+        key: operation.id,
+        purpose: "dispatch",
+      },
+      {
+        owner: operatorID,
+        fingerprint: await fingerprint(`/operations/${other.id}/dispatch`, {}),
+        key: other.id,
+        purpose: "dispatch",
+        binding: operationBinding(other),
+      },
+    ];
+    const fixture = await pendingFixture(
+      () => ({ operation: { ...operation, state: "succeeded" } }),
+      stored,
+    );
+    try {
+      await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/reconcile`,
+        {},
+        operationResponse,
+        { ...boundOptions(operation), allowUncertainReconcile: true },
+      );
+      expect(fixture.calls).toHaveLength(1);
+      expect(fixture.entries()).toEqual(stored);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it.each(["node_id", "actor_id", "artifact_id", "target_node_id"] as const)(
+    "never upgrades a prior reconcile with a different %s",
+    async (field) => {
+      const path = `/operations/${operation.id}/reconcile`;
+      const prior = { ...operation, [field]: "different-binding" };
+      const stored = [
+        {
+          owner: operatorID,
+          fingerprint: await fingerprint(path, {}),
+          key: operation.id,
+          purpose: "reconcile",
+          binding: operationBinding(prior),
+        },
+      ];
+      const fixture = await pendingFixture(
+        () => ({ operation: { ...operation, state: "dispatched" } }),
+        stored,
+      );
+      try {
+        await fixture.mutation.execute("POST", path, {}, operationResponse, {
+          ...boundOptions(operation),
+          allowUncertainReconcile: true,
+        });
+        expect(fixture.calls).toHaveLength(0);
+        expect(fixture.entries()).toEqual(stored);
+        expect(fixture.mutation.error.value).toBe("unknown");
+      } finally {
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it("captures the immutable binding and request key before asynchronous hashing", async () => {
+    const fixture = await pendingFixture(() => ({
+      operation: { ...operation, state: "dispatched" },
+    }));
+    try {
+      const options = boundOptions(operation);
+      const pending = fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        options,
+      );
+      options.key = "f".repeat(32);
+      options.bindOperation.nodeId = "different-node";
+      options.bindOperation.actorId = operatorID;
+      expect((await pending)?.operation.id).toBe(operation.id);
+      expect(fixture.calls[0]?.key).toBe(operation.id);
+      expect(fixture.entries()).toEqual([]);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it("a late explicit error after an identity switch does not delete the original owner's entry", async () => {
+    const reply = deferred<unknown>();
+    const fixture = await pendingFixture(() => reply.promise);
+    try {
+      const pending = fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      await vi.waitFor(() => expect(fixture.calls).toHaveLength(1));
+      fixture.context.session.invalidate();
+      fixture.context.session.user.value = admin;
+      reply.reject(new ApiError("conflict", "STATE_CONFLICT", 409));
+      expect(await pending).toBeNull();
+      expect(fixture.entries()).toHaveLength(1);
+      expect(fixture.entries()[0]?.owner).toBe(operatorID);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+});
+
+describe("pending intent persistence must succeed before a write", () => {
+  it.each(["QuotaExceededError", "SecurityError"])(
+    "%s prevents every new POST and permits the first send only after storage recovers",
+    async (name) => {
+      const fixture = await pendingFixture((_method, _path, _body, key) => ({
+        operation: {
+          ...operation,
+          id: key,
+          action: "create",
+          actor_id: operatorID,
+        },
+      }));
+      const setter = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation(() => {
+          throw new DOMException("private storage fault", name);
+        });
+      const body = { hostname: "storage-test", owner_ref: instance.owner_ref };
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          expect(
+            await fixture.mutation.execute(
+              "POST",
+              "/instances",
+              body,
+              operationResponse,
+              { bindOperation: { action: "create" } },
+            ),
+          ).toBeNull();
+          expect(fixture.calls).toHaveLength(0);
+          expect(fixture.mutation.error.value).toBe("unavailable");
+          expect(fixture.mutation.pendingKey.value).toBe("");
+        }
+        setter.mockRestore();
+        expect(fixture.entries()).toEqual([]);
+        const result = await fixture.mutation.execute(
+          "POST",
+          "/instances",
+          body,
+          operationResponse,
+          { bindOperation: { action: "create" } },
+        );
+        expect(result?.operation.actor_id).toBe(operatorID);
+        expect(fixture.calls).toHaveLength(1);
+        expect(fixture.entries()).toEqual([]);
+      } finally {
+        setter.mockRestore();
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it.each(["sessionStorage getter", "getItem"])(
+    "%s failure cannot overwrite unread unknown entries, and recovery rereads them before sending",
+    async (fault) => {
+      const stored = [
+        {
+          owner: operatorID,
+          fingerprint: await fingerprint("/legacy-operation", {}),
+          key: "3".repeat(32),
+          purpose: "dispatch",
+        },
+      ];
+      let restore = () => {};
+      const fixture = await pendingFixture(
+        () => {
+          throw new ApiError("unknown");
+        },
+        stored,
+        () => {
+          if (fault === "getItem") {
+            const read = vi
+              .spyOn(Storage.prototype, "getItem")
+              .mockImplementation(() => {
+                throw new DOMException("blocked", "SecurityError");
+              });
+            restore = () => read.mockRestore();
+          } else {
+            const read = vi
+              .spyOn(window, "sessionStorage", "get")
+              .mockImplementation(() => {
+                throw new DOMException("blocked", "SecurityError");
+              });
+            restore = () => read.mockRestore();
+          }
+        },
+      );
+      try {
+        await fixture.mutation.execute(
+          "POST",
+          "/instances",
+          { hostname: "unread-storage" },
+          operationResponse,
+        );
+        expect(fixture.calls).toHaveLength(0);
+        expect(fixture.mutation.error.value).toBe("unavailable");
+        restore();
+        expect(fixture.entries()).toEqual(stored);
+        await fixture.mutation.execute(
+          "POST",
+          "/instances",
+          { hostname: "unread-storage" },
+          operationResponse,
+        );
+        expect(fixture.calls).toHaveLength(1);
+        expect(fixture.entries()).toHaveLength(2);
+        expect(fixture.entries()[0]).toEqual(stored[0]);
+        expect(fixture.entries()[1]?.key).toBe(fixture.calls[0]?.key);
+      } finally {
+        restore();
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it("a failed save never replaces a prior unknown reconcile key or legacy entry", async () => {
+    const path = `/operations/${operation.id}/reconcile`;
+    const stored = [
+      {
+        owner: operatorID,
+        fingerprint: await fingerprint("/legacy-operation", {}),
+        key: "4".repeat(32),
+        purpose: "dispatch",
+      },
+      {
+        owner: operatorID,
+        fingerprint: await fingerprint(path, {}),
+        key: operation.id,
+        purpose: "reconcile",
+        binding: operationBinding(operation),
+      },
+    ];
+    const fixture = await pendingFixture(
+      () => ({ operation: { ...operation, state: "dispatched" } }),
+      stored,
+    );
+    const setter = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("full", "QuotaExceededError");
+      });
+    try {
+      const options = {
+        ...boundOptions(operation),
+        allowUncertainReconcile: true,
+      };
+      expect(
+        await fixture.mutation.execute(
+          "POST",
+          path,
+          {},
+          operationResponse,
+          options,
+        ),
+      ).toBeNull();
+      expect(fixture.calls).toHaveLength(0);
+      expect(fixture.mutation.pendingKey.value).toBe(operation.id);
+      expect(fixture.mutation.error.value).toBe("unavailable");
+      setter.mockRestore();
+      expect(fixture.entries()).toEqual(stored);
+      await fixture.mutation.execute(
+        "POST",
+        path,
+        {},
+        operationResponse,
+        options,
+      );
+      expect(fixture.calls).toHaveLength(1);
+      expect(fixture.calls[0]?.key).toBe(operation.id);
+      expect(fixture.entries()).toEqual([stored[0]]);
+    } finally {
+      setter.mockRestore();
+      fixture.wrapper.unmount();
+    }
+  });
+  it.each(["ACK", "GET", "explicit failure"])(
+    "%s cleanup failure retains the original uncertainty instead of permitting another POST",
+    async (outcome) => {
+      let setter: ReturnType<typeof vi.spyOn> | undefined;
+      let explicitFailure: Error;
+      const fixture = await pendingFixture(() => {
+        if (outcome === "GET") throw new ApiError("unknown");
+        setter = vi
+          .spyOn(Storage.prototype, "setItem")
+          .mockImplementation(() => {
+            throw new DOMException("full", "QuotaExceededError");
+          });
+        if (outcome === "explicit failure") throw explicitFailure;
+        return { operation: { ...operation, state: "dispatched" } };
+      });
+      const { ApiError: FreshApiError } = await import("../src/api/client");
+      explicitFailure = new FreshApiError("conflict", "STATE_CONFLICT", 409);
+      try {
+        const path = `/operations/${operation.id}/dispatch`;
+        const result = await fixture.mutation.execute(
+          "POST",
+          path,
+          {},
+          operationResponse,
+          boundOptions(operation),
+        );
+        expect(result?.operation.state).toBe(
+          outcome === "ACK" ? "dispatched" : undefined,
+        );
+        if (outcome === "GET") {
+          setter = vi
+            .spyOn(Storage.prototype, "setItem")
+            .mockImplementation(() => {
+              throw new DOMException("full", "QuotaExceededError");
+            });
+          fixture.acknowledgeOperations(operatorID, [
+            { ...operation, state: "dispatched" },
+          ]);
+        }
+        expect(fixture.calls).toHaveLength(1);
+        setter?.mockRestore();
+        expect(fixture.entries()).toHaveLength(1);
+        const saved = fixture.entries()[0];
+        fixture.mutation.clearMessage();
+        await fixture.mutation.execute(
+          "POST",
+          path,
+          {},
+          operationResponse,
+          boundOptions(operation),
+        );
+        expect(fixture.calls).toHaveLength(1);
+        expect(fixture.mutation.error.value).toBe("unknown");
+        expect(fixture.mutation.pendingKey.value).toBe(operation.id);
+        expect(fixture.entries()).toEqual([saved]);
+      } finally {
+        setter?.mockRestore();
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it("a resource ACK whose cleanup cannot persist stays guarded after a simulated reload", async () => {
+    let setter: ReturnType<typeof vi.spyOn> | undefined;
+    const fixture = await pendingFixture((_method, _path, _body, key) => {
+      setter = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new DOMException("full", "QuotaExceededError");
+      });
+      return {
+        operation: {
+          ...operation,
+          id: key,
+          action: "create",
+          actor_id: operatorID,
+        },
+      };
+    });
+    const body = { hostname: "ack-storage-test" };
+    try {
+      const result = await fixture.mutation.execute(
+        "POST",
+        "/instances",
+        body,
+        operationResponse,
+        { bindOperation: { action: "create" } },
+      );
+      const key = result?.operation.id;
+      expect(key).toBe(fixture.calls[0]?.key);
+      expect(fixture.calls).toHaveLength(1);
+      setter?.mockRestore();
+      const saved = fixture.entries();
+      expect(saved).toHaveLength(1);
+      expect(saved[0]?.key).toBe(key);
+      fixture.mutation.clearMessage();
+      await fixture.mutation.execute(
+        "POST",
+        "/instances",
+        body,
+        operationResponse,
+      );
+      expect(fixture.calls).toHaveLength(1);
+      expect(fixture.mutation.pendingKey.value).toBe(key);
+      const reloaded = await pendingFixture(() => {
+        throw new Error("a reloaded unknown intent must not be resent");
+      }, saved);
+      try {
+        await reloaded.mutation.execute(
+          "POST",
+          "/instances",
+          body,
+          operationResponse,
+        );
+        expect(reloaded.calls).toHaveLength(0);
+        expect(reloaded.mutation.error.value).toBe("unknown");
+        expect(reloaded.mutation.pendingKey.value).toBe(key);
+        expect(reloaded.entries()).toEqual(saved);
+      } finally {
+        reloaded.wrapper.unmount();
+      }
+    } finally {
+      setter?.mockRestore();
+      fixture.wrapper.unmount();
+    }
   });
 });

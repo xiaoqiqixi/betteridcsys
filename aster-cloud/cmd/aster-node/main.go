@@ -2,6 +2,7 @@
 package main
 
 import (
+	"aster/cloud/internal/diagnostics"
 	"aster/cloud/internal/hypervisor"
 	"aster/cloud/internal/nodeproto"
 	"context"
@@ -9,6 +10,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -19,8 +22,9 @@ import (
 )
 
 func main() {
+	slog.SetDefault(diagnostics.New(os.Stderr, "node"))
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "aster-node:", err)
+		slog.Error("aster_command_failed", "code", "COMMAND_FAILED")
 		os.Exit(1)
 	}
 }
@@ -40,6 +44,7 @@ type options struct {
 func parseArgs(args []string) (options, error) {
 	var o options
 	flags := flag.NewFlagSet("aster-node", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	flags.StringVar(&o.config, "config", "/etc/aster-node/node.json", "root-owned 0600 configuration")
 	flags.StringVar(&o.reconcile, "reconcile-operation", "", "root-only read-only original-domain observation; service must be stopped")
 	flags.StringVar(&o.approveImport, "approve-storage-import", "", "root approval of a protected offline handoff artifact")
@@ -147,6 +152,7 @@ func run() error {
 	}
 	defer listener.Close()
 	server := &http.Server{Handler: manager.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 30 * time.Second, TLSConfig: tlsConfig}
+	server.ErrorLog = diagnostics.TransportLog(slog.Default())
 	signals, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -155,8 +161,10 @@ func run() error {
 		defer cancel()
 		_ = server.Shutdown(ctx)
 	}()
+	slog.Info("aster_service_starting")
 	err = server.Serve(tls.NewListener(listener, tlsConfig))
 	if err == http.ErrServerClosed {
+		slog.Info("aster_service_stopped")
 		return nil
 	}
 	return err

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from "vue";
+import { RouterLink } from "vue-router";
 import { useConsole } from "../context";
 import { useQuery } from "../composables/query";
 import { useMutation } from "../composables/mutation";
@@ -104,6 +105,12 @@ async function submit() {
         }}
       </p>
       <code class="break-anywhere">{{ accepted.id }}</code>
+      <RouterLink
+        class="task-link"
+        :replace="true"
+        :to="`/operations/${accepted.id}`"
+        >{{ tr("查看原任务", "View original task") }}</RouterLink
+      >
     </div>
     <StateBlock
       v-else
@@ -165,7 +172,14 @@ async function submit() {
         ><InlineError
           :error="mutation.error.value"
           :pending-key="mutation.pendingKey.value"
-        /></form></StateBlock
+        /><RouterLink
+          v-if="mutation.error.value === 'unknown' && mutation.pendingKey.value"
+          class="task-link"
+          :replace="true"
+          :to="`/operations/${mutation.pendingKey.value}`"
+          >{{ tr("查看原任务", "View original task") }}</RouterLink
+        >
+      </form></StateBlock
     ><template #footer="{ close }"
       ><UiButton :disabled="mutation.busy.value" @click="close">{{
         accepted.id ? tr("完成", "Done") : tr("取消", "Cancel")
@@ -190,5 +204,11 @@ async function submit() {
 }
 .callout p {
   margin: 12px 0;
+}
+.task-link {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  overflow-wrap: anywhere;
 }
 </style>

@@ -21,6 +21,15 @@ const options = (context: ReturnType<typeof mockContext>["context"]) => ({
   attachTo: document.body,
   global: {
     provide: { [consoleKey as symbol]: context },
+    plugins: [
+      createRouter({
+        history: createMemoryHistory(),
+        routes: [
+          { path: "/", component: { template: "<div />" } },
+          { path: "/operations/:id", component: { template: "<div />" } },
+        ],
+      }),
+    ],
     stubs: { teleport: true },
   },
 });

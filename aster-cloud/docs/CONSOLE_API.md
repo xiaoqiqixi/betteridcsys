@@ -60,7 +60,7 @@
 | GET `/operations?cursor=...&instance_id=...` | `instances.read` | `{items:[Operation],next_cursor:string\|null}`，最多 100；过滤可省略 |
 | GET `/operations/{id}` | `instances.read` | `{operation}`，数据库持久化进度 |
 | GET `/nodes` | `nodes.read` | `{items:[Node],next_cursor:null}`；最多 100，当前无完整节点分页 |
-| GET `/audit?cursor=...` | `audit.read` | `{items:[Audit],next_cursor:string\|null}`，资源与身份事件合并 |
+| GET `/audit?source=...&action=...&actor=...&target=...&from=...&until=...&cursor=...` | `audit.read` | `{items:[Audit],next_cursor:string\|null}`，固定最多 100；所有筛选可省略，资源与身份事件合并 |
 
 资源写权限 **额外依赖 `instances.read`** 作为实例/operation 路由的基础权限；节点维护另依赖 `nodes.read`。custom 配置应明确勾选所需 read 与 write，不存在“write 自动拥有 read”的隐式推断。
 
@@ -78,6 +78,16 @@
 operation 的 `actor_id` 是不可变的意图创建者，不等于后来点击派发的人。`operation.dispatch_requested` / `operation.reconcile_requested` 分别记录实际发起者（`user:<id>`，CLI 为 `host-operator`）；`operation.dispatch_committed` 的 actor 为 `controller`，只说明 sending claim 已落盘；绑定节点回执产生的 `operation.dispatched/succeeded/rejected/uncertain` 使用 `node:<node_id>` 作为结果来源。创建者、实际请求者、controller commit 与节点结果是四种不同角色，不能互相冒名。未授权请求不能写成已授权 requested/committed 事件；requested 本身不代表节点已执行或成功。
 
 将 `next_cursor` 当作不透明字符串，URL-encode 后原样带到下一页，不自行生成、递增或转换数值。实例按 ID 降序 keyset 分页，**不是创建时间降序**；operation 按内部单调序号，audit 按 UTC 微秒时间/source/id 稳定排序。`next_cursor:null` 表示该次列表没有下一页。detail 内 operations/artifacts/migrations 各最多 100，完整 operation 历史可另用带 instance_id 的列表翻页；artifact/migration 详情子列表暂未分页。
+
+### 审计精确筛选
+
+- `source` 仅为 `identity` 或 `resource`。`action` 最多 64 字节、`actor` 最多 80 字节、`target` 最多 128 字节；均须匹配 ASCII `^[A-Za-z0-9][A-Za-z0-9_.:-]*$`。**大小写、完整值精确匹配**，不 trim、不按邮箱推断用户、不支持 LIKE/前缀/通配符。合法但未出现的 action 返回空列表，不由前端擅自限制为固定枚举。
+- `from` / `until` 接受带显式时区的 RFC3339，须使用 `T`，秒后最多 6 位小数，时区为 `Z` 或 `±HH:MM`（HH 00–23、MM 00–59）。规范化为 UTC 后年份须在 1000–9999；保留微秒，不静默舍入。时间范围为 **`created_at >= from AND created_at < until`**；两端都提供时必须 `from < until`。
+- 多个筛选按 AND 组合；省略表示不限该项。所有参数单值；重复键、未知键、显式空值、非法时间/字符/长度、超长 cursor 或总查询串超过 4096 字节，均返回 **400 `{error:{code:"INVALID_QUERY"}}`**。不接受客户端修改 page size、排序字段或 SQL。
+- 新 cursor 绑定规范化后的全部筛选；改变、增加或删除条件时必须清除 cursor，否则 400。等价的时区/小数表示规范化后可继续同一分页。cursor 最多 1024 字节，仅用于定位，不是授权凭据；权限仍逐请求从数据库校验。旧的无筛选 cursor 仅兼容无筛选请求，不得附加新条件复用。
+- 前端应把 cursor 当作不透明字符串并严格 URL 编码（包括旧 cursor 中的 `~`），不要自行解码、拼接或依赖其内部格式。每个来源先按条件与 keyset 界限最多取 101 条，再进行最多 202 条的跨来源排序/合并；响应最多 100 条，没有 unbounded OFFSET 或全量导出。
+- 本接口纯只读，不调用节点、不追加“查询成功”审计、不变更 operation/容量/财务。无会话 401、缺少 `audit.read` 403；新增查询不会赋予 viewer 审计权限。
+- 数据库迁移 004 仅添加两张审计表各 action/actor/target + time/id 索引。部分未记账 DDL 可在精确核对已有索引后重新进入；同名错误定义拒绝，全部完成后才记录迁移 SHA。不删除历史事件，也不提供自动保留清理或防篡改外部归档；**节点 journal 与幂等/恢复记录不能当作普通日志裁剪**。
 
 ## 4. 写入、幂等与显式派发
 

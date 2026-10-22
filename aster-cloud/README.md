@@ -15,7 +15,7 @@
 本轮包含独立管理台、staff RBAC、实例动作、停止态快照/备份与四阶段冷迁移实现；热迁移、租户SSO、VPC和生产宿主验收不在已完成范围。具体实现、支持范围、命令和测试结果见下列记录；当前禁止直接用于真实客户销售。没有用假按钮、内存数据或模拟执行器冒充已完成的主控功能。
 
 - [功能与验收矩阵](docs/ARCHITECTURE.md)
-- [本轮开发验证](docs/VALIDATION.md) · [管理台与资源 API](docs/CONSOLE_API.md)
+- [本轮开发验证](docs/VALIDATION.md) · [管理台与资源 API](docs/CONSOLE_API.md) · [日志与审计](docs/LOGGING.md)
 - [主控运维](deploy/controller-OPERATIONS.md) · [KVM 被控运维](NODE_README.md)
 - [术语](GLOSSARY.md)
 - 财务产品配置合同：[PRODUCT_CONFIGURATION.md](../vps-billing/docs/PRODUCT_CONFIGURATION.md)
