@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -30,13 +31,17 @@ func main() {
 }
 
 type options struct {
-	config            string
-	doctor            bool
-	reconcile         string
-	reconcileProvided bool
-	approveImport     string
-	reviewedFence     string
-	approveProvided   bool
+	networkStatus          string
+	recoverNetwork         string
+	networkStatusProvided  bool
+	recoverNetworkProvided bool
+	config                 string
+	doctor                 bool
+	reconcile              string
+	reconcileProvided      bool
+	approveImport          string
+	reviewedFence          string
+	approveProvided        bool
 }
 
 // parseArgs is side-effect free. An explicitly empty/invalid reconcile flag may
@@ -45,6 +50,8 @@ func parseArgs(args []string) (options, error) {
 	var o options
 	flags := flag.NewFlagSet("aster-node", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	flags.StringVar(&o.networkStatus, "network-recovery-status", "", "root-only read-only fabric recovery expectation for a profile")
+	flags.StringVar(&o.recoverNetwork, "recover-network", "", "root-owned canonical recovery approval JSON; service must be stopped")
 	flags.StringVar(&o.config, "config", "/etc/aster-node/node.json", "root-owned 0600 configuration")
 	flags.StringVar(&o.reconcile, "reconcile-operation", "", "root-only read-only original-domain observation; service must be stopped")
 	flags.StringVar(&o.approveImport, "approve-storage-import", "", "root approval of a protected offline handoff artifact")
@@ -56,6 +63,12 @@ func parseArgs(args []string) (options, error) {
 	doctorProvided := false
 	reviewedProvided := false
 	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "network-recovery-status" {
+			o.networkStatusProvided = true
+		}
+		if f.Name == "recover-network" {
+			o.recoverNetworkProvided = true
+		}
 		if f.Name == "reconcile-operation" {
 			o.reconcileProvided = true
 		}
@@ -69,6 +82,17 @@ func parseArgs(args []string) (options, error) {
 			doctorProvided = true
 		}
 	})
+	if o.networkStatusProvided || o.recoverNetworkProvided {
+		if o.networkStatusProvided && o.recoverNetworkProvided || doctorProvided || o.reconcileProvided || o.approveProvided || reviewedProvided {
+			return o, fmt.Errorf("network recovery modes are exclusive")
+		}
+		if o.networkStatusProvided && !nodeproto.ValidNodeID(o.networkStatus) {
+			return o, fmt.Errorf("invalid network profile")
+		}
+		if o.recoverNetworkProvided && (!filepath.IsAbs(o.recoverNetwork) || filepath.Clean(o.recoverNetwork) != o.recoverNetwork) {
+			return o, fmt.Errorf("canonical absolute recovery file required")
+		}
+	}
 	if flags.NArg() != 0 {
 		return o, fmt.Errorf("unexpected arguments")
 	}
@@ -126,6 +150,26 @@ func run() error {
 	defer ledger.Close()
 	defer manager.Shutdown()
 	manager.Ledger = ledger
+	if o.networkStatusProvided {
+		result, e := manager.NetworkRecoveryStatus(o.networkStatus)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
+	if o.recoverNetworkProvided {
+		request, e := hypervisor.LoadNetworkRecoveryRequest(o.recoverNetwork)
+		if e != nil {
+			return e
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		result, e := manager.RecoverNetwork(ctx, request)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
 	if o.approveProvided {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()

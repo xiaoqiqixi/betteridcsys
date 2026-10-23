@@ -171,6 +171,11 @@ func run(args []string) error {
 			return control.ErrUnavailable
 		}
 		app := control.App{Store: store, Config: config, Secrets: secrets}
+		overlayWorker := control.OverlayWorker{Store: store, Config: config}
+		overlayRunner := control.NewOverlayRunner(overlayWorker)
+		overlayContext, stopOverlay := context.WithCancel(context.Background())
+		defer func() { stopOverlay(); overlayRunner.Close() }()
+		go overlayRunner.Run(overlayContext)
 		var handler http.Handler = app.Handler()
 		if *consoleOrigin != "" {
 			auth, e := identity.New(store.DB, identity.Config{Origin: *consoleOrigin})
@@ -182,7 +187,7 @@ func run(args []string) error {
 			worker := control.OperationWorker{Store: store, Config: config}
 			runner := control.NewOperationRunner(worker)
 			defer runner.Close()
-			mux.Handle("/console/v1/", (control.Console{Store: store, Config: config, Identity: auth, Worker: &worker, Runner: runner}).Handler())
+			mux.Handle("/console/v1/", (control.Console{Store: store, Config: config, Identity: auth, Worker: &worker, Runner: runner, OverlayWorker: &overlayWorker, OverlayRunner: overlayRunner}).Handler())
 			if *uiDirectory != "" {
 				web, e := control.Web(*uiDirectory)
 				if e != nil {

@@ -449,15 +449,21 @@ is not isolation proof. Old power-only reconcile is refused for OVS. Direct
 reboot and old storage/restore/migration contracts are refused: use explicit
 shutdown then start, and do not use legacy restore as a network-gate bypass.
 
-Node journal upgrades to schema 3 and fabric journal to schema 2; older binaries
-must reject them. No downgrade/pruning/reset is supplied. **The fabric currently
-retains 64 mutations per bridge**, including starts/stops and CLI revisions;
-reaching the bound blocks mutations, including further guarded shutdown. Safe
-archival with replay identity retention is still a production prerequisite, not
-a license to remove journals. Keep this development slice off real customer nodes.
+The original node/2 binding uses node journal schema 3. New explicit recovery
+completion upgrades it to schema 4; the fabric archive and overlay mode pin use
+fabric schema 3. Older binaries must reject unsupported schemas. The former
+64-mutation lifetime cap is removed: 32-record active pages rotate into immutable
+SHA-linked archives retaining all exact replay/conflict and unknown-state evidence.
+Opening verifies the complete chain, so storage/I/O costs still grow with history.
+Never delete journals or archives to unlock a failed bridge.
 
-Only single-host private L2 IPv4 peers and per-IP drop policing are implemented.
-No gateway/default route/DNS is invented in NoCloud; no routing, VXLAN, public
-Internet, floating IP, NAT or DHCP service is implied. See
-[gate tests and limits](docs/OVS_VM_GATE_VALIDATION.md) and
-[unimplemented overlay design](docs/OVERLAY_DESIGN.md).
+An independently root-approved `aster.overlay/1` contract now connects fixed-peer
+VXLAN, full global-VPC epochs, constrained router-appliance forwarding and explicit
+all-node recovery to VM creation/start/stop. New VM seed/XML use approved MTU and
+routes; old immutable bindings/seeds are not rewritten. Internet, NAT, DHCP,
+floating IP, dynamic routing and real-host acceptance are not implied. The original
+single-host contract stays unchanged when overlay is not configured. See
+[network implementation and boundaries](docs/OVERLAY_DESIGN.md),
+[deployment/recovery runbook](deploy/OVERLAY_OPERATIONS.md), and
+[current validation](docs/NETWORK_RECOVERY_VALIDATION.md). Keep this development
+slice off real customer nodes until the deferred KVM/OVS acceptance is complete.

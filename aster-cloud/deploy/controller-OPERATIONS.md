@@ -1,6 +1,6 @@
 # 独立主控：原生部署与运行（开发版）
 
-此程序与财务使用独立进程、独立数据库/账号、独立权限和审计。它只接收财务的不可变开通请求，不读取金额、不签收付款、不修改财务表，也不把 accepted 画成已开机。资源执行必须由主机操作员或具备对应权限的staff明确派发；HTTP接纳意图不会自动创建VM。节点必须另行root审批mTLS策略、image/storage/network和静态IP资源。
+此程序与财务使用独立进程、独立数据库/账号、独立权限和审计。它只接收财务的不可变开通请求，不读取金额、不签收付款、不修改财务表，也不把 accepted 画成已开机。普通资源执行必须由主机操作员或具备对应权限的staff明确派发。显式批准的 overlay cluster 是独立例外：root mapping 命中的新建任务会在全组网络 epoch 确认后由后台 runner 派发，参见 [overlay 运维](OVERLAY_OPERATIONS.md)；HTTP accepted 本身仍不是 VM 已创建。节点必须另行root审批mTLS策略、image/storage/network和静态IP资源。
 
 ## 初始化与启动
 
@@ -76,7 +76,7 @@ aster-controller reconcile -config /etc/aster-controller/config.json -operation 
 
 本机单元和真实TLS/mTLS测试可用`go test -race ./internal/control`。真实MySQL测试优先`ASTER_CLOUD_TEST_DSN`且库名须含`_test`；缺env明确skip。CI仅在`ASTER_MYSQL_TEST_DSN`严格指向隔离`aster_ci_test`时创建随机独立`aster_cloud_test_<hex>`并最终drop；不改生产OpenDSN限制，不读取财务表。日志不可打印DSN/token内容。
 
-必须分别报告真实MySQL/目标Linux测试、真实KVM/静态IP/SSH、systemd安装/证书/备份恢复。模拟node RPC、contract-shaped TLS server和SQL状态测试不等于真实VM创建。本期已包含管理UI、staff RBAC、停止态快照/备份、四阶段冷迁移和查询型审计；仍没有MFA/租户SSO、完整路由/跨节点VPC、完整配额告警、热迁移、自动重派、不可篡改外部归档或完整集群调度。
+必须分别报告真实MySQL/目标Linux测试、真实KVM/静态IP/SSH、systemd安装/证书/备份恢复。模拟node RPC、contract-shaped TLS server和SQL状态测试不等于真实VM创建。本期已包含管理UI、staff RBAC、停止态快照/备份、四阶段冷迁移和查询型审计；本轮新增固定 peer 的跨节点 VPC、受控网关转发和显式恢复，范围及真机缺项见 [overlay 运维](OVERLAY_OPERATIONS.md)。仍没有MFA/租户SSO、内置 NAT/动态路由服务、完整配额告警、热迁移、自动重派、不可篡改外部归档或完整集群调度。
 
 
 ## 独立管理台与 staff 权限（开发版）
@@ -93,9 +93,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs
 
 将 binary 与 `frontend/dist/` 分别审核安装到 `/opt/aster-cloud/bin/`、`/opt/aster-cloud/ui/`，均 root 所有且不可被组/其他用户写入。不公开源码、配置、日志或 secrets 目录。API 保持自身 TLS；当前版本不信任转发 Header 来绕过 Origin / Host / TLS，反向代理必须保留公开 Host，后端证书应由受信链验证。
 
-先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表，004 添加审计精确查询索引，005 添加私有网络、IP 地址池和地址预留，006 添加不可变 instance-network 任务绑定；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。005 会核对已有同名表的精确列/索引/引擎形状；部分 DDL 只有与预期完全一致才可重入，不采用忽略错误后手工记账。
+先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表，004 添加审计精确查询索引，005 添加私有网络、IP 地址池和地址预留，006 添加不可变 instance-network 任务绑定，007 添加独立全局 VPC/epoch/成员/节点阶段表；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。005 会核对已有同名表的精确列/索引/引擎形状；部分 DDL 只有与预期完全一致才可重入，不采用忽略错误后手工记账。
 
-006 确认后，只认识 001–005 的旧 binary 会拒绝该 schema，不能仅替换 binary 回退。升级须停写并备份独立主控库；回滚须恢复匹配 binary/schema 的独立库备份，并核对备份后新增的地址预留、节点 journal、制品和资源操作。不能删表、删迁移记录、释放未知地址或自动重派来“修复”版本不匹配。当前仅通过隔离实库迁移测试，整机备份还原/回滚尚未验收；既有审计增量见 [增量验收](../docs/OPERATIONS_VALIDATION.md)，网络范围见 [网络 API](../docs/NETWORK_API.md)。
+007 确认后，只认识 001–006 的旧 binary 会拒绝该 schema，不能仅替换 binary 回退。升级须停写并备份独立主控库；回滚须恢复匹配 binary/schema 的独立库备份，并核对备份后新增的地址预留、节点 journal、制品和资源操作。不能删表、删迁移记录、释放未知地址或自动重派来“修复”版本不匹配。当前仅通过隔离实库迁移测试，整机备份还原/回滚尚未验收；既有审计增量见 [增量验收](../docs/OPERATIONS_VALIDATION.md)，网络范围见 [网络 API](../docs/NETWORK_API.md)。
 
 首个管理员仅在空用户库由 root CLI 创建；不要把密码放进 argv、unit、shell 历史、截图或日志：
 
@@ -126,7 +126,7 @@ TimeoutStopSec=45
 
 丢响应后仅按原任务 ID 核对，HTTP核对入口的POST只触发**节点GET**，不会再次发原动作。若只传完部分文件而未形成审批，核对保留 unknown，须root按被控运维文档核查缺少阶段；不要创建替代任务、删除partial/fence或直接启动源/目标域。服务退出先取消转运并等待worker，恢复后不自动派发。
 
-当前 schema 2 节点 journal 不能交给 schema 1-only旧binary；旧版必须拒绝读取，不得删字段降级。主控数据库新增表不能靠换旧binary完成无损回滚。回滚须停写、保留双方journals、备份独立数据库与所有制品，使用配套版本和恢复演练确认，不回退财务数据库或覆盖历史订单快照。
+节点普通存储 journal 使用 schema 2、OVS 绑定使用 schema 3，新的网络恢复 completion 使用 schema 4；旧 binary 必须拒绝不认识的 schema，不得删字段降级。主控数据库新增表不能靠换旧binary完成无损回滚。回滚须停写、保留双方journals、备份独立数据库与所有制品，使用配套版本和恢复演练确认，不回退财务数据库或覆盖历史订单快照。
 
 ### 财务兼容和状态
 

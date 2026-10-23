@@ -1,106 +1,82 @@
-# 路由与跨节点 VPC：后续执行设计
+# 路由、跨节点 VPC 与恢复合同
 
-**状态：DESIGN / NOT IMPLEMENTED。** 本文不是已发布功能、可执行配置、安装说明或验收报告。本轮没有新增 overlay planner、VXLAN 执行命令或未接入的 CLI，也没有开放旧节点协议的安全限制。
+本页描述 **main 开发版已接入的实现**，不是 KVM 宿主或生产连通性验收报告。真机验收按用户要求延期。代码不改变财务金额、币种、支付、订单幂等或历史商品配置；原 `aster.node/2` 创建请求及 IPAM 绑定也不重写。
 
-目前单宿主实现使用 `aster.node/2` 的不可变 IPAM 绑定，以及 `fabric.Activate` / `Deactivate` / `Check`。它只在批准的专用 OVS 桥上提供私有 IPv4 成员互通和双向 drop meter，不提供网关、NAT、DHCP、Internet 接入或跨节点网络。下面的结构均为待评审草案，不是现有 Go/API 类型。
+## 执行链
 
-## 1. 目标与必须保留的边界
+`管理 API / 创建实例事务 → schema 7 全局 VPC、epoch、任务 → 主控后台 worker → pinned mTLS → 节点 → 同一 OVS fabric 锁 → libvirt NIC / VM`。
 
-下一步应交付一个完整的网络执行切片，而不是把配置输入成功叫作网络成功：
+独立网络合同为 `aster.overlay/1`。root 明确批准的 `OverlayClusters`、每节点 `OVSProfile.overlay_config` 和完整配置摘要是必要条件。没有配置的旧单宿主网络保持原义。
 
-1. 主控对全局 VPC、VNI、成员和 IP 租约做同事务、不可变绑定。
-2. 节点核对本地 root profile、完整成员快照和实际隧道端口身份。
-3. 用同一个 fabric 执行器、状态目录和跨进程锁隔离、编程、读回、放行 VM。
-4. 两端均确认之前，主控只记录分阶段结果，不宣称跨节点原子成功或端到端连通。
-5. 不改变订单金额、币种、支付幂等、历史商品配置或财务请求摘要。
+- 全局 VPC 单独分配 VNI，保留 owner、CIDR；成员引用原 lease、pool、local VPC 和完整 `NetworkBinding` SHA，不能只靠 MAC/IP 认领。
+- 全量 snapshot 包含所有参与节点 profile pin、成员和网关。每个节点检查本桥完整 inventory，不接受省略现有实例或改写租约。
+- 新实例在原创建/IPAM事务中产生明确的 `reserved` 成员授权。所有节点完成该 epoch 后，才派发原创建任务；节点 paused/link-down 启动、TAP 身份核验、flow/meter 编程读回后才 resume。不存在的预留成员不产生本机放行规则，更不算 VM 已创建。
+- 同一专用桥的旧 CLI、单宿主 gate 和 overlay 不得并行覆盖规则。持久模式 pin 与同一个 flock 阻止退回旧 executor；删除 `overlay.owner` 不会恢复成未初始化桥。
 
-不迁移、重接、配置宿主机管理物理网卡；不修改其默认路由、全局转发开关或防火墙。root 配置也不能成为任意 shell、URL、DNS 名或临时隧道目标的执行入口。
+## 三阶段与未知结果
 
-## 2. 先解决 underlay 信任，而不是把 VNI 当认证
+1. **prepare**：先持久记录意图、隔离整桥，再将本地自有活动 VM link-down / pause，验证现有接口，建立固定 peer 隧道。
+2. 全部节点 prepare 确认后 **program**：安装、精确读回 flows/meters/接口映射；客户 VM 仍暂停。
+3. 全部节点 program 确认后 **release**：再次核验，按快照放行 VM，再次读回并持久记录结果。
 
-VXLAN 是封装，不提供对端密码学认证。固定源 IP、VNI、UDP 校验和都不能单独证明远端节点身份。RFC 7348 指出了外部封装注入风险及另行使用 IPsec 等措施的需求。[RFC 7348 §7](https://www.rfc-editor.org/rfc/rfc7348.html#section-7)
+这不是跨机器原子事务。某节点 release 成功、另一节点失败仍可能出现部分放行；主控必须报告 `uncertain`，不能声称整个集群成功。新任务写前 claim；发送丢 ACK 后只 GET 查询原 operation ID + request SHA，不自动重新 POST。精确历史回执不是持续有效的启动许可。
 
-最小可接受的部署边界二选一，必须显式 root 批准：
+### 集群显式恢复
 
-- 由运营方保证只有批准节点能收发的隔离 underlay，并记录独立的 `underlay_trusted_ack`；
-- 预先配置并独立验证的认证 underlay，例如固定节点身份的 WireGuard/IPsec。不能用一个布尔字段冒充密钥、内核策略和对端握手已经验证。
+`POST /console/v1/overlays/epochs/{id}/recover` 使用**新的 Idempotency-Key**，提交精确 `expected_snapshot_sha256`。主控先读取每节点受 mTLS 保护的只读 head，再在事务中固定这些 head，创建新的 recovery epoch；可选完整 `replacement.members/gateways`，原 SHA 与实际 heads 不变，详见 `OVERLAY_CONTROL.md`。
 
-若选择由本系统管理 IPsec，还需要独立的密钥生命周期、peer pin、内核策略读回和防明文泄漏门禁。OVS 文档明确讨论其数据面与 IPsec 策略配置之间的先后竞争，不能仅写 `options:psk` 后宣称加密已经生效。[OVSDB IPsec 与明文策略](https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.txt)
+主控最新 epoch 已 `succeeded` 时，后续 OVS 重启或普通成员生命周期失败也可显式恢复；仍保留所有旧成功 receipt，不能恢复已被替代的旧 epoch。
 
-## 3. 待定版本合同
+恢复任务包含每节点精确预期 head（也允许尚未收到故障 epoch 的空/较旧 head）。节点 head 变化就拒绝；不能在执行时自动重新读取并更新授权。新 epoch 重新执行全组 prepare → program → release。旧 snapshot、请求和回执保留；旧 epoch 以 `superseded_by` 关联新恢复，不把原 unknown 擦成成功。再次恢复失败仍需新批准，不自动循环重试。
 
-### root 节点 profile
+### 单宿主 OVS 故障恢复
 
-建议独立版本，至少包含：
+单宿主使用 root-only `aster-node --network-recovery-status PROFILE` 读取精确 journal / operation / revision / digest，然后通过 `--recover-network /root/approval.json` 执行新恢复意图。服务必须停止，让节点 ledger 保持独占。
 
-- `schema`、`node_id`、专用 `bridge`、唯一 `state_directory`、`dedicated_ack`；
-- 固定 `local_ipv4`、underlay 信任模式及批准证据引用；
-- `underlay_mtu`、`guest_mtu`，IPv4 VXLAN 预留至少 50 字节封装空间；
-- 显式 peer 清单：远端节点 ID、固定规范 IPv4、稳定隧道 UUID/名字；
-- 独立批准的网关附件清单（若启用），不能从客户请求取宿主设备名。
+批准文档协议 `aster.node-network-recovery/1`，包含新的 `operation_id`、`original_operation_id`、`profile_id`、完整 `expected`、`enabled_instances`。JSON 为规范紧凑序列化，文件 root 私有，不接受重复/大小写别名字段。恢复从本地原 ledger 重建完整同桥意图，先保存原始不确定结果证据，隔离、暂停、动态解析 TAP/ofport、重编程、读回、放行。它不重跑创建/销毁命令，不重建丢失 VM，不绕过陌生端口或域 XML 所有权。
 
-不接受 `remote_ip=flow`、`local_ip=flow`、任意 remote URL、客户指定的隧道名称或不在批准清单内的目的地址。一个专用桥只能有一套状态目录/执行权，不能用第二个 profile 的新锁绕开第一套 journal。
+也支持“原节点任务成功，但 OVS 重启丢规则”的恢复；不改写已成功原任务。故障创建/启动仅在新恢复实际证明其目标状态后完成原操作，并保留原始记录。恢复完成还需独立 node journal completion，与整组旧操作的收敛一次 CAS/save；只有旧任务本来已成功或只存在结果文件不能冒充本轮完成。首次写入 completion 升级节点 journal 到 schema 4，旧 binary 必须拒绝读取。磁盘写入/回调/读回失败均不视为成功。overlay 桥必须使用集群恢复，不能用本地命令绕过多节点屏障。
 
-### 全局成员快照
+## 数据面边界
 
-建议独立 `aster.overlay/1` 合同；名称和字段未冻结：
+### VXLAN
 
-- `cluster_id`、单调 `epoch`；
-- VPC：`id`、`owner_ref`、规范私有 IPv4 CIDR、固定 VNI；
-- 成员：`instance_id`、`node_id`、`owner_ref`、`vpc_id`、IP、MAC、interface UUID、显式双向 Mbps、生命周期资格；
-- 所有相关节点 root profile SHA，以及规范完整快照 SHA。
+- root 固定 local/remote IPv4、UDP 4789、专用桥、接口派生身份及 MTU；不接受 `remote_ip=flow`、任意设备/URL 或客户提供的 ofport。
+- IPv4 VXLAN 预留至少 50 字节；核对本机 underlay 地址/接口 MTU 和 TAP MTU。新 VM 的 libvirt XML、NoCloud 同时设置 guest MTU。旧 1500 MTU 客户机不会被静默认作 1450，需独立受控迁移/配置。
+- 隧道入口精确匹配 peer port、tun_src、tun_dst、VNI、源 MAC/IP/ARP sender。VLAN、IPv6、未知源和未知目的默认丢弃；不使用 NORMAL/FLOOD。
+- remote-ingress 位禁止 peer → peer 中转。本地来源 egress、本地目的 ingress 分别使用 drop meter；这不是队列整形或流量计费。
+- VXLAN 本身不提供对端密码学认证。运营方必须独立准备隔离或认证 underlay，并在 root 配置中明确批准；`underlay_trusted_ack` 与 evidence reference 不是本系统已配置 IPsec 的证明。[RFC 7348 §7](https://www.rfc-editor.org/rfc/rfc7348.html#section-7)、[OVS VXLAN 文档](https://docs.openvswitch.org/en/latest/faq/vxlan/)
 
-VNI 范围为 24 bit；同一集群内唯一，不等于原有 VLAN ID。IP 在 VPC 内唯一，MAC、实例、节点和租约必须有明确绑定；节点不能临时自行发号。禁用或不确定成员仍保留身份记录，但不能生成 allow 规则。
+### 受控网关路由
 
-将这些值作为新协议完整必填字段，而不是向 `aster.node/2` 或 `aster.controller/1` 添加可被旧实现忽略的可选字段。旧 `normal`、单宿主 VPC 和历史订单保持原义；不把带宽 0 擅自换成有限正速率。
+实现的是**批准 router appliance 的实际受限转发**，不是本系统自建 NAT、Internet 接入或网络命名空间路由服务。
 
-## 4. VXLAN 数据面草案
+网关具备固定 VPC/IP/MAC/TAP/接口身份和目的 prefix allowlist；客户机仅能向对应网关及批准目的转发，返回流量也受源 prefix 限制。拒绝与任何 VPC、root protected CIDRs、underlay 端点、loopback、link-local/metadata、multicast 等地址范围重叠的路由。网关不能被替换成宿主管理物理网卡。
 
-OVS 支持按固定远端端点建立 VXLAN，并可用控制平面预置 MAC 映射，不要求 multicast/flood 学习。[OVS VXLAN FAQ](https://docs.openvswitch.org/en/latest/faq/vxlan/)
+root `guest_networks` 把 local VPC / owner / CIDR 映射至批准 gateway 和同一 allowlist，供新 VM NoCloud 写入路由。既有 VM 的 guest 路由以及 appliance 的实际路由/NAT/返回路径仍是部署验收前置条件；不会修改历史 seed、假设客户机已执行配置或宣称公网已通。
 
-建议每个批准 peer 一条固定 local/remote IPv4 的 VXLAN 口，UDP 4789，`key=flow`。执行器必须核对 OVSDB type、options、外部身份标签、所属 bridge、实际 ofport 和稳定接口 UUID；ofport 只是观察结果。OVSDB 文档描述了固定端点、输入 key 和输出 key 的含义。[OVS tunnel options](https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.txt)
+## 归档与容量
 
-拟议流程：
+原有“64 次变更后停止接受动作”的终身上限已移除。活动页达到 32 条时，以规范 SHA 链归档完整记录，保留所有历史精确重放/冲突检查和 unknown 围栏；不会删 journal 或仅调大数字。
 
-- table 0 默认 drop；租户端口只接受其精确源 MAC/IP 和 ARP sender。
-- 隧道入口同时匹配批准 tunnel `in_port`、外层 `tun_src` / `tun_dst`、精确 VNI、该 peer 所属成员的源 MAC/IP。未知成员、错误 VNI、内部 VLAN/QinQ、IPv6 默认 drop。
-- 由匹配规则写入 VPC metadata，另标记 remote ingress；租户自己不能设置这些 metadata。
-- 目的表只接受同 VPC 的精确目的 MAC/IP。ARP 单目标定向，不使用 NORMAL、FLOOD 或未知单播泛洪。
-- 本地来源发往远端成员时，设置固定 VNI 并输出到唯一批准 peer 口；remote ingress 不得再转发到另一个 peer，避免节点成为 transit 或绕过成员入口检查。
-- 本地源 egress 和本地目的 ingress 分别执行已有速率语义。不能声称远端节点必然执行了自己的 meter，也不能把 policer 当队列整形或财务流量计费。
+归档损坏、缺失、权限不可信、落盘失败均拒绝继续，而不是丢历史。当前打开时完整核验历史链，有随历史增长的 I/O/内存成本；仍需磁盘容量、备份和长期规模规划，不能解释为无限规模。overlay phase/local lifecycle 使用独立持久操作记录，不复用 64 条数组上限。细节见 [fabric 恢复说明](../internal/fabric/RECOVERY.md)。
 
-OVS `set_tunnel` 可设置隧道 ID；当前设计只使用有明确成员映射的固定输出，不动态计算任意隧道目标。[OVS actions](https://www.openvswitch.org/support/dist-docs/ovs-actions.7.txt)
+## 管理 API 与权限
 
-## 5. 明确区分“网关接入”和“内建路由器”
+- `GET /console/v1/overlays/clusters`：已批准 cluster 与节点清单。
+- `POST /console/v1/overlays/vpcs`：创建全局 VPC；`GET .../vpcs?cluster_id=...` 查询该 cluster 的完整有界清单。
+- `POST /console/v1/overlays/epochs`：冻结完整 epoch；`GET .../epochs?cluster_id=...&before_epoch=...` 分页查询，响应 `next_before_epoch` 指向下一页。
+- `GET /console/v1/overlays/epochs/{id}`：详情和逐节点阶段结果，不派发节点写操作。
+- `POST .../epochs/{id}/advance`：异步后台推进；`POST .../epochs/{id}/reconcile` 只读远端原结果；二者 body 为 `{}`，Idempotency-Key 必须等于 epoch ID。
+- `POST .../epochs/{id}/recover`：新 key 和精确 `expected_snapshot_sha256` 创建恢复 epoch；可选完整 `replacement.members/gateways`，原 SHA 与实际 heads 不变，详见 `OVERLAY_CONTROL.md`。
+- 读需 `nodes.read`；创建 VPC 另需 `nodes.manage`；规划/推进/核对/恢复 epoch 同时需 `nodes.manage` 与 `instances.manage`。保留 session、CSRF、TLS 与审计；节点接口只接受批准的控制器 mTLS 身份，不能靠前端隐藏按钮实现权限。
 
-最小 north-south 方案是**独立 root 批准的 router appliance / gateway TAP 接入**：每个 VPC 有固定的网关 IP/MAC、稳定接口身份和明确允许的目的 IPv4 prefix。普通宿主物理/管理端口不是可选网关设备。
+`aster-controller serve` 的后台 runner 自动推进持久的未发送 epoch，发送前持久 claim；不会重发 sending/uncertain。完成 reserved epoch 后才调用原 worker 派发对应创建，随后通过原 ID/SHA 的 GET-only 核对收敛异步创建或成员生命周期结果，未知不重 POST。root `overlay_clusters[].mappings` 明确批准 node/local VPC → global VPC，不从客户参数推断归属。已确认删除的实例只从下一个活跃快照移除，原 epoch、绑定和租约历史仍保留。
 
-需要同时验证：
+root 文件示例、规范摘要工具、配置顺序、备份与恢复边界见 [overlay 运维](../deploy/OVERLAY_OPERATIONS.md)。完整字段与请求示例见 [控制接口说明](OVERLAY_CONTROL.md)、`internal/overlayproto` 和 `internal/control/overlay_*`。root 配置变化会使旧 pin 失效；不要通过编辑数据库、删历史文件、改已有 profile ID 的设备归属来解除门禁。
 
-- 网关 IP 在对应 VPC 内，且不与成员、网络地址、广播地址冲突；
-- 只有固定网关身份可以回复网关 ARP；租户不能冒用网关 MAC/IP；
-- 前往和来自网关的数据都有明确 VPC 绑定，不能靠默认路由让客户访问其他 VPC、underlay、管理网或元数据地址；
-- 目的 allowlist 与管理/underlay denylist 冲突时拒绝配置，不靠规则顺序猜测；
-- 真实网关返回路由、NAT（若需要）、MTU 与回包验收独立存在。
+## 测试与仍需真机验收
 
-只有这个附件层完成时，应称“批准网关接入”，不能宣称本系统已提供 NAT、Internet 或完整路由器。若改为系统自建路由器，必须另交付受限 network namespace / veth / nftables 的所有权、事务、反欺骗、回滚和验收合同；不得顺手改宿主全局网络。
+源码包含 strict-contract、全阶段屏障、事务回滚、lost ACK 只查询、空/落后 head 恢复、身份/VNI/ARP/路由隔离、MTU、命令/存储故障、超过 64 次变更与重启重放测试。Linux CI 还运行独立真实 MySQL，以及 Ubuntu22/24 原生 `ovs-ofctl` 离线规则解析和真实 meter wire 编码检查；它们均不是 KVM 双宿主流量验收。
 
-## 6. 不能复用单机成功冒充集群原子性
-
-单机 flock、OpenFlow bundle 和本机 receipt 不能构成跨宿主事务。下一切片至少需要：
-
-1. 主控同事务冻结 VPC/VNI/租约、完整成员快照、epoch、各节点 profile pin 和请求 SHA。
-2. 所有参与节点先持久准备并隔离，明确保存原 epoch、目标 epoch 和身份映射。
-3. 节点逐一编程并实时核对；重启、端口替换、丢包、单边失败全部保留未确认状态。
-4. 只有所需参与节点都确认目标 epoch，才允许相应成员 VM 放行；中途失败不自动回滚到未知旧拓扑，更不能自动重新 POST。
-5. 每个节点的 journal 能拒绝旧 epoch、同 epoch 换成员，以及旧二进制忽略新网络绑定。
-
-同一桥的 overlay、单宿主成员、网关和 VM admission 必须由统一执行器编译整份规则，并使用同一锁跨越隔离到 resume。不能并排运行两个各自 `replace-flows` 的执行器。
-
-## 7. 完成标准与未完成项
-
-代码测试应覆盖严格合同解码、成员/VNI/owner 绑定、错误隧道身份、端口复用、跨 VPC 注入、ARP 冒用、网关绕过、MTU 越界、所有存储/命令故障、节点崩溃、单边 epoch 及显式恢复。
-
-真实验收需要至少两台独立 Ubuntu22+ KVM/OVS 节点和专门测试网络，检查 VM 双向流量、隧道注入、错误 peer、跨 VPC/管理网隔离、限速、MTU、丢包和重启。尚无这些证据时，只能报告代码/协议级验证，不能报告“跨节点已开通”或“路由已可用”。
-
-本文没有执行官方示例中的物理网卡接入、IP flush、iptables flush 或宿主路由修改。官方示例是语义参考，不是本项目已批准执行的操作。[OVS tunnel how-to](https://docs.openvswitch.org/en/latest/howto/userspace-tunneling/)
+仍需两台独立 Ubuntu22+ KVM/OVS 节点验证 VM 双向数据、错误 peer/VNI 注入、ARP 欺骗、管理网隔离、MTU、meter 丢包精度、OVS/宿主重启、网关返回路由和连续恢复。没有这些证据，不应启用真实客户销售。

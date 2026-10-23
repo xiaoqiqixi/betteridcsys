@@ -18,7 +18,7 @@ func run(args []string, out, stderr io.Writer) int {
 		return 2
 	}
 	command := args[0]
-	if command != "plan" && command != "status" && command != "apply" && command != "verify" && command != "fingerprint" {
+	if command != "plan" && command != "status" && command != "apply" && command != "verify" && command != "fingerprint" && command != "overlay-fingerprint" {
 		return 2
 	}
 	f := flag.NewFlagSet("aster-network", flag.ContinueOnError)
@@ -34,7 +34,7 @@ func run(args []string, out, stderr io.Writer) int {
 		_ = json.NewEncoder(stderr).Encode(map[string]any{"error": map[string]string{"code": code}})
 		return 1
 	}
-	if command == "verify" || command == "fingerprint" {
+	if command == "verify" || command == "fingerprint" || command == "overlay-fingerprint" {
 		invalid := false
 		f.Visit(func(option *flag.Flag) {
 			if option.Name != "config" {
@@ -44,6 +44,22 @@ func run(args []string, out, stderr io.Writer) int {
 		if invalid {
 			return failure("INVALID_ARGUMENTS")
 		}
+	}
+	// Read and validate the root-approved canonical overlay contract only. This
+	// command neither opens a fabric journal nor touches a bridge or guest.
+	if command == "overlay-fingerprint" {
+		c, err := fabric.LoadOverlayConfig(*config)
+		if err != nil || os.Geteuid() != 0 {
+			return failure("OVERLAY_CONFIG_REJECTED")
+		}
+		sha, err := fabric.OverlayConfigSHA256(c)
+		if err != nil {
+			return failure("OVERLAY_CONFIG_REJECTED")
+		}
+		if json.NewEncoder(out).Encode(map[string]string{"protocol": "aster.overlay.config/1", "node_id": c.Base.NodeID, "sha256": sha}) != nil {
+			return 1
+		}
+		return 0
 	}
 	c, e := fabric.LoadConfig(*config)
 	if e != nil {
@@ -119,7 +135,7 @@ func run(args []string, out, stderr io.Writer) int {
 func main() {
 	code := run(os.Args[1:], os.Stdout, os.Stderr)
 	if code == 2 {
-		fmt.Fprintln(os.Stderr, "usage: aster-network plan|status|verify|fingerprint|apply --config FILE [--topology FILE] [--confirm-bridge BRIDGE] [--revision N]")
+		fmt.Fprintln(os.Stderr, "usage: aster-network plan|status|verify|fingerprint|overlay-fingerprint|apply --config FILE [--topology FILE] [--confirm-bridge BRIDGE] [--revision N]")
 	}
 	os.Exit(code)
 }

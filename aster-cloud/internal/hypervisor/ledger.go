@@ -4,6 +4,7 @@ import (
 	"aster/billing/controllerapi"
 	"aster/cloud/internal/fabric"
 	"aster/cloud/internal/nodeproto"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -55,13 +56,14 @@ type Operation struct {
 const maxJournalBytes = 64 << 20
 
 type journal struct {
-	InboxTransfers    map[string]InboxTransfer    `json:"inbox_transfers,omitempty"`
-	StorageOperations map[string]StorageOperation `json:"storage_operations,omitempty"`
-	Artifacts         map[string]ArtifactRecord   `json:"artifacts,omitempty"`
-	Schema            int                         `json:"schema"`
-	NodeID            string                      `json:"node_id"`
-	Operations        map[string]Operation        `json:"operations"`
-	Instances         map[string]Instance         `json:"instances"`
+	NetworkRecoveries map[string]networkRecoveryRecord `json:"network_recoveries,omitempty"`
+	InboxTransfers    map[string]InboxTransfer         `json:"inbox_transfers,omitempty"`
+	StorageOperations map[string]StorageOperation      `json:"storage_operations,omitempty"`
+	Artifacts         map[string]ArtifactRecord        `json:"artifacts,omitempty"`
+	Schema            int                              `json:"schema"`
+	NodeID            string                           `json:"node_id"`
+	Operations        map[string]Operation             `json:"operations"`
+	Instances         map[string]Instance              `json:"instances"`
 }
 type Ledger struct {
 	mu        sync.Mutex
@@ -110,9 +112,16 @@ func OpenLedger(directory, nodeID string) (*Ledger, error) {
 			l.Close()
 			return nil, e
 		}
-		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2 && l.state.Schema != 3) || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
+		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2 && l.state.Schema != 3 && l.state.Schema != 4) || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
 			l.Close()
 			return nil, errors.New("invalid journal")
+		}
+		if l.state.Schema == 4 {
+			canonical, e := json.Marshal(l.state)
+			if e != nil || !bytes.Equal(bytes.TrimSpace(raw), canonical) {
+				l.Close()
+				return nil, errors.New("noncanonical recovery journal")
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		l.Close()
@@ -230,6 +239,9 @@ func (l *Ledger) Claim(task nodeproto.NodeTask, sha string) (nodeproto.NodeResul
 	if _, ok := l.state.StorageOperations[task.OperationID]; ok {
 		return nodeproto.NodeResult{}, false, ErrConflict
 	}
+	if _, ok := l.state.NetworkRecoveries[task.OperationID]; ok {
+		return nodeproto.NodeResult{}, false, ErrConflict
+	}
 	if op, ok := l.state.Operations[task.OperationID]; ok {
 		if op.Result.RequestSHA256 != sha {
 			return nodeproto.NodeResult{}, false, ErrConflict
@@ -237,7 +249,7 @@ func (l *Ledger) Claim(task nodeproto.NodeTask, sha string) (nodeproto.NodeResul
 		return op.Result, false, nil
 	}
 	result := nodeproto.NodeResult{Protocol: task.Protocol, OperationID: task.OperationID, RequestSHA256: sha, InstanceID: task.InstanceID, Status: "accepted"}
-	if task.Protocol == nodeproto.NetworkProtocol {
+	if task.Protocol == nodeproto.NetworkProtocol && l.state.Schema < 3 {
 		l.state.Schema = 3
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -254,7 +266,9 @@ func (l *Ledger) Reserve(instance Instance) error {
 		if !instance.Network.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: instance.ID, OwnerRef: instance.OwnerRef, Resources: instance.Resources}) {
 			return ErrOwnership
 		}
-		l.state.Schema = 3
+		if l.state.Schema < 3 {
+			l.state.Schema = 3
+		}
 	}
 	for _, existing := range l.state.Instances {
 		if existing.State != "deleted" && (instance.IPv4 != "" && existing.IPv4 == instance.IPv4 || !instance.Network.IsZero() && instance.Network.LeaseID == existing.Network.LeaseID) {
@@ -319,13 +333,16 @@ func (l *Ledger) Instance(id string) (Instance, bool) {
 }
 
 func (l *Ledger) validateLoaded() error {
+	if err := l.validateNetworkRecoveries(); err != nil {
+		return err
+	}
 	ips := map[string]bool{}
 	leases, taps := map[string]bool{}, map[string]bool{}
 	for id, op := range l.state.Operations {
 		if id != op.Task.OperationID || !op.Result.Matches(op.Task, op.Result.RequestSHA256) || op.Task.NodeID != l.state.NodeID {
 			return errors.New("invalid journal operation identity")
 		}
-		if !op.Task.Network.IsZero() && l.state.Schema != 3 {
+		if !op.Task.Network.IsZero() && l.state.Schema < 3 {
 			return errors.New("OVS task needs schema 3")
 		}
 		if _, e := time.Parse(time.RFC3339Nano, op.CreatedAt); e != nil {
@@ -337,7 +354,7 @@ func (l *Ledger) validateLoaded() error {
 			return errors.New("invalid journal instance identity")
 		}
 		if !i.Network.IsZero() {
-			if l.state.Schema != 3 || !i.Network.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: i.ID, OwnerRef: i.OwnerRef, Resources: i.Resources}) || i.IPv4 != i.Network.IPv4 || i.MAC != i.Network.MAC {
+			if l.state.Schema < 3 || !i.Network.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: i.ID, OwnerRef: i.OwnerRef, Resources: i.Resources}) || i.IPv4 != i.Network.IPv4 || i.MAC != i.Network.MAC {
 				return errors.New("invalid immutable OVS journal binding")
 			}
 			if i.State != "deleted" {

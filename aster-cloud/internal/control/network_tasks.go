@@ -118,5 +118,8 @@ func validateTaskNetwork(ctx context.Context, tx *sql.Tx, task nodeproto.NodeTas
 			return networkError(e)
 		}
 	}
+	if !n.IsZero() {
+		return overlayLifecycleGate(ctx, tx, task.InstanceID)
+	}
 	return nil
 }

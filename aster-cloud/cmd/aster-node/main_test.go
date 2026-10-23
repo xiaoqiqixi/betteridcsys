@@ -54,3 +54,16 @@ func TestRootImportApprovalModeRequiresExactPairedFlags(t *testing.T) {
 		t.Fatal(o, e)
 	}
 }
+
+func TestNetworkRecoveryModesRejectAmbiguityBeforeIO(t *testing.T) {
+	for _, args := range [][]string{{"--network-recovery-status="}, {"--recover-network="}, {"--recover-network", "relative.json"}, {"--recover-network", "/etc/../tmp/approval.json"}, {"--network-recovery-status", "private-v1", "--doctor=false"}, {"--recover-network", "/root/recovery.json", "--network-recovery-status", "private-v1"}, {"--recover-network", "/root/recovery.json", "--reconcile-operation", strings.Repeat("a", 32)}, {"--recover-network", "/root/recovery.json", "--reviewed-source-fence", strings.Repeat("a", 64)}} {
+		if _, e := parseArgs(args); e == nil {
+			t.Fatal("unsafe recovery parsed", args)
+		}
+	}
+	for _, args := range [][]string{{"--network-recovery-status", "private-v1"}, {"--recover-network", "/root/recovery.json"}} {
+		if _, e := parseArgs(args); e != nil {
+			t.Fatal(e)
+		}
+	}
+}

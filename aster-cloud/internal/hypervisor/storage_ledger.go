@@ -36,6 +36,9 @@ func (l *Ledger) ClaimStorage(task nodeproto.TypedStorageTask, sha string) (node
 	if _, ok := l.state.Operations[task.OperationID]; ok {
 		return nodeproto.StorageResult{}, false, ErrConflict
 	}
+	if _, ok := l.state.NetworkRecoveries[task.OperationID]; ok {
+		return nodeproto.StorageResult{}, false, ErrConflict
+	}
 	if op, ok := l.state.StorageOperations[task.OperationID]; ok {
 		if op.Result.RequestSHA256 != sha {
 			return nodeproto.StorageResult{}, false, ErrConflict
