@@ -6,7 +6,7 @@
 
 - **全局 VPC**：同一 cluster 中的 owner、私有 IPv4 CIDR 和唯一 VNI。与已有 node-bound local VPC 分开，不能混用 VLAN 与 VNI。
 - **成员**：引用原实例、节点、local VPC、pool、lease、原 `NetworkBinding.Digest()`，以及原 IP、MAC、interface UUID、双向限速。全局 IP 在 VPC 内唯一，成员 identity/lease/IP 不随网络 epoch 改写。
-- **epoch**：全量 VPC、所有成员（包括禁用成员）、root profile pins、路由网关配置的不可变快照。完整快照 SHA 和前一快照 SHA 固定在数据库中。
+- **epoch**：全量 VPC、所有成员（包括禁用成员）、root profile pins、路由网关和可选 NAT 策略的不可变快照。完整快照 SHA 和前一快照 SHA 固定在数据库中。
 - **Reserved 成员**：已在同一数据库事务中保留实例和原 IPAM 绑定，但尚未向节点发送创建任务的未来成员。不是已经创建/运行的 VM。创建完成后可以在下一 epoch 清除 `reserved`；未创建时不可清除。
 - **恢复 epoch**：新 operation ID、新 epoch；原成功、失败或未知快照与所有原节点 receipt 保留。只增加 `superseded_by` 关联，不将旧未知 receipt 改为成功。
 
@@ -43,6 +43,8 @@
 
 没有原 IPAM 租约的客户端输入不能通过填 IP/MAC 直接入网；API 只接受实例 ID 和 VPC ID，从数据库重建其余身份。
 
+后台已提供 VPC 创建、成员/路由/NAT 配置、阶段任务、只读核对与显式恢复。root 网关/NAT 安全投影、候选实例、迁移批准状态及字段边界见 [后台网络管理合同](NETWORK_MANAGEMENT.md)，节点私有审批见 [NAT 执行合同](../internal/fabric/NAT.md)。
+
 ## API
 
 基址 `/console/v1/overlays/`：
@@ -50,9 +52,11 @@
 | 方法/路径 | 作用 |
 | --- | --- |
 | GET `clusters` | 已批准 cluster ID 与节点 ID；不暴露凭据/URL/宿主路径 |
+| GET `options?cluster_id=…` | 批准 profile/映射/网关/NAT、完整实例候选和最新 epoch；不暴露私有 namespace/路径 |
 | POST `vpcs` | 创建全局 VPC；`Idempotency-Key` 为 32 位小写 hex ID |
 | GET `vpcs?cluster_id=…` | cluster 的全局 VPC；root 上限 32，不截断无提示 |
-| POST `epochs` | 冻结完整成员和网关快照，返回 202 |
+| GET `vpcs/{id}` | 按原创建 ID 查询完整 VPC，用于未知 ACK 核对 |
+| POST `epochs` | 冻结完整成员、网关与 NAT 快照，返回 202 |
 | GET `epochs?cluster_id=…&before_epoch=…` | 按 epoch 降序分页；`next_before_epoch` 继续访问历史 |
 | GET `epochs/{id}` | 不修改节点，返回冻结快照、每个节点阶段状态 |
 | POST `epochs/{id}/advance` | 启动异步后台推进；key 必须等于 epoch ID，body `{}` |
@@ -61,7 +65,9 @@
 
 创建 VPC 的 body：`cluster_id, owner_ref, name, cidr, vni` 全部必填。
 
-普通 epoch 的 body：`cluster_id, expected_epoch, members, gateways` 全部必填。成员为 `instance_id, vpc_id, enabled, reserved`；空数组必须写 `[]`，不能用 `null`。网关采用 `overlayproto.Gateway` 的固定实例/接口/IP/MAC/prefix，只有节点 root 明确批准且实时身份核对成功才可执行。网关允许前缀不可覆盖任何 VPC CIDR；host、underlay、metadata 等保护前缀由节点继续验证。该合同是批准网关附件与目的路由策略，不宣称本系统已自动部署 Internet/NAT 路由器。
+普通 epoch 的 body：`cluster_id, expected_epoch, members, gateways` 全部必填。成员为 `instance_id, vpc_id, enabled, reserved`；空数组必须写 `[]`，不能用 `null`。网关采用 `overlayproto.Gateway` 的固定实例/接口/IP/MAC/prefix，只有节点 root 明确批准且实时身份核对成功才可执行。网关允许前缀不可覆盖任何 VPC CIDR；host、underlay、metadata 等保护前缀由节点继续验证。该合同允许从 root 批准网关选择目的前缀子集或移除网关；不自动部署物理上联或无限制 Internet 路由器。
+
+可选 `nat_policies` 支持批准 namespace 的 IPv4 SNAT / TCP、UDP 单端口 DNAT；省略保留上次策略，显式 `[]` 清除，`null` 拒绝。每个 VPC 最多一份策略，目标必须是同 VPC 已启用冻结成员；端口、来源和目的前缀不能超出 root 批准。完整形状见 [NETWORK_MANAGEMENT.md](NETWORK_MANAGEMENT.md)。旧不含 NAT 的规范快照与摘要保持不变。
 
 接口采用精确字段名、禁止未知/重复/null 字段。任务使用规范 JSON 字节计算 SHA。数组顺序不构成新成员意图。相同 key 不同 actor 或不同 body 返回冲突，不更换既有 reservation。
 
@@ -69,7 +75,7 @@
 
 1. **prepare**：每个参与节点先持久记录意图并隔离整桥、核对/暂停完整本地 inventory。
 2. **program**：仅全部 prepare 确认后开始；各节点编程并读回完整规则，VM 仍不放行。
-3. **release**：仅全部 program 确认后开始；各节点核对并放行被允许成员。
+3. **release**：仅全部 program 确认后开始；各节点核对并放行被允许成员；NAT namespace 在完整规则核验和全节点 program 屏障后才开启 forwarding。
 
 没有“多数节点成功”的 quorum 规则。任务先持久 `sending`，再一次性 POST；HTTP 超时、断连、异常 receipt 都是 unknown。重启不会重发 sending/uncertain。overlay 采用独立 110 秒总超时/100 秒响应头预算，保留固定 DNS/CIDR、mTLS pin、禁代理/重定向/静默重拨；原节点协议的 10/6 秒预算不变。后台单 epoch 最长 30 分钟、最多 4 个并发协调器。
 
@@ -89,7 +95,7 @@
 }
 ```
 
-`replacement` 不提供时保持原快照恢复；提供时必须同时写完整 `members`、`gateways`（不是 merge patch），`null`、缺字段、重复字段均拒绝。它复用普通 Plan 的 owner/profile/mapping/IPAM/原 binding/全量 inventory 与唯一 IP 校验：不能省略仍未确认 deleted 的实例，不能修改原 node/2 identity、租约或财务字节；已归属成员的 unknown 生命周期由新恢复 epoch 和节点实际 ledger 再隔离核验。cluster、root pins、预期旧 SHA 与全部观察 head 不可借 replacement 变更。新 canonical snapshot SHA 以 `overlay.recovery.replacement` 审计，target 为 `<新operationID>:<新SHA>`；旧 snapshot 和失败 receipt 原样保留。前缀依然必须通过节点 root 的保护范围与实时核验，绝不因“恢复”放宽策略。
+`replacement` 不提供时保持原快照恢复；提供时必须同时写完整 `members`、`gateways`（不是 merge patch），二者的 `null`、缺字段、重复字段均拒绝；可选 `nat_policies` 的省略保留/显式空数组删除语义同普通 epoch。它复用普通 Plan 的 owner/profile/mapping/IPAM/原 binding/全量 inventory 与唯一 IP 校验：不能省略仍未确认 deleted 的实例，不能修改原 node/2 identity、租约或财务字节；已归属成员的 unknown 生命周期由新恢复 epoch 和节点实际 ledger 再隔离核验。cluster、预期旧 SHA 与全部观察 head 不可借 replacement 变更。root pins 不能从 HTTP 指定；普通恢复沿用批准 pin，仅节点与主控都明确审批旧→新 pin 的恢复可生成当前新 pin，详见 [配置迁移](NETWORK_MANAGEMENT.md#为已有集群启用新的-root-nat-配置)。新 canonical snapshot SHA 以 `overlay.recovery.replacement` 审计，target 为 `<新operationID>:<新SHA>`；旧 snapshot 和失败 receipt 原样保留。前缀依然必须通过节点 root 的保护范围与实时核验，绝不因“恢复”放宽策略。
 
 原 release 失败可能已有部分 VM 运行；因此恢复不能仅把一个节点的旧 receipt 改成成功，而必须重新隔离所有参与节点。即使主控最新 epoch 为 `succeeded`，后续 OVS 重启或成员生命周期故障也允许以精确 SHA 显式建立恢复 epoch；旧成功 receipt 仍原样保留。已被替代或不是最新的 epoch 不能重新取得控制权。主控不宣称多宿主事务原子性。
 
@@ -105,4 +111,4 @@ go test -race ./internal/overlayproto ./internal/control ./internal/networking
 go test -race ./internal/control -run '^TestMySQLOverlay' -count=1
 ```
 
-未配置 DSN 的 skip 不是 MySQL 通过。故障测试包含成功 epoch 后续故障恢复、错误网关拒绝后的明确 replacement（含 SHA 审计和事务回滚）、双节点 blocked/eligible 公平队列、all-node barrier、丢 ACK 无重发、只读核对、多轮恢复的落后/空 head、原快照不变、审计失败整体回滚、真实 TLS/CSRF/RBAC，以及财务/管理两条新增链先冻结 Reserved epoch 再允许 create。真实两台 KVM/OVS、路由流量、MTU、重启和故障注入仍需另行宿主验收，不能由 fake RPC 或 SQL 测试替代。
+未配置 DSN 的 skip 不是 MySQL 通过。故障测试包含成功 epoch 后续故障恢复、错误网关拒绝后的明确 replacement（含 SHA 审计和事务回滚）、双节点 blocked/eligible 公平队列、all-node barrier、丢 ACK 无重发、只读核对、多轮恢复的落后/空 head、原快照不变、审计失败整体回滚、真实 TLS/CSRF/RBAC，以及财务/管理两条新增链先冻结 Reserved epoch 再允许 create。本轮 NAT/后台管理的精确实测与跳过项见 [NAT_NETWORK_VALIDATION.md](NAT_NETWORK_VALIDATION.md)。真实两台 KVM/OVS、路由流量、MTU、重启和故障注入仍需另行宿主验收，不能由 fake RPC、SQL 或隔离 namespace NAT 测试替代。

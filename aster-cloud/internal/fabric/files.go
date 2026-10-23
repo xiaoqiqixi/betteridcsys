@@ -85,6 +85,7 @@ type record struct {
 	Bindings []binding `json:"bindings"`
 }
 type journal struct {
+	NATProfileIDs        []string           `json:"nat_profile_ids,omitempty"`
 	OverlayProfileSHA256 string             `json:"overlay_profile_sha256,omitempty"`
 	ArchiveHead          string             `json:"archive_head,omitempty"`
 	Recovery             *recoveryRecord    `json:"recovery,omitempty"`
@@ -236,6 +237,9 @@ func decodeJournal(raw []byte, j *journal) error {
 		var f map[string]json.RawMessage
 		if json.Unmarshal(raw, &f) != nil {
 			return ErrUnavailable
+		}
+		if _, ok := f["nat_profile_ids"]; ok {
+			keys = append(keys, "nat_profile_ids")
 		}
 		if _, ok := f["overlay_profile_sha256"]; ok {
 			keys = append(keys, "overlay_profile_sha256")
@@ -411,6 +415,14 @@ func Status(c Config, revision int64) (Receipt, error) {
 }
 
 func (l *ledger) validateState(j journal) error {
+	if len(j.NATProfileIDs) > 32 || len(j.NATProfileIDs) > 0 && (j.Schema != 3 || j.OverlayProfileSHA256 == "") {
+		return ErrUnavailable
+	}
+	for i, id := range j.NATProfileIDs {
+		if !nodeRE.MatchString(id) || i > 0 && id <= j.NATProfileIDs[i-1] {
+			return ErrUnavailable
+		}
+	}
 	if j.OverlayProfileSHA256 != "" && (j.Schema != 3 || !validSHA(j.OverlayProfileSHA256)) {
 		return ErrUnavailable
 	}

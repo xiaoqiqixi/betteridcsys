@@ -7,6 +7,7 @@ import { useQuery } from "../composables/query";
 import { networkID, networkPage, type NetworkKind } from "../api/network";
 import UiButton from "../components/UiButton.vue";
 import StateBlock from "../components/StateBlock.vue";
+import NetworkNav from "../components/NetworkNav.vue";
 import NetworkCreateDialog from "../components/NetworkCreateDialog.vue";
 
 const route = useRoute(),
@@ -16,11 +17,6 @@ const {
   prefs: { tr },
 } = useConsole();
 const kind = computed(() => route.params.kind as NetworkKind);
-const tabs = computed(() => [
-  { kind: "vpcs", label: tr("私有网络", "Private networks") },
-  { kind: "pools", label: tr("IP 地址池", "IP pools") },
-  { kind: "leases", label: tr("地址分配", "IP allocations") },
-]);
 const cursor = computed(() =>
   typeof route.query.cursor === "string" ? route.query.cursor : "",
 );
@@ -90,15 +86,7 @@ function page(value: string | null) {
         >
       </div>
     </header>
-    <nav class="network-tabs" :aria-label="tr('网络分类', 'Network sections')">
-      <RouterLink
-        v-for="tab in tabs"
-        :key="tab.kind"
-        :to="`/networks/${tab.kind}`"
-        :aria-current="kind === tab.kind ? 'page' : undefined"
-        >{{ tab.label }}</RouterLink
-      >
-    </nav>
+    <NetworkNav />
     <p class="network-boundary">
       {{
         tr(

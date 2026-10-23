@@ -1,0 +1,174 @@
+package control
+
+import (
+	"aster/cloud/internal/identity"
+	"aster/cloud/internal/overlayproto"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+)
+
+// Included only by the CI runner's explicit Go -overlay. This file is not part
+// of ordinary go test ./... or any production executable. Console HTTP, TLS,
+// sessions, RBAC, CSRF, audit, MySQL and the runner are real; node RPC is the
+// deterministic test double. This is NOT KVM/OVS/NAT dataplane acceptance.
+func TestOwnedNATBrowserFixture(t *testing.T) {
+	if os.Getenv("ASTER_BROWSER_CI") != "1" || os.Getenv("ASTER_MYSQL_TEST_DSN") == "" || os.Getenv("ASTER_CLOUD_TEST_DSN") != "" {
+		t.Fatal("explicit disposable MySQL browser fixture required; never skip")
+	}
+	caseDir, dist := os.Getenv("ASTER_BROWSER_CASE"), os.Getenv("ASTER_BROWSER_DIST")
+	if !filepath.IsAbs(caseDir) || !filepath.IsAbs(dist) {
+		t.Fatal("absolute private case and built UI required")
+	}
+	info, err := os.Lstat(caseDir)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+		t.Fatal("private case required")
+	}
+	if info, err := os.Stat(filepath.Join(dist, "index.html")); err != nil || !info.Mode().IsRegular() {
+		t.Fatal("built UI index required")
+	}
+	f := mysqlOverlayFixture(t)
+	gateway, policies := f.approveNAT(t)
+	ctx := context.Background()
+	if _, err = f.store.DB.Exec("UPDATE controller_overlay_vpcs SET name=? WHERE id=?", "业务内网", f.vpc.ID); err != nil {
+		t.Fatal("fixture VPC name unavailable")
+	}
+	f.vpc.Name = "业务内网"
+	epoch, _, err := f.store.PlanOverlayEpoch(ctx, f.config, f.actor, id(), OverlayEpochInput{ClusterID: f.vpc.ClusterID, Members: f.members, Gateways: []overlayproto.Gateway{gateway}, NATPolicies: &policies}, f.now)
+	if err != nil {
+		t.Fatal("initial epoch unavailable")
+	}
+	rpc := &overlayFakeRPC{}
+	worker := f.worker(rpc)
+	advanceOverlayFixture(t, worker, epoch.ID)
+	initialTasks, err := f.store.OverlayTasks(ctx, epoch.ID)
+	if err != nil {
+		t.Fatal("initial node receipts unavailable")
+	}
+	var initialSnapshot []byte
+	var initialAudit int
+	if err = f.store.DB.QueryRow("SELECT snapshot FROM controller_overlay_epochs WHERE id=?", epoch.ID).Scan(&initialSnapshot); err != nil {
+		t.Fatal("initial snapshot unavailable")
+	}
+	if err = f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_audit").Scan(&initialAudit); err != nil {
+		t.Fatal("initial audit count unavailable")
+	}
+	worker.Now = func() time.Time { return time.Now().UTC() }
+	rpc.lose = "program" // One lost ACK: receipt exists; GET reconcile must not re-POST.
+	const origin = "https://localhost:5447"
+	auth, err := identity.New(f.store.DB, identity.Config{Origin: origin})
+	if err != nil {
+		t.Fatal("fixture identity unavailable")
+	}
+	password, email := "Browser-NAT-"+id()+"!", "network-admin@example.invalid"
+	if _, err = auth.Bootstrap(ctx, email, "网络验收管理员", []byte(password)); err != nil {
+		t.Fatal("fixture bootstrap failed")
+	}
+	runner := NewOverlayRunner(worker)
+	defer runner.Close()
+	mux := http.NewServeMux()
+	console := Console{Store: f.store, Config: f.config, Identity: auth, OverlayWorker: &worker, OverlayRunner: runner}
+	mux.Handle("/console/v1/", console.Handler())
+	files := http.FileServer(http.Dir(dist))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		files.ServeHTTP(w, r)
+	}))
+	listener, err := net.Listen("tcp", "127.0.0.1:5447")
+	if err != nil {
+		t.Fatal("owned loopback listener unavailable")
+	}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	defer server.Close()
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.ServeTLS(listener, filepath.Join(caseDir, "server.pem"), filepath.Join(caseDir, "server.key"))
+	}()
+	credentials, err := json.Marshal(map[string]any{"email": email, "password": password, "origin": origin, "owner_ref": f.vpc.OwnerRef, "vpc_id": f.vpc.ID, "epoch_id": epoch.ID, "members": f.members, "gateway": gateway})
+	if err != nil || os.WriteFile(filepath.Join(caseDir, "browser-credentials.json"), credentials, 0600) != nil {
+		t.Fatal("private fixture credentials unavailable")
+	}
+	t.Log("READY: loopback HTTPS, independent MySQL; simulated node RPC, no VM commands")
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	lifetime := time.NewTimer(12 * time.Minute)
+	defer lifetime.Stop()
+	for {
+		select {
+		case <-lifetime.C:
+			t.Fatal("browser fixture exceeded bounded lifetime")
+		case err := <-serverDone:
+			if !errors.Is(err, http.ErrServerClosed) {
+				t.Fatal("owned HTTPS server failed")
+			}
+			t.Fatal("server stopped before explicit acceptance shutdown")
+		case <-ticker.C:
+			if _, err := os.Stat(filepath.Join(caseDir, "stop-browser")); err != nil {
+				continue
+			}
+			shutdown, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := server.Shutdown(shutdown)
+			cancel()
+			if err != nil {
+				t.Fatal("owned HTTPS shutdown failed")
+			}
+			runner.Close()
+			var epochs, audit, vpcs, completed int
+			for _, item := range []struct {
+				query string
+				value *int
+			}{
+				{"SELECT COUNT(*) FROM controller_overlay_epochs", &epochs},
+				{"SELECT COUNT(*) FROM controller_audit", &audit},
+				{"SELECT COUNT(*) FROM controller_overlay_vpcs", &vpcs},
+				{"SELECT COUNT(*) FROM controller_overlay_epochs WHERE state='succeeded'", &completed},
+			} {
+				if err := f.store.DB.QueryRow(item.query).Scan(item.value); err != nil {
+					t.Fatal("durable browser evidence unavailable")
+				}
+			}
+			for _, job := range f.jobs {
+				saved, err := f.store.Lookup(ctx, job.OperationID)
+				if err != nil || saved.RequestSHA != job.RequestSHA || saved.NodeRequestSHA != job.NodeRequestSHA || !bytes.Equal(saved.RequestJSON, job.RequestJSON) || !bytes.Equal(saved.NodeRequest, job.NodeRequest) {
+					t.Fatal("financial/node historical snapshot changed")
+				}
+			}
+			var savedSnapshot []byte
+			if err := f.store.DB.QueryRow("SELECT snapshot FROM controller_overlay_epochs WHERE id=?", epoch.ID).Scan(&savedSnapshot); err != nil || !bytes.Equal(savedSnapshot, initialSnapshot) {
+				t.Fatal("initial network snapshot changed")
+			}
+			savedTasks, err := f.store.OverlayTasks(ctx, epoch.ID)
+			if err != nil || !reflect.DeepEqual(savedTasks, initialTasks) {
+				t.Fatal("initial node receipt changed")
+			}
+			rpc.mu.Lock()
+			gets, posts, lostACKConsumed := rpc.gets, len(rpc.posts), rpc.lose == ""
+			uniquePosts := make(map[string]bool, posts)
+			for _, task := range rpc.posts {
+				uniquePosts[task.OperationID] = true
+			}
+			rpc.mu.Unlock()
+			// Initial, planned and recovered epochs each send exactly six unique
+			// tasks. Lost ACK reconciliation must never resend the original POST.
+			if epochs != 3 || vpcs != 2 || audit <= initialAudit || completed < 2 || gets < 1 || posts != 3*len(initialTasks) || len(uniquePosts) != posts || !lostACKConsumed {
+				t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
+			}
+			// Fixed schema: no emails, IDs, credentials, DSNs, cookies, SQL or logs.
+			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts})
+			if err != nil || os.WriteFile(filepath.Join(caseDir, "fixture.json"), result, 0600) != nil {
+				t.Fatal("sanitized durable result unavailable")
+			}
+			t.Log("PASS: durable UI operations; financial/node/network history unchanged")
+			return
+		}
+	}
+}

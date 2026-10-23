@@ -137,6 +137,9 @@ func (e *Executor) overlayLocal(ctx context.Context, c OverlayConfig, in Activat
 	}
 	owned := false
 	fail := func() (LiveVerification, error) {
+		nctx, ncancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = e.isolateNAT(nctx, c)
+		ncancel()
 		if owned {
 			cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = e.isolateOverlay(cctx, l)
@@ -147,7 +150,7 @@ func (e *Executor) overlayLocal(ctx context.Context, c OverlayConfig, in Activat
 		return LiveVerification{}, ErrUncertain
 	}
 	before, owned, err := e.probeOverlay(ctx, c, s, false)
-	if err != nil || !sameOverlayPorts(before, h.Ports) || e.ownedFlows(ctx) != nil {
+	if err != nil || !sameOverlayPorts(before, h.Ports) || e.ownedFlows(ctx) != nil || e.verifyNAT(ctx, c, l, s, true) != nil {
 		return fail()
 	}
 	if e.isolateOverlay(ctx, l) != nil {
@@ -198,7 +201,7 @@ func (e *Executor) overlayLocal(ctx context.Context, c OverlayConfig, in Activat
 	if start && callOverlayCallback(ctx, release) != nil {
 		return fail()
 	}
-	if e.verifyOverlayPlan(ctx, l, p) != nil {
+	if e.verifyOverlayPlan(ctx, l, p) != nil || e.verifyNAT(ctx, c, l, s, true) != nil {
 		return fail()
 	}
 	final, ok, err := e.probeOverlay(ctx, c, s, false)
@@ -222,6 +225,10 @@ func (e *Executor) overlayLocal(ctx context.Context, c OverlayConfig, in Activat
 	return op.Proof, nil
 }
 func overlayReadOnlyCommand(c Config, binary string, args []string) bool {
+	if binary == NATIP && len(args) == 6 && args[0] == "-j" && args[1] == "-d" && args[2] == "link" && args[3] == "show" && args[4] == "dev" && nameRE.MatchString(args[5]) {
+		return true
+	}
+
 	if binary == Vsctl && len(args) == 5 && args[0] == "--timeout=3" && args[1] == "--format=json" && args[3] == "list" {
 		return args[2] == "--columns=_uuid,name,ofport,type,external_ids,options,mtu" && args[4] == "Interface" || args[2] == "--columns=name,interfaces,tag,trunks,vlan_mode" && args[4] == "Port"
 	}
@@ -232,8 +239,8 @@ func overlayReadOnlyCommand(c Config, binary string, args []string) bool {
 }
 
 // Keep the permitted command surface explicit even though callbacks are trusted
-// root components. No shell, nftables, global forwarding or host route mutation
-// is part of this gateway-appliance attachment contract.
+// root components. NAT commands use a separately approved, descriptor-pinned
+// namespace. Host nftables, forwarding and routes remain read-only/unmodified.
 
 // OverlayCheck additionally proves the requested member is eligible and has its
 // exact live TAP, rather than treating an unrelated applied epoch as VM proof.
@@ -275,7 +282,7 @@ func (e *Executor) OverlayCheck(ctx context.Context, c OverlayConfig, in Activat
 		return LiveVerification{}, ErrUncertain
 	}
 	p, err := compileOverlay(c, s, ports)
-	if err != nil || reader.verifyOverlayPlan(ctx, l, p) != nil {
+	if err != nil || reader.verifyOverlayPlan(ctx, l, p) != nil || reader.verifyNAT(ctx, c, l, s, true) != nil {
 		return LiveVerification{}, ErrUncertain
 	}
 	after, _, err := reader.probeOverlay(ctx, c, s, false)

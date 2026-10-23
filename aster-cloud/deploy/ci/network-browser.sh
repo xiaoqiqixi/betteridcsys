@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Run only inside mysql-native.sh's disposable Unix-socket MySQL fixture.
+# Secrets, TLS keys, NSS profile, browser diagnostics and credentials stay in the
+# private scratch; only allowlisted PNGs and fixed-schema results are exported.
+set +x
+set -euo pipefail
+umask 077
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+[[ $(uname -s) == Linux && $EUID != 0 ]] || fail 'Use the unprivileged disposable Linux runner.'
+[[ -n ${ASTER_MYSQL_TEST_DSN:-} && -n ${ASTER_NATIVE_MYSQL_FIXTURE_ROOT:-} ]] || fail 'Disposable native MySQL is required.'
+[[ -n ${RUNNER_TEMP:-} && -d $RUNNER_TEMP ]] || fail 'Private runner scratch is required.'
+[[ -d ${PLAYWRIGHT_MODULE_DIR:-}/playwright && -d ${PLAYWRIGHT_BROWSERS_PATH:-} ]] || fail 'Pinned private Playwright installation is required.'
+for tool in go node python3 openssl certutil curl; do command -v "$tool" >/dev/null || fail "Missing required tool: $tool"; done
+node -e 'if(require(process.env.PLAYWRIGHT_MODULE_DIR+"/playwright/package.json").version!=="1.64.0")process.exit(1)' || fail 'Playwright must be exactly 1.64.0.'
+cloud=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+ci="$cloud/deploy/ci"
+[[ -f $cloud/frontend/dist/index.html ]] || fail 'Build the real frontend before browser acceptance.'
+[[ -f $ci/network-browser.mjs ]] || fail 'The required UI acceptance script is missing.'
+scratch=$(mktemp -d "$RUNNER_TEMP/aster-network-browser.XXXXXXXX")
+fixture_pid=''
+fixture_status=''
+fixture_done=false
+stop_fixture() {
+  [[ -n $fixture_pid && $fixture_done == false ]] || return 0
+  touch "$scratch/stop-browser"
+  local end=$((SECONDS + 35))
+  while kill -0 "$fixture_pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
+  if kill -0 "$fixture_pid" 2>/dev/null; then kill -TERM "$fixture_pid" 2>/dev/null || true; fi
+  fixture_status=0
+  wait "$fixture_pid" || fixture_status=$?
+  fixture_done=true
+}
+cleanup() {
+  local result=$?
+  trap - EXIT INT TERM
+  stop_fixture
+  rm -rf -- "$scratch"
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+unset ASTER_CLOUD_TEST_DSN
+export ASTER_BROWSER_CI=1 ASTER_BROWSER_CASE="$scratch" ASTER_BROWSER_DIST="$cloud/frontend/dist"
+export BASE_URL='https://localhost:5447' BROWSER_CREDENTIALS_FILE="$scratch/browser-credentials.json"
+export FIREFOX_PROFILE_DIR="$scratch/firefox-profile"
+export BROWSER_ARTIFACT_DIR="$cloud/artifacts/network-browser"
+export NO_PROXY='localhost,127.0.0.1,::1' no_proxy='localhost,127.0.0.1,::1'
+mkdir -p "$cloud/artifacts"
+mkdir "$BROWSER_ARTIFACT_DIR" || fail 'Refuse to mix results with an existing browser artifact directory.'
+mkdir "$FIREFOX_PROFILE_DIR"
+cat >"$scratch/ca.cnf" <<'CA'
+[req]
+prompt=no
+distinguished_name=subject
+x509_extensions=extensions
+[subject]
+CN=Aster disposable network browser localhost CA
+[extensions]
+basicConstraints=critical,CA:TRUE,pathlen:0
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+nameConstraints=critical,permitted;DNS:localhost,permitted;IP:127.0.0.1/255.255.255.255
+CA
+cat >"$scratch/server.cnf" <<'SERVER'
+[req]
+prompt=no
+distinguished_name=subject
+[subject]
+CN=localhost
+[extensions]
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:localhost,IP:127.0.0.1
+SERVER
+openssl req -new -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -config "$scratch/ca.cnf" -keyout "$scratch/ca.key" -out "$scratch/ca.pem" >"$scratch/openssl.log" 2>&1
+openssl req -new -newkey rsa:2048 -nodes -sha256 -config "$scratch/server.cnf" -keyout "$scratch/server.key" -out "$scratch/server.csr" >>"$scratch/openssl.log" 2>&1
+openssl x509 -req -sha256 -days 1 -in "$scratch/server.csr" -CA "$scratch/ca.pem" -CAkey "$scratch/ca.key" -CAcreateserial -extfile "$scratch/server.cnf" -extensions extensions -out "$scratch/server.pem" >>"$scratch/openssl.log" 2>&1
+# Signing is complete; this CA can no longer issue another certificate.
+rm -- "$scratch/ca.key"
+python3 - "$cloud" "$scratch" <<'PY'
+import json, pathlib, sys
+cloud, scratch = map(pathlib.Path, sys.argv[1:])
+(scratch / 'go-overlay.json').write_text(json.dumps({'Replace': {
+    str(cloud / 'internal/control/owned_nat_browser_fixture_test.go'):
+    str(cloud / 'deploy/ci/network-browser-fixture.gotxt')
+}}))
+PY
+(cd "$cloud" && go test -mod=readonly -race -overlay "$scratch/go-overlay.json" -c -o "$scratch/browser.test" ./internal/control)
+(cd "$cloud/internal/control" && exec "$scratch/browser.test" -test.v -test.count=1 -test.timeout=15m -test.run '^TestOwnedNATBrowserFixture$') >"$scratch/fixture.log" 2>&1 &
+fixture_pid=$!
+ready=false
+for ((attempt = 0; attempt < 900; attempt++)); do
+  kill -0 "$fixture_pid" 2>/dev/null || fail 'Private browser fixture stopped before readiness; raw logs withheld.'
+  if [[ -s $BROWSER_CREDENTIALS_FILE ]] && grep -q 'READY: loopback HTTPS' "$scratch/fixture.log"; then ready=true; break; fi
+  sleep 0.1
+done
+[[ $ready == true ]] || fail 'Browser fixture readiness timed out.'
+curl --fail --silent --show-error --cacert "$scratch/ca.pem" --resolve localhost:5447:127.0.0.1 --max-time 10 "$BASE_URL/" -o /dev/null
+# Only this new private NSS profile gets the CA; never modify host trust or
+# browser global policy, and never use ignoreHTTPSErrors or click through TLS.
+certutil -N -d "sql:$FIREFOX_PROFILE_DIR" --empty-password
+if ! node "$ci/network-browser-tls.mjs" untrusted >"$scratch/tls-negative.log" 2>&1; then fail 'Actual browser did not prove untrusted TLS rejection; raw browser diagnostics withheld.'; fi
+certutil -A -d "sql:$FIREFOX_PROFILE_DIR" -n aster-ci-localhost -t 'C,,' -i "$scratch/ca.pem"
+if ! node "$ci/network-browser-tls.mjs" trusted >"$scratch/tls-positive.log" 2>&1; then fail 'Private-profile CA did not establish strict browser TLS; raw browser diagnostics withheld.'; fi
+browser_status=0
+node "$ci/network-browser.mjs" >"$scratch/browser.log" 2>&1 || browser_status=$?
+# Always wait for the real backend's post-browser durable-history assertion,
+# including when UI checks fail. A screenshot or an accepted POST is not enough.
+stop_fixture
+if [[ $fixture_status != 0 ]]; then
+  python3 - "$scratch/fixture.log" "$BROWSER_ARTIFACT_DIR/fixture.json" <<'PYFAIL'
+import json, pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text(errors='replace')
+# Fixed vocabulary only: never serialize exception text, query/DSN or raw logs.
+checks = {
+    'financial/node historical snapshot changed': 'financial_or_node_history_changed',
+    'initial network snapshot changed': 'network_history_changed',
+    'initial node receipt changed': 'node_receipt_history_changed',
+    'required browser plan/reconcile/recovery/VPC persistence did not execute': 'required_browser_operations_missing',
+    'durable browser evidence unavailable': 'durable_evidence_unavailable',
+    'browser fixture exceeded bounded lifetime': 'fixture_lifetime_exceeded',
+    'DATA RACE': 'race_detected',
+}
+codes = [code for fragment, code in checks.items() if fragment in text] or ['fixture_test_failed']
+pathlib.Path(sys.argv[2]).write_text(json.dumps({'passed': False, 'codes': codes}))
+print('Backend fixture result: ' + ', '.join(codes))
+PYFAIL
+fi
+[[ $browser_status == 0 ]] || fail 'Actual browser UI acceptance failed; inspect sanitized report.json, not private logs.'
+[[ $fixture_status == 0 ]] || fail 'Backend durable-history acceptance failed; private fixture logs withheld.'
+grep -q '^--- PASS: TestOwnedNATBrowserFixture ' "$scratch/fixture.log" || fail 'Required browser fixture did not pass.'
+if grep -qE -- '--- (SKIP|FAIL):' "$scratch/fixture.log"; then fail 'Required browser fixture must never skip or fail.'; fi
+python3 - "$scratch/fixture.json" "$BROWSER_ARTIFACT_DIR" <<'PY'
+import json, pathlib, shutil, sys
+source, output = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+value = json.loads(source.read_text())
+assert value.get('passed') is True
+assert value.get('financial_and_node_snapshots_unchanged') is True
+assert value.get('initial_network_snapshot_and_receipts_unchanged') is True
+assert value.get('lost_ack_reconciled') is True
+assert value.get('node_posts_unique') is True and value.get('node_post_count') == 18
+report = json.loads((output / 'report.json').read_text())
+assert report.get('passed') is True, 'UI report must confirm completion'
+for path in output.iterdir():
+    assert path.is_file() and not path.is_symlink()
+    assert path.suffix == '.png' or path.name in {'report.json', 'tls.json'}, 'Artifact is not allowlisted'
+shutil.copyfile(source, output / 'fixture.json')
+PY
+printf 'PASS: actual desktop/mobile browser with strict TLS, real MySQL, UI plan/reconcile/recovery and immutable history. Node RPC is simulated; this is not KVM/dataplane acceptance.\n'

@@ -1,3 +1,7 @@
+> Optional root-approved namespace SNAT/DNAT now integrates with the overlay
+> commit/recovery/lifecycle gate; see [NAT.md](NAT.md). The historical
+> single-host baseline limitations below do not replace that explicit contract.
+
 # Root-only OVS fabric executor (development)
 
 **Current update:** the sections below describe the original single-host contract.

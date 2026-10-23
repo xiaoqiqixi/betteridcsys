@@ -1,6 +1,6 @@
 # Overlay 与受限网关执行器
 
-本目录实现的是 `aster.overlay/1` **固定 VXLAN 对端 + 完整成员快照 + 经批准网关 appliance 接入**，不是内置 NAT、DHCP、动态路由协议或公网开通系统。原 `aster.node/2` 绑定、财务金额、支付与历史快照没有换义。真实双 KVM 节点流量、故障切换与回包验收仍需专门环境。
+本目录实现的是 `aster.overlay/1` **固定 VXLAN 对端 + 完整成员快照 + 经批准网关 appliance 接入**，可选增加[固定 namespace NAT](NAT.md)：经 root 批准的 IPv4 SNAT / TCP、UDP DNAT 与三阶段恢复联动；不提供 DHCP、动态路由协议或公网自动开通。原 `aster.node/2` 绑定、财务金额、支付与历史快照没有换义。真实双 KVM 节点流量、故障切换与回包验收仍需专门环境。
 
 ## 独立 root 审批
 
@@ -33,7 +33,7 @@
 - metadata 的 remote-ingress bit 阻止 peer→peer transit；目的仅为同 VPC 精确 MAC/IP，ARP 按单目标定向。
 - 每个实际本地 VM 分别执行出站与入站 drop meter。它是 policer，不是排队整形，也不构成财务流量计费。
 - 发往 gateway 的 IP 必须命中其允许 prefix 与固定目的 MAC；gateway 返回流量只接受批准源 prefix/网关地址，再按精确成员目的转发。跨节点 gateway 的回包仍不能成为 tunnel transit。
-- 网关系统本身的 forwarding、return route、NAT（如需要）、公网和防火墙由专用 appliance 提供并独立验收；这里不修改宿主默认路由、全局 forwarding、nftables 或管理物理网卡。
+- 原 appliance 网关仍由外部系统提供 forwarding/return route。选择 root namespace NAT profile 后，本项目管理该专用 namespace 内的 nftables/forwarding/conntrack，固定 veth 路由与外部连接须由 root 预建并验证；详情见 [NAT.md](NAT.md)。不修改宿主默认路由、全局 forwarding、host nftables 或管理物理网卡。
 
 OVSDB 读回包括 Interface UUID/type/options/external_ids/实际 ofport，以及 Port 单一 Interface、空 tag/trunks/vlan_mode；ofport 是观察结果而非授权身份。tunnel csum/df 与固定端点精确核对，端口复用或外部改动会阻断。全局 Interface 读回还拒绝其它桥的重叠 VXLAN ingress tuple（包括 wildcard / flow 与默认 UDP 端口）；不同 cluster 不能只靠独立 VNI 复用同一未区分的隧道入口。
 

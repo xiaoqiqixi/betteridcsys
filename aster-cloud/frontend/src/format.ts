@@ -87,6 +87,61 @@ export const permissionNames: Record<string, [string, string]> = {
   "users.manage": ["管理成员与权限", "Manage members and access"],
 };
 export const auditNames: Record<string, [string, string]> = {
+  "overlay.vpc.created": ["VPC 已创建", "VPC created"],
+  "overlay.epoch.planned": ["网络变更已规划", "Network change planned"],
+  "overlay.member.reserved": ["网络成员已预留", "Network member reserved"],
+  "overlay.advance.requested": [
+    "请求继续网络变更",
+    "Network continuation requested",
+  ],
+  "overlay.reconcile.requested": [
+    "请求核对节点回执",
+    "Node receipt check requested",
+  ],
+  "overlay.recovery.planned": ["网络恢复已规划", "Network recovery planned"],
+  "overlay.recovery.replacement": [
+    "网络恢复配置已修正",
+    "Recovery configuration replaced",
+  ],
+  "overlay.prepare.sending": [
+    "网络准备正在派发",
+    "Network preparation sending",
+  ],
+  "overlay.prepare.succeeded": [
+    "网络准备已确认",
+    "Network preparation confirmed",
+  ],
+  "overlay.prepare.uncertain": [
+    "网络准备待核实",
+    "Network preparation unconfirmed",
+  ],
+  "overlay.prepare.rejected": [
+    "网络准备已拒绝",
+    "Network preparation rejected",
+  ],
+  "overlay.program.sending": [
+    "网络应用正在派发",
+    "Network application sending",
+  ],
+  "overlay.program.succeeded": [
+    "网络应用已确认",
+    "Network application confirmed",
+  ],
+  "overlay.program.uncertain": [
+    "网络应用待核实",
+    "Network application unconfirmed",
+  ],
+  "overlay.program.rejected": [
+    "网络应用已拒绝",
+    "Network application rejected",
+  ],
+  "overlay.release.sending": ["网络放行正在派发", "Network release sending"],
+  "overlay.release.succeeded": ["网络放行已确认", "Network release confirmed"],
+  "overlay.release.uncertain": [
+    "网络放行待核实",
+    "Network release unconfirmed",
+  ],
+  "overlay.release.rejected": ["网络放行已拒绝", "Network release rejected"],
   "network.vpc.planned": ["私有网络已规划", "Private network planned"],
   "network.pool.created": ["IP 地址池已创建", "IP pool created"],
   "network.lease.reserved": ["IP 地址已预留", "IP address reserved"],

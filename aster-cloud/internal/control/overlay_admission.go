@@ -43,6 +43,10 @@ func reserveOverlayCreation(ctx context.Context, tx *sql.Tx, candidate Candidate
 		return ErrState
 	}
 	snapshot := overlayproto.Snapshot{Protocol: overlayproto.Protocol, ClusterID: cluster.ClusterID, Epoch: previous.Epoch + 1, PreviousSHA256: previous.SnapshotSHA256, Profiles: append([]overlayproto.ProfilePin{}, cluster.Profiles...), VPCs: []overlayproto.VPC{}, Members: []overlayproto.Member{}, Gateways: append([]overlayproto.Gateway{}, previous.Snapshot.Gateways...)}
+	snapshot.NATPolicies = previous.Snapshot.NATPolicies
+	if !overlayPoliciesApproved(cluster, snapshot) {
+		return ErrState
+	}
 	// Confirmed deleted instances leave only the next active snapshot. Their
 	// original epoch, immutable binding and unique lease reservation are retained.
 	for _, old := range previous.Snapshot.Members {

@@ -218,7 +218,15 @@ func (m *Manager) startOVS(ctx context.Context, i Instance, t nodeproto.NodeTask
 	}
 	return e
 }
-func (m *Manager) checkOVS(ctx context.Context, i Instance, t nodeproto.NodeTask, sha string) error {
+func (m *Manager) checkOVS(ctx context.Context, i Instance, t nodeproto.NodeTask, sha string) (err error) {
+	// A broken root profile, boot policy or observation is not proof that a
+	// previously running guest is isolated. Cover every early return as well as
+	// the fabric check itself; the independent fence re-verifies ownership.
+	defer func() {
+		if err != nil {
+			m.fenceOVSGuest(i)
+		}
+	}()
 	if e := m.ovsBootPolicy(ctx, i); e != nil {
 		return e
 	}
@@ -234,9 +242,6 @@ func (m *Manager) checkOVS(ctx context.Context, i Instance, t nodeproto.NodeTask
 		return e
 	}
 	_, e = g.Check(ctx, intent)
-	if e != nil {
-		m.fenceOVSGuest(i)
-	}
 	return e
 }
 
@@ -274,7 +279,15 @@ func (m *Manager) assertOVSLink(ctx context.Context, i Instance, want string) er
 	}
 	return nil
 }
-func (m *Manager) stopOVS(ctx context.Context, i Instance, t nodeproto.NodeTask, sha, command string) error {
+func (m *Manager) stopOVS(ctx context.Context, i Instance, t nodeproto.NodeTask, sha, command string) (err error) {
+	// Deactivate may reject before invoking the stop callback (for example a
+	// stale overlay pin or damaged head). Do not leave an owned guest live just
+	// because its operation is now uncertain. Never retry shutdown/destroy.
+	defer func() {
+		if err != nil {
+			m.fenceOVSGuest(i)
+		}
+	}()
 	g, e := m.gateFor(i.Network)
 	if e != nil {
 		return e

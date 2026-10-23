@@ -374,8 +374,46 @@ func TestMySQLOverlayConsoleRequiresNetworkAndInstanceGrants(t *testing.T) {
 	admin.createUser(t, "overlay-network@example.invalid", "custom", []string{"nodes.read", "nodes.manage"})
 	read := newConsoleHTTPBrowser(t, server)
 	read.login(t, "overlay-read@example.invalid")
+	for _, path := range []string{"/console/v1/overlays/options?cluster_id=" + f.vpc.ClusterID, "/console/v1/overlays/vpcs/" + f.vpc.ID} {
+		status, raw := read.request(t, "GET", path, "", consoleHTTPOptions{})
+		if status != 200 {
+			t.Fatal("safe read endpoint not wired", path, status, string(raw))
+		}
+		for _, value := range []string{f.config.Nodes[0].ClientKeyFile, f.config.Nodes[0].Endpoint, f.config.DSNFile} {
+			if value != "" && strings.Contains(string(raw), value) {
+				t.Fatal("options leaked private profile")
+			}
+		}
+	}
+	for _, path := range []string{"/console/v1/overlays/options?cluster_id=" + f.vpc.ClusterID + "&cluster_id=" + f.vpc.ClusterID, "/console/v1/overlays/options?cluster_id=" + f.vpc.ClusterID + "&host_path=/root", "/console/v1/overlays/vpcs/" + f.vpc.ID + "?cluster_id=" + f.vpc.ClusterID} {
+		status, _ := read.request(t, "GET", path, "", consoleHTTPOptions{})
+		if status == 200 {
+			t.Fatal("ambiguous query accepted", path)
+		}
+	}
 	network := newConsoleHTTPBrowser(t, server)
 	network.login(t, "overlay-network@example.invalid")
+	// An unknown VPC creation acknowledgement is resolved by the exact ID;
+	// matching the complete original intent is possible without another POST.
+	vpcKey := id()
+	vpcInput := OverlayVPCInput{ClusterID: f.vpc.ClusterID, OwnerRef: f.vpc.OwnerRef, Name: "console-created", CIDR: "10.26.0.0/24", VNI: 502}
+	vpcBody := consoleHTTPJSON(t, vpcInput)
+	if status, _ := read.request(t, "POST", "/console/v1/overlays/vpcs", vpcBody, consoleHTTPOptions{idempotency: vpcKey}); status != 403 {
+		t.Fatal("read-only created VPC")
+	}
+	if status, _ := network.request(t, "POST", "/console/v1/overlays/vpcs", vpcBody, consoleHTTPOptions{idempotency: vpcKey, csrf: ptr("")}); status != 403 {
+		t.Fatal("VPC without CSRF")
+	}
+	if status, _ := network.request(t, "POST", "/console/v1/overlays/vpcs", vpcBody, consoleHTTPOptions{idempotency: vpcKey}); status != 201 {
+		t.Fatal("network manager cannot create VPC", status)
+	}
+	statusVPC, rawVPC := network.request(t, "GET", "/console/v1/overlays/vpcs/"+vpcKey, "", consoleHTTPOptions{})
+	var readVPC struct {
+		VPC OverlayVPC `json:"vpc"`
+	}
+	if statusVPC != 200 || json.Unmarshal(rawVPC, &readVPC) != nil || readVPC.VPC.ID != vpcKey || readVPC.VPC.Name != vpcInput.Name || readVPC.VPC.CIDR != vpcInput.CIDR || readVPC.VPC.OwnerRef != vpcInput.OwnerRef || readVPC.VPC.VNI != vpcInput.VNI || readVPC.VPC.ClusterID != vpcInput.ClusterID {
+		t.Fatal("exact create outcome not recoverable", statusVPC, string(rawVPC))
+	}
 	path := "/console/v1/overlays/epochs"
 	body := consoleHTTPJSON(t, OverlayEpochInput{ClusterID: f.vpc.ClusterID, Members: f.members, Gateways: []overlayproto.Gateway{}})
 	for _, b := range []*consoleHTTPBrowser{read, network} {
@@ -428,11 +466,21 @@ func TestMySQLOverlayMigrationRejectsDriftAndReenters(t *testing.T) {
 }
 
 func TestMySQLOverlayNewCreateReservesEpochBeforeNodeDispatch(t *testing.T) {
-	for _, kind := range []string{"billing", "console", "billing_after_delete", "billing_lost_ack", "console_lost_ack"} {
+	for _, kind := range []string{"billing", "console", "billing_after_delete", "billing_lost_ack", "console_lost_ack", "billing_nat"} {
 		t.Run(kind, func(t *testing.T) {
 			f := mysqlOverlayFixture(t)
 			ctx := context.Background()
-			initial := f.plan(t)
+			var initial OverlayEpoch
+			if kind == "billing_nat" {
+				g, policies := f.approveNAT(t)
+				var err error
+				initial, _, err = f.store.PlanOverlayEpoch(ctx, f.config, f.actor, id(), OverlayEpochInput{ClusterID: f.vpc.ClusterID, Members: f.members, Gateways: []overlayproto.Gateway{g}, NATPolicies: &policies}, f.now)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				initial = f.plan(t)
+			}
 			rpc := &overlayFakeRPC{}
 			worker := f.worker(rpc)
 			for i := 0; i < 6; i++ {
@@ -502,6 +550,13 @@ func TestMySQLOverlayNewCreateReservesEpochBeforeNodeDispatch(t *testing.T) {
 			epoch, e := f.store.OverlayEpoch(ctx, epochID)
 			if e != nil || epoch.Epoch != 2 || len(epoch.Snapshot.Members) != expectedMembers {
 				t.Fatal("future member not atomically reserved", e)
+			}
+			if kind == "billing_nat" {
+				before, _ := json.Marshal(initial.Snapshot.NATPolicies)
+				after, _ := json.Marshal(epoch.Snapshot.NATPolicies)
+				if string(before) != string(after) {
+					t.Fatal("automatic create rewrote existing NAT policy")
+				}
 			}
 			found := false
 			for _, m := range epoch.Snapshot.Members {
@@ -662,6 +717,9 @@ func TestMySQLOverlayRejectedGatewayCanRecoverWithApprovedReplacement(t *testing
 	ctx := context.Background()
 	gatewayID := id()
 	gateway := overlayproto.Gateway{NodeID: f.config.Nodes[0].ID, InstanceID: gatewayID, InterfaceID: nodeproto.NetworkInterfaceID(gatewayID), OwnerRef: f.vpc.OwnerRef, VPCID: f.vpc.ID, IPv4: "10.25.0.1", MAC: nodeproto.NetworkMAC(f.config.Nodes[0].ID, gatewayID), AllowedPrefixes: []string{"192.0.2.0/24"}}
+	approvedGateway := gateway
+	approvedGateway.AllowedPrefixes = []string{"192.0.2.0/24", "172.20.0.0/16"}
+	f.config.OverlayClusters[0].Gateways = []overlayproto.Gateway{approvedGateway}
 	initial, _, err := f.store.PlanOverlayEpoch(ctx, f.config, f.actor, id(), OverlayEpochInput{ClusterID: f.vpc.ClusterID, Members: f.members, Gateways: []overlayproto.Gateway{gateway}}, f.now)
 	if err != nil {
 		t.Fatal(err)

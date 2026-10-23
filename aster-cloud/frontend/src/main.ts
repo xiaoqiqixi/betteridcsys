@@ -4,6 +4,8 @@ import App from "./App.vue";
 import InstancesPage from "./pages/InstancesPage.vue";
 import InstanceDetailPage from "./pages/InstanceDetailPage.vue";
 import NodesPage from "./pages/NodesPage.vue";
+import OverlayNetworksPage from "./pages/OverlayNetworksPage.vue";
+import OverlayEpochPage from "./pages/OverlayEpochPage.vue";
 import NetworksPage from "./pages/NetworksPage.vue";
 import OperationsPage from "./pages/OperationsPage.vue";
 import OperationDetailPage from "./pages/OperationDetailPage.vue";
@@ -29,7 +31,17 @@ const router = createRouter({
       component: NodesPage,
       meta: { permission: "nodes.read" },
     },
-    { path: "/networks", redirect: "/networks/vpcs" },
+    { path: "/networks", redirect: "/networks/overlays" },
+    {
+      path: "/networks/overlays",
+      component: OverlayNetworksPage,
+      meta: { permission: "nodes.read" },
+    },
+    {
+      path: "/networks/epochs/:id",
+      component: OverlayEpochPage,
+      meta: { permission: "nodes.read" },
+    },
     {
       path: "/networks/:kind(vpcs|pools|leases)",
       component: NetworksPage,

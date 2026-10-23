@@ -9,7 +9,7 @@
 独立网络合同为 `aster.overlay/1`。root 明确批准的 `OverlayClusters`、每节点 `OVSProfile.overlay_config` 和完整配置摘要是必要条件。没有配置的旧单宿主网络保持原义。
 
 - 全局 VPC 单独分配 VNI，保留 owner、CIDR；成员引用原 lease、pool、local VPC 和完整 `NetworkBinding` SHA，不能只靠 MAC/IP 认领。
-- 全量 snapshot 包含所有参与节点 profile pin、成员和网关。每个节点检查本桥完整 inventory，不接受省略现有实例或改写租约。
+- 全量 snapshot 包含所有参与节点 profile pin、成员、网关及可选 NAT 策略。每个节点检查本桥完整 inventory，不接受省略现有实例或改写租约。
 - 新实例在原创建/IPAM事务中产生明确的 `reserved` 成员授权。所有节点完成该 epoch 后，才派发原创建任务；节点 paused/link-down 启动、TAP 身份核验、flow/meter 编程读回后才 resume。不存在的预留成员不产生本机放行规则，更不算 VM 已创建。
 - 同一专用桥的旧 CLI、单宿主 gate 和 overlay 不得并行覆盖规则。持久模式 pin 与同一个 flock 阻止退回旧 executor；删除 `overlay.owner` 不会恢复成未初始化桥。
 
@@ -23,7 +23,7 @@
 
 ### 集群显式恢复
 
-`POST /console/v1/overlays/epochs/{id}/recover` 使用**新的 Idempotency-Key**，提交精确 `expected_snapshot_sha256`。主控先读取每节点受 mTLS 保护的只读 head，再在事务中固定这些 head，创建新的 recovery epoch；可选完整 `replacement.members/gateways`，原 SHA 与实际 heads 不变，详见 `OVERLAY_CONTROL.md`。
+`POST /console/v1/overlays/epochs/{id}/recover` 使用**新的 Idempotency-Key**，提交精确 `expected_snapshot_sha256`。主控先读取每节点受 mTLS 保护的只读 head，再在事务中固定这些 head，创建新的 recovery epoch；可选完整 `replacement.members/gateways` 及可选 `replacement.nat_policies`，原 SHA 与实际 heads 不变，详见 `OVERLAY_CONTROL.md`。
 
 主控最新 epoch 已 `succeeded` 时，后续 OVS 重启或普通成员生命周期失败也可显式恢复；仍保留所有旧成功 receipt，不能恢复已被替代的旧 epoch。
 
@@ -49,11 +49,17 @@
 
 ### 受控网关路由
 
-实现的是**批准 router appliance 的实际受限转发**，不是本系统自建 NAT、Internet 接入或网络命名空间路由服务。
+保留**批准 router appliance 的实际受限转发**，并增加 root 预备专用 namespace 的受控 NAT 网关。两者均绑定明确身份和前缀，不提供无限制 Internet 默认出口或自动物理上联。
 
-网关具备固定 VPC/IP/MAC/TAP/接口身份和目的 prefix allowlist；客户机仅能向对应网关及批准目的转发，返回流量也受源 prefix 限制。拒绝与任何 VPC、root protected CIDRs、underlay 端点、loopback、link-local/metadata、multicast 等地址范围重叠的路由。网关不能被替换成宿主管理物理网卡。
+网关具备固定 VPC/IP/MAC/接口身份和目的 prefix allowlist；appliance 使用受管 TAP，NAT 网关使用单独批准和核验的 veth，不冒充 libvirt VM。客户机仅能向对应网关及批准目的转发，返回流量也受源 prefix 限制。拒绝与任何 VPC、root protected CIDRs、underlay 端点、loopback、link-local/metadata、multicast 等地址范围重叠的路由。网关不能被替换成宿主管理物理网卡。
 
-root `guest_networks` 把 local VPC / owner / CIDR 映射至批准 gateway 和同一 allowlist，供新 VM NoCloud 写入路由。既有 VM 的 guest 路由以及 appliance 的实际路由/NAT/返回路径仍是部署验收前置条件；不会修改历史 seed、假设客户机已执行配置或宣称公网已通。
+root `guest_networks` 把 local VPC / owner / CIDR 映射至批准 gateway 和同一 allowlist，供新 VM NoCloud 写入路由。既有 VM 的 guest 路由、appliance 自身配置及运营者提供的外部返回路径仍是部署验收前置条件；不会修改历史 seed、假设客户机已执行配置或宣称公网已通。
+
+### 批准 namespace NAT
+
+`Snapshot.nat_policies` 绑定 VPC、网关、节点和完整 root NAT profile SHA；支持 IPv4 SNAT、TCP/UDP 单端口 DNAT 到同 VPC 已启用冻结成员（包括跨节点成员）。目的与来源前缀、公共端口均受 root 审批和已选路由约束，不支持 `0.0.0.0/0`、IPv6/hairpin NAT、ICMP DNAT 或公共 IP 分配。
+
+NAT 跟随 prepare/program/release 屏障，使用 namespace 内 nft 原子替换、精确读回和 conntrack 撤销；策略修改会中断既有 NAT 连接。失败独立尝试关闭并核对 namespace forwarding，无法确认仍保留 unknown，不重放；root pin/namespace 重建须显式恢复，旧 owner 不能靠删文件或删配置遗忘。后台只操作安全投影，不接受 namespace/宿主路径或命令。完整前置条件与兼容语义见 [NAT 执行合同](../internal/fabric/NAT.md) 和 [后台网络管理合同](NETWORK_MANAGEMENT.md)。
 
 ## 归档与容量
 
@@ -63,20 +69,20 @@ root `guest_networks` 把 local VPC / owner / CIDR 映射至批准 gateway 和�
 
 ## 管理 API 与权限
 
-- `GET /console/v1/overlays/clusters`：已批准 cluster 与节点清单。
-- `POST /console/v1/overlays/vpcs`：创建全局 VPC；`GET .../vpcs?cluster_id=...` 查询该 cluster 的完整有界清单。
+- `GET /console/v1/overlays/clusters`：已批准 cluster 与节点清单；`GET .../options?cluster_id=...` 返回批准 profile/映射/网关/NAT 投影、实例候选及最新 epoch。
+- `POST /console/v1/overlays/vpcs`：创建全局 VPC；`GET .../vpcs?cluster_id=...` 查询该 cluster 的完整有界清单；`GET .../vpcs/{id}` 按原创建 ID 核对完整意图。
 - `POST /console/v1/overlays/epochs`：冻结完整 epoch；`GET .../epochs?cluster_id=...&before_epoch=...` 分页查询，响应 `next_before_epoch` 指向下一页。
 - `GET /console/v1/overlays/epochs/{id}`：详情和逐节点阶段结果，不派发节点写操作。
 - `POST .../epochs/{id}/advance`：异步后台推进；`POST .../epochs/{id}/reconcile` 只读远端原结果；二者 body 为 `{}`，Idempotency-Key 必须等于 epoch ID。
-- `POST .../epochs/{id}/recover`：新 key 和精确 `expected_snapshot_sha256` 创建恢复 epoch；可选完整 `replacement.members/gateways`，原 SHA 与实际 heads 不变，详见 `OVERLAY_CONTROL.md`。
+- `POST .../epochs/{id}/recover`：新 key 和精确 `expected_snapshot_sha256` 创建恢复 epoch；可选完整 `replacement.members/gateways` 及可选 `replacement.nat_policies`，原 SHA 与实际 heads 不变，详见 `OVERLAY_CONTROL.md`。
 - 读需 `nodes.read`；创建 VPC 另需 `nodes.manage`；规划/推进/核对/恢复 epoch 同时需 `nodes.manage` 与 `instances.manage`。保留 session、CSRF、TLS 与审计；节点接口只接受批准的控制器 mTLS 身份，不能靠前端隐藏按钮实现权限。
 
 `aster-controller serve` 的后台 runner 自动推进持久的未发送 epoch，发送前持久 claim；不会重发 sending/uncertain。完成 reserved epoch 后才调用原 worker 派发对应创建，随后通过原 ID/SHA 的 GET-only 核对收敛异步创建或成员生命周期结果，未知不重 POST。root `overlay_clusters[].mappings` 明确批准 node/local VPC → global VPC，不从客户参数推断归属。已确认删除的实例只从下一个活跃快照移除，原 epoch、绑定和租约历史仍保留。
 
-root 文件示例、规范摘要工具、配置顺序、备份与恢复边界见 [overlay 运维](../deploy/OVERLAY_OPERATIONS.md)。完整字段与请求示例见 [控制接口说明](OVERLAY_CONTROL.md)、`internal/overlayproto` 和 `internal/control/overlay_*`。root 配置变化会使旧 pin 失效；不要通过编辑数据库、删历史文件、改已有 profile ID 的设备归属来解除门禁。
+root 文件示例、规范摘要工具、配置顺序、备份与恢复边界见 [overlay 运维](../deploy/OVERLAY_OPERATIONS.md)。后台现可创建 VPC、编辑完整成员/路由/NAT、查看阶段任务、核对与恢复；字段与权限见 [后台网络管理合同](NETWORK_MANAGEMENT.md)。完整字段与请求示例见 [控制接口说明](OVERLAY_CONTROL.md)、`internal/overlayproto` 和 `internal/control/overlay_*`。root 配置变化会使旧 pin 失效；不要通过编辑数据库、删历史文件、改已有 profile ID 的设备归属来解除门禁。
 
 ## 测试与仍需真机验收
 
-源码包含 strict-contract、全阶段屏障、事务回滚、lost ACK 只查询、空/落后 head 恢复、身份/VNI/ARP/路由隔离、MTU、命令/存储故障、超过 64 次变更与重启重放测试。Linux CI 还运行独立真实 MySQL，以及 Ubuntu22/24 原生 `ovs-ofctl` 离线规则解析和真实 meter wire 编码检查；它们均不是 KVM 双宿主流量验收。
+源码包含 strict-contract、全阶段屏障、事务回滚、lost ACK 只查询、空/落后 head 恢复、身份/VNI/ARP/路由隔离、MTU、命令/存储故障、超过 64 次变更与重启重放测试。Linux CI 还运行独立真实 MySQL，以及 Ubuntu22/24 原生 `ovs-ofctl` 离线规则解析和真实 meter wire 编码检查；另有 Ubuntu22/24 隔离 namespace 原生 NAT 包流门禁；这些均不是 KVM 双宿主流量验收。本轮具体执行结果与跳过项见 [NAT 与网络管理验收记录](NAT_NETWORK_VALIDATION.md)。
 
 仍需两台独立 Ubuntu22+ KVM/OVS 节点验证 VM 双向数据、错误 peer/VNI 注入、ARP 欺骗、管理网隔离、MTU、meter 丢包精度、OVS/宿主重启、网关返回路由和连续恢复。没有这些证据，不应启用真实客户销售。

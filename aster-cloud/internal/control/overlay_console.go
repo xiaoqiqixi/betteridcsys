@@ -49,6 +49,24 @@ func (c Console) overlays(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method == http.MethodGet {
+		if len(parts) == 1 && parts[0] == "options" {
+			options, e := c.Store.OverlayOptions(r.Context(), c.Config, query.Get("cluster_id"))
+			if e != nil {
+				consoleError(w, e)
+				return
+			}
+			output(w, 200, options)
+			return
+		}
+		if len(parts) == 2 && parts[0] == "vpcs" && nodeproto.ValidID(parts[1]) && r.URL.RawQuery == "" {
+			vpc, e := c.Store.OverlayVPC(r.Context(), parts[1])
+			if e != nil {
+				consoleError(w, e)
+				return
+			}
+			output(w, 200, map[string]any{"vpc": vpc})
+			return
+		}
 		if len(parts) == 1 && parts[0] == "clusters" && r.URL.RawQuery == "" {
 			items := []map[string]any{}
 			for _, cluster := range c.Config.OverlayClusters {
