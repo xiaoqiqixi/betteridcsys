@@ -18,12 +18,12 @@
 | Go1.27.3 / Darwin arm64 全 scope race | **906 PASS 测试事件、0 FAIL/race**；22 个测试事件明确 SKIP：21 个缺 DSN 的入口/子项及 1 个要求真实 root policy 的 TLS 入口。没有将这些跳过算作本机实库成功。 |
 | Go 静态检查/构建 | vet、固定 actionlint1.7.7、shell 语法及 diff-check 通过；CGO=0/Linux amd64 的 controller、node、network、billing-plugin 四程序构建通过。 |
 | 财务旧合同/传输回归 | Go1.27.3 race：49 PASS 事件、0 SKIP/FAIL；覆盖原请求、结果和固定目的地传输。与全 scope 合同覆盖可能重叠，不合并数量。 |
-| 管理台 | 540 Vitest 用例 /15 文件，0 SKIP/FAIL；typecheck、Prettier check、production build 通过。**不是本轮浏览器或手机视觉验收。** |
+| 管理台 | 545 Vitest 用例 /15 文件，0 SKIP/FAIL；typecheck、Prettier check、production build 通过。**不是本轮浏览器或手机视觉验收。** |
 | 依赖扫描 | npm 全依赖扫描 0 漏洞；Go1.27.3 + govulncheck1.9.0 报未发现漏洞。先前本机 Go1.26.4 命中 17 个可达标准库漏洞，失败日志保留；改用与 CI 相同的独立工具链重新测试/构建/扫描，没有忽略告警或删除门禁。 |
 
-Go 源文件/SQL/合同 manifest 逐文件留存；CI 夹具修正后全量重跑对应 SHA256 为 `5afe0c6ea9616624b4eb4ddbbf9ad4eb0c8eaf672e5831713dbd4bdd2fe199a9`。前端 58 个 src/tests 文件冻结 manifest SHA 为 `21a17d678a213e7d1135bf3f3adc39bef9fa26bedf3e1cc566406ec3653bfd5b`。修正只改测试，生产代码、构建 JS/CSS/HTML 未变。
+Go 源文件/SQL/合同 manifest 逐文件留存；CI 夹具修正后全量重跑对应 SHA256 为 `5afe0c6ea9616624b4eb4ddbbf9ad4eb0c8eaf672e5831713dbd4bdd2fe199a9`。前端 58 个 src/tests 文件冻结 manifest SHA 为 `3ce04deb1daa573cc968b3d19a3c65d67fb7c01a884ccaa7ecf741b9c9fa3096`。Go 的 CI 修正只改测试；前端最终另修复了下述路由失效问题，构建资产已重新生成。
 
-最终前端构建为 `index-mP3EBj64.js` / `index-BEpCc0Of.css`，HTML SHA256 `26c862e9409b639ab6899e056bcbb08bcbd218b6c5092778702526a5d9767cda`。这些是本轮开发构建，不作为财务 Release 资产上传。
+最终前端构建为 `index-BsxKwddS.js` / `index-DbXj-mn0.css`，HTML SHA256 `e67ddf74aa3141480b728c811d2de09bd76d57601dd5c1e12be97684f4f1d0ed`。这些是本轮开发构建，不作为财务 Release 资产上传。
 
 ## Ubuntu22 真实隔离 MySQL / TLS
 
@@ -60,6 +60,14 @@ Go 源文件/SQL/合同 manifest 逐文件留存；CI 夹具修正后全量重�
 提交 `037e77f` 的 [cloud CI 39932974414](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39932974414) 中，Ubuntu22/24 单测构建及管理台检查通过，实库 job 在既有 hypervisor 取消时序测试失败：夹具把所有 virsh 命令都阻塞，Shutdown 可能落在只读 ownership 预检，此时生产逻辑正确返回 `LIVE_OWNERSHIP_UNCONFIRMED`，并非测试预期的“电源命令已发出但结果不明”。
 
 仅修改测试夹具，精确阻塞 `destroy`，用 channel 握手确认已通过 `dumpxml` / `domstate` 并进入变更命令后才取消；加强为同时核对 `uncertain` 与 `POWER_OUTCOME_UNCERTAIN`。保留持久化隔离、进程重启、其他动作受阻以及不能自动重发 destroy 的断言。没有 sleep、重试生产操作或放宽结果。确定性预检复现、定向 race 连跑 100 次、完整 hypervisor race、vet 及修正后的全量 906 PASS / 22 SKIP / 0 FAIL 均留存。本机 22 项跳过边界仍如上，不替代最终 GitHub 实库零跳过门禁。
+
+### 已通过的主控 CI 与最后路由回归
+
+提交 `31f4ab8` 的 [cloud CI 39934631704](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39934631704) 四项 job 全部通过：Ubuntu22/24 单测与构建、管理台检查、原生隔离 MySQL 与 root TLS / Go 扫描。实库 job 无 SKIP；这不替代真实 KVM/OVS 或新管理台浏览器验收。
+
+随后只读复核发现 Vue Router 复用 `/networks/:kind` 页面时，打开中的创建弹窗没有随 route 失效。已同步监听真实 `route.fullPath` 关闭旧弹窗，使旧 generation 失效并保留原 pending。新增 5 个 memory / WebHashHistory 情境，明确断言同 route record、同组件 UID，覆盖分类/分页变化、迟到成功与断连失败：POST 始终一次，迟到响应不清 pending、不通知或刷新新页；回原表单后只 GET 原 ID 才核对完成。最终 545 用例、typecheck、格式检查、build 通过。WebHashHistory 在 JSDOM 内运行，不冒充真实浏览器。该后续 main 的 GitHub 结果另行核对，不借用 `31f4ab8` 的通过状态。
+
+初次提交的 [性能基线 39932042358](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39932042358) 在 runner 下载 Ubuntu 包/字体时耗尽 25 分钟，测量步骤未执行；完整日志保留，不能写成性能通过。这不是主控实库失败，也没有通过改超时、换不可信源或跳过校验规避。
 
 ## 清理与明确未验证项
 

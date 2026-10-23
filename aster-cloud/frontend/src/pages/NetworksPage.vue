@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue";
+import { computed, shallowRef, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { Plus, RefreshCw } from "@lucide/vue";
 import { useConsole } from "../context";
@@ -37,6 +37,14 @@ const list = useQuery(
   (v) => networkPage(kind.value)(v),
 );
 const creating = shallowRef<NetworkKind | null>(null);
+// Vue Router reuses this page for /networks/:kind (and cursor changes). Closing
+// on the actual route identity disposes the old dialog's generation, so an ACK
+// for that page cannot resolve pending intent or report success on the new one.
+watch(
+  () => route.fullPath,
+  () => (creating.value = null),
+  { flush: "sync" },
+);
 const title = computed(() =>
   kind.value === "vpcs"
     ? tr("私有网络", "Private networks")
