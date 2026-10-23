@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DOMWrapper, flushPromises, mount } from "@vue/test-utils";
-import { createMemoryHistory, createRouter } from "vue-router";
+import {
+  createMemoryHistory,
+  createRouter,
+  createWebHashHistory,
+} from "vue-router";
 import { webcrypto } from "node:crypto";
 import { deferred } from "./helpers";
+import { node } from "./fixtures";
 
 const vpc = {
   id: "1".repeat(32),
@@ -40,6 +45,11 @@ beforeEach(() => {
   vi.resetModules();
   vi.stubGlobal("crypto", webcrypto);
   sessionStorage.clear();
+  Element.prototype.scrollIntoView = vi.fn();
+  vi.spyOn(history, "back").mockImplementation(() => {});
+  vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(
+    () => [new DOMRect(0, 0, 100, 44)] as unknown as DOMRectList,
+  );
 });
 afterEach(() => {
   cleanups
@@ -47,6 +57,8 @@ afterEach(() => {
     .reverse()
     .forEach((cleanup) => cleanup());
   document.body.innerHTML = "";
+  document.body.style.overflow = "";
+  history.replaceState(null, "", "/");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -58,6 +70,7 @@ const json = (data: unknown, status = 200) =>
 async function page(
   resolve: (path: string, init?: RequestInit) => Response | Promise<Response>,
   path = "/networks/vpcs",
+  hashHistory = false,
 ) {
   const [
     { default: Page },
@@ -78,12 +91,14 @@ async function page(
     );
   context.api = createApiClient(fetcher);
   const router = createRouter({
-    history: createMemoryHistory(),
+    history: hashHistory ? createWebHashHistory() : createMemoryHistory(),
     routes: [
+      { path: "/", redirect: "/networks/vpcs" },
       { path: "/networks/:kind(vpcs|pools|leases)", component: Page },
       { path: "/instances/:id", component: { template: "<div />" } },
     ],
   });
+  cleanups.push(() => router.options.history.destroy());
   await router.push(path);
   await router.isReady();
   const wrapper = mount(
@@ -98,7 +113,7 @@ async function page(
     },
   );
   cleanups.push(() => wrapper.unmount());
-  return { context, fetcher, router, wrapper };
+  return { context, fetcher, router, wrapper, pageComponent: Page };
 }
 function button(
   wrapper: { findAll(s: string): DOMWrapper<Element>[] },
@@ -110,6 +125,148 @@ function button(
 }
 
 describe("network inventory loading and read-only navigation", () => {
+  it.each([
+    { hashHistory: false, outcome: "success", target: "/networks/pools" },
+    { hashHistory: false, outcome: "failure", target: "/networks/pools" },
+    { hashHistory: true, outcome: "success", target: "/networks/pools" },
+    { hashHistory: true, outcome: "failure", target: "/networks/pools" },
+    {
+      hashHistory: true,
+      outcome: "success",
+      target: `/networks/vpcs?cursor=${"f".repeat(32)}`,
+    },
+  ])(
+    "disposes a pending dialog on same-record route reuse (hash: $hashHistory, late: $outcome, to: $target) and resolves only by original-ID GET",
+    async ({ hashHistory, outcome, target }) => {
+      const pending = deferred<Response>();
+      let original: Record<string, unknown> | undefined;
+      let originalKey = "";
+      const fixture = await page(
+        (path, init) => {
+          if (path === "/nodes")
+            return json({
+              items: [{ ...node, id: vpc.node_id }],
+              next_cursor: null,
+            });
+          if (init?.method === "POST") {
+            originalKey = (init.headers as Record<string, string>)[
+              "Idempotency-Key"
+            ]!;
+            original = {
+              ...vpc,
+              ...JSON.parse(String(init.body)),
+              id: originalKey,
+            };
+            return pending.promise;
+          }
+          if (path === `/networks/vpcs/${originalKey}`)
+            return json({ vpc: original });
+          return json({
+            items: [path === "/networks/pools" ? pool : vpc],
+            next_cursor: null,
+          });
+        },
+        "/networks/vpcs",
+        hashHistory,
+      );
+      fixture.context.api.setCSRF("fixture-csrf");
+      await flushPromises();
+      // Vue Test Utils can create different public proxies for the same setup
+      // component. The internal UID is unique per mount and proves real reuse.
+      const pageUID = fixture.wrapper.getComponent(fixture.pageComponent).vm.$
+        .uid;
+      const routeRecord = fixture.router.currentRoute.value.matched.at(-1);
+      const fillVPC = async () => {
+        const dialog = fixture.wrapper.get('[role="dialog"]');
+        for (const [label, value] of [
+          ["名称", "慢请求网络"],
+          ["客户归属 ID", vpc.owner_ref],
+          ["IPv4 网段", vpc.cidr],
+          ["VLAN ID", String(vpc.vlan_id)],
+        ]) {
+          const field = dialog
+            .findAll("label.field")
+            .find((item) => item.text().startsWith(label!));
+          expect(field).toBeDefined();
+          await field!.get("input").setValue(value);
+        }
+        const select = dialog.get('[role="combobox"][aria-label="计算节点"]');
+        await select.trigger("keydown", { key: "ArrowDown" });
+        await select.trigger("keydown", { key: "Home" });
+        await select.trigger("keydown", { key: "Enter" });
+      };
+      await button(fixture.wrapper, "新建网络").trigger("click");
+      await flushPromises();
+      await fillVPC();
+      await fixture.wrapper.get("form").trigger("submit");
+      const postCalls = () =>
+        fixture.fetcher.mock.calls.filter(
+          ([, init]) => init?.method === "POST",
+        );
+      await vi.waitFor(() => expect(postCalls()).toHaveLength(1));
+      expect(
+        fixture.wrapper.get('[role="dialog"] input').attributes("disabled"),
+      ).toBeDefined();
+      const pendingBefore = sessionStorage.getItem("aster.cloud.pending.v1");
+      expect(JSON.parse(pendingBefore!)).toHaveLength(1);
+
+      await fixture.router.push(target);
+      await flushPromises();
+      expect(fixture.wrapper.getComponent(fixture.pageComponent).vm.$.uid).toBe(
+        pageUID,
+      );
+      expect(
+        fixture.router.currentRoute.value.matched.at(-1) === routeRecord,
+      ).toBe(true);
+      expect(fixture.wrapper.get("h1").text()).toBe(
+        target.startsWith("/networks/pools") ? "IP 地址池" : "私有网络",
+      );
+      if (hashHistory) expect(location.hash).toBe(`#${target}`);
+      expect(fixture.wrapper.find('[role="dialog"]').exists()).toBe(false);
+      const callsAfterNavigation = fixture.fetcher.mock.calls.length;
+      if (outcome === "success")
+        pending.resolve(json({ vpc: original, replay: false }, 201));
+      else pending.reject(new TypeError("synthetic lost ACK"));
+      await flushPromises();
+      expect(postCalls()).toHaveLength(1);
+      expect(fixture.fetcher.mock.calls).toHaveLength(callsAfterNavigation);
+      expect(sessionStorage.getItem("aster.cloud.pending.v1")).toBe(
+        pendingBefore,
+      );
+      expect(fixture.context.notify).not.toHaveBeenCalled();
+      expect(fixture.wrapper.find('[role="dialog"]').exists()).toBe(false);
+
+      // Returning to the old form must recover the original key, not POST again.
+      await fixture.router.push("/networks/vpcs");
+      await flushPromises();
+      await button(fixture.wrapper, "新建网络").trigger("click");
+      await flushPromises();
+      await fillVPC();
+      await fixture.wrapper.get("form").trigger("submit");
+      await vi.waitFor(() =>
+        expect(fixture.wrapper.text()).toContain("结果尚未确认"),
+      );
+      expect(fixture.wrapper.text()).toContain(originalKey);
+      expect(postCalls()).toHaveLength(1);
+      await button(fixture.wrapper, "只读核对原记录").trigger("click");
+      await vi.waitFor(() =>
+        expect(
+          JSON.parse(sessionStorage.getItem("aster.cloud.pending.v1") || "[]"),
+        ).toHaveLength(0),
+      );
+      expect(postCalls()).toHaveLength(1);
+      expect(
+        fixture.fetcher.mock.calls.some(
+          ([url, init]) =>
+            url === `/console/v1/networks/vpcs/${originalKey}` &&
+            init?.method === "GET",
+        ),
+      ).toBe(true);
+      expect(fixture.context.notify).toHaveBeenCalledExactlyOnceWith(
+        "已找到原记录。",
+      );
+    },
+  );
   it("shows loading rather than empty data while a real GET is pending", async () => {
     const pending = deferred<Response>();
     const fixture = await page(() => pending.promise);
