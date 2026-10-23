@@ -83,6 +83,33 @@ func overlayPinsMatch(c Config, e OverlayEpoch) bool {
 	}
 	return true
 }
+
+// A new full root configuration is never silently adopted by ordinary edits.
+// Only recovery may cross an explicitly listed old pin while preserving the old
+// snapshot and observed heads. HTTP callers cannot supply this approval.
+func overlayRecoveryPinsApproved(c Config, e OverlayEpoch) bool {
+	cluster, ok := c.OverlayCluster(e.ClusterID)
+	if !ok || len(cluster.Profiles) != len(e.Snapshot.Profiles) {
+		return false
+	}
+	for _, old := range e.Snapshot.Profiles {
+		approved := false
+		for _, current := range cluster.Profiles {
+			if old == current {
+				approved = true
+			}
+		}
+		for _, previous := range cluster.PreviousProfiles {
+			if old == previous {
+				approved = true
+			}
+		}
+		if !approved {
+			return false
+		}
+	}
+	return true
+}
 func validateOverlayBindings(ctx context.Context, tx *sql.Tx, e OverlayEpoch) error {
 	for _, m := range e.Snapshot.Members {
 		v, err := scanInstance(tx.QueryRowContext(ctx, "SELECT id,owner_ref,node_id,hostname,state,resources,created_at,updated_at FROM controller_instances WHERE id=?", m.InstanceID))
@@ -114,6 +141,10 @@ func (s *SQLStore) claimOverlayTask(ctx context.Context, c Config, id, taskID st
 	wire := overlayTask(epoch, task.NodeID, task.Phase)
 	_, sha, err := wire.BytesAndDigest()
 	if err != nil || !ok || task.EpochID != epoch.ID || epoch.State != "pending" || task.Phase != epoch.Phase || task.State != "pending" || task.NodeProfileSHA256 != p.Digest() || task.RequestSHA256 != sha || !overlayPinsMatch(c, epoch) {
+		return epoch, task, ErrState
+	}
+	cluster, _ := c.OverlayCluster(epoch.ClusterID)
+	if !overlayPoliciesApproved(cluster, epoch.Snapshot) {
 		return epoch, task, ErrState
 	}
 	if e = validateOverlayBindings(ctx, tx, epoch); e != nil {

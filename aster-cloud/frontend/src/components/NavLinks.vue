@@ -37,7 +37,7 @@ const links = computed(() =>
       permission: "nodes.read",
     },
     {
-      path: "/networks/vpcs",
+      path: "/networks/overlays",
       label: tr("网络与 IP", "Networks & IP"),
       icon: Waypoints,
       permission: "nodes.read",
@@ -96,7 +96,7 @@ async function follow(
         :class="{
           'is-current':
             isActive ||
-            (link.path === '/networks/vpcs' &&
+            (link.path === '/networks/overlays' &&
               router.currentRoute.value.path.startsWith('/networks/')),
         }"
         :aria-current="isExactActive ? 'page' : undefined"

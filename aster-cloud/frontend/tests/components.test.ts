@@ -57,7 +57,7 @@ describe("custom controls", () => {
         "operations",
         "audit",
         "users",
-        "networks/vpcs",
+        "networks/overlays",
       ].map((name) => ({
         path: `/${name}`,
         component: { template: "<div />" },
@@ -73,7 +73,9 @@ describe("custom controls", () => {
     wrappers.push(wrapper);
     expect(wrapper.classes()).toContain("tone-surface");
     expect(wrapper.findAll("a")).toHaveLength(6);
-    expect(wrapper.get('a[href="/networks/vpcs"]').text()).toBe("网络与 IP");
+    expect(wrapper.get('a[href="/networks/overlays"]').text()).toBe(
+      "网络与 IP",
+    );
     expect(wrapper.get("a.is-current").text()).toBe("实例");
     await wrapper.get('a[href="/nodes"]').trigger("click");
     await flushPromises();

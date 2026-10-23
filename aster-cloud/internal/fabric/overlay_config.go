@@ -14,17 +14,19 @@ import (
 // peers: TrustedAck approves an independently isolated/authenticated underlay,
 // and TrustReference records the operator's evidence, not an encryption claim.
 type OverlayConfig struct {
-	Schema             int                    `json:"schema"`
-	Base               Config                 `json:"base"`
-	LocalIPv4          string                 `json:"local_ipv4"`
-	UnderlayMTU        int                    `json:"underlay_mtu"`
-	GuestMTU           int                    `json:"guest_mtu"`
-	UnderlayTrustedAck bool                   `json:"underlay_trusted_ack"`
-	TrustReference     string                 `json:"trust_reference"`
-	ProtectedCIDRs     []string               `json:"protected_cidrs"`
-	Peers              []OverlayPeer          `json:"peers"`
-	Gateways           []overlayproto.Gateway `json:"gateways"`
-	GuestNetworks      []OverlayGuestNetwork  `json:"guest_networks"`
+	Schema                int                    `json:"schema"`
+	Base                  Config                 `json:"base"`
+	LocalIPv4             string                 `json:"local_ipv4"`
+	UnderlayMTU           int                    `json:"underlay_mtu"`
+	GuestMTU              int                    `json:"guest_mtu"`
+	UnderlayTrustedAck    bool                   `json:"underlay_trusted_ack"`
+	TrustReference        string                 `json:"trust_reference"`
+	ProtectedCIDRs        []string               `json:"protected_cidrs"`
+	Peers                 []OverlayPeer          `json:"peers"`
+	Gateways              []overlayproto.Gateway `json:"gateways"`
+	GuestNetworks         []OverlayGuestNetwork  `json:"guest_networks"`
+	NATProfiles           []NATProfile           `json:"nat_profiles,omitempty"`
+	PreviousProfileSHA256 string                 `json:"previous_profile_sha256,omitempty"`
 }
 type OverlayGuestNetwork struct {
 	LocalVPCID      string   `json:"local_vpc_id"`
@@ -39,6 +41,9 @@ type OverlayPeer struct {
 }
 
 func canonicalOverlayConfig(c OverlayConfig) (OverlayConfig, error) {
+	if c.PreviousProfileSHA256 != "" && !overlayproto.ValidSHA(c.PreviousProfileSHA256) {
+		return c, ErrInvalid
+	}
 	ip, e := netip.ParseAddr(c.LocalIPv4)
 	if c.Schema != 1 || !c.Base.Validate() || e != nil || !ip.Is4() || !ip.IsGlobalUnicast() || ip.String() != c.LocalIPv4 || !c.UnderlayTrustedAck || len(c.TrustReference) < 1 || len(c.TrustReference) > 160 || strings.ContainsAny(c.TrustReference, "\x00\r\n") || c.UnderlayMTU < 1280 || c.UnderlayMTU > 9216 || c.GuestMTU < 576 || c.GuestMTU > c.UnderlayMTU-50 || c.ProtectedCIDRs == nil || len(c.ProtectedCIDRs) < 1 || len(c.ProtectedCIDRs) > 64 || c.Peers == nil || len(c.Peers) > 31 || c.Gateways == nil || len(c.Gateways) > 32 || c.GuestNetworks == nil || len(c.GuestNetworks) > 32 {
 		return OverlayConfig{}, ErrInvalid
@@ -112,6 +117,9 @@ func canonicalOverlayConfig(c OverlayConfig) (OverlayConfig, error) {
 		}
 		c.GuestNetworks[i] = g
 	}
+	if err := canonicalNATConfig(&c); err != nil {
+		return c, err
+	}
 	return c, nil
 }
 func OverlayConfigSHA256(c OverlayConfig) (string, error) {
@@ -127,7 +135,16 @@ func OverlayConfigSHA256(c OverlayConfig) (string, error) {
 }
 func DecodeOverlayConfig(raw []byte) (OverlayConfig, error) {
 	var c OverlayConfig
-	if object(raw, []string{"schema", "base", "local_ipv4", "underlay_mtu", "guest_mtu", "underlay_trusted_ack", "trust_reference", "protected_cidrs", "peers", "gateways", "guest_networks"}, &c) != nil {
+	keys := []string{"schema", "base", "local_ipv4", "underlay_mtu", "guest_mtu", "underlay_trusted_ack", "trust_reference", "protected_cidrs", "peers", "gateways", "guest_networks"}
+	var outer map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &outer)
+	if _, ok := outer["nat_profiles"]; ok {
+		keys = append(keys, "nat_profiles")
+	}
+	if _, ok := outer["previous_profile_sha256"]; ok {
+		keys = append(keys, "previous_profile_sha256")
+	}
+	if object(raw, keys, &c) != nil {
 		return c, ErrInvalid
 	}
 	var fields map[string]json.RawMessage
@@ -156,6 +173,36 @@ func DecodeOverlayConfig(raw []byte) (OverlayConfig, error) {
 		var g OverlayGuestNetwork
 		if object(r, []string{"local_vpc_id", "owner_ref", "cidr", "gateway_ipv4", "allowed_prefixes"}, &g) != nil {
 			return c, ErrInvalid
+		}
+	}
+	var profiles []json.RawMessage
+	if r, ok := fields["nat_profiles"]; ok {
+		if json.Unmarshal(r, &profiles) != nil || profiles == nil {
+			return c, ErrInvalid
+		}
+		for _, r := range profiles {
+			var p NATProfile
+			natKeys := []string{"id", "namespace", "namespace_device", "namespace_inode", "dedicated_ack", "vpc_id", "vpc_cidr", "gateway_instance_id", "inside_interface", "outside_interface", "outside_peer", "public_ipv4", "uplink_gateway_ipv4", "allow_snat", "allowed_source_cidrs", "allowed_ports"}
+			var natFields map[string]json.RawMessage
+			_ = json.Unmarshal(r, &natFields)
+			for _, key := range []string{"previous_profile_sha256", "retired_previous_namespace_ack"} {
+				if _, ok := natFields[key]; ok {
+					natKeys = append(natKeys, key)
+				}
+			}
+			if object(r, natKeys, &p) != nil {
+				return c, ErrInvalid
+			}
+			var f map[string]json.RawMessage
+			_ = json.Unmarshal(r, &f)
+			var ports []json.RawMessage
+			_ = json.Unmarshal(f["allowed_ports"], &ports)
+			for _, rr := range ports {
+				var pp NATPortRange
+				if object(rr, []string{"protocol", "start", "end"}, &pp) != nil {
+					return c, ErrInvalid
+				}
+			}
 		}
 	}
 	return canonicalOverlayConfig(c)
@@ -210,9 +257,18 @@ func validateOverlayApproval(c OverlayConfig, s overlayproto.Snapshot) (OverlayC
 	if !found {
 		return c, s, "", ErrInvalid
 	}
-	a, _ := json.Marshal(c.Gateways)
-	b, _ := json.Marshal(s.Gateways)
-	if string(a) != string(b) {
+	for _, g := range s.Gateways {
+		found := false
+		for _, root := range c.Gateways {
+			if gatewaySubset(g, root) {
+				found = true
+			}
+		}
+		if !found {
+			return c, s, "", ErrConflict
+		}
+	}
+	if validateNATApproval(c, s) != nil {
 		return c, s, "", ErrConflict
 	}
 	names := map[string]bool{}
@@ -225,7 +281,7 @@ func validateOverlayApproval(c OverlayConfig, s overlayproto.Snapshot) (OverlayC
 			names[n] = true
 		}
 	}
-	for _, g := range s.Gateways {
+	for _, g := range c.Gateways {
 		if g.NodeID == c.Base.NodeID {
 			n := TAPName(g.InstanceID)
 			if names[n] {
@@ -249,13 +305,22 @@ func validateOverlayApproval(c OverlayConfig, s overlayproto.Snapshot) (OverlayC
 				}
 				for _, g := range s.Gateways {
 					if g.VPCID == v.ID && g.IPv4 == gn.GatewayIPv4 {
-						a, _ := json.Marshal(g.AllowedPrefixes)
-						b, _ := json.Marshal(gn.AllowedPrefixes)
-						found = string(a) == string(b)
+						found = true
+						for _, r := range g.AllowedPrefixes {
+							if !prefixSubset(r, gn.AllowedPrefixes) {
+								found = false
+							}
+						}
 					}
 				}
 			}
-			if !found {
+			selected := false
+			for _, g := range s.Gateways {
+				if g.VPCID == m.VPCID {
+					selected = true
+				}
+			}
+			if selected && !found {
 				return c, s, "", ErrConflict
 			}
 		}

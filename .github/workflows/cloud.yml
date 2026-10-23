@@ -82,6 +82,39 @@ jobs:
           assert expected <= passed, 'required native parser tests did not execute'
           PYTEST
 
+  native-nat:
+    name: Native NAT packet flow and revocation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Install namespace tools (no network service)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y iproute2 nftables conntrack
+          /usr/sbin/nft --version
+      - name: Real isolated namespace traffic; no skips or host rule changes
+        working-directory: aster-cloud
+        run: |
+          set -euo pipefail
+          go test -mod=readonly -race -c -o "$RUNNER_TEMP/aster-nat.test" ./internal/fabric
+          sudo -- env ASTER_NATIVE_NAT=1 "$RUNNER_TEMP/aster-nat.test" -test.v -test.count=1 -test.timeout=3m -test.run '^TestNativeNAT' | tee native-nat.log
+          grep -q '^--- PASS: TestNativeNATPacketFlowAndRevocation ' native-nat.log
+          if grep -qE -- '--- (SKIP|FAIL):' native-nat.log; then
+            echo 'Native NAT gate must not skip or fail.' >&2; exit 1
+          fi
+
   management-ui:
     name: Vue management console checks
     runs-on: ubuntu-24.04
@@ -127,6 +160,62 @@ jobs:
         working-directory: aster-cloud
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format=text -show=version,verbose ./...
       - name: Remove only owned native scratch
+        if: always()
+        run: |
+          if [[ -n ${ASTER_NATIVE_FIXTURE_ROOT:-} ]]; then
+            [[ $ASTER_NATIVE_FIXTURE_ROOT =~ ^/run/aster-native\.[A-Za-z0-9]{8}$ ]]
+            sudo rm -rf -- "$ASTER_NATIVE_FIXTURE_ROOT"
+          fi
+
+  network-browser:
+    name: Real MySQL network management browser acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Build the real management frontend
+        working-directory: aster-cloud/frontend
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+      - name: Prepare disposable native runner
+        run: bash vps-billing/deploy/ci/prepare-native-runner.sh
+      - name: Install pinned private browser tools
+        run: |
+          set -euo pipefail
+          umask 077
+          tools_root=$(mktemp -d "$ASTER_NATIVE_FIXTURE_ROOT/browser-tools.XXXXXXXX")
+          npm install --prefix "$tools_root" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.64.0
+          export PLAYWRIGHT_BROWSERS_PATH="$tools_root/browsers"
+          node "$tools_root/node_modules/playwright/cli.js" install --with-deps firefox
+          sudo apt-get install --no-install-recommends -y libnss3-tools
+          printf 'PLAYWRIGHT_MODULE_DIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s\n' "$tools_root/node_modules" "$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+      - name: Strict TLS desktop/mobile UI and durable MySQL history; no skips
+        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash vps-billing/deploy/ci/mysql-native.sh -- bash aster-cloud/deploy/ci/network-browser.sh
+      - name: Publish only screenshots and sanitized acceptance results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: network-management-browser
+          path: |
+            aster-cloud/artifacts/network-browser/*.png
+            aster-cloud/artifacts/network-browser/report.json
+            aster-cloud/artifacts/network-browser/tls.json
+            aster-cloud/artifacts/network-browser/fixture.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove only owned native scratch, browser profile and test certificates
         if: always()
         run: |
           if [[ -n ${ASTER_NATIVE_FIXTURE_ROOT:-} ]]; then

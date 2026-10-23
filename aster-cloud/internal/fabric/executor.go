@@ -27,7 +27,7 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func (OSRunner) Run(ctx context.Context, binary string, args ...string) ([]byte, error) {
-	if binary != Vsctl && binary != Ofctl {
+	if binary != Vsctl && binary != Ofctl && binary != NATIP {
 		return nil, ErrInvalid
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)

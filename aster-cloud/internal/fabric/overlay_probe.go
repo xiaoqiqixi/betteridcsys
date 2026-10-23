@@ -150,7 +150,7 @@ func (e *Executor) probeOverlayAdmitting(ctx context.Context, c OverlayConfig, s
 			members[TAPName(m.InstanceID)] = m
 		}
 	}
-	for _, g := range s.Gateways {
+	for _, g := range c.Gateways {
 		if g.NodeID == c.Base.NodeID {
 			gateways[TAPName(g.InstanceID)] = g
 			required[TAPName(g.InstanceID)] = true
@@ -232,7 +232,9 @@ func (e *Executor) probeOverlayAdmitting(ctx context.Context, c OverlayConfig, s
 			o.Kind = "tunnel"
 			o.Identity = p.NodeID
 		} else {
-			if r[3] != "" && r[3] != "system" || len(opts) != 0 || e.tap(name) != nil {
+			gateway := gateways[name]
+			natProfile, isNAT := natGatewayProfile(c, gateway.InstanceID)
+			if r[3] != "" && r[3] != "system" || len(opts) != 0 || (!isNAT && e.tap(name) != nil) {
 				return nil, owned, ErrUnavailable
 			}
 			mtu, mok := ovsInt(r[6])
@@ -254,7 +256,12 @@ func (e *Executor) probeOverlayAdmitting(ctx context.Context, c OverlayConfig, s
 				o.Kind = "member"
 				o.Identity = m.InstanceID
 			} else if g, ok := gateways[name]; ok {
-				if ids["iface-id"] != g.InterfaceID || ids["attached-mac"] != g.MAC || ids["vm-id"] != DomainID(g.InstanceID) || ids["iface-status"] != "active" || ids["aster-node-id"] != c.Base.NodeID || ids["aster-owner"] != g.OwnerRef || ids["aster-gateway-vpc"] != g.VPCID {
+				if isNAT {
+					want := map[string]string{"aster-node-id": c.Base.NodeID, "aster-owner": g.OwnerRef, "aster-gateway-vpc": g.VPCID, "aster-nat-profile": natProfile.ID, "aster-interface-id": g.InterfaceID, "aster-gateway-mac": g.MAC}
+					if !equalMap(ids, want) || e.probeNAT(ctx, c, s, natProfile) != nil {
+						return nil, owned, ErrUnavailable
+					}
+				} else if ids["iface-id"] != g.InterfaceID || ids["attached-mac"] != g.MAC || ids["vm-id"] != DomainID(g.InstanceID) || ids["iface-status"] != "active" || ids["aster-node-id"] != c.Base.NodeID || ids["aster-owner"] != g.OwnerRef || ids["aster-gateway-vpc"] != g.VPCID {
 					return nil, owned, ErrUnavailable
 				}
 				o.Kind = "gateway"

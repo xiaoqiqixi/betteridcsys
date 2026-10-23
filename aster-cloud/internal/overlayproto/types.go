@@ -66,6 +66,7 @@ type Snapshot struct {
 	VPCs           []VPC        `json:"vpcs"`
 	Members        []Member     `json:"members"`
 	Gateways       []Gateway    `json:"gateways"`
+	NATPolicies    []NATPolicy  `json:"nat_policies,omitempty"`
 }
 
 // Head is an observed node journal position, not proof of connectivity.
@@ -211,6 +212,9 @@ func CanonicalSnapshot(s Snapshot) (Snapshot, string, error) {
 			}
 		}
 		s.Gateways[i] = g
+	}
+	if err := canonicalNAT(&s); err != nil {
+		return Snapshot{}, "", err
 	}
 	raw, e := json.Marshal(s)
 	if e != nil || len(raw) > MaxBytes {

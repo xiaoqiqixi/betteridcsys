@@ -71,9 +71,12 @@ type OverlayMapping struct {
 	VPCID      string `json:"vpc_id"`
 }
 type OverlayCluster struct {
-	ClusterID string                    `json:"cluster_id"`
-	Profiles  []overlayproto.ProfilePin `json:"profiles"`
-	Mappings  []OverlayMapping          `json:"mappings,omitempty"`
+	ClusterID        string                    `json:"cluster_id"`
+	Profiles         []overlayproto.ProfilePin `json:"profiles"`
+	PreviousProfiles []overlayproto.ProfilePin `json:"previous_profiles,omitempty"`
+	Mappings         []OverlayMapping          `json:"mappings,omitempty"`
+	Gateways         []overlayproto.Gateway    `json:"gateways,omitempty"`
+	NATProfiles      []OverlayNATProfile       `json:"nat_profiles,omitempty"`
 }
 
 func (c Config) OverlayCluster(id string) (OverlayCluster, bool) {
@@ -115,6 +118,25 @@ func (c Config) validOverlayClusters() bool {
 				return false
 			}
 			mappingKeys[key] = true
+		}
+		previousNodes := map[string]bool{}
+		if len(cluster.PreviousProfiles) > len(cluster.Profiles) {
+			return false
+		}
+		for _, old := range cluster.PreviousProfiles {
+			found := false
+			for _, current := range cluster.Profiles {
+				if current.NodeID == old.NodeID && current.ProfileID == old.ProfileID && current.ProfileSHA256 != old.ProfileSHA256 {
+					found = true
+				}
+			}
+			if !found || previousNodes[old.NodeID] || !overlayproto.ValidSHA(old.ProfileSHA256) {
+				return false
+			}
+			previousNodes[old.NodeID] = true
+		}
+		if !validOverlayPolicyApproval(cluster, nodes) {
+			return false
 		}
 	}
 	return true

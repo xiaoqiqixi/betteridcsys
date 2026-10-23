@@ -163,7 +163,7 @@ func (l *ledger) compact() error {
 	if len(old.Records) > 0 {
 		keep = append(keep, old.Records[len(old.Records)-1])
 	}
-	l.state = journal{OverlayProfileSHA256: old.OverlayProfileSHA256, Schema: 3, NodeID: l.cfg.NodeID, Bridge: l.cfg.Bridge, ArchiveHead: head, Records: keep, Activations: []activationRecord{}}
+	l.state = journal{NATProfileIDs: old.NATProfileIDs, OverlayProfileSHA256: old.OverlayProfileSHA256, Schema: 3, NodeID: l.cfg.NodeID, Bridge: l.cfg.Bridge, ArchiveHead: head, Records: keep, Activations: []activationRecord{}}
 	if err = l.save(); err != nil {
 		l.state = old
 		return err
@@ -203,6 +203,7 @@ func (l *ledger) lastRevision() int64 {
 
 func (j journal) MarshalJSON() ([]byte, error) {
 	type wire struct {
+		NATProfileIDs        []string            `json:"nat_profile_ids,omitempty"`
 		OverlayProfileSHA256 string              `json:"overlay_profile_sha256,omitempty"`
 		ArchiveHead          string              `json:"archive_head,omitempty"`
 		Recovery             *recoveryRecord     `json:"recovery,omitempty"`
@@ -212,7 +213,7 @@ func (j journal) MarshalJSON() ([]byte, error) {
 		Bridge               string              `json:"bridge"`
 		Records              []record            `json:"records"`
 	}
-	w := wire{OverlayProfileSHA256: j.OverlayProfileSHA256, ArchiveHead: j.ArchiveHead, Recovery: j.Recovery, Schema: j.Schema, NodeID: j.NodeID, Bridge: j.Bridge, Records: j.Records}
+	w := wire{NATProfileIDs: j.NATProfileIDs, OverlayProfileSHA256: j.OverlayProfileSHA256, ArchiveHead: j.ArchiveHead, Recovery: j.Recovery, Schema: j.Schema, NodeID: j.NodeID, Bridge: j.Bridge, Records: j.Records}
 	if j.Schema >= 2 {
 		a := j.Activations
 		if a == nil {
@@ -223,8 +224,9 @@ func (j journal) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w)
 }
 
-// The immutable initial approval digest is a mode tombstone, not the currently
-// active overlay profile (which can evolve through explicitly approved epochs).
+// The current approval digest is also a permanent overlay-mode tombstone.
+// Only explicit root-approved recovery can migrate the digest; no legacy
+// single-host entrypoint can downgrade the mode or erase NAT ownership IDs.
 func (l *ledger) overlayOwned() bool { return l.state.OverlayProfileSHA256 != "" }
 func (l *ledger) legacyGuard() error {
 	if l.overlayOwned() {
@@ -237,6 +239,9 @@ func (l *ledger) pinOverlay(sha string) error {
 		return ErrInvalid
 	}
 	if l.overlayOwned() {
+		if l.state.OverlayProfileSHA256 != sha {
+			return ErrConflict
+		}
 		return nil
 	}
 	if !settled(l.state) {

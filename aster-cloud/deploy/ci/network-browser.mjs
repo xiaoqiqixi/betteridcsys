@@ -1,0 +1,338 @@
+// Real browser acceptance for the isolated MySQL-backed console fixture.
+// All mutations go through visible UI controls. Evidence fetches below are GET-only.
+// Never persist cookies, storageState, HAR, credentials, raw response bodies or DOM.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing ${name}`);
+  return value;
+}
+const base = new URL(required('BASE_URL'));
+assert.equal(base.protocol, 'https:');
+assert(['localhost', '127.0.0.1', '[::1]'].includes(base.hostname));
+assert(!base.username && !base.password && base.pathname === '/');
+const output = path.resolve(required('BROWSER_ARTIFACT_DIR'));
+fs.mkdirSync(output, { recursive: true, mode: 0o700 });
+const credentials = JSON.parse(fs.readFileSync(required('BROWSER_CREDENTIALS_FILE'), 'utf8'));
+assert(typeof credentials.email === 'string' && credentials.email.endsWith('@example.invalid'));
+assert(typeof credentials.password === 'string' && credentials.password.length >= 16);
+assert(/^[a-f0-9]{32}$/.test(credentials.owner_ref));
+const { firefox } = await import(pathToFileURL(path.join(required('PLAYWRIGHT_MODULE_DIR'), 'playwright', 'index.mjs')).href);
+const report = {
+  schema: 1, status: 'running', passed: false, strict_tls: true, real_mysql: true,
+  node_rpc: 'Isolated deterministic test substitute; no real KVM or host networking actions.',
+  checks: [], screenshots: [], console_errors: [], requests: [],
+};
+let phase = 'launch', context, page, signedIn = false;
+const sensitive = new Set([credentials.password]);
+// Do not output a Playwright stack/call log: fill() diagnostics can contain secrets.
+function safeMessage(error) {
+  let value = String(error instanceof Error ? error.message : error).split('\n')[0].slice(0,500);
+  for (const secret of sensitive) if (secret) value = value.split(secret).join('[redacted]');
+  return value.replace(/(?:password|csrf|cookie|authorization)\s*[:=]\s*[^\s,;]+/gi, '[redacted]');
+}
+function check(name, data = {}) {
+  report.checks.push({ name, ...data });
+  console.log(`PASS ${name}`);
+}
+function posts(suffix) {
+  return report.requests.filter(r => r.method === 'POST' && (!suffix || r.path.endsWith(suffix))).length;
+}
+async function screenshot(name, fullPage = true) {
+  assert(signedIn, 'Screenshots must not include the sign-in form');
+  // Never capture an unexpected sign-in page after a session failure.
+  assert.equal(await page.locator('input[type="password"]').count(), 0);
+  await page.screenshot({ path: path.join(output, `${name}.png`), fullPage, animations: 'disabled' });
+  report.screenshots.push(`${name}.png`);
+}
+async function noOverflow(name) {
+  const size = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
+  assert(size.scroll <= size.width, `${name}: ${JSON.stringify(size)}`);
+  check(name, size);
+}
+async function read(suffix) {
+  assert(suffix.startsWith('/overlays/') && !suffix.includes('://'));
+  return page.evaluate(async suffix => {
+    const response = await fetch(`/console/v1${suffix}`, { method: 'GET', credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`Read-only evidence request failed (${response.status})`);
+    return response.json();
+  }, suffix);
+}
+async function dialogClosed() {
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  // UiOverlay removes its same-URL history entry on close.
+  await page.waitForFunction(() => !history.state?.asterOverlay);
+}
+async function pick(label, option) {
+  await page.getByRole('combobox', { name: label, exact: true }).click();
+  await page.getByRole('option', { name: option, exact: true }).click();
+}
+async function refreshDetail(id) {
+  await Promise.all([
+    page.waitForResponse(r => new URL(r.url()).pathname === `/console/v1/overlays/epochs/${id}` && r.request().method() === 'GET' && r.status() === 200),
+    page.getByRole('button', { name: '刷新', exact: true }).click(),
+  ]);
+  // StateBlock temporarily unmounts the detail while reloading. Wait for the
+  // response to be rendered before asserting controls or taking a screenshot.
+  await page.getByRole('heading', { name: /网络变更/ }).waitFor();
+}
+async function action(label, submit, id) {
+  await page.getByRole('button', { name: label, exact: true }).click();
+  await page.getByRole('dialog').locator('input').fill(id);
+  await page.getByRole('button', { name: submit, exact: true }).click();
+  await dialogClosed();
+  await refreshDetail(id);
+}
+async function advanceUntilStopped(id) {
+  let detail = await read(`/overlays/epochs/${id}`);
+  const before = posts('/advance');
+  if (detail.epoch.state === 'pending') {
+    // One explicit continuation starts the production asynchronous coordinator.
+    // Never loop POSTs while it is working or retry an uncertain original task.
+    await action('继续执行', '确认继续', id);
+  }
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    detail = await read(`/overlays/epochs/${id}`);
+    if (detail.epoch.state !== 'pending') {
+      await refreshDetail(id);
+      assert(posts('/advance') - before <= 1);
+      return detail;
+    }
+    await page.waitForTimeout(250); // GET-only bounded observation, not a write retry.
+  }
+  throw new Error('Network coordinator did not settle within 45 seconds');
+}
+
+function receiptProof(detail) {
+  return detail.tasks.map(t => ({
+    operation_id: t.operation_id, node_id: t.node_id, phase: t.phase,
+    request_sha256: t.request_sha256, result: t.result,
+  })).sort((a,b) => a.operation_id.localeCompare(b.operation_id));
+}
+
+try {
+  context = await firefox.launchPersistentContext(required('FIREFOX_PROFILE_DIR'), {
+    headless: true,
+    firefoxUserPrefs: { 'security.enterprise_roots.enabled': false },
+    ...(process.env.FIREFOX_EXECUTABLE_PATH ? { executablePath: process.env.FIREFOX_EXECUTABLE_PATH } : {}),
+    ignoreHTTPSErrors: false,
+    viewport: { width: 1440, height: 1000 },
+    colorScheme: 'light', locale: 'zh-CN', timezoneId: 'Asia/Shanghai',
+  });
+  page = context.pages()[0] || await context.newPage();
+  for (const extra of context.pages().filter(p => p !== page)) await extra.close();
+  page.setDefaultTimeout(15000);
+  page.on('pageerror', error => report.console_errors.push(safeMessage(error)));
+  page.on('response', response => {
+    const url = new URL(response.url()), request = response.request();
+    if (url.origin === base.origin && url.pathname.startsWith('/console/v1/overlays/')) {
+      // Deliberately no headers, bodies, query strings or cookie data.
+      report.requests.push({ method: request.method(), path: url.pathname, status: response.status() });
+    }
+  });
+
+  phase = 'sign-in';
+  await page.goto(new URL('#/networks/overlays', base).href, { waitUntil: 'networkidle' });
+  await page.getByLabel('邮箱', { exact: true }).fill(credentials.email);
+  await page.getByLabel('密码', { exact: true }).fill(credentials.password);
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
+  await page.getByRole('button', { name: '配置网络', exact: true }).waitFor();
+  signedIn = true;
+  // Keep secrets only in memory for error redaction; never serialize them.
+  for (const cookie of await context.cookies()) sensitive.add(cookie.value);
+  check('real session sign-in');
+  const initialOptions = await read('/overlays/options?cluster_id=cluster-fixture');
+  const initialID = initialOptions.latest_epoch.id;
+  const initial = await read(`/overlays/epochs/${initialID}`);
+  assert.equal(initial.epoch.state, 'succeeded');
+  assert.equal(initial.epoch.snapshot.nat_policies.length, 1);
+
+  phase = 'responsive-overview';
+  await screenshot('desktop-network');
+  await noOverflow('desktop overview has no horizontal overflow');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await screenshot('mobile-network');
+  await noOverflow('mobile overview has no horizontal overflow');
+  await page.getByRole('button', { name: '新建 VPC', exact: true }).click();
+  await screenshot('mobile-vpc-create', false);
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).focus();
+  for (let i = 0; i < 12; i++) {
+    await page.keyboard.press(i < 6 ? 'Tab' : 'Shift+Tab');
+    assert(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]')));
+  }
+  await page.keyboard.press('Escape');
+  await dialogClosed();
+  assert(await page.getByRole('button', { name: '新建 VPC', exact: true }).evaluate(el => el === document.activeElement));
+  check('dialog keyboard focus trap, Escape and focus restoration');
+  await page.getByRole('button', { name: '新建 VPC', exact: true }).click();
+  await page.goBack();
+  await dialogClosed();
+  assert(page.url().includes('#/networks/overlays'));
+  check('browser Back closes a clean dialog without leaving network management');
+
+  phase = 'create-vpc';
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '新建 VPC', exact: true }).click();
+  await page.getByLabel('名称', { exact: true }).fill('备份隔离网');
+  await page.getByLabel('客户归属 ID', { exact: false }).fill(credentials.owner_ref);
+  await page.getByLabel('IPv4 网段', { exact: true }).fill('10.44.0.0/24');
+  await page.getByLabel('VNI', { exact: false }).fill('504');
+  await screenshot('desktop-vpc-create', false);
+  const vpcBefore = posts('/overlays/vpcs');
+  await page.getByRole('button', { name: '创建 VPC', exact: true }).click();
+  await dialogClosed();
+  await page.getByRole('heading', { name: '备份隔离网', exact: true }).waitFor();
+  const vpcs = await read('/overlays/vpcs?cluster_id=cluster-fixture');
+  assert(vpcs.items.some(v => v.name === '备份隔离网' && v.cidr === '10.44.0.0/24' && v.vni === 504));
+  assert.equal(posts('/overlays/vpcs') - vpcBefore, 1);
+  check('one UI VPC creation is persisted in real MySQL', { vpc_count: vpcs.items.length });
+
+  phase = 'edit-route-nat';
+  await page.getByRole('button', { name: '配置网络', exact: true }).click();
+  await page.getByLabel('目标网段，每行一个', { exact: false }).fill('192.0.2.0/25');
+  await page.getByLabel('公开端口', { exact: true }).fill('40002');
+  await page.getByLabel('目标端口', { exact: true }).fill('2222');
+  await page.getByLabel('允许访问的来源网段', { exact: false }).fill('192.0.2.0/26');
+  await page.getByRole('button', { name: '添加端口映射', exact: true }).click();
+  assert.equal(await page.getByLabel('公开端口', { exact: true }).count(), 2);
+  await page.getByRole('button', { name: '删除端口映射 2', exact: true }).click();
+  assert.equal(await page.getByLabel('公开端口', { exact: true }).count(), 1);
+  check('NAT mapping add and remove controls preserve the intended mapping');
+  await page.getByRole('dialog').locator('.forwarding').scrollIntoViewIfNeeded();
+  await screenshot('desktop-nat-editor', false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('dialog').locator('.forwarding').scrollIntoViewIfNeeded();
+  await screenshot('mobile-nat-editor', false);
+  await noOverflow('mobile NAT dialog has no horizontal overflow');
+  const protocol = page.getByRole('combobox', { name: '协议', exact: true });
+  await protocol.focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('option', { name: 'TCP', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.getByRole('dialog').count(), 1);
+  assert.equal(await protocol.getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('select').count(), 0);
+  check('custom select is keyboard operable and Escape preserves the parent dialog');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click();
+  assert.equal(await page.getByLabel('公开端口', { exact: true }).inputValue(), '40002');
+  check('dirty form discard prompt preserves unsaved NAT edits');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('dialog').locator('#overlay-change-form input').fill('cluster-fixture');
+  const planBefore = posts('/overlays/epochs');
+  await page.getByRole('button', { name: '应用网络配置', exact: true }).click();
+  await dialogClosed();
+  await page.waitForURL(/#\/networks\/epochs\/[a-f0-9]{32}$/);
+  const epochID = page.url().split('/').at(-1);
+  let detail = await read(`/overlays/epochs/${epochID}`);
+  assert.equal(posts('/overlays/epochs') - planBefore, 1);
+  assert.deepEqual(detail.epoch.snapshot.gateways[0].allowed_prefixes, ['192.0.2.0/25']);
+  const forwarding = detail.epoch.snapshot.nat_policies[0].forwardings[0];
+  assert.equal(forwarding.public_port, 40002);
+  assert.equal(forwarding.target_port, 2222);
+  assert.equal(forwarding.source_cidr, '192.0.2.0/26');
+  check('route and NAT changes persisted in exactly one new epoch', { epoch: detail.epoch.epoch });
+
+  phase = 'lost-ack';
+  detail = await advanceUntilStopped(epochID);
+  assert.equal(detail.epoch.state, 'uncertain');
+  await page.getByRole('button', { name: '继续执行', exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await page.getByRole('button', { name: '继续执行', exact: true }).count(), 0);
+  await screenshot('desktop-unknown-result');
+  check('lost program ACK is shown as uncertain, never successful');
+  const mutationBeforeRefresh = posts();
+  await refreshDetail(epochID);
+  await refreshDetail(epochID);
+  assert.equal(posts(), mutationBeforeRefresh);
+  check('read-only detail refresh never repeats a POST');
+  const advanceBefore = posts('/advance');
+  await action('核对节点回执', '核对回执', epochID);
+  assert.equal(posts('/advance'), advanceBefore);
+  detail = await read(`/overlays/epochs/${epochID}`);
+  assert.equal(detail.epoch.state, 'pending');
+  check('receipt reconciliation confirms the existing task without retrying advance');
+  detail = await advanceUntilStopped(epochID);
+  assert.equal(detail.epoch.state, 'succeeded');
+  check('explicit continuation completes the remaining phases');
+  const originalReceipts = receiptProof(detail);
+  const originalSnapshot = detail.epoch.snapshot;
+  const originalSHA = detail.epoch.snapshot_sha256;
+
+  phase = 'explicit-recovery';
+  await page.getByRole('button', { name: '恢复网络', exact: true }).click();
+  await page.getByRole('dialog').locator('#overlay-change-form input').fill(epochID);
+  await screenshot('desktop-recovery-dialog', false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await screenshot('mobile-recovery-dialog', false);
+  await noOverflow('mobile recovery dialog has no horizontal overflow');
+  await page.getByRole('button', { name: '提交恢复', exact: true }).click();
+  await dialogClosed();
+  await page.waitForURL(u => /#\/networks\/epochs\/[a-f0-9]{32}$/.test(u.href) && !u.href.endsWith(epochID));
+  const recoveryID = page.url().split('/').at(-1);
+  detail = await read(`/overlays/epochs/${recoveryID}`);
+  assert(detail.epoch.recovery);
+  assert.notEqual(recoveryID, epochID);
+  assert.equal(detail.epoch.epoch, initial.epoch.epoch + 2);
+  check('explicit recovery creates a distinct persisted epoch', { epoch: detail.epoch.epoch });
+  detail = await advanceUntilStopped(recoveryID);
+  assert.equal(detail.epoch.state, 'succeeded');
+  assert.equal(detail.tasks.length, detail.epoch.snapshot.profiles.length * 3);
+  check('recovery completes every node in all three phases via UI', { tasks: detail.tasks.length });
+  await screenshot('mobile-recovery-complete');
+  await noOverflow('mobile recovery detail has no horizontal overflow');
+  const original = await read(`/overlays/epochs/${epochID}`);
+  assert.equal(original.epoch.superseded_by, recoveryID);
+  assert.equal(original.epoch.snapshot_sha256, originalSHA);
+  assert.deepEqual(original.epoch.snapshot, originalSnapshot);
+  assert.deepEqual(receiptProof(original), originalReceipts);
+  const untouched = await read(`/overlays/epochs/${initialID}`);
+  assert.equal(untouched.epoch.snapshot_sha256, initial.epoch.snapshot_sha256);
+  assert.deepEqual(untouched.epoch.snapshot, initial.epoch.snapshot);
+  assert.deepEqual(receiptProof(untouched), receiptProof(initial));
+  check('recovery preserves original snapshots and task receipts');
+
+  phase = 'navigation-appearance';
+  await page.getByRole('link', { name: '返回网络管理', exact: true }).click();
+  await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
+  await page.goBack();
+  await page.getByRole('heading', { name: /网络变更/ }).waitFor();
+  await page.goForward();
+  await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
+  check('browser Back and Forward restore the expected network pages');
+  await page.getByRole('button', { name: '语言与外观', exact: true }).click();
+  await pick('界面语言', 'English');
+  await pick('Appearance', 'Dark');
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await dialogClosed();
+  await screenshot('mobile-network-english-dark');
+  await noOverflow('mobile English dark page has no horizontal overflow');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await screenshot('desktop-network-english-dark');
+  await noOverflow('desktop English dark page has no horizontal overflow');
+  // Read only rendered text to catch accidental raw ISO rendering; never serialize DOM.
+  assert(!/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z/.test(await page.locator('main').innerText()));
+  check('visible dates are localized, not raw microsecond ISO values');
+  assert.deepEqual(report.console_errors, []);
+  check('no browser JavaScript errors');
+  report.status = 'passed';
+  report.passed = true;
+  console.log('PASS real MySQL network management browser acceptance');
+} catch (error) {
+  report.status = 'failed';
+  report.failure = { phase, kind: error instanceof Error ? error.name : 'Error', message: safeMessage(error) };
+  // No raw error object/stack or HTML. A screenshot is safe only on a signed-in business page.
+  if (signedIn && page && !page.isClosed()) {
+    try { await screenshot('failure'); } catch { /* Do not mask the original failure. */ }
+  }
+  console.error(`FAIL ${phase}: ${safeMessage(error)}`);
+  process.exitCode = 1;
+} finally {
+  if (context) { try { await context.close(); } catch { /* Browser may have already stopped. */ } }
+  fs.writeFileSync(path.join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+}

@@ -42,6 +42,9 @@ type OverlayEpochInput struct {
 	ExpectedEpoch int64                  `json:"expected_epoch"`
 	Members       []OverlayMemberInput   `json:"members"`
 	Gateways      []overlayproto.Gateway `json:"gateways"`
+	// nil preserves the preceding NAT intent; an explicit empty list removes it.
+	// A pointer keeps these distinct in the idempotency digest.
+	NATPolicies *[]overlayproto.NATPolicy `json:"nat_policies,omitempty"`
 }
 type OverlayEpoch struct {
 	ID             string                 `json:"id"`
@@ -59,15 +62,16 @@ type OverlayEpoch struct {
 	SupersededBy   string                 `json:"superseded_by"`
 }
 type OverlayNodeTask struct {
-	OperationID       string    `json:"operation_id"`
-	EpochID           string    `json:"epoch_id"`
-	NodeID            string    `json:"node_id"`
-	Phase             string    `json:"phase"`
-	State             string    `json:"state"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	NodeProfileSHA256 string    `json:"-"`
-	RequestSHA256     string    `json:"request_sha256"`
-	Receipt           []byte    `json:"-"`
+	OperationID       string                `json:"operation_id"`
+	EpochID           string                `json:"epoch_id"`
+	NodeID            string                `json:"node_id"`
+	Phase             string                `json:"phase"`
+	State             string                `json:"state"`
+	UpdatedAt         time.Time             `json:"updated_at"`
+	NodeProfileSHA256 string                `json:"-"`
+	RequestSHA256     string                `json:"request_sha256"`
+	Receipt           []byte                `json:"-"`
+	Result            *overlayproto.Receipt `json:"result,omitempty"`
 }
 
 const overlayVPCColumns = "id,cluster_id,owner_ref,name,cidr,vni,created_at"
@@ -140,6 +144,15 @@ func scanOverlayTask(row interface{ Scan(...any) error }) (OverlayNodeTask, erro
 		return v, e
 	}
 	if v.OperationID != overlayproto.PhaseOperationID(v.EpochID, v.NodeID, v.Phase) || !nodeproto.ValidID(v.EpochID) || !nodeproto.ValidNodeID(v.NodeID) || !overlayproto.ValidPhase(v.Phase) || !shaRE.MatchString(v.NodeProfileSHA256) || !shaRE.MatchString(v.RequestSHA256) || !(v.State == "pending" || v.State == "sending" || v.State == "uncertain" || v.State == "succeeded" || v.State == "rejected") || !validOverlayTime(v.UpdatedAt) {
+		return v, ErrState
+	}
+	if len(v.Receipt) > 0 {
+		receipt, err := overlayproto.DecodeReceipt(v.Receipt)
+		if err != nil || receipt.OperationID != v.OperationID || receipt.NodeID != v.NodeID || receipt.Phase != v.Phase || receipt.RequestSHA256 != v.RequestSHA256 || receipt.Status != v.State {
+			return v, ErrState
+		}
+		v.Result = &receipt
+	} else if v.State == "succeeded" || v.State == "rejected" {
 		return v, ErrState
 	}
 	return v, nil
@@ -232,6 +245,21 @@ func canonicalOverlayInput(in OverlayEpochInput) (OverlayEpochInput, string, err
 		sort.Strings(g.AllowedPrefixes)
 		in.Gateways[i] = g
 	}
+	if in.NATPolicies != nil {
+		if *in.NATPolicies == nil || len(*in.NATPolicies) > 32 {
+			return in, "", ErrInput
+		}
+		policies := append([]overlayproto.NATPolicy{}, (*in.NATPolicies)...)
+		sort.Slice(policies, func(i, j int) bool { return policies[i].ID < policies[j].ID })
+		for i := range policies {
+			if policies[i].Forwardings == nil || len(policies[i].Forwardings) > 128 {
+				return in, "", ErrInput
+			}
+			policies[i].Forwardings = append([]overlayproto.NATForwarding{}, policies[i].Forwardings...)
+			sort.Slice(policies[i].Forwardings, func(a, b int) bool { return policies[i].Forwardings[a].ID < policies[i].Forwardings[b].ID })
+		}
+		in.NATPolicies = &policies
+	}
 	b, _ := json.Marshal(in)
 	return in, overlayproto.Digest(b), nil
 }
@@ -266,7 +294,7 @@ func (s *SQLStore) PlanOverlayEpoch(ctx context.Context, c Config, actor, op str
 	if e != nil && !errors.Is(e, ErrNotFound) {
 		return OverlayEpoch{}, false, e
 	}
-	if previous.Epoch != in.ExpectedEpoch || previous.Epoch > 0 && previous.State != "succeeded" {
+	if previous.Epoch != in.ExpectedEpoch || previous.Epoch > 0 && (previous.State != "succeeded" || !overlayPinsMatch(c, previous)) {
 		return OverlayEpoch{}, false, ErrState
 	}
 	snapshot, sha, e := buildOverlaySnapshot(ctx, tx, c, cluster, previous, in, now, false)
@@ -303,6 +331,13 @@ func (s *SQLStore) PlanOverlayEpoch(ctx context.Context, c Config, actor, op str
 // The caller holds the global controller transaction lock.
 func buildOverlaySnapshot(ctx context.Context, tx *sql.Tx, c Config, cluster OverlayCluster, previous OverlayEpoch, in OverlayEpochInput, now time.Time, recovery bool) (overlayproto.Snapshot, string, error) {
 	snapshot := overlayproto.Snapshot{Protocol: overlayproto.Protocol, ClusterID: in.ClusterID, Epoch: in.ExpectedEpoch + 1, PreviousSHA256: previous.SnapshotSHA256, Profiles: append([]overlayproto.ProfilePin{}, cluster.Profiles...), VPCs: []overlayproto.VPC{}, Members: []overlayproto.Member{}, Gateways: in.Gateways}
+	snapshot.NATPolicies = previous.Snapshot.NATPolicies
+	if in.NATPolicies != nil {
+		snapshot.NATPolicies = *in.NATPolicies
+	}
+	if !overlayPoliciesApproved(cluster, snapshot) {
+		return overlayproto.Snapshot{}, "", ErrState
+	}
 	rows, e := tx.QueryContext(ctx, "SELECT "+overlayVPCColumns+" FROM controller_overlay_vpcs WHERE cluster_id=? ORDER BY id LIMIT 33", in.ClusterID)
 	if e != nil {
 		return overlayproto.Snapshot{}, "", e

@@ -2,7 +2,7 @@
 
 This is the **single-host** `ActivationIntent` recovery contract. The overlay
 protocol has its own cluster-epoch recovery, under the same bridge lock. A
-schema-3 journal field records the immutable initial overlay profile digest as a
+schema-3 journal field records the current root-approved overlay profile digest as a
 mode tombstone, independently of `overlay.owner`. Deleting the overlay head
 cannot enable old mutation/live-proof paths. Recovery never removes this pin.
 
@@ -129,3 +129,8 @@ running or that current OVS forwarding is healthy. If a save/ack was interrupted
 but a complete atomic transaction survives reopening, the stored receipt may be
 read without repeating any host mutation. Starting or resuming guests still
 requires the separate fresh live safety checks.
+
+Root profile migrations (including namespace NAT approvals) require explicit
+previous SHA approvals and an exact-head recovery prepare. See [NAT.md](NAT.md)
+for immutable migration evidence, NAT ownership tombstones and inode replacement
+requirements. Ordinary epochs cannot change the current full profile pin.

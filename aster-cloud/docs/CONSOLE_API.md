@@ -105,7 +105,9 @@ operation 的 `actor_id` 是不可变的意图创建者，不等于后来点击�
 
 这些写入只持久化 `planned` 网络、地址池和 `reserved` 地址，**不调用节点、不把实例标记为已联网**。管理页不自动重发创建；丢失回包后保留原 ID 与完整意图，仅 GET 原记录核对。未知状态、退出/切换会话或迟到回包不能清除防重记录。地址顺序变化不产生新的地址池创建意图。没有自动释放、超时回收或未确认解绑后的重新分配。
 
-以下表格继续描述既有实例操作，不能将网络资源 ID 用作 VM 操作派发 ID。
+另有 `/console/v1/overlays/` 与后台“VPC 与路由”页面，提供全局 VPC、完整成员/路由/NAT 策略、逐节点阶段任务、推进、只读核对和显式恢复，不再只留 API。读取需要 `nodes.read`；创建 VPC 另需 `nodes.manage`；epoch 写入/执行/恢复同时需 `nodes.manage` 与 `instances.manage`，并保留会话、Origin、CSRF 与审计。批准目录来自 root 安全投影，HTTP 不接收 namespace、宿主路径、命令或任意公网 IP；NAT 仅为批准前缀 SNAT/TCP/UDP 单端口 DNAT。完整接口、字段和未知结果处理见 [后台网络管理合同](NETWORK_MANAGEMENT.md) 与 [overlay 控制合同](OVERLAY_CONTROL.md)，实测边界见 [NAT 与网络管理验收记录](NAT_NETWORK_VALIDATION.md)。
+
+以下表格继续描述既有实例操作，不能将网络资源 ID 或 epoch ID 用作 VM 操作派发 ID。
 
 | Method / path | 输入/权限 | 成功 |
 | --- | --- | --- |
@@ -192,4 +194,4 @@ Staff 手工创建资源只建立主控 resource intent，**不伪造财务 orde
 - 400/415 显示输入错误；409 显示意图/状态冲突并重新 GET 原 operation；429 遵守 Retry-After；503 说明依赖不可用，保留原 operation/key 与未知状态。
 - 常见 code：`AUTH_REQUIRED`、`LOGIN_FAILED`、`RATE_LIMITED`、`TLS_REQUIRED`、`ORIGIN_INVALID`、`CSRF_INVALID`、`FORBIDDEN`、`INVALID_INPUT`、`INVALID_REQUEST`、`INVALID_QUERY`、`JSON_REQUIRED`、`CONFLICT`（账户冲突）、`IDEMPOTENCY_KEY_REQUIRED`、`IDEMPOTENCY_CONFLICT`、`STATE_CONFLICT`、`NODE_NOT_READY`、`TRANSFER_WORKER_UNAVAILABLE`、`DEPENDENCY_UNAVAILABLE`、`IDENTITY_UNAVAILABLE`。同一 HTTP status 不等于同一业务状态。
 - 权限控制由服务端执行；前端仍须禁用/隐藏不可操作动作、精确输入危险确认、清晰展示 pending/unknown、保留键盘焦点和可取消的 drawer/dialog。不能通过前端缓存或假成功 toast 修补后端未知结果。
-- 没有 MFA、密码重置、租户自助、完整用户/子资源分页、VPC、热迁移或真实宿主验收的承诺。真实 MySQL、HTTP/mTLS fake 和浏览器回归不等于实际 KVM/guest network/跨主机/安装升级全部验收；最终证据以独立 VALIDATION 记录为准。
+- 没有 MFA、密码重置、租户自助、完整用户/子资源分页、完整 VPC 产品能力、热迁移或真实宿主验收的承诺。真实 MySQL、HTTP/mTLS fake 和浏览器回归不等于实际 KVM/guest network/跨主机/安装升级全部验收；最终证据以独立 VALIDATION 记录为准。

@@ -33,3 +33,13 @@
 ## 实际读取的技能
 
 本轮已读取 ui-skills-root、frontend-design、apple-design 及其accessibility/color/layout/typography/entering-data/dark-mode参考，vue-best-practices及reactivity/sfc/component-data-flow/composables核心参考。ui-skills CLI本地离线缓存不可用（ENOTCACHED），没有宣称新安装。
+
+## VPC、路由与 NAT 管理
+
+- 入口 `/networks/overlays`，与节点网络、IP 地址池、地址分配放在同一层导航；集群选择保存在 URL，浏览器返回恢复上下文。主要工作区是 VPC、当前配置和变更记录，不加装饰统计卡。
+- VPC 可以采用预批准映射 ID，也可以新建 ID；后者明确标为“尚未映射节点”，不会绕过节点映射批准。VPC 元数据保存不冒充网络已接通。
+- `OverlaySelectionEditor` 管理完整成员与网关选择；`OverlayNATEditor` 管理批准出口、SNAT 和端口映射。只展示安全候选投影，不提供任意宿主命令、设备路径或裸 JSON 编辑器。NAT 引用仍存在时不能悄悄移除网关或目标成员。
+- `OverlayEpochDialog` 管理计划/恢复确认；恢复固定原 SHA-256、新操作 ID，可保留原配置或明确提交完整替换。根配置变化时禁普通变更，未批准迁移时禁恢复。故障成员保留身份；仅明确删除的实例可由操作员移出成员表。
+- `OverlayEpochPage` 展示全部节点的准备、应用、放行三阶段、完整回执代码和原版本依据；继续执行、只读核对、恢复都是独立显式动作。节点确认不等于已完成真实流量验收。
+- `useOverlayMutation` 在发送前持久化非秘密的完整意图，并按账号/集群/原版本锁定。未知响应时关闭、重开、更改草稿、刷新不产生另一个 POST；只读核对须匹配完整原意图，迟到的旧页面/旧会话响应不解锁。存储不可用或损坏时不发送。
+- 新增组件仍使用现有语义色和自定义 UiSelect/UiOverlay。手机端成员、端口规则、节点阶段改为单列；桌面保留宽表格式分组。表单忙碌状态、焦点、Escape、背景关闭、浏览器返回复用已验证的浮层契约。

@@ -19,6 +19,8 @@ const labels: Record<string, [string, string, string]> = {
   online: ["在线", "Online", "good"],
   offline: ["离线", "Offline", "neutral"],
   accepted: ["已受理", "Accepted", "info"],
+  pending: ["待执行", "Pending", "info"],
+  superseded: ["已由新版本替代", "Superseded", "neutral"],
   queued: ["等待执行", "Queued", "info"],
   dispatching: ["正在派发", "Dispatching", "info"],
   succeeded: ["已完成", "Completed", "good"],

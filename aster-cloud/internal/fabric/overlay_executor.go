@@ -177,6 +177,11 @@ func (e *Executor) overlayPhase(ctx context.Context, c OverlayConfig, t overlayp
 	if err != nil {
 		return overlayproto.Receipt{}, err
 	}
+	for _, p := range c.NATProfiles {
+		if _, err := compileNAT(c, t.Snapshot, p, false); err != nil {
+			return overlayproto.Receipt{}, err
+		}
+	}
 	taskBytes, sha, err := t.BytesAndDigest()
 	if err != nil {
 		return overlayproto.Receipt{}, ErrInvalid
@@ -256,11 +261,17 @@ func (e *Executor) overlayPhase(ctx context.Context, c OverlayConfig, t overlayp
 	}
 
 	profileSHA, _ := OverlayConfigSHA256(c)
-	if l.pinOverlay(profileSHA) != nil {
-		return overlayproto.Receipt{}, ErrUncertain
+	if l.checkNATInventory(c) != nil {
+		return overlayproto.Receipt{}, ErrConflict
+	}
+	if err := l.authorizeOverlayPin(c, t, h, profileSHA); err != nil {
+		return overlayproto.Receipt{}, err
 	}
 	op := overlayOperation{Task: t, Receipt: overlayReceipt(t, sha, "uncertain", "OVERLAY_PHASE_UNCONFIRMED")}
 	if saveOverlayOperation(l, op) != nil {
+		return op.Receipt, ErrUncertain
+	}
+	if err := l.migrateOverlayPin(c, t, h, profileSHA, sha); err != nil {
 		return op.Receipt, ErrUncertain
 	}
 	if fresh {
@@ -291,6 +302,11 @@ func (e *Executor) overlayPhase(ctx context.Context, c OverlayConfig, t overlayp
 	}
 	owned := false
 	fail := func(code string) (overlayproto.Receipt, error) {
+		nctx, ncancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if e.isolateNAT(nctx, c) != nil {
+			code = "NAT_ISOLATION_UNCONFIRMED"
+		}
+		ncancel()
 		if owned {
 			cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if e.isolateOverlay(cctx, l) != nil {
@@ -313,6 +329,9 @@ func (e *Executor) overlayPhase(ctx context.Context, c OverlayConfig, t overlayp
 		return fail("OVERLAY_FOREIGN_FLOWS")
 	}
 	if phase == "prepare" {
+		if e.prepareNAT(ctx, c, l, t.Snapshot, t) != nil {
+			return fail("NAT_PREPARE_UNCONFIRMED")
+		}
 		if e.isolateOverlay(ctx, l) != nil {
 			return fail("OVERLAY_ISOLATION_UNCONFIRMED")
 		}
@@ -347,6 +366,9 @@ func (e *Executor) overlayPhase(ctx context.Context, c OverlayConfig, t overlayp
 			if e.verifyOverlayIsolation(ctx, l) != nil {
 				return fail("OVERLAY_ISOLATION_UNCONFIRMED")
 			}
+			if e.programNAT(ctx, c, l, t.Snapshot) != nil {
+				return fail("NAT_PROGRAM_UNCONFIRMED")
+			}
 			if e.programOverlay(ctx, l, p, h.Meters) != nil {
 				return fail("OVERLAY_PROGRAM_UNCONFIRMED")
 			}
@@ -356,11 +378,17 @@ func (e *Executor) overlayPhase(ctx context.Context, c OverlayConfig, t overlayp
 			if e.verifyOverlayPlan(ctx, l, p) != nil {
 				return fail("OVERLAY_READBACK_UNCONFIRMED")
 			}
+			if e.releaseNAT(ctx, c, l, t.Snapshot) != nil {
+				return fail("NAT_RELEASE_UNCONFIRMED")
+			}
 			if callOverlayCallback(ctx, callback) != nil {
 				return fail("OVERLAY_RELEASE_UNCONFIRMED")
 			}
 			if e.verifyOverlayPlan(ctx, l, p) != nil {
 				return fail("OVERLAY_READBACK_UNCONFIRMED")
+			}
+			if e.verifyNAT(ctx, c, l, t.Snapshot, true) != nil {
+				return fail("NAT_READBACK_UNCONFIRMED")
 			}
 			h.State = "applied"
 		}
@@ -470,7 +498,7 @@ func (e *Executor) CheckOverlay(ctx context.Context, c OverlayConfig) (overlaypr
 		return overlayproto.Snapshot{}, ErrUncertain
 	}
 	p, err := compileOverlay(c, s, ports)
-	if err != nil || reader.verifyOverlayPlan(ctx, l, p) != nil {
+	if err != nil || reader.verifyOverlayPlan(ctx, l, p) != nil || reader.verifyNAT(ctx, c, l, s, true) != nil {
 		return overlayproto.Snapshot{}, ErrUncertain
 	}
 	after, _, err := reader.probeOverlay(ctx, c, s, false)
