@@ -799,8 +799,36 @@ describe("cross-creator task recovery in the actual shared controls", () => {
     await flushPromises();
     await byText(wrapper, "派发任务").trigger("click");
     await wrapper.get('[role="dialog"]').get("input").setValue(op.id);
+    // Native WebCrypto does not settle with Vue's/JS promises. Hold the second
+    // intent hash to reproduce the CI busy state, then await the actual UI
+    // outcome instead of assuming flushPromises completed the digest.
+    const computeDigest = crypto.subtle.digest.bind(crypto.subtle),
+      heldDigest = deferred<ArrayBuffer>(),
+      digest = vi
+        .spyOn(crypto.subtle, "digest")
+        .mockReturnValueOnce(heldDigest.promise);
     await byText(wrapper.get('[role="dialog"]'), "确认派发").trigger("click");
     await flushPromises();
+    expect(digest).toHaveBeenCalledOnce();
+    const hashingDialog = wrapper.get('[role="dialog"]');
+    expect(byText(hashingDialog, "确认派发").attributes("aria-busy")).toBe(
+      "true",
+    );
+    expect(hashingDialog.get("input").attributes("disabled")).toBeDefined();
+    expect(hashingDialog.find('[role="alert"]').exists()).toBe(false);
+    expect(calls).toHaveLength(1);
+    const [algorithm, bytes] = digest.mock.calls[0]!;
+    heldDigest.resolve(await computeDigest(algorithm, bytes));
+    await vi.waitFor(() => {
+      const repeatedDialog = wrapper.get('[role="dialog"]');
+      expect(repeatedDialog.get('[role="alert"]').text()).toContain(
+        "结果尚未确认",
+      );
+      expect(
+        byText(repeatedDialog, "确认派发").attributes("aria-busy"),
+      ).toBeUndefined();
+    });
+    digest.mockRestore();
     expect(calls).toHaveLength(1);
     expect(
       wrapper.get('[role="dialog"]').get('[role="alert"]').text(),
