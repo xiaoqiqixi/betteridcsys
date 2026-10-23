@@ -28,6 +28,9 @@ type fakeRunner struct {
 	info      string
 	before    func(string)
 	block     <-chan struct{}
+	// Empty blockVerb preserves the all-command gate used by other fixtures.
+	blockVerb string
+	blocked   chan<- struct{}
 }
 
 func (f *fakeRunner) Run(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -41,7 +44,11 @@ func (f *fakeRunner) Run(ctx context.Context, binary string, args ...string) ([]
 	if f.before != nil {
 		f.before(cmd)
 	}
-	if f.block != nil {
+	if f.block != nil && (f.blockVerb == "" || f.blockVerb == verb) {
+		select {
+		case f.blocked <- struct{}{}:
+		default:
+		}
 		select {
 		case <-f.block:
 		case <-ctx.Done():
@@ -553,11 +560,24 @@ func TestPowerClaimQuarantinesInstanceBeforeExecAndBlocksOtherOperations(t *test
 		t.Fatal(r)
 	}
 	gate := make(chan struct{})
-	f.block = gate
+	entered := make(chan struct{}, 1)
+	// Only hold the mutating command. Blocking dumpxml instead makes Shutdown
+	// race ownership preflight, where rejection is correct and not evidence of
+	// an uncertain power command. The handshake pins the intended test phase.
+	f.block, f.blockVerb, f.blocked = gate, "destroy", entered
+	beforeXML, beforeState := f.count(" dumpxml "), f.count(" domstate ")
 	off := next(task, "4", "force_off")
 	raw, _, _ := off.BytesAndDigest()
 	if r, e := m.Accept(off, raw); e != nil || r.Status != "accepted" {
 		t.Fatal(r, e)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not reach the blocked destroy command")
+	}
+	if f.count(" dumpxml ") != beforeXML+1 || f.count(" domstate ") != beforeState+1 || f.count(" destroy ") != 0 {
+		t.Fatal("power gate did not follow successful live preflight")
 	}
 	i, _ := m.Ledger.Instance(task.InstanceID)
 	if i.State != "uncertain" {
@@ -565,7 +585,7 @@ func TestPowerClaimQuarantinesInstanceBeforeExecAndBlocksOtherOperations(t *test
 	}
 	m.Shutdown()
 	op, _ := m.Ledger.Query(off.OperationID)
-	if op.Result.Status != "uncertain" {
+	if op.Result.Status != "uncertain" || op.ErrorCode != "POWER_OUTCOME_UNCERTAIN" {
 		t.Fatal(op)
 	}
 	// Simulate process restart, not an automatic retry of the original operation.

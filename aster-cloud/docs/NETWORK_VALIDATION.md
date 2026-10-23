@@ -21,7 +21,7 @@
 | 管理台 | 540 Vitest 用例 /15 文件，0 SKIP/FAIL；typecheck、Prettier check、production build 通过。**不是本轮浏览器或手机视觉验收。** |
 | 依赖扫描 | npm 全依赖扫描 0 漏洞；Go1.27.3 + govulncheck1.9.0 报未发现漏洞。先前本机 Go1.26.4 命中 17 个可达标准库漏洞，失败日志保留；改用与 CI 相同的独立工具链重新测试/构建/扫描，没有忽略告警或删除门禁。 |
 
-Go 源文件/SQL/合同 manifest 逐文件留存；CI 夹具修正后全量重跑对应 SHA256 为 `5d01fd1b5d1ee0e46d58ee57420d76f0ab7d65ddd31afd7ac74bf2620878e314`。前端 58 个 src/tests 文件冻结 manifest SHA 为 `21a17d678a213e7d1135bf3f3adc39bef9fa26bedf3e1cc566406ec3653bfd5b`。修正只改测试，生产代码、构建 JS/CSS/HTML 未变。
+Go 源文件/SQL/合同 manifest 逐文件留存；CI 夹具修正后全量重跑对应 SHA256 为 `5afe0c6ea9616624b4eb4ddbbf9ad4eb0c8eaf672e5831713dbd4bdd2fe199a9`。前端 58 个 src/tests 文件冻结 manifest SHA 为 `21a17d678a213e7d1135bf3f3adc39bef9fa26bedf3e1cc566406ec3653bfd5b`。修正只改测试，生产代码、构建 JS/CSS/HTML 未变。
 
 最终前端构建为 `index-mP3EBj64.js` / `index-BEpCc0Of.css`，HTML SHA256 `26c862e9409b639ab6899e056bcbb08bcbd218b6c5092778702526a5d9767cda`。这些是本轮开发构建，不作为财务 Release 资产上传。
 
@@ -54,6 +54,12 @@ Go 源文件/SQL/合同 manifest 逐文件留存；CI 夹具修正后全量重�
 提交 `8fe75d9` 的 [cloud CI 39932042264](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39932042264) **失败**，不标成全绿：fabric 夹具写死 macOS `/private/tmp`，Ubuntu22/24 与原生实库 job 无该目录；一个旧迁移确认用例在 native WebCrypto digest 尚未完成时就查询错误提示。修正为 `t.TempDir()` + `EvalSymlinks`，保留真实祖先/权限校验，新增默认 Linux `/tmp` 与 symlink TMPDIR 回归；前端用可控 deferred 实证 digest 未完成的 busy 状态，释放真实 digest 后等待确定 UI 终态，仍断言只有一次 POST。没有新建系统目录、改生产安全函数、加任意 sleep、放宽协议或删除用例。
 
 修正后重新执行上述 906 Go race 和 540 前端用例；最终 GitHub 结果须按后续 main 提交单独核对，不能用本机通过覆盖这次失败。
+
+### 第二次 GitHub CI 暴露并修正的取消时序问题
+
+提交 `037e77f` 的 [cloud CI 39932974414](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39932974414) 中，Ubuntu22/24 单测构建及管理台检查通过，实库 job 在既有 hypervisor 取消时序测试失败：夹具把所有 virsh 命令都阻塞，Shutdown 可能落在只读 ownership 预检，此时生产逻辑正确返回 `LIVE_OWNERSHIP_UNCONFIRMED`，并非测试预期的“电源命令已发出但结果不明”。
+
+仅修改测试夹具，精确阻塞 `destroy`，用 channel 握手确认已通过 `dumpxml` / `domstate` 并进入变更命令后才取消；加强为同时核对 `uncertain` 与 `POWER_OUTCOME_UNCERTAIN`。保留持久化隔离、进程重启、其他动作受阻以及不能自动重发 destroy 的断言。没有 sleep、重试生产操作或放宽结果。确定性预检复现、定向 race 连跑 100 次、完整 hypervisor race、vet 及修正后的全量 906 PASS / 22 SKIP / 0 FAIL 均留存。本机 22 项跳过边界仍如上，不替代最终 GitHub 实库零跳过门禁。
 
 ## 清理与明确未验证项
 
