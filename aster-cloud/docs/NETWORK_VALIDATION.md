@@ -15,13 +15,13 @@
 
 | 检查 | 实际结果与限制 |
 | --- | --- |
-| Go1.27.3 / Darwin arm64 全 scope race | **902 PASS 测试事件、0 FAIL/race**；22 个测试事件明确 SKIP：21 个缺 DSN 的入口/子项及 1 个要求真实 root policy 的 TLS 入口。没有将这些跳过算作本机实库成功。 |
+| Go1.27.3 / Darwin arm64 全 scope race | **906 PASS 测试事件、0 FAIL/race**；22 个测试事件明确 SKIP：21 个缺 DSN 的入口/子项及 1 个要求真实 root policy 的 TLS 入口。没有将这些跳过算作本机实库成功。 |
 | Go 静态检查/构建 | vet、固定 actionlint1.7.7、shell 语法及 diff-check 通过；CGO=0/Linux amd64 的 controller、node、network、billing-plugin 四程序构建通过。 |
 | 财务旧合同/传输回归 | Go1.27.3 race：49 PASS 事件、0 SKIP/FAIL；覆盖原请求、结果和固定目的地传输。与全 scope 合同覆盖可能重叠，不合并数量。 |
 | 管理台 | 540 Vitest 用例 /15 文件，0 SKIP/FAIL；typecheck、Prettier check、production build 通过。**不是本轮浏览器或手机视觉验收。** |
 | 依赖扫描 | npm 全依赖扫描 0 漏洞；Go1.27.3 + govulncheck1.9.0 报未发现漏洞。先前本机 Go1.26.4 命中 17 个可达标准库漏洞，失败日志保留；改用与 CI 相同的独立工具链重新测试/构建/扫描，没有忽略告警或删除门禁。 |
 
-Go 源文件/SQL/合同 manifest 在最终全量前后逐文件 SHA 验证一致，manifest SHA256 为 `3d603300d8f0e448cf599767ab9ff3a88d99eabee7a1d402cb17da5fb62d518e`。前端 58 个 src/tests 文件 manifest SHA 为 `b8f65d1d83fd8cbcc4af1ec57bade6a28cf5fd4fb88a8f5249e8f7c6ee2ebcde`。
+Go 源文件/SQL/合同 manifest 逐文件留存；CI 夹具修正后全量重跑对应 SHA256 为 `5d01fd1b5d1ee0e46d58ee57420d76f0ab7d65ddd31afd7ac74bf2620878e314`。前端 58 个 src/tests 文件冻结 manifest SHA 为 `21a17d678a213e7d1135bf3f3adc39bef9fa26bedf3e1cc566406ec3653bfd5b`。修正只改测试，生产代码、构建 JS/CSS/HTML 未变。
 
 最终前端构建为 `index-mP3EBj64.js` / `index-BEpCc0Of.css`，HTML SHA256 `26c862e9409b639ab6899e056bcbb08bcbd218b6c5092778702526a5d9767cda`。这些是本轮开发构建，不作为财务 Release 资产上传。
 
@@ -47,7 +47,13 @@ Go 源文件/SQL/合同 manifest 在最终全量前后逐文件 SHA 验证一致
 - libvirt8 `domstats --raw` 字符串实际可不带引号，修正 parser/夹具；guest balloon-unused 没有新鲜 last-update 则返回 null。
 - 网络创建的部分意图不再误清 pending；池地址次序变化不会产生第二次 POST；过时页面/会话/权限回包和异步 hash 间隙不能确认旧请求；非 201、重放标记或无效 cursor 不冒充首次成功。
 - 新导航入口对应的旧测试夹具补齐第 6 路由；没有删测试、放宽权限或改变生产协议来通过。
-- OVS `verify` 拒绝历史未决记录、缺失/被替换 desired 文件、丢失/漂移 flow、meter、端口身份；只读命令另有白名单。独立代码复核和 150 个 fabric/CLI race 事件通过，包含在上述全量，不重复累加。
+- OVS `verify` 拒绝历史未决记录、缺失/被替换 desired 文件、丢失/漂移 flow、meter、端口身份；只读命令另有白名单。独立代码复核和初版 150 个 fabric/CLI race 事件通过，后续新增 4 个跨平台临时目录事件，共 154 个，包含在上述全量，不重复累加。
+
+### 首次 GitHub CI 暴露并修正的夹具问题
+
+提交 `8fe75d9` 的 [cloud CI 39932042264](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39932042264) **失败**，不标成全绿：fabric 夹具写死 macOS `/private/tmp`，Ubuntu22/24 与原生实库 job 无该目录；一个旧迁移确认用例在 native WebCrypto digest 尚未完成时就查询错误提示。修正为 `t.TempDir()` + `EvalSymlinks`，保留真实祖先/权限校验，新增默认 Linux `/tmp` 与 symlink TMPDIR 回归；前端用可控 deferred 实证 digest 未完成的 busy 状态，释放真实 digest 后等待确定 UI 终态，仍断言只有一次 POST。没有新建系统目录、改生产安全函数、加任意 sleep、放宽协议或删除用例。
+
+修正后重新执行上述 906 Go race 和 540 前端用例；最终 GitHub 结果须按后续 main 提交单独核对，不能用本机通过覆盖这次失败。
 
 ## 清理与明确未验证项
 

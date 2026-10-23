@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -153,11 +154,13 @@ func (f *fakeOVS) Run(ctx context.Context, binary string, args ...string) ([]byt
 }
 func fixtureExecutor(t *testing.T) (*Executor, *fakeOVS, Topology) {
 	t.Helper()
-	root, e := os.MkdirTemp("/private/tmp", "aster-fabric-test-")
+	// testing.TempDir follows the platform's temporary root (Ubuntu: /tmp).
+	// macOS may expose that root through /tmp or /var symlinks; resolve them
+	// before using the real production ancestor/symlink security checks.
+	root, e := filepath.EvalSymlinks(t.TempDir())
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { os.RemoveAll(root) })
 	c := Config{1, "node-a", "aster-vpc", filepath.Join(root, "state"), true}
 	top := topologyFixture()
 	fake := &fakeOVS{topology: top, meters: map[int]int{}}
@@ -173,6 +176,56 @@ func fixtureExecutor(t *testing.T) (*Executor, *fakeOVS, Topology) {
 		return nil
 	}
 	return executor, fake, top
+}
+
+func TestFabricFixtureUsesPlatformTemporaryRoot(t *testing.T) {
+	// Exercise the Ubuntu default even when the regression is run on a Mac;
+	// t.Run gets a fresh testing.TempDir cache after changing TMPDIR.
+	t.Setenv("TMPDIR", "")
+	t.Run("platform-default", func(t *testing.T) {
+		if runtime.GOOS == "linux" && os.TempDir() != "/tmp" {
+			t.Fatalf("Ubuntu/Linux default temporary root = %q, want /tmp", os.TempDir())
+		}
+		assertFixtureTemporaryRoot(t)
+	})
+}
+
+func TestFabricFixtureCanonicalizesSymlinkedTemporaryRoot(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	realRoot := filepath.Join(base, "real-temp")
+	if err = os.Mkdir(realRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "temp-alias")
+	if err = os.Symlink(realRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", alias)
+	t.Run("symlinked-tmpdir", func(t *testing.T) { assertFixtureTemporaryRoot(t) })
+}
+
+func assertFixtureTemporaryRoot(t *testing.T) {
+	t.Helper()
+	wantRoot, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _, top := fixtureExecutor(t)
+	root := filepath.Dir(e.Config.StateDirectory)
+	rel, err := filepath.Rel(wantRoot, root)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Fatalf("fixture root %q is not a child of platform temporary root %q: %v", root, wantRoot, err)
+	}
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil || canonical != root || securePath(root) != nil {
+		t.Fatalf("fixture did not preserve production path validation: %q, %q, %v", root, canonical, err)
+	}
+	if receipt, err := e.Apply(context.Background(), top, e.Config.Bridge); err != nil || receipt.State != "applied" {
+		t.Fatalf("canonical platform-temp fixture failed real security checks: %+v, %v", receipt, err)
+	}
 }
 func mutationCount(f *fakeOVS) int {
 	f.mu.Lock()
@@ -234,7 +287,7 @@ func TestCompileRejectInvalidInputAndCommandInjection(t *testing.T) {
 		})
 	}
 	for _, bridge := range []string{"br0", "eth0", "aster-a;id", "tcp:host:6653", "aster-"} {
-		c := Config{1, "node-a", bridge, "/private/tmp/test", true}
+		c := Config{1, "node-a", bridge, filepath.Join(os.TempDir(), "aster-fabric-invalid"), true}
 		if c.Validate() {
 			t.Fatal("unsafe bridge", bridge)
 		}
