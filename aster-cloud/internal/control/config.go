@@ -21,18 +21,19 @@ import (
 )
 
 type Config struct {
-	Schema              int           `json:"schema"`
-	ControllerID        string        `json:"controller_id"`
-	Listen              string        `json:"listen"`
-	TLSCertFile         string        `json:"tls_cert_file"`
-	TLSKeyFile          string        `json:"tls_key_file"`
-	DSNFile             string        `json:"dsn_file"`
-	BillingTokenFile    string        `json:"billing_token_file"`
-	AdminReadTokenFile  string        `json:"admin_read_token_file"`
-	AdminWriteTokenFile string        `json:"admin_write_token_file"`
-	HeartbeatTTLSeconds int           `json:"heartbeat_ttl_seconds"`
-	Nodes               []NodeProfile `json:"nodes"`
-	Presets             []Preset      `json:"presets"`
+	Schema              int              `json:"schema"`
+	ControllerID        string           `json:"controller_id"`
+	Listen              string           `json:"listen"`
+	TLSCertFile         string           `json:"tls_cert_file"`
+	TLSKeyFile          string           `json:"tls_key_file"`
+	DSNFile             string           `json:"dsn_file"`
+	BillingTokenFile    string           `json:"billing_token_file"`
+	AdminReadTokenFile  string           `json:"admin_read_token_file"`
+	AdminWriteTokenFile string           `json:"admin_write_token_file"`
+	HeartbeatTTLSeconds int              `json:"heartbeat_ttl_seconds"`
+	Nodes               []NodeProfile    `json:"nodes"`
+	Presets             []Preset         `json:"presets"`
+	NetworkProfiles     []NetworkProfile `json:"network_profiles,omitempty"`
 }
 type NodeProfile struct {
 	ID                      string   `json:"id"`
@@ -46,14 +47,27 @@ type NodeProfile struct {
 	ServerCertificateSHA256 string   `json:"server_certificate_sha256"`
 }
 type Preset struct {
-	ID        string                  `json:"id"`
-	NodeID    string                  `json:"node_id"`
-	Resources controllerapi.Resources `json:"resources"`
+	ID               string                  `json:"id"`
+	NodeID           string                  `json:"node_id"`
+	Resources        controllerapi.Resources `json:"resources"`
+	NetworkProfileID string                  `json:"network_profile_id,omitempty"`
+}
+
+// NetworkProfile is a root-controlled IPAM selection, not a customer resource
+// selector. Custom financial products require an exact immutable Spec digest.
+type NetworkProfile struct {
+	ID                  string `json:"id"`
+	NodeID              string `json:"node_id"`
+	PoolID              string `json:"pool_id"`
+	OwnerRef            string `json:"owner_ref"`
+	ProfileSHA256       string `json:"profile_sha256"`
+	ConfigurationSHA256 string `json:"configuration_sha256,omitempty"`
 }
 type Secrets struct{ Billing, AdminRead, AdminWrite string }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 var shaRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var vpcPresetID = regexp.MustCompile(`^ovs-vpc-[a-z0-9][a-z0-9_-]*-v[1-9][0-9]*$`)
 
 func ReadProtected(path string, private bool, maximum int64) ([]byte, error) {
 	return readProtected(path, private, maximum, 0)
@@ -137,6 +151,20 @@ func (c Config) Valid() bool {
 		}
 		seen[n.ID] = true
 	}
+	if len(c.NetworkProfiles) > 256 {
+		return false
+	}
+	networkSeen, customSeen := map[string]bool{}, map[string]bool{}
+	for _, p := range c.NetworkProfiles {
+		_, nodeOK := c.Node(p.NodeID)
+		if !nodeproto.ValidNodeID(p.ID) || networkSeen[p.ID] || !nodeOK || !nodeproto.ValidID(p.PoolID) || !nodeproto.ValidID(p.OwnerRef) || !shaRE.MatchString(p.ProfileSHA256) || p.ConfigurationSHA256 != "" && (!shaRE.MatchString(p.ConfigurationSHA256) || customSeen[p.ConfigurationSHA256+":"+p.OwnerRef]) {
+			return false
+		}
+		networkSeen[p.ID] = true
+		if p.ConfigurationSHA256 != "" {
+			customSeen[p.ConfigurationSHA256+":"+p.OwnerRef] = true
+		}
+	}
 	presetSeen := map[string]bool{}
 	for _, p := range c.Presets {
 		n, ok := c.Node(p.NodeID)
@@ -144,9 +172,38 @@ func (c Config) Valid() bool {
 		if !identifier.MatchString(p.ID) || presetSeen[p.ID] || !ok || !spec.Valid() || p.Resources.ComputeNodeID != n.ID || p.Resources.DatacenterID != n.DatacenterID || p.Resources.NodeGroupID != n.GroupID {
 			return false
 		}
+		if p.Resources.NetworkType == "vpc" {
+			profile, ok := c.NetworkProfile(p.NetworkProfileID)
+			if !ok || profile.NodeID != p.NodeID || !vpcResources(p.Resources) || !vpcPresetID.MatchString(p.ID) {
+				return false
+			}
+		} else if p.NetworkProfileID != "" {
+			return false
+		}
 		presetSeen[p.ID] = true
 	}
 	return true
+}
+func (c Config) NetworkProfile(id string) (NetworkProfile, bool) {
+	for _, p := range c.NetworkProfiles {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return NetworkProfile{}, false
+}
+
+// Current root approval is checked without rebuilding a task from mutable
+// presets. Removing/changing a profile blocks new writes, not GET reconciliation.
+func (c Config) approvesTaskNetwork(t nodeproto.NodeTask) bool {
+	if t.Protocol == nodeproto.Protocol {
+		return t.Network.IsZero()
+	}
+	if t.Protocol != nodeproto.NetworkProtocol || !t.Network.ValidFor(t) {
+		return false
+	}
+	p, ok := c.NetworkProfile(t.Network.ProfileID)
+	return ok && p.NodeID == t.NodeID && p.PoolID == t.Network.PoolID && p.OwnerRef == t.OwnerRef && p.ProfileSHA256 == t.Network.ProfileSHA256
 }
 func (c Config) Node(id string) (NodeProfile, bool) {
 	for _, n := range c.Nodes {
@@ -179,13 +236,28 @@ func (c Config) Candidates(r controllerapi.Request) []Candidate {
 	if r.Product.ControllerID != c.ControllerID {
 		return nil
 	}
-	add := func(n NodeProfile, r controllerapi.Resources) Candidate { return Candidate{n, n.Digest(), r} }
+	add := func(n NodeProfile, resources controllerapi.Resources, profileID string) (Candidate, bool) {
+		candidate := Candidate{Node: n, ProfileSHA: n.Digest(), Resources: resources}
+		if resources.NetworkType == "vpc" {
+			profile, ok := c.NetworkProfile(profileID)
+			if !ok || profile.NodeID != n.ID || profile.OwnerRef != r.OwnerRef || !vpcResources(resources) {
+				return Candidate{}, false
+			}
+			candidate.NetworkProfileID, candidate.NetworkPoolID, candidate.NetworkProfileSHA = profile.ID, profile.PoolID, profile.ProfileSHA256
+			candidate.NetworkOwnerRef = profile.OwnerRef
+		} else if profileID != "" {
+			return Candidate{}, false
+		}
+		return candidate, true
+	}
 	if r.Product.Mode == "preset" {
 		for _, p := range c.Presets {
 			if p.ID == r.Product.RemoteProductID {
 				n, ok := c.Node(p.NodeID)
 				if ok {
-					return []Candidate{add(n, p.Resources)}
+					if candidate, ok := add(n, p.Resources, p.NetworkProfileID); ok {
+						return []Candidate{candidate}
+					}
 				}
 			}
 		}
@@ -195,11 +267,31 @@ func (c Config) Candidates(r controllerapi.Request) []Candidate {
 		return nil
 	}
 	wanted := *r.Product.Resources
+	profileID := ""
+	if wanted.NetworkType == "vpc" {
+		hash, err := r.Product.Digest()
+		if err != nil || hash != r.ConfigurationSHA256 {
+			return nil
+		}
+		for _, profile := range c.NetworkProfiles {
+			if profile.ConfigurationSHA256 == hash && profile.OwnerRef == r.OwnerRef {
+				if profileID != "" {
+					return nil
+				}
+				profileID = profile.ID
+			}
+		}
+		if profileID == "" {
+			return nil
+		}
+	}
 	// This first vertical slice requires explicit concrete IDs. It never silently
 	// maps a custom node group, storage, bandwidth or VPC to a different resource.
 	for _, n := range c.Nodes {
 		if wanted.ComputeNodeID == n.ID && wanted.DatacenterID == n.DatacenterID && wanted.NodeGroupID == n.GroupID {
-			return []Candidate{add(n, wanted)}
+			if candidate, ok := add(n, wanted, profileID); ok {
+				return []Candidate{candidate}
+			}
 		}
 	}
 	return nil

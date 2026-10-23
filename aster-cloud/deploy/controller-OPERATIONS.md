@@ -30,9 +30,21 @@ DSN只允许独立`aster_controller`/`aster_cloud`及其`_`前缀子命名空间
 
 node字段：id、datacenter_id、group_id、endpoint（纯HTTPS来源、不含路径/query/userinfo）、allowed_cidrs、ca_file、client_cert_file、client_key_file、server_certificate_sha256。连接同时验证CA/hostname与固定server叶证书DER SHA256；节点端另须校验controller客户端叶证书pin。DNS解析的全部地址须在允许CIDR内，单次请求固定一个地址、禁代理/重定向、禁自动重拨、POST无GetBody重放。轮换证书或endpoint改变profile SHA会阻止旧job派发/核对，须人工恢复原绑定，不能静默转送另一节点。
 
-preset字段：id、node_id、resources（公开controllerapi.Resources全部字段）。preset以root策略固定整份资源，不随财务请求字段拼URL。custom本期要求显式具体compute_node/datacenter/group，与批准profile完全一致；不做模糊别名映射或隐含资源替换。
+preset字段：id、node_id、resources（公开controllerapi.Resources全部字段），新显式VPC额外选择network_profile_id。preset以root策略固定整份资源，不随财务请求字段拼URL。custom本期要求显式具体compute_node/datacenter/group，与批准profile完全一致；不做模糊别名映射或隐含资源替换。
 
-当前可执行资源形状：有实际capabilities的image/storage；normal + exact1IPv4/0IPv6，能力中必须明确`normal-static-ipv4-dedicated-bridge`；data_disk=0、data_storage空；bandwidth/inbound/transfer=0（root明确批准的节点默认），traffic_direction=all。isolated-no-nic不能冒充IPv4网络；VPC、额外磁盘、IPv6和非零带宽/流量不支持时明确拒绝，不忽略。节点还须有真实IP池、bridge、NoCloud/SSH和nwfilter策略；本期控制器不代替节点配置这些敏感资源。
+旧normal可执行资源形状：有实际capabilities的image/storage；normal + exact1IPv4/0IPv6，能力中必须明确`normal-static-ipv4-dedicated-bridge`；data_disk=0、data_storage空；bandwidth/inbound/transfer=0（root明确批准的节点默认），traffic_direction=all。isolated-no-nic不能冒充IPv4网络；VPC、额外磁盘、IPv6和非零带宽/流量不支持时明确拒绝，不忽略。节点还须有真实IP池、bridge、NoCloud/SSH和nwfilter策略；本期控制器不代替节点配置这些敏感资源。
+
+### 显式单宿主 VPC（新协议切片）
+
+旧normal/default-bandwidth路径不改。新 `aster.node/2` 仅批准显式vpc、1IPv4/0IPv6、双向各1–100000Mbps、零transfer和data disk；必须存在节点已验证的 `ovs-vpc-singlehost/1` 能力与 `ovs_network_profiles`。这不是路由VPC/公网开通承诺，也不能把旧normal同ID preset换成VPC。
+
+完整合成配置见 `controller-ovs.example.json`：`network_profiles` 每项固定 `id,node_id,pool_id,owner_ref,profile_sha256`，可另声明 `configuration_sha256`。后者按 `(精确ProductSpec摘要,owner_ref)` 唯一选择custom商品；没有映射则拒绝，不能按地区/线路猜池。新VPC preset ID必须为 `ovs-vpc-<名称>-v<正整数>`，明确新版本且仍只批准该profile所属owner。一个SKU给多个owner使用时，各owner需独立预审批的池/profile；不是自动共享私网。
+
+`profile_sha256` 按实际 `fabric.LoadConfig` 得到的结构计算 `sha256.Sum256(json.Marshal(config))`。这绑定node/bridge/state/root-ack等实际值；不能对有空格的配置文件直接`sha256sum`冒充它，也不能复制示例的重复字母hash。节点root配置应核对相同profile ID/hash；同一profile的绑定共享同一fabric gate。新版独立root profile不能共用不同ID的bridge/state以绕过gate互斥。
+
+schema006将instance/create-operation/request-SHA/network-SHA和binding固定保存；租约、实例、容量、任务与审计同InnoDB事务。之后power复用原绑定，不从当今preset重建。真实激活仍由节点对root策略、IPAM binding、域/TAP和live fabric核验后执行；主控accepted不是开机许可。禁用池拒绝激活，但不禁止已绑定实例停止/删除；移除root profile会阻止所有新power写操作（含stop），停机前不要先删profile，原SHA的GET核对仍保留；未知状态不能自动释放地址。
+
+VPC重启必须先shutdown再start，主控早期拒绝旧reboot。本切片明确拒绝VPC snapshot/backup/restore/migration进入旧storage合同；原normal路径保留。财务`aster.controller/1`、金额、支付和历史商品快照不变。schema006不能只换旧binary回滚：必须停写并恢复匹配的独立主控库备份，保留节点journal/租约和制品证据。实库CI、真实OVS/KVM、宿主重启/失败恢复和网络流量测试是不同验收层，不能相互冒充。
 
 ## HTTP合同
 
@@ -64,7 +76,7 @@ aster-controller reconcile -config /etc/aster-controller/config.json -operation 
 
 本机单元和真实TLS/mTLS测试可用`go test -race ./internal/control`。真实MySQL测试优先`ASTER_CLOUD_TEST_DSN`且库名须含`_test`；缺env明确skip。CI仅在`ASTER_MYSQL_TEST_DSN`严格指向隔离`aster_ci_test`时创建随机独立`aster_cloud_test_<hex>`并最终drop；不改生产OpenDSN限制，不读取财务表。日志不可打印DSN/token内容。
 
-必须分别报告真实MySQL/目标Linux测试、真实KVM/静态IP/SSH、systemd安装/证书/备份恢复。模拟node RPC、contract-shaped TLS server和SQL状态测试不等于真实VM创建。本期已包含管理UI、staff RBAC、停止态快照/备份、四阶段冷迁移和查询型审计；仍没有MFA/租户SSO、VPC、完整配额告警、热迁移、自动重派、不可篡改外部归档或完整集群调度。
+必须分别报告真实MySQL/目标Linux测试、真实KVM/静态IP/SSH、systemd安装/证书/备份恢复。模拟node RPC、contract-shaped TLS server和SQL状态测试不等于真实VM创建。本期已包含管理UI、staff RBAC、停止态快照/备份、四阶段冷迁移和查询型审计；仍没有MFA/租户SSO、完整路由/跨节点VPC、完整配额告警、热迁移、自动重派、不可篡改外部归档或完整集群调度。
 
 
 ## 独立管理台与 staff 权限（开发版）
@@ -81,9 +93,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs
 
 将 binary 与 `frontend/dist/` 分别审核安装到 `/opt/aster-cloud/bin/`、`/opt/aster-cloud/ui/`，均 root 所有且不可被组/其他用户写入。不公开源码、配置、日志或 secrets 目录。API 保持自身 TLS；当前版本不信任转发 Header 来绕过 Origin / Host / TLS，反向代理必须保留公开 Host，后端证书应由受信链验证。
 
-先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表，004 添加审计精确查询索引，005 添加私有网络、IP 地址池和地址预留；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。005 会核对已有同名表的精确列/索引/引擎形状；部分 DDL 只有与预期完全一致才可重入，不采用忽略错误后手工记账。
+先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表，004 添加审计精确查询索引，005 添加私有网络、IP 地址池和地址预留，006 添加不可变 instance-network 任务绑定；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。005 会核对已有同名表的精确列/索引/引擎形状；部分 DDL 只有与预期完全一致才可重入，不采用忽略错误后手工记账。
 
-005 确认后，只认识 001–004 的旧 binary 会拒绝该 schema，不能仅替换 binary 回退。升级须停写并备份独立主控库；回滚须恢复匹配 binary/schema 的独立库备份，并核对备份后新增的地址预留、节点 journal、制品和资源操作。不能删表、删迁移记录、释放未知地址或自动重派来“修复”版本不匹配。当前仅通过隔离实库迁移测试，整机备份还原/回滚尚未验收；既有审计增量见 [增量验收](../docs/OPERATIONS_VALIDATION.md)，网络范围见 [网络 API](../docs/NETWORK_API.md)。
+006 确认后，只认识 001–005 的旧 binary 会拒绝该 schema，不能仅替换 binary 回退。升级须停写并备份独立主控库；回滚须恢复匹配 binary/schema 的独立库备份，并核对备份后新增的地址预留、节点 journal、制品和资源操作。不能删表、删迁移记录、释放未知地址或自动重派来“修复”版本不匹配。当前仅通过隔离实库迁移测试，整机备份还原/回滚尚未验收；既有审计增量见 [增量验收](../docs/OPERATIONS_VALIDATION.md)，网络范围见 [网络 API](../docs/NETWORK_API.md)。
 
 首个管理员仅在空用户库由 root CLI 创建；不要把密码放进 argv、unit、shell 历史、截图或日志：
 

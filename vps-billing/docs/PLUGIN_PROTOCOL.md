@@ -66,3 +66,9 @@ systemd unit 使用独立 UID、只读文件系统/秘密不可达、设备/内�
 SMTP 的 `smtp.send` 业务入口限制为管理员固定测试。支付仅提供 `payment.checkout` 和 `payment.verify_callback`，账务校验、持久化重放去重与原子结算属于 Core；浏览器回跳不能触发记账，签名正确性仍由经过批准的渠道适配器负责。没有任意文件、shell、数据库、主控/被控或账务修改能力。兼容性承诺仅限明确区间、当前协议和实际验证组合；尚无 LTS/SLA、自动插件升级、自动回退或跨版本数据迁移保证。
 
 插件升级/回退只切换所选槽的独立程序及策略；Core 文件/进程保持不变的结论必须由原生验收中的哈希/PID/业务检查证实，单元测试、manifest 或本文不能作为替代证明。
+
+## Host-only resource slot（本轮 main）
+
+`aster.resource/1` 是独立于 SMTP/payment 的资源协议，仅 `resource.send`、`resource.lookup` 两个能力。root 管理器批准非 root worker、manifest/binary digest、固定 controller ID、socket、目标 host/port；client UID 必须为 root host command，Web API 不获得资源调用或任意 exec 权限。RPC 外封套带 nonce/version/timeout/controller ID 和原 `aster.controller/1` canonical JSON 的 base64 payload；只在同一物理 Unix 连接握手后执行一次操作。完整匹配的原 6 字段结果才能确认为 confirmed，否则 unknown 且不重发。原金额、支付、快照/claim/complete 状态机不变。
+
+安装、固定 systemd 凭据、host dispatch 路由及旧 core 回滚的 policy 清理见 [RESOURCE_PLUGINS.md](RESOURCE_PLUGINS.md)。已发布旧 core 不因版本号相同自动获得此能力，须使用包含本轮实现的构建。

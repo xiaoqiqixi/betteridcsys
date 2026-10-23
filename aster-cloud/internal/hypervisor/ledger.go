@@ -2,6 +2,7 @@ package hypervisor
 
 import (
 	"aster/billing/controllerapi"
+	"aster/cloud/internal/fabric"
 	"aster/cloud/internal/nodeproto"
 	"encoding/json"
 	"errors"
@@ -28,19 +29,20 @@ type TargetBinding struct {
 	Activated         bool   `json:"activated"`
 }
 type Instance struct {
-	SourceFence   *SourceFence            `json:"source_fence,omitempty"`
-	TargetBinding *TargetBinding          `json:"target_binding,omitempty"`
-	ID            string                  `json:"id"`
-	OwnerRef      string                  `json:"owner_ref"`
-	Hostname      string                  `json:"hostname"`
-	Domain        string                  `json:"domain"`
-	Directory     string                  `json:"directory"`
-	Disk          string                  `json:"disk"`
-	Seed          string                  `json:"seed"`
-	IPv4          string                  `json:"ipv4"`
-	MAC           string                  `json:"mac"`
-	State         string                  `json:"state"`
-	Resources     controllerapi.Resources `json:"resources"`
+	Network       nodeproto.NetworkBinding `json:"network,omitzero"`
+	SourceFence   *SourceFence             `json:"source_fence,omitempty"`
+	TargetBinding *TargetBinding           `json:"target_binding,omitempty"`
+	ID            string                   `json:"id"`
+	OwnerRef      string                   `json:"owner_ref"`
+	Hostname      string                   `json:"hostname"`
+	Domain        string                   `json:"domain"`
+	Directory     string                   `json:"directory"`
+	Disk          string                   `json:"disk"`
+	Seed          string                   `json:"seed"`
+	IPv4          string                   `json:"ipv4"`
+	MAC           string                   `json:"mac"`
+	State         string                   `json:"state"`
+	Resources     controllerapi.Resources  `json:"resources"`
 }
 type Operation struct {
 	Task      nodeproto.NodeTask   `json:"task"`
@@ -108,7 +110,7 @@ func OpenLedger(directory, nodeID string) (*Ledger, error) {
 			l.Close()
 			return nil, e
 		}
-		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2) || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
+		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2 && l.state.Schema != 3) || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
 			l.Close()
 			return nil, errors.New("invalid journal")
 		}
@@ -130,7 +132,9 @@ func OpenLedger(directory, nodeID string) (*Ledger, error) {
 		l.state.Artifacts = map[string]ArtifactRecord{}
 	}
 	if len(l.state.StorageOperations) > 0 || len(l.state.Artifacts) > 0 || len(l.state.InboxTransfers) > 0 {
-		l.state.Schema = 2
+		if l.state.Schema < 2 {
+			l.state.Schema = 2
+		}
 	}
 	if err = l.validateStorageState(); err != nil {
 		l.Close()
@@ -232,7 +236,10 @@ func (l *Ledger) Claim(task nodeproto.NodeTask, sha string) (nodeproto.NodeResul
 		}
 		return op.Result, false, nil
 	}
-	result := nodeproto.NodeResult{Protocol: nodeproto.Protocol, OperationID: task.OperationID, RequestSHA256: sha, InstanceID: task.InstanceID, Status: "accepted"}
+	result := nodeproto.NodeResult{Protocol: task.Protocol, OperationID: task.OperationID, RequestSHA256: sha, InstanceID: task.InstanceID, Status: "accepted"}
+	if task.Protocol == nodeproto.NetworkProtocol {
+		l.state.Schema = 3
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	l.state.Operations[task.OperationID] = Operation{Task: task, Result: result, CreatedAt: now, UpdatedAt: now}
 	return result, true, l.save()
@@ -243,8 +250,14 @@ func (l *Ledger) Reserve(instance Instance) error {
 	if _, ok := l.state.Instances[instance.ID]; ok {
 		return ErrConflict
 	}
+	if !instance.Network.IsZero() {
+		if !instance.Network.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: instance.ID, OwnerRef: instance.OwnerRef, Resources: instance.Resources}) {
+			return ErrOwnership
+		}
+		l.state.Schema = 3
+	}
 	for _, existing := range l.state.Instances {
-		if instance.IPv4 != "" && existing.IPv4 == instance.IPv4 && existing.State != "deleted" {
+		if existing.State != "deleted" && (instance.IPv4 != "" && existing.IPv4 == instance.IPv4 || !instance.Network.IsZero() && instance.Network.LeaseID == existing.Network.LeaseID) {
 			return ErrConflict
 		}
 	}
@@ -307,9 +320,13 @@ func (l *Ledger) Instance(id string) (Instance, bool) {
 
 func (l *Ledger) validateLoaded() error {
 	ips := map[string]bool{}
+	leases, taps := map[string]bool{}, map[string]bool{}
 	for id, op := range l.state.Operations {
 		if id != op.Task.OperationID || !op.Result.Matches(op.Task, op.Result.RequestSHA256) || op.Task.NodeID != l.state.NodeID {
 			return errors.New("invalid journal operation identity")
+		}
+		if !op.Task.Network.IsZero() && l.state.Schema != 3 {
+			return errors.New("OVS task needs schema 3")
 		}
 		if _, e := time.Parse(time.RFC3339Nano, op.CreatedAt); e != nil {
 			return errors.New("invalid journal timestamp")
@@ -318,6 +335,20 @@ func (l *Ledger) validateLoaded() error {
 	for id, i := range l.state.Instances {
 		if !nodeproto.ValidID(id) || i.ID != id || !nodeproto.ValidID(i.OwnerRef) || i.Domain != "aster-"+id || filepath.Base(i.Directory) != i.Domain || !filepath.IsAbs(i.Directory) || i.Disk != filepath.Join(i.Directory, "system.qcow2") || (i.Seed != "" && i.Seed != filepath.Join(i.Directory, "seed.iso")) {
 			return errors.New("invalid journal instance identity")
+		}
+		if !i.Network.IsZero() {
+			if l.state.Schema != 3 || !i.Network.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: i.ID, OwnerRef: i.OwnerRef, Resources: i.Resources}) || i.IPv4 != i.Network.IPv4 || i.MAC != i.Network.MAC {
+				return errors.New("invalid immutable OVS journal binding")
+			}
+			if i.State != "deleted" {
+				tap := fabric.TAPName(i.ID)
+				if leases[i.Network.LeaseID] || taps[tap] {
+					return errors.New("duplicate OVS lease or TAP identity")
+				}
+				leases[i.Network.LeaseID], taps[tap] = true, true
+			}
+		} else if i.Resources.NetworkType == "vpc" {
+			return errors.New("VPC binding missing")
 		}
 		switch i.State {
 		case "reserved", "uncertain", "running", "shut off", "deleted", "imported":

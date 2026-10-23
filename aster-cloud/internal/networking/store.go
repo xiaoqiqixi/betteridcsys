@@ -229,6 +229,69 @@ func (s *Store) Reserve(ctx context.Context, actor, id string, in ReserveInput, 
 		return Lease{}, false, e
 	}
 	defer tx.Rollback()
+	v, again, e := reserveTx(ctx, tx, actor, id, in, now, "user:"+actor)
+	if e != nil {
+		return Lease{}, false, e
+	}
+	return v, again, commit(tx)
+}
+
+// ReserveTaskTx binds IPAM to a controller task in the caller's transaction. It
+// never commits or opens a second connection. Re-taking the shared mutation gate
+// in this same transaction is safe and prevents an unguarded internal caller.
+// Task IDs, rather than fictitious users, identify the reservation audit actor.
+func (s *Store) ReserveTaskTx(ctx context.Context, tx *sql.Tx, taskID string, in ReserveInput, now time.Time) (Lease, IPPool, VPC, error) {
+	if tx == nil || !validWrite(taskID, taskID, now) || !in.Valid() {
+		return Lease{}, IPPool{}, VPC{}, ErrInput
+	}
+	var one int
+	if tx.QueryRowContext(ctx, "SELECT id FROM controller_lock WHERE id=1 FOR UPDATE").Scan(&one) != nil || one != 1 {
+		return Lease{}, IPPool{}, VPC{}, ErrUnavailable
+	}
+	lease, _, e := reserveTx(ctx, tx, taskID, taskID, in, now, "task:"+taskID)
+	if e != nil {
+		return Lease{}, IPPool{}, VPC{}, e
+	}
+	pool, e := scanPool(tx.QueryRowContext(ctx, "SELECT "+poolColumns+" FROM controller_network_pools WHERE id=?", lease.PoolID))
+	if e != nil {
+		return Lease{}, IPPool{}, VPC{}, e
+	}
+	vpc, e := scanVPC(tx.QueryRowContext(ctx, "SELECT "+vpcColumns+" FROM controller_network_vpcs WHERE id=?", lease.VPCID))
+	if e != nil {
+		return Lease{}, IPPool{}, VPC{}, e
+	}
+	if !pool.Enabled || pool.VPCID == "" || pool.NodeID != lease.NodeID || pool.VPCID != vpc.ID || vpc.NodeID != lease.NodeID || vpc.OwnerRef != lease.OwnerRef || vpc.CIDR != pool.CIDR {
+		return Lease{}, IPPool{}, VPC{}, ErrForbidden
+	}
+	return lease, pool, vpc, nil
+}
+
+// CheckTaskReservationTx is read-only and runs under the controller's mutation
+// gate. Disabled pools cannot authorize activation but do not prevent a bound
+// guest shutdown/deletion. Identity bindings are never repaired or reallocated.
+func (s *Store) CheckTaskReservationTx(ctx context.Context, tx *sql.Tx, n nodeproto.NetworkBinding, requireEnabled bool) error {
+	if tx == nil || !nodeproto.ValidID(n.LeaseID) {
+		return ErrInput
+	}
+	l, e := scanLease(tx.QueryRowContext(ctx, "SELECT "+leaseColumns+" FROM controller_network_leases WHERE id=?", n.LeaseID))
+	if e != nil {
+		return e
+	}
+	p, e := scanPool(tx.QueryRowContext(ctx, "SELECT "+poolColumns+" FROM controller_network_pools WHERE id=?", n.PoolID))
+	if e != nil {
+		return e
+	}
+	v, e := scanVPC(tx.QueryRowContext(ctx, "SELECT "+vpcColumns+" FROM controller_network_vpcs WHERE id=?", n.VPCID))
+	if e != nil {
+		return e
+	}
+	if requireEnabled && !p.Enabled || l.PoolID != p.ID || l.VPCID != v.ID || p.VPCID != v.ID || l.NodeID != n.NodeID || p.NodeID != n.NodeID || v.NodeID != n.NodeID || l.InstanceID != n.InstanceID || l.OwnerRef != n.OwnerRef || v.OwnerRef != n.OwnerRef || l.Address != n.IPv4 || p.CIDR != n.CIDR || v.CIDR != n.CIDR || v.VLANID != n.VLANID {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func reserveTx(ctx context.Context, tx *sql.Tx, actor, id string, in ReserveInput, now time.Time, auditActor string) (Lease, bool, error) {
 	again, e := replay(ctx, tx, "controller_network_leases", id, actor, bodyDigest(in))
 	if e != nil {
 		return Lease{}, false, e
@@ -238,7 +301,7 @@ func (s *Store) Reserve(ctx context.Context, actor, id string, in ReserveInput, 
 		if e != nil {
 			return Lease{}, false, e
 		}
-		return v, true, commit(tx)
+		return v, true, nil
 	}
 	pool, e := scanPool(tx.QueryRowContext(ctx, "SELECT "+poolColumns+" FROM controller_network_pools WHERE id=?", in.PoolID))
 	if e != nil {
@@ -325,10 +388,10 @@ func (s *Store) Reserve(ctx context.Context, actor, id string, in ReserveInput, 
 	if _, e = tx.ExecContext(ctx, "INSERT INTO controller_network_leases("+leaseColumns+",request_sha256,actor_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)", v.ID, v.PoolID, v.VPCID, v.NodeID, v.InstanceID, v.OwnerRef, v.Address, v.State, v.CreatedAt, bodyDigest(in), actor); e != nil {
 		return Lease{}, false, ErrUnavailable
 	}
-	if e = networkAudit(ctx, tx, actor, "network.lease.reserved", id, now); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO controller_audit(actor,action,target,created_at) VALUES(?,?,?,?)", auditActor, "network.lease.reserved", id, stamp(now)); e != nil {
 		return Lease{}, false, e
 	}
-	return v, false, commit(tx)
+	return v, false, nil
 }
 
 func (s *Store) GetVPC(ctx context.Context, id string) (VPC, error) {

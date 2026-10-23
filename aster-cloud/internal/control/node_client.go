@@ -153,7 +153,7 @@ func (c *NodeClient) Capabilities(ctx context.Context) (Capability, error) {
 		return Capability{}, e
 	}
 	var v Capability
-	if !strict(raw, &v) || v.NodeID != c.profile.ID || v.Protocol != nodeproto.Protocol || v.ObservedAt == "" {
+	if !strict(raw, &v) || v.NodeID != c.profile.ID || v.Protocol != nodeproto.Protocol || v.ObservedAt == "" || !v.validNetworkCapabilities() {
 		return Capability{}, ErrUnavailable
 	}
 	return v, nil
@@ -189,7 +189,7 @@ func (w Worker) Dispatch(ctx context.Context, op string) (out Job, err error) {
 		return Job{}, ErrState
 	}
 	task, e := nodeproto.DecodeTask(j.NodeRequest)
-	if e != nil || nodeproto.Digest(j.NodeRequest) != j.NodeRequestSHA || task.OperationID != j.OperationID || task.InstanceID != j.InstanceID || task.NodeID != j.NodeID {
+	if e != nil || nodeproto.Digest(j.NodeRequest) != j.NodeRequestSHA || task.OperationID != j.OperationID || task.InstanceID != j.InstanceID || task.NodeID != j.NodeID || task.Action != "create" || !w.Config.approvesTaskNetwork(task) {
 		return Job{}, ErrState
 	}
 	rpc, e := w.rpc(ctx, p)

@@ -1,10 +1,10 @@
 # 网络资源与 IPAM API（开发实现）
 
-2026-10-23。本文只描述持久网络意图、地址池和地址预留；它们不是 OVS 已接线、VLAN 已隔离或客户公网已可访问的证明。原生 KVM/OVS 实机验收仍未进行。
+2026-10-23。本文区分持久网络意图/IPAM 与显式 `aster.node/2` 任务绑定；创建 VPC、地址池或租约本身不是 OVS 已接线、VLAN 已隔离或客户公网已可访问的证明。原生 KVM/OVS 实机验收仍未进行。
 
 ## 安全边界
 
-- `internal/networking` 使用独立 `Store{DB *sql.DB}`，与主控其他写操作共同锁定 `controller_lock.id=1`。只写三张网络表及同事务 `controller_audit`；不修改实例 resources、金额/支付/订单快照、容量预留或节点信任根。
+- `internal/networking` 使用独立 `Store{DB *sql.DB}`，与主控其他写操作共同锁定 `controller_lock.id=1`。公开 IPAM 写入口只写三张网络表及同事务 `controller_audit`。内部 `ReserveTaskTx` 不另开事务、不提交，供主控将租约与实例、容量、不可变任务绑定共同提交；仍不修改金额/支付/订单快照或节点信任根。
 - `NewHandler(store, approvedNodeIDs)` 必须放在 `identity.Require` 的 HTTPS/origin/实时会话/CSRF 保护后。主控 Console 路由基础要求 `nodes.read`，处理器自行再次要求 GET `nodes.read`、POST `nodes.manage`，因此正式 Console 的 POST 必须同时拥有 **`nodes.read` + `nodes.manage`**；custom 角色须显式授予两项，operator 没有 manage 不能写。独立可复用处理器的测试会分别验证其逐方法权限，不表示放宽正式 Console 的组合要求。不是隐藏按钮授权。所有写入均检查构造时复制的批准节点列表，Store 再检查节点确实存在于主控 registry。
 - 节点 endpoint、证书、root 路径、宿主命令及 OpenFlow 字符串不是这些接口的输入。处理器从不运行宿主网络命令。
 - VPC 状态固定为 **`planned`**，租约固定为 **`reserved`**。地址池 `enabled=true` 只允许预留，不表示数据面已应用。
@@ -113,18 +113,36 @@ ReserveInput：`pool_id,instance_id,owner_ref,address`。空 address 按数值�
 | 415 | `JSON_REQUIRED` | 非 JSON |
 | 503 | `NETWORK_UNAVAILABLE` | 持久状态无法确证；不回显 DSN/SQL/请求正文 |
 
+## 显式 VPC 任务：主控/IPAM 同事务绑定
+
+这不是将已有 normal 套餐“升级”成私网。旧 `aster.node/1` 请求字节及其 normal/default-bandwidth 语义保持不变；新任务必须明确使用 `aster.node/2`，`network_type=vpc`、IPv4=1/IPv6=0、两个方向 **1–100000 Mbps**、transfer=0、traffic_direction=all，且没有 data disk。0 带宽继续表示旧合同的主控默认，不能猜成正数、无限或 fabric 限速。当前 VPC 是单宿主 L2；没有默认路由、网关服务、NAT/DHCP、IPv6 或跨宿主私网。
+
+根配置 `network_profiles` 选择固定 node/pool/owner，并冻结实际 `fabric.Config` 的规范 Go JSON SHA256（不是原配置文件文本 SHA）。网页、财务请求不能提交 bridge、宿主路径、OpenFlow、ofport 或外部 URL。节点能力还必须同时公告 `ovs-vpc-singlehost/1` 和匹配的 `ovs_network_profiles` ID；没有新能力的旧节点明确拒绝，不回退普通 Linux bridge。
+
+- **staff preset**：新 VPC preset 必须选择 `network_profile_id`，ID 格式为 `ovs-vpc-<名称>-v<正整数>`，例如 `ovs-vpc-private-v1`。该 preset 只批准根策略 `owner_ref` 对应租户，不自动创建/共享租户私网。不得把已售 normal preset 同 ID 改成 VPC；preset-only 财务快照不包含原资源明细，所以版本化新 ID 是必要运营边界，格式约束不替代版本变更审核。
+- **custom 财务商品**：只按精确 `(ProductSpec SHA256, owner_ref)` 选择唯一根审批 profile。相同 SKU 可以为不同 owner 各审批独立池；同 SHA/owner 二元键不能出现多个候选。`ConfigurationSHA256` 只覆盖 ProductSpec，不含价格/币种或配置 revision；财务请求 digest 与六字段 `aster.controller/1` Result 完全保留。
+- `CreateInstance` / `Admit` 在同一 InnoDB/global-lock 事务中插入 reserved 实例、核对已启用池及 VPC/owner/node、一笔地址预留、不可变 NetworkBinding、CPU/内存/磁盘预留、原任务和审计。任何一环失败全部 rollback，没有先分地址再尝试写任务的跨事务窗口。IPAM reservation 审计 actor 是 `task:<operation_id>`，不冒充客户自己操作。
+- `NetworkBinding` 全标量字段为 `schema,profile_id,profile_sha256,lease_id,pool_id,vpc_id,node_id,owner_ref,instance_id,cidr,ipv4,mac,interface_id,vlan_id,inbound_mbps,outbound_mbps`。MAC 与 InterfaceID 按节点合同确定性生成；不接受 ofport、网关、路径或命令字段。
+- `controller_instance_networks` 仅插入一次，保存 create operation、精确 create request SHA 与 NetworkBinding SHA。重放不另分配；power 操作复用原 binding，不重新读取当前 preset。当前根策略移除或改变 profile 的 node/pool/owner/config-SHA 会阻止新写派发，不阻止同原 SHA 的只读 GET 核对。Profile 移除会阻止所有新 power 写操作（含 stop）；停机前应保留原 profile，若只需禁止激活应禁用池，不能先删 profile。派发 claim 在共享锁内复核 immutable binding 和 lease/pool/VPC 身份；禁用池不允许 create/start/reboot，但仍可对身份一致的实例 shutdown/force_off/delete，不自动释放 IP。
+- 创建/重启激活还需节点实际 root-approved fabric/live gate，不凭主控 accepted、IPAM reserved 或旧 applied receipt 授权。断线/未知结果保留原任务，只做同 SHA 的 GET 核对；不重新 POST。
+- **VPC 的 reboot/snapshot/backup/restore/migration 暂不支持**。重启必须明确 shutdown 后再 start，不使用旧 reboot 绕过门禁。主控拒绝将其送入未携带网络合同的旧 storage/migration 路径；normal 的既有存储/迁移路径保持原行为。不能把旧 normal 备份恢复成新 VPC 实例或称网络恢复已经完成。
+
+根配置的完整合成示例见 [`deploy/controller-ovs.example.json`](../deploy/controller-ovs.example.json)。示例中的证书 pin、pool/owner、Spec/config SHA 必须由运营者核对替换；示例不创建桥、地址、证书信任或实例。节点和 fabric 准备由各自 root 审批流程负责，不运行 shell 下载器/任意 IP 隧道。
+
 ## 迁移与测试
 
 迁移 **005** 只新增三张网络表。`CheckMigration(ctx, reader, true)` 供未记录版本的 DDL 前只读预检：缺表允许重入，已存在表的列类型、长度、字符序/NULL/时间精度和保留索引必须准确。完整 `Store.Check` 不允许缺表；错误保留索引不得静默重建/接受。额外运营者索引不被删除。
 
-旧主控二进制不认识 schema 5，不能仅替换旧 binary 回滚；须停写、备份、使用兼容应用或按已演练的完整数据库恢复方案回滚。没有提供网络对象自动降级/删除迁移。节点执行器的新网络协议/journal 升级为另一个独立验收边界，不能混为本次 MySQL 迁移。
+迁移 **006** 另加 `controller_instance_networks`，精确检查列/引擎/字符序及 instance PK、operation UNIQUE、node 索引；正确部分 DDL 可重入，view/错误索引/缺失约束拒绝且不写成功 SHA。005 SQL 字节保持不变。
+
+旧主控二进制不认识 schema 6，不能仅替换旧 binary 回滚；须停写、备份、使用兼容应用或按已演练的完整数据库恢复方案回滚。没有提供网络对象自动降级/删除迁移。节点执行器的新网络协议/journal 升级为另一个独立验收边界，不能混为本次 MySQL 迁移。
 
 测试入口：
 
 ```sh
-GOCACHE=/private/tmp/aster-cloud-go-cache go test -race -count=1 ./internal/networking
+GOTOOLCHAIN=go1.27.3 GOCACHE=/tmp/aster-cloud-go-cache go test -race -count=1 ./internal/control ./internal/networking
 ```
 
-真实 MySQL 使用 `ASTER_NETWORK_TEST_DSN` 或 `ASTER_CLOUD_TEST_DSN`（必须含 `_test`）；CI fallback `ASTER_MYSQL_TEST_DSN` 仅接受 `aster_ci_test`。只接受 private Unix socket 或 literal loopback TCP，不接受跳过 TLS 验证/多语句/危险文件选项。测试使用借用的服务器权限创建并清理自己随机独立的 `aster_cloud_test_network_*` 数据库，不 truncate 原测试库或财务库；不回显凭据。没有 DSN 则明确 SKIP，不能算实库通过。
+真实 MySQL 使用 `ASTER_NETWORK_TEST_DSN` 或 `ASTER_CLOUD_TEST_DSN`（必须含 `_test`）；CI fallback `ASTER_MYSQL_TEST_DSN` 仅接受 `aster_ci_test`。只接受 private Unix socket 或 literal loopback TCP，不接受跳过 TLS 验证/多语句/危险文件选项。测试使用借用的服务器权限创建并清理自己随机独立的 `aster_cloud_test_network_*` 数据库，不 truncate 原测试库或财务库；不回显凭据。新 controller 任务绑定测试使用 `ASTER_CLOUD_TEST_DSN` / 同一 CI fallback，并始终借服务器权限创建/清理自己的随机独立数据库；不会在传入库中 DROP 绑定表或注入 trigger。仅设置 `ASTER_NETWORK_TEST_DSN` 不会自动覆盖 controller 测试。没有 DSN 则明确 SKIP，不能算实库通过。
 
-覆盖输入/4096 上限、canonical replay、越权、池禁用、地址耗尽、并发唯一、重启查询、固定/字节预算分页、GET 不改状态、schema 冲突/部分 DDL 及真实 HTTPS Cookie/CSRF/RBAC。所有数据均为合成记录；不运行 KVM、OVS、公网路由或实际地址绑定。
+覆盖输入/4096 上限、canonical replay、越权、池禁用、地址耗尽、并发唯一、重启查询、固定/字节预算分页、GET 不改状态、schema 冲突/部分 DDL 及真实 HTTPS Cookie/CSRF/RBAC。另覆盖新旧能力区分、root profile 精确 SHA/owner 选择、正双向限速、同事务实例/容量/租约/任务/audit rollback、并发池耗尽、不可变 power binding、禁用池/绑定篡改拒绝派发、新协议丢响应只 GET 及 schema 006 重入/冲突。所有数据均为合成记录；这些主控测试不运行 KVM、OVS、公网路由或实际地址绑定。

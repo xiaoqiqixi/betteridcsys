@@ -25,8 +25,14 @@ func (m *Manager) Reconcile(ctx context.Context, id string) (nodeproto.NodeResul
 		return op.Result, errors.New("only accepted/uncertain operations can be reconciled")
 	}
 	instance, ok := m.Ledger.Instance(op.Task.InstanceID)
-	if !ok || instance.OwnerRef != op.Task.OwnerRef || instance.Resources != op.Task.Resources || instance.Hostname != op.Task.Hostname {
+	if !ok || instance.OwnerRef != op.Task.OwnerRef || instance.Resources != op.Task.Resources || instance.Hostname != op.Task.Hostname || instance.Network != op.Task.Network {
 		return op.Result, ErrOwnership
+	}
+	// A running VM is not evidence of a completed fabric activation. The old
+	// read-only power reconciler must not turn a dropped/unknown OVS guest into
+	// a successful opening. Network reconciliation needs its own live proof.
+	if !instance.Network.IsZero() {
+		return op.Result, errors.New("OVS_NEEDS_NETWORK_GATE_RECONCILIATION")
 	}
 	if op.Task.Action == "reboot" || op.Task.Action == "delete" {
 		return op.Result, errors.New("read-only observation cannot prove reboot/delete completion")

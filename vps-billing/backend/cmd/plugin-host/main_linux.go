@@ -18,15 +18,17 @@ import (
 func main() {
 	root := flag.String("root", "", "Protected installed plugin directory")
 	policy := flag.String("policy", "", "Root-owned explicit plugin policy")
-	kind := flag.String("kind", "smtp", "Approved plugin slot: smtp or payment")
+	kind := flag.String("kind", "smtp", "Approved plugin slot: smtp, payment or resource")
 	flag.Parse()
-	if flag.NArg() != 0 || os.Geteuid() == 0 || *kind != "smtp" && *kind != "payment" {
+	if flag.NArg() != 0 || os.Geteuid() == 0 || *kind != "smtp" && *kind != "payment" && *kind != "resource" {
 		stop()
 	}
 	var approved *runtimeplugins.Approval
 	var err error
 	if *kind == "payment" {
 		approved, err = runtimeplugins.OpenApprovedPayment(*root, *policy)
+	} else if *kind == "resource" {
+		approved, err = runtimeplugins.OpenApprovedResource(*root, *policy)
 	} else {
 		approved, err = runtimeplugins.OpenApproved(*root, *policy)
 	}
@@ -64,11 +66,19 @@ func main() {
 	executable := "/proc/self/fd/" + strconv.Itoa(int(approved.Executable.Fd()))
 	args := []string{"plugin", "--socket", approved.Selection.Socket, "--client-uid", strconv.FormatUint(uint64(approved.Selection.ClientUID), 10), "--targets", string(targets)}
 	environment := []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC", "TMPDIR=/tmp"}
+	if *kind == "resource" {
+		if approved.Manifest.Protocol != pluginapi.ResourceProtocol || approved.Selection.ClientUID != 0 {
+			stop()
+		}
+		args = append(args, "--controller-id", approved.Selection.ControllerID)
+	}
 	if *kind == "payment" {
 		args = append(args, "--merchant-id", approved.Selection.MerchantID)
 		if approved.Manifest.Protocol != pluginapi.PaymentProtocol {
 			stop()
 		}
+	}
+	if *kind == "payment" || *kind == "resource" {
 		// systemd supplies a read-only credential directory to this service only.
 		// No core configuration, database credentials or arbitrary environment leaks.
 		if directory := os.Getenv("CREDENTIALS_DIRECTORY"); directory != "" {

@@ -44,7 +44,9 @@ func (l *Ledger) ClaimStorage(task nodeproto.TypedStorageTask, sha string) (node
 	}
 	result := nodeproto.StorageResult{Protocol: nodeproto.StorageProtocol, OperationID: task.OperationID, RequestSHA256: sha, InstanceID: task.InstanceID, ArtifactID: task.ArtifactID, Status: "accepted", SourceNodeID: task.SourceNodeID, TargetNodeID: task.TargetNodeID, ManifestSHA256: task.ManifestSHA256, FenceToken: task.FenceToken, Items: []nodeproto.StorageArtifact{}}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	l.state.Schema = 2
+	if l.state.Schema < 2 {
+		l.state.Schema = 2
+	}
 	l.state.StorageOperations[task.OperationID] = StorageOperation{Task: task, Result: result, CreatedAt: now, UpdatedAt: now}
 	return result, true, l.save()
 }

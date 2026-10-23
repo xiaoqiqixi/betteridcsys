@@ -1,5 +1,5 @@
 // Package fabric applies a root-approved, single-host OVS microsegment fabric.
-// It is deliberately not connected to VM creation or the financial protocol.
+// The embedded lifecycle gate is independent from the financial protocol.
 package fabric
 
 import (

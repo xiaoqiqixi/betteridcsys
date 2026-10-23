@@ -62,7 +62,9 @@ func (l *Ledger) SaveInbox(t InboxTransfer) error {
 	if old, ok := l.state.InboxTransfers[t.ArtifactID]; ok && (old.TransferID != t.TransferID || old.ManifestSHA256 != t.ManifestSHA256) {
 		return ErrConflict
 	}
-	l.state.Schema = 2
+	if l.state.Schema < 2 {
+		l.state.Schema = 2
+	}
 	l.state.InboxTransfers[t.ArtifactID] = cloneInbox(t)
 	return l.save()
 }

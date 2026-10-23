@@ -3,6 +3,7 @@ package main
 import (
 	"aster/billing/internal/billing"
 	"aster/billing/internal/controllers"
+	"aster/billing/internal/runtimeplugins"
 	"context"
 	"encoding/json"
 	"errors"
@@ -104,7 +105,7 @@ func runHostProvisioning(out io.Writer, jobID string, reconcile bool) int {
 	if err != nil {
 		return emit(2)
 	}
-	policy, err := controllers.LoadPolicy(os.Getenv("PROVISIONING_POLICY_FILE"))
+	prepare, err := hostProvisioningTransport(os.Getenv("PROVISIONING_TRANSPORT"), os.Getenv("PROVISIONING_POLICY_FILE"), os.Getenv("PROVISIONING_PLUGIN_ROOT"), os.Getenv("PROVISIONING_PLUGIN_POLICY_FILE"))
 	if err != nil {
 		return emit(2)
 	}
@@ -119,7 +120,7 @@ func runHostProvisioning(out io.Writer, jobID string, reconcile bool) int {
 		response.Code = "SCHEMA_NOT_READY"
 		return emit(2)
 	}
-	job, err := performProvisioning(ctx, store, jobID, reconcile, func(ctx context.Context, id string) (controllerTransport, error) { return policy.Client(ctx, id) })
+	job, err := performProvisioning(ctx, store, jobID, reconcile, prepare)
 	if job.ID != "" {
 		response.Job = &job
 	}
@@ -139,4 +140,30 @@ func runHostProvisioning(out io.Writer, jobID string, reconcile bool) int {
 		return emit(1)
 	}
 	return emit(0)
+}
+
+// Selection exists only in the explicit root host command, never the web
+// settings/API. Choosing resource disables direct HTTPS fallback completely.
+func hostProvisioningTransport(mode, policyPath, pluginRoot, pluginPolicy string) (func(context.Context, string) (controllerTransport, error), error) {
+	switch mode {
+	case "", "https":
+		if pluginRoot != "" || pluginPolicy != "" {
+			return nil, controllers.ErrUnavailable
+		}
+		policy, err := controllers.LoadPolicy(policyPath)
+		if err != nil {
+			return nil, err
+		}
+		return func(ctx context.Context, id string) (controllerTransport, error) { return policy.Client(ctx, id) }, nil
+	case "resource":
+		if policyPath != "" || pluginRoot == "" || pluginPolicy == "" {
+			return nil, controllers.ErrUnavailable
+		}
+		manager := runtimeplugins.New(pluginRoot, pluginPolicy)
+		return func(ctx context.Context, id string) (controllerTransport, error) {
+			return manager.PrepareResource(ctx, id)
+		}, nil
+	default:
+		return nil, controllers.ErrUnavailable
+	}
 }

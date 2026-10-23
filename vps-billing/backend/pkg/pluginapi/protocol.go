@@ -21,6 +21,8 @@ const (
 	SMTPCapability            = "smtp.send"
 	PaymentProtocol           = "aster.payment/1"
 	PaymentMinCoreVersion     = "0.5.3"
+	ResourceProtocol          = "aster.resource/1"
+	ResourceMinCoreVersion    = "0.5.9"
 	PaymentCheckoutCapability = "payment.checkout"
 	PaymentVerifyCapability   = "payment.verify_callback"
 	// JSON can expand a valid 64 KiB plain-text message up to sixfold. Include
@@ -32,7 +34,7 @@ const (
 )
 
 var ErrInvalid = errors.New("invalid plugin data")
-var identifier = regexp.MustCompile(`^(email|payment)\.[a-z][a-z0-9-]{0,47}$`)
+var identifier = regexp.MustCompile(`^(email|payment|resource)\.[a-z][a-z0-9-]{0,47}$`)
 var digest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var release = regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
 
@@ -60,6 +62,7 @@ type Policy struct {
 	Revision uint64     `json:"revision"`
 	SMTP     *Selection `json:"smtp,omitempty"`
 	Payment  *Selection `json:"payment,omitempty"`
+	Resource *Selection `json:"resource,omitempty"`
 }
 
 type Selection struct {
@@ -72,6 +75,7 @@ type Selection struct {
 	Socket         string   `json:"socket"`
 	AllowedTargets []Target `json:"allowed_targets"`
 	MerchantID     string   `json:"merchant_id,omitempty"`
+	ControllerID   string   `json:"controller_id,omitempty"`
 }
 
 type Hello struct {
@@ -148,6 +152,15 @@ func (m Manifest) Validate(core string) error {
 		if actualErr != nil || declaredErr != nil || actual < 0 || declared < 0 {
 			return ErrInvalid
 		}
+	case ResourceProtocol:
+		if !strings.HasPrefix(m.ID, "resource.") || m.Payment != nil || !EqualCapabilities(m.Capabilities, ResourceCapabilities()) {
+			return ErrInvalid
+		}
+		actual, e := CompareVersion(core, ResourceMinCoreVersion)
+		declared, d := CompareVersion(m.CoreMin, ResourceMinCoreVersion)
+		if e != nil || d != nil || actual < 0 || declared < 0 {
+			return ErrInvalid
+		}
 	default:
 		return ErrInvalid
 	}
@@ -203,6 +216,8 @@ func DecodeStrict(raw []byte, limit int, destination any) error {
 	var nested string
 	var nestedRequired []string
 	switch destination.(type) {
+	case *ResourceResponse:
+		required = []string{"protocol", "request_id", "status", "code", "payload"}
 	case *SendResponse:
 		required = []string{"protocol", "request_id", "status", "code", "delivery_uncertain"}
 	case *PaymentCreateResponse:

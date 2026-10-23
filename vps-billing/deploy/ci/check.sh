@@ -28,7 +28,7 @@ else
 fi
 source_root=$(cd -- "$source_path" && pwd -P)
 project_root="$source_root/vps-billing"
-for required in backend/go.mod frontend/package-lock.json tests/config_smoke.py tests/security_smoke.py deploy/scripts/test-release-manifest.py deploy/scripts/test-plugin-manager.py deploy/scripts/test-update-manager.py deploy/scripts/test-core-manager.py deploy/scripts/test-core-operation.py deploy/scripts/test-backup-native.sh deploy/ci/test_release_pipeline.py; do
+for required in backend/go.mod frontend/package-lock.json tests/config_smoke.py tests/security_smoke.py deploy/scripts/test-release-manifest.py deploy/scripts/test-plugin-manager.py deploy/scripts/test-update-manager.py deploy/scripts/test-core-manager.py deploy/scripts/test-core-operation.py deploy/scripts/test-backup-native.sh deploy/ci/test_release_pipeline.py deploy/ci/check-resource-package.sh deploy/ci/resource_package_gate.py; do
   [[ -f "$project_root/$required" ]] || fail "Source checkout is missing $required"
 done
 
@@ -101,6 +101,9 @@ print("PASS: core excludes concrete plugin transport and process execution")
 PYDEPS
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$check_tmp/aster-api" ./cmd/server
 )
+
+step 'Resource static package and protected production manager verification'
+bash "$project_root/deploy/ci/check-resource-package.sh" "$source_root" | tee "$check_tmp/resource-package-verification.log"
 
 step 'Frontend locked dependencies, types, tests, production build and formatting'
 (

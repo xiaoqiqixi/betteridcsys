@@ -79,6 +79,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 				return e
 			}
 		}
+		if migration.Version == 6 {
+			if e = networking.CheckTaskBindingMigration(ctx, conn, true); e != nil {
+				return e
+			}
+		}
 		if migration.Version == 4 {
 			existingIndexes, e = auditIndexMigrationPlan(ctx, conn, migration.SQL)
 			if e != nil {
@@ -102,6 +107,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		}
 		if migration.Version == 5 {
 			if e = networking.CheckMigration(ctx, conn, false); e != nil {
+				return e
+			}
+		}
+		if migration.Version == 6 {
+			if e = networking.CheckTaskBindingMigration(ctx, conn, false); e != nil {
 				return e
 			}
 		}
@@ -137,7 +147,10 @@ func (s *SQLStore) Check(ctx context.Context) error {
 	if err := checkAuditQueryIndexes(ctx, s.DB); err != nil {
 		return err
 	}
-	return (&networking.Store{DB: s.DB}).Check(ctx)
+	if e := (&networking.Store{DB: s.DB}).Check(ctx); e != nil {
+		return e
+	}
+	return networking.CheckTaskBindingMigration(ctx, s.DB, false)
 }
 func (s *SQLStore) locked(ctx context.Context) (*sql.Tx, error) {
 	// ponytail: one database gate serializes mutations; replace with ordered node/
@@ -235,7 +248,7 @@ func (s *SQLStore) Admit(ctx context.Context, r controllerapi.Request, candidate
 		if !strict(caps, &capability) {
 			return Job{}, false, ErrUnavailable
 		}
-		if !capability.Supports(candidate.Resources, n) {
+		if !capability.SupportsNetwork(candidate.Resources, n, candidate.NetworkProfileID) {
 			continue
 		}
 		supported = true
@@ -255,12 +268,19 @@ func (s *SQLStore) Admit(ctx context.Context, r controllerapi.Request, candidate
 		j.NodeProfileSHA = candidate.ProfileSHA
 		j.State = "accepted"
 		task := nodeproto.NodeTask{Protocol: nodeproto.Protocol, OperationID: j.OperationID, NodeID: n.ID, Action: "create", InstanceID: j.InstanceID, OwnerRef: r.OwnerRef, Hostname: r.Hostname, Resources: rsc}
+		resourceRaw, _ := json.Marshal(rsc)
+		if _, e = tx.ExecContext(ctx, "INSERT INTO controller_instances(id,owner_ref,node_id,hostname,state,resources,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", j.InstanceID, r.OwnerRef, n.ID, r.Hostname, "reserved", resourceRaw, now, now); e != nil {
+			return Job{}, false, e
+		}
+		task, e = bindCreateNetwork(ctx, tx, task, candidate, now)
+		if e != nil {
+			return Job{}, false, e
+		}
 		j.NodeRequest, j.NodeRequestSHA, e = task.BytesAndDigest()
 		if e != nil {
 			return Job{}, false, e
 		}
-		resourceRaw, _ := json.Marshal(rsc)
-		if _, e = tx.ExecContext(ctx, "INSERT INTO controller_instances(id,owner_ref,node_id,hostname,state,resources,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", j.InstanceID, r.OwnerRef, n.ID, r.Hostname, "reserved", resourceRaw, now, now); e != nil {
+		if e = insertNetworkBinding(ctx, tx, task, j.NodeRequestSHA, now); e != nil {
 			return Job{}, false, e
 		}
 		if _, e = tx.ExecContext(ctx, "INSERT INTO controller_reservations(operation_id,node_id,cpu,memory_mib,disk_gib,released,created_at) VALUES(?,?,?,?,?,FALSE,?)", j.OperationID, n.ID, rsc.CPUCores, rsc.MemoryMiB, rsc.SystemDiskGiB, now); e != nil {
@@ -291,6 +311,13 @@ func (s *SQLStore) Claim(ctx context.Context, op, profile string, now time.Time,
 	}
 	if j.State != "accepted" || profile != j.NodeProfileSHA {
 		return Job{}, ErrState
+	}
+	task, e := nodeproto.DecodeTask(j.NodeRequest)
+	if e != nil || nodeproto.Digest(j.NodeRequest) != j.NodeRequestSHA || task.OperationID != j.OperationID || task.InstanceID != j.InstanceID || task.NodeID != j.NodeID || task.Action != "create" {
+		return Job{}, ErrState
+	}
+	if e = validateTaskNetwork(ctx, tx, task); e != nil {
+		return Job{}, e
 	}
 	// Nodes execute one operation at a time and reject, rather than queue, a
 	// second POST. Keep accepted jobs here until the prior operation is proven
@@ -405,7 +432,7 @@ func (s *SQLStore) RegisterNode(ctx context.Context, p NodeProfile) error {
 }
 func (s *SQLStore) Heartbeat(ctx context.Context, p NodeProfile, c Capability, now time.Time, ttl time.Duration) error {
 	at, e := time.Parse(time.RFC3339Nano, c.ObservedAt)
-	if e != nil || !heartbeatFresh(&at, now, ttl) || c.Protocol != nodeproto.Protocol || c.NodeID != p.ID || c.Hypervisor != "libvirt-kvm" {
+	if e != nil || !heartbeatFresh(&at, now, ttl) || c.Protocol != nodeproto.Protocol || c.NodeID != p.ID || c.Hypervisor != "libvirt-kvm" || !c.validNetworkCapabilities() {
 		return ErrInput
 	}
 	v := c.Capacity

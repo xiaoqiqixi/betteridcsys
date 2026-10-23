@@ -11,19 +11,20 @@ type Capacity struct {
 	StorageAllocatedGiB int64 `json:"storage_allocated_gib"`
 }
 type Capabilities struct {
-	Protocol        string   `json:"protocol"`
-	NodeID          string   `json:"node_id"`
-	Hypervisor      string   `json:"hypervisor"`
-	Maintenance     bool     `json:"maintenance"`
-	ObservedAt      string   `json:"observed_at"`
-	Actions         []string `json:"actions"`
-	ImageIDs        []string `json:"image_ids"`
-	StorageIDs      []string `json:"storage_ids"`
-	NetworkProfiles []string `json:"network_profiles"`
-	IPv4Counts      []int    `json:"ipv4_counts"`
-	IPv6Counts      []int    `json:"ipv6_counts"`
-	BandwidthMbps   []int    `json:"bandwidth_mbps"`
-	TransferGiB     []int    `json:"transfer_gib"`
-	Capacity        Capacity `json:"capacity"`
-	Limitations     []string `json:"limitations"`
+	OVSNetworkProfiles []string `json:"ovs_network_profiles,omitempty"`
+	Protocol           string   `json:"protocol"`
+	NodeID             string   `json:"node_id"`
+	Hypervisor         string   `json:"hypervisor"`
+	Maintenance        bool     `json:"maintenance"`
+	ObservedAt         string   `json:"observed_at"`
+	Actions            []string `json:"actions"`
+	ImageIDs           []string `json:"image_ids"`
+	StorageIDs         []string `json:"storage_ids"`
+	NetworkProfiles    []string `json:"network_profiles"`
+	IPv4Counts         []int    `json:"ipv4_counts"`
+	IPv6Counts         []int    `json:"ipv6_counts"`
+	BandwidthMbps      []int    `json:"bandwidth_mbps"`
+	TransferGiB        []int    `json:"transfer_gib"`
+	Capacity           Capacity `json:"capacity"`
+	Limitations        []string `json:"limitations"`
 }

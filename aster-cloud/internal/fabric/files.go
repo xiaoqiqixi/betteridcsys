@@ -85,10 +85,11 @@ type record struct {
 	Bindings []binding `json:"bindings"`
 }
 type journal struct {
-	Schema  int      `json:"schema"`
-	NodeID  string   `json:"node_id"`
-	Bridge  string   `json:"bridge"`
-	Records []record `json:"records"`
+	Activations []activationRecord `json:"activations,omitempty"`
+	Schema      int                `json:"schema"`
+	NodeID      string             `json:"node_id"`
+	Bridge      string             `json:"bridge"`
+	Records     []record           `json:"records"`
 }
 type ledger struct {
 	cfg   Config
@@ -183,7 +184,11 @@ func openLedger(c Config, write bool, fault func(string) error) (*ledger, error)
 		return nil, ErrUnavailable
 	}
 	raw, e := readPrivate(path, uint32(os.Geteuid()), 8<<20)
-	if e != nil || decodeJournal(raw, &l.state) != nil || l.state.Schema != 1 || l.state.NodeID != c.NodeID || l.state.Bridge != c.Bridge || l.state.Records == nil || len(l.state.Records) > 64 {
+	if e != nil || decodeJournal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2) || l.state.NodeID != c.NodeID || l.state.Bridge != c.Bridge || l.state.Records == nil || len(l.state.Records) > 64 {
+		l.close()
+		return nil, ErrUnavailable
+	}
+	if l.validateActivations() != nil {
 		l.close()
 		return nil, ErrUnavailable
 	}
@@ -244,11 +249,32 @@ func validBindings(items []binding) bool {
 	return true
 }
 func decodeJournal(raw []byte, j *journal) error {
-	if object(raw, []string{"schema", "node_id", "bridge", "records"}, j) != nil {
+	var header struct {
+		Schema int `json:"schema"`
+	}
+	if json.Unmarshal(raw, &header) != nil {
+		return ErrUnavailable
+	}
+	keys := []string{"schema", "node_id", "bridge", "records"}
+	if header.Schema == 2 {
+		keys = append(keys, "activations")
+	}
+	if object(raw, keys, j) != nil {
 		return ErrUnavailable
 	}
 	var root map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &root)
+	if header.Schema == 2 {
+		var items []json.RawMessage
+		if json.Unmarshal(root["activations"], &items) != nil || len(items) > 64 {
+			return ErrUnavailable
+		}
+		for _, raw := range items {
+			if decodeActivationRecord(raw) != nil {
+				return ErrUnavailable
+			}
+		}
+	}
 	var records []json.RawMessage
 	if json.Unmarshal(root["records"], &records) != nil || len(records) > 64 {
 		return ErrUnavailable
@@ -373,6 +399,9 @@ func Status(c Config, revision int64) (Receipt, error) {
 		return Receipt{}, e
 	}
 	defer l.close()
+	if l.activationPending() {
+		return Receipt{}, ErrUncertain
+	}
 	for n := len(l.state.Records) - 1; n >= 0; n-- {
 		r := l.state.Records[n].Receipt
 		if revision == 0 || revision == r.Revision {

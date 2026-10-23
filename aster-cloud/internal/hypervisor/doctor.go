@@ -1,6 +1,7 @@
 package hypervisor
 
 import (
+	"aster/cloud/internal/fabric"
 	"aster/cloud/internal/nodeproto"
 	"bufio"
 	"context"
@@ -98,6 +99,30 @@ func (m *Manager) Doctor(ctx context.Context) DoctorReport {
 		add("cloud_localds", e == nil && s.Mode().Perm()&0111 != 0)
 		add("approved_static_ipv4_bridge_filter", m.verifyNetwork(ctx) == nil)
 	}
+	if len(m.Config.OVSProfiles) > 0 {
+		st, err := os.Stat(CloudLocalDS)
+		add("ovs_cloud_localds", err == nil && st.Mode().Perm()&0111 != 0)
+		ids := make([]string, 0, len(m.Config.OVSProfiles))
+		for id := range m.Config.OVSProfiles {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			p := m.Config.OVSProfiles[id]
+			c, err := fabric.LoadConfig(p.FabricConfig)
+			if err == nil && c.NodeID == m.Config.NodeID {
+				e, ee := fabric.NewExecutor(c, fabric.OSRunner{})
+				if ee != nil {
+					err = ee
+				} else {
+					err = e.Inspect(ctx)
+				}
+			} else {
+				err = ErrUnsupported
+			}
+			add("ovs_approved_profile:"+id, err == nil)
+		}
+	}
 	return report
 }
 func (m *Manager) Capabilities(ctx context.Context) nodeproto.Capabilities {
@@ -125,7 +150,7 @@ func (m *Manager) Capabilities(ctx context.Context) nodeproto.Capabilities {
 	} else {
 		capacity.MemoryAvailableMiB = 0
 	}
-	c := nodeproto.Capabilities{Protocol: nodeproto.Protocol, NodeID: m.Config.NodeID, Hypervisor: "libvirt-kvm", Maintenance: m.Config.Maintenance, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Actions: []string{}, ImageIDs: []string{}, StorageIDs: []string{m.Config.StorageID}, NetworkProfiles: []string{}, IPv4Counts: []int{}, IPv6Counts: []int{0}, BandwidthMbps: []int{0}, TransferGiB: []int{0}, Capacity: capacity, Limitations: []string{"No VPC, IPv6 allocation, data disks, non-zero bandwidth shaping or traffic metering.", "Zero bandwidth/transfer means the explicitly root-approved unmetered default, not an enforced numeric quota.", "Static IPv4 requires operator-preconfigured dedicated routed bridge and pinned anti-spoof/default-deny nwfilter; not a tenant security group or complete host network isolation.", "Succeeded create confirms libvirt domain running, not guest boot, SSH, network connectivity or billing service activation.", "Reboot completion cannot be proved without guest lifecycle evidence and is retained uncertain after the command acknowledgement."}}
+	c := nodeproto.Capabilities{Protocol: nodeproto.Protocol, NodeID: m.Config.NodeID, Hypervisor: "libvirt-kvm", Maintenance: m.Config.Maintenance, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Actions: []string{}, ImageIDs: []string{}, StorageIDs: []string{m.Config.StorageID}, NetworkProfiles: []string{}, IPv4Counts: []int{}, IPv6Counts: []int{0}, BandwidthMbps: []int{0}, TransferGiB: []int{0}, Capacity: capacity, Limitations: []string{"OVS requires an explicit pinned profile and node/2 immutable IPAM binding. No routed/cross-node VPC, IPv6, data disks, traffic accounting or queue shaping.", "Zero bandwidth/transfer means the explicitly root-approved unmetered default, not an enforced numeric quota.", "Static IPv4 requires operator-preconfigured dedicated routed bridge and pinned anti-spoof/default-deny nwfilter; not a tenant security group or complete host network isolation.", "Succeeded create confirms libvirt domain running, not guest boot, SSH, network connectivity or billing service activation.", "Reboot completion cannot be proved without guest lifecycle evidence and is retained uncertain after the command acknowledgement."}}
 	for id := range m.Config.Images {
 		c.ImageIDs = append(c.ImageIDs, id)
 	}
@@ -137,6 +162,17 @@ func (m *Manager) Capabilities(ctx context.Context) nodeproto.Capabilities {
 	if m.Config.Network.Enabled {
 		c.NetworkProfiles = append(c.NetworkProfiles, "normal-static-ipv4-dedicated-bridge")
 		c.IPv4Counts = append(c.IPv4Counts, 1)
+	}
+	if len(m.Config.OVSProfiles) > 0 {
+		for id := range m.Config.OVSProfiles {
+			c.OVSNetworkProfiles = append(c.OVSNetworkProfiles, id)
+		}
+		sort.Strings(c.OVSNetworkProfiles)
+		c.NetworkProfiles = append(c.NetworkProfiles, nodeproto.OVSNetworkCapability)
+		if !m.Config.Network.Enabled {
+			c.IPv4Counts = append(c.IPv4Counts, 1)
+		}
+		c.Limitations = append(c.Limitations, "OVS is single-host private IPv4 with per-IP drop meters; restart is explicit shutdown then start. OVS backup/restore/migration requires a future bound storage contract.")
 	}
 	doctor := m.Doctor(ctx)
 	if !doctor.Ready {
