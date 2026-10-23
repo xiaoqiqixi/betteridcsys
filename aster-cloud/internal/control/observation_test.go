@@ -32,8 +32,12 @@ type observationFixture struct {
 	verifiedPeers atomic.Int32
 }
 
-func newObservationFixture(t *testing.T) *observationFixture {
+func newObservationFixture(t *testing.T, suffix ...string) *observationFixture {
 	t.Helper()
+	readSuffix := ""
+	if len(suffix) == 1 {
+		readSuffix = suffix[0]
+	}
 	ca, key, caPEM := authority(t)
 	serverIdentity, clientIdentity := issue(t, ca, key, false), issue(t, ca, key, true)
 	clientPin := sha256.Sum256(clientIdentity.der)
@@ -46,7 +50,7 @@ func newObservationFixture(t *testing.T) *observationFixture {
 	f.raw, _ = json.Marshal(f.value)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.requests.Add(1)
-		if r.Method != "GET" || r.URL.Path != "/v1/instances/"+f.value.InstanceID {
+		if r.Method != "GET" || r.URL.Path != "/v1/instances/"+f.value.InstanceID+readSuffix || r.URL.RawQuery != "" {
 			w.WriteHeader(400)
 			return
 		}

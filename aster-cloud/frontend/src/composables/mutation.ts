@@ -2,6 +2,7 @@ import { shallowRef } from "vue";
 import { ApiError, key32, record, validOperation } from "../api/client";
 import { useConsole } from "../context";
 import type { Operation } from "../api/types";
+import { matchesNetworkIntent, type NetworkKind } from "../api/network";
 const bindingKeys = [
   "id",
   "action",
@@ -152,8 +153,25 @@ export function acknowledgeOperations(
   if (changed) saveLedger(next);
 }
 export async function fingerprint(path: string, body: unknown) {
+  // Network inputs are canonical objects; pool address order is set-like at
+  // both API boundaries. Do not create another intent after a cosmetic reorder.
+  const canonical =
+    /^\/networks\/(vpcs|pools|leases)$/.test(path) && record(body)
+      ? Object.fromEntries(
+          Object.entries(body)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, v]) => [
+              k,
+              path === "/networks/pools" &&
+              k === "addresses" &&
+              Array.isArray(v)
+                ? [...v].sort()
+                : v,
+            ]),
+        )
+      : body;
   const bytes = new TextEncoder().encode(
-    JSON.stringify([path, body], (key, value) =>
+    JSON.stringify([path, canonical], (key, value) =>
       /^(password|token|csrf_token|secret)$/i.test(key) ? "[private]" : value,
     ),
   );
@@ -161,6 +179,36 @@ export async function fingerprint(path: string, body: unknown) {
   return [...new Uint8Array(hash)]
     .map((v) => v.toString(16).padStart(2, "0"))
     .join("");
+}
+// Network reservations are not resource-operation DTOs. Resolve a lost ACK
+// only after a read of the original ID matches its complete frozen payload.
+export async function acknowledgeNetwork(
+  owner: string,
+  kind: NetworkKind,
+  body: unknown,
+  key: string,
+  value: unknown,
+  isCurrent: () => boolean,
+) {
+  if (
+    !isCurrent() ||
+    !loadLedger() ||
+    !matchesNetworkIntent(kind, value, key, body)
+  )
+    return false;
+  const path = `/networks/${kind}`,
+    digest = await fingerprint(path, body),
+    slot = `${owner}:${digest}`;
+  const entry = ledger.get(slot);
+  if (!isCurrent()) return false;
+  if (
+    !entry ||
+    entry.owner !== owner ||
+    entry.key !== key ||
+    entry.purpose !== "other"
+  )
+    return false;
+  return removePending(slot);
 }
 export function useMutation() {
   const { api, session } = useConsole();
@@ -178,11 +226,13 @@ export function useMutation() {
       expectedStatus?: number;
       allowUncertainReconcile?: boolean;
       bindOperation?: OperationIntent;
+      isCurrent?: () => boolean;
     } = {},
   ): Promise<T | null> {
     if (busy.value) return null;
     const owner = session.user.value?.id,
       identity = session.epoch.value;
+    const stillCurrent = () => !options.isCurrent || options.isCurrent();
     if (!owner) {
       error.value = "unauthorized";
       return null;
@@ -248,7 +298,11 @@ export function useMutation() {
         error.value = "unavailable";
         return null;
       }
-      if (identity !== session.epoch.value || session.user.value?.id !== owner)
+      if (
+        identity !== session.epoch.value ||
+        session.user.value?.id !== owner ||
+        !stillCurrent()
+      )
         return null;
       const key = prior?.key || requestedKey || key32();
       const purpose =
@@ -317,7 +371,8 @@ export function useMutation() {
         }
         if (
           identity !== session.epoch.value ||
-          session.user.value?.id !== owner
+          session.user.value?.id !== owner ||
+          !stillCurrent()
         )
           return null;
         removePending(slot);
@@ -329,7 +384,8 @@ export function useMutation() {
         const kind = cause instanceof ApiError ? cause.kind : "unknown";
         if (
           identity !== session.epoch.value ||
-          session.user.value?.id !== owner
+          session.user.value?.id !== owner ||
+          !stillCurrent()
         )
           return null;
         if (kind !== "unknown") {

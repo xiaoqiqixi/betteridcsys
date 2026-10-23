@@ -51,9 +51,17 @@ describe("custom controls", () => {
     const { context } = mockContext(() => ({}));
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: ["instances", "nodes", "operations", "audit", "users"].map(
-        (name) => ({ path: `/${name}`, component: { template: "<div />" } }),
-      ),
+      routes: [
+        "instances",
+        "nodes",
+        "operations",
+        "audit",
+        "users",
+        "networks/vpcs",
+      ].map((name) => ({
+        path: `/${name}`,
+        component: { template: "<div />" },
+      })),
     });
     await router.push("/instances");
     await router.isReady();
@@ -64,7 +72,8 @@ describe("custom controls", () => {
     });
     wrappers.push(wrapper);
     expect(wrapper.classes()).toContain("tone-surface");
-    expect(wrapper.findAll("a")).toHaveLength(5);
+    expect(wrapper.findAll("a")).toHaveLength(6);
+    expect(wrapper.get('a[href="/networks/vpcs"]').text()).toBe("网络与 IP");
     expect(wrapper.get("a.is-current").text()).toBe("实例");
     await wrapper.get('a[href="/nodes"]').trigger("click");
     await flushPromises();

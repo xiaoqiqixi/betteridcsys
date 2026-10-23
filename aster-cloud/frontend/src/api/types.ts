@@ -158,3 +158,23 @@ export interface InstanceObservation {
   source_fenced: boolean;
   target_pending: boolean;
 }
+// Counters remain decimal strings through validation and rendering. A JSON
+// number cannot represent all uint64 values without losing precision.
+export interface InstanceMetrics {
+  protocol: "aster.node.metrics/1";
+  node_id: string;
+  instance_id: string;
+  owner_ref: string;
+  hostname: string;
+  state: string;
+  observed_at: string;
+  vcpus: number;
+  cpu_time_ns: string | null;
+  memory_rss_kib: string | null;
+  memory_actual_kib: string | null;
+  memory_unused_kib: string | null;
+  block_read_bytes: string | null;
+  block_write_bytes: string | null;
+  network_receive_bytes: string | null;
+  network_transmit_bytes: string | null;
+}

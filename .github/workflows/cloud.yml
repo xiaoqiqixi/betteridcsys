@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           go test -mod=readonly -race -count=1 -v -timeout=10m ./...
           go vet -mod=readonly ./...
-          CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false ./cmd/aster-controller ./cmd/aster-node
+          CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false ./cmd/aster-controller ./cmd/aster-node ./cmd/aster-network ./cmd/aster-billing-plugin
       - name: Workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/cloud.yml
 

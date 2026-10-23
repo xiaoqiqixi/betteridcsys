@@ -87,6 +87,9 @@ export const permissionNames: Record<string, [string, string]> = {
   "users.manage": ["管理成员与权限", "Manage members and access"],
 };
 export const auditNames: Record<string, [string, string]> = {
+  "network.vpc.planned": ["私有网络已规划", "Private network planned"],
+  "network.pool.created": ["IP 地址池已创建", "IP pool created"],
+  "network.lease.reserved": ["IP 地址已预留", "IP address reserved"],
   "identity.bootstrap": ["创建首位管理员", "First administrator created"],
   "identity.user_created": ["创建成员", "Member created"],
   "identity.user_updated": ["更新成员权限", "Member access updated"],

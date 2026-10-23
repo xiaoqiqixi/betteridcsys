@@ -30,13 +30,15 @@ provide(consoleKey, { api, session, prefs, notify });
 const pageTitle = computed(() =>
   route.path.startsWith("/nodes")
     ? tr("节点", "Nodes")
-    : route.path.startsWith("/operations")
-      ? tr("操作任务", "Tasks")
-      : route.path.startsWith("/audit")
-        ? tr("审计记录", "Audit log")
-        : route.path.startsWith("/users")
-          ? tr("成员与权限", "Members & access")
-          : tr("实例", "Instances"),
+    : route.path.startsWith("/networks")
+      ? tr("网络与 IP", "Networks & IP")
+      : route.path.startsWith("/operations")
+        ? tr("操作任务", "Tasks")
+        : route.path.startsWith("/audit")
+          ? tr("审计记录", "Audit log")
+          : route.path.startsWith("/users")
+            ? tr("成员与权限", "Members & access")
+            : tr("实例", "Instances"),
 );
 const permission = computed(() => route.meta.permission as string | undefined);
 const authorized = computed(

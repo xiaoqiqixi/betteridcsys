@@ -81,9 +81,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs
 
 将 binary 与 `frontend/dist/` 分别审核安装到 `/opt/aster-cloud/bin/`、`/opt/aster-cloud/ui/`，均 root 所有且不可被组/其他用户写入。不公开源码、配置、日志或 secrets 目录。API 保持自身 TLS；当前版本不信任转发 Header 来绕过 Origin / Host / TLS，反向代理必须保留公开 Host，后端证书应由受信链验证。
 
-先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表，004添加审计精确查询索引；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。
+先备份独立控制器库，明确执行 `aster-controller migrate -config /etc/aster-controller/config.json`。迁移 001 不变，002 添加 staff identity，003 添加资源操作/制品/迁移表，004 添加审计精确查询索引，005 添加私有网络、IP 地址池和地址预留；每个 SQL SHA 被记录并核对，不允许编辑已经应用的 SQL、手工伪造版本或复用财务库。新表不是财务订单。005 会核对已有同名表的精确列/索引/引擎形状；部分 DDL 只有与预期完全一致才可重入，不采用忽略错误后手工记账。
 
-004确认后，只认识前三版迁移的旧binary会拒绝该schema，不能仅替换binary回退。升级须停写并备份独立主控库；恢复还须保留和核对节点journal、制品及升级后已发生的资源操作，禁止删除迁移记录或自动重派来“修复”版本不匹配。具体未验收范围见 [增量验收](../docs/OPERATIONS_VALIDATION.md)。
+005 确认后，只认识 001–004 的旧 binary 会拒绝该 schema，不能仅替换 binary 回退。升级须停写并备份独立主控库；回滚须恢复匹配 binary/schema 的独立库备份，并核对备份后新增的地址预留、节点 journal、制品和资源操作。不能删表、删迁移记录、释放未知地址或自动重派来“修复”版本不匹配。当前仅通过隔离实库迁移测试，整机备份还原/回滚尚未验收；既有审计增量见 [增量验收](../docs/OPERATIONS_VALIDATION.md)，网络范围见 [网络 API](../docs/NETWORK_API.md)。
 
 首个管理员仅在空用户库由 root CLI 创建；不要把密码放进 argv、unit、shell 历史、截图或日志：
 

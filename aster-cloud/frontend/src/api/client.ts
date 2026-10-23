@@ -4,6 +4,7 @@ import type {
   Audit,
   Instance,
   InstanceDetail,
+  InstanceMetrics,
   InstanceObservation,
   Node,
   Operation,
@@ -176,6 +177,99 @@ export const observationResponse = (
   x: unknown,
 ): x is { observation: InstanceObservation } =>
   record(x) && validObservation(x.observation);
+const metricCounters = [
+  "cpu_time_ns",
+  "memory_rss_kib",
+  "memory_actual_kib",
+  "memory_unused_kib",
+  "block_read_bytes",
+  "block_write_bytes",
+  "network_receive_bytes",
+  "network_transmit_bytes",
+] as const;
+function uint64Counter(value: unknown): value is string | null {
+  return (
+    value === null ||
+    (text(value) &&
+      /^(0|[1-9][0-9]{0,19})$/.test(value) &&
+      BigInt(value) <= 18446744073709551615n)
+  );
+}
+export function metricObservedNanos(value: unknown): bigint | null {
+  if (!text(value)) return null;
+  const parts =
+    /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (!parts) return null;
+  const year = Number(parts[1]),
+    month = Number(parts[2]),
+    day = Number(parts[3]),
+    hour = Number(parts[4]),
+    minute = Number(parts[5]),
+    second = Number(parts[6]);
+  if (
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  )
+    return null;
+  // Date.parse normalizes February 30. Check the local calendar separately,
+  // including years 1..99, which Date.UTC otherwise maps into 1900..1999.
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(hour, minute, second, 0);
+  if (!(
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day
+  ))
+    return null;
+  return (
+    BigInt(calendar.valueOf()) * 1000000n +
+    BigInt((parts[7] || "").padEnd(9, "0"))
+  );
+}
+export const validMetrics = (x: unknown): x is InstanceMetrics =>
+  record(x) &&
+  Object.keys(x).length === 16 &&
+  x.protocol === "aster.node.metrics/1" &&
+  ["node_id", "instance_id", "owner_ref", "hostname"].every(
+    (key) => text(x[key]) && x[key].length > 0,
+  ) &&
+  text(x.state) &&
+  [
+    "running",
+    "shutoff",
+    "paused",
+    "in_shutdown",
+    "crashed",
+    "pmsuspended",
+    "idle",
+    "blocked",
+  ].includes(x.state) &&
+  metricObservedNanos(x.observed_at) !== null &&
+  finite(x.vcpus) &&
+  x.vcpus > 0 &&
+  x.vcpus <= 4096 &&
+  metricCounters.every((key) => uint64Counter(x[key]));
+export function metricsResponse(instance: Instance) {
+  // Capture the request's expected identity, never a later mutable page prop.
+  const { id, node_id, owner_ref, hostname } = instance,
+    vcpus = instance.resources.cpu_cores;
+  return (x: unknown): x is { metrics: InstanceMetrics } =>
+    record(x) &&
+    Object.keys(x).length === 1 &&
+    validMetrics(x.metrics) &&
+    x.metrics.instance_id === id &&
+    x.metrics.node_id === node_id &&
+    x.metrics.owner_ref === owner_ref &&
+    x.metrics.hostname === hostname &&
+    x.metrics.vcpus === vcpus;
+}
 export const validRoles = (x: unknown): x is { items: Role[] } =>
   record(x) &&
   Array.isArray(x.items) &&

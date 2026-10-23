@@ -2,6 +2,7 @@ package control
 
 import (
 	"aster/billing/controllerapi"
+	"aster/cloud/internal/networking"
 	"aster/cloud/internal/nodeproto"
 	"aster/cloud/migrations"
 	"context"
@@ -73,6 +74,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 			return e
 		}
 		var existingIndexes map[string]bool
+		if migration.Version == 5 {
+			if e = networking.CheckMigration(ctx, conn, true); e != nil {
+				return e
+			}
+		}
 		if migration.Version == 4 {
 			existingIndexes, e = auditIndexMigrationPlan(ctx, conn, migration.SQL)
 			if e != nil {
@@ -91,6 +97,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		}
 		if migration.Version == 4 {
 			if e = checkAuditQueryIndexes(ctx, conn); e != nil {
+				return e
+			}
+		}
+		if migration.Version == 5 {
+			if e = networking.CheckMigration(ctx, conn, false); e != nil {
 				return e
 			}
 		}
@@ -123,7 +134,10 @@ func (s *SQLStore) Check(ctx context.Context) error {
 		}
 		rows.Close()
 	}
-	return checkAuditQueryIndexes(ctx, s.DB)
+	if err := checkAuditQueryIndexes(ctx, s.DB); err != nil {
+		return err
+	}
+	return (&networking.Store{DB: s.DB}).Check(ctx)
 }
 func (s *SQLStore) locked(ctx context.Context) (*sql.Tx, error) {
 	// ponytail: one database gate serializes mutations; replace with ordered node/

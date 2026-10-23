@@ -1,6 +1,7 @@
 // Test-only synthetic contracts. Never imported by src/ or the production entry.
 import type {
   Instance,
+  InstanceMetrics,
   Node,
   Operation,
   Resources,
@@ -80,4 +81,22 @@ export const operation: Operation = {
   target_node_id: "",
   created_at: instance.created_at,
   updated_at: instance.updated_at,
+};
+export const metrics: InstanceMetrics = {
+  protocol: "aster.node.metrics/1",
+  node_id: instance.node_id,
+  instance_id: instance.id,
+  owner_ref: instance.owner_ref,
+  hostname: instance.hostname,
+  state: "running",
+  observed_at: "2026-10-23T04:00:00.123456789Z",
+  vcpus: 2,
+  cpu_time_ns: "1000000001",
+  memory_rss_kib: "1048576",
+  memory_actual_kib: "4194304",
+  memory_unused_kib: "0",
+  block_read_bytes: "9007199254740993",
+  block_write_bytes: "18446744073709551615",
+  network_receive_bytes: "9007199254740995",
+  network_transmit_bytes: null,
 };
