@@ -162,6 +162,10 @@ operation. No automatic operator command or HTTP reconciliation write is exposed
 
 From the `aster-cloud` module with its local `aster/billing` replace present:
 
+Use the CI-pinned Go 1.27.3 toolchain for current builds and vulnerability
+checks (`export GOTOOLCHAIN=go1.27.3`). The module language version does not
+guarantee that an older Go standard library has received security patches.
+
 ```sh
 GOCACHE=/private/tmp/aster-node-gocache go test -race -count=1 \
   ./internal/nodeproto ./internal/hypervisor ./cmd/aster-node
@@ -367,3 +371,26 @@ mid-copy disk-full/fsync/crash cases, large real mTLS transfer interruption,
 certificate rotation, cold migration activation/dual-start checks and schema-2
 backup/upgrade/recovery. Do not claim a copied file or green unit test proves a
 recoverable production VM.
+
+### Read-only instance metrics
+
+`GET /v1/instances/<32hex-id>/metrics` uses the same pinned controller mTLS
+identity. It serializes with node workers, verifies the owned domain XML and
+fresh libvirt state, and invokes only fixed `virsh domstats` arguments for that
+ledger-owned domain. Busy, reserved, uncertain, pending or unowned instances are
+not sampled. It does not write journals, reconcile tasks, create a VM, retry a
+mutation or change billing. Query parameters and non-GET methods are rejected.
+
+The separate `aster.node.metrics/1` response includes identity, UTC observation
+time, vCPU count and eight nullable decimal uint64 string counters: cumulative
+CPU nanoseconds, QEMU RSS/current balloon/guest-reported unused KiB, system-disk
+read/write bytes and domain-perspective network receive/transmit bytes. Only
+owned `vda` and the single managed interface are counted; the seed CD-ROM and
+host-wide totals are excluded. Unsupported fields are `null`, never synthetic
+zeroes. RSS/balloon/unused values are not interchangeable and do not prove guest
+memory utilization. Counters may reset at restart and are not billable transfer.
+
+Parsing is bounded and refuses duplicate, malformed, overflow, cross-domain or
+unexpected device data. Output never includes host disk paths or tap names.
+Current tests cover deterministic runners and real pinned mTLS, not actual KVM
+counter accuracy, guest-agent freshness or historical monitoring/alerts.

@@ -2,6 +2,8 @@
 
 2026-10-23，开发中。以下把完整产品目标与实际交付分开，不用接口存在、页面效果或 fake runner 测试声称生产功能已经完成。
 
+用户指定以 KVM 加强版能力为对标范围；逐项差距、当前代码锚点、网络/IPAM 数据约束及交付依赖见 [KVM_ENHANCED_PARITY.md](KVM_ENHANCED_PARITY.md)。该规格不表示加强版已完成，也不改变下面已有实现和实机验收边界。
+
 ## 责任划分
 
 ```text
@@ -27,8 +29,12 @@
 - 四阶段冷迁移：源停止并持久 fence → 固定双向 mTLS 流式转运和目标审批 → 目标导入且停止 → 显式激活。目标容量预留、源/目标双节点互斥、资源映射冻结；不接受任意 URL、宿主路径、XML 或命令。目标默认不开放控制器 inbox 审批，须由 root 明确配置与 pin 源证书。
 - 不确定恢复：写前持久意图；断线、响应丢失、进程重启保留 sending / uncertain。核对仅 GET，绝不自动补 PUT/POST。转运部分完成且缺审批时须 root 核查，不能凭文件存在自动导入或启动。
 - 财务兼容：既有 `aster.controller/1` 六字段开通结果和幂等原样保留，另加 owner 绑定的只读 `aster.resource/1`。账单金额、币种、支付、商品历史快照和财务数据库均不修改；不把管理台用户 ID 自动当客户 owner。
+- 实时监控只读链：节点 `aster.node.metrics/1` 读取自有实例 domstats，主控重新验证实例/owner/node，管理台显示 CPU/内存/系统盘/网卡样本。缺值 null、累计 uint64 用十进制字符串；RSS 不冒充来宾已用内存，balloon 过期报告不伪装新数据。GET 不重试写任务、不推进状态，不是历史监控或计费账本；真实 libvirt/KVM 采样待验。
+- 集中网络管理：schema 5 的 MySQL VPC/IPv4 池/租约、同事务审计、受批准节点及真实 RBAC 保护的 create/list/detail API 和管理 UI。canonical 意图/actor/kind 幂等、并发地址唯一、有限分页；状态只为 planned/reserved，不接线、不自动释放，不修改实例资源和历史产品快照。详见 [NETWORK_API.md](NETWORK_API.md)。
+- 独立 OVS 核心：`aster-network` root CLI 为专用整桥编译单节点静态 VPC metadata 微分段、精确 IP/MAC/ARP 与双向 drop meter；写前 journal、整桥 drop→meter→allow、exact 读回、未知结果不重试。status/replay 是历史回执；verify 只读实时校验，是点时观察而非永久 VM-start 授权。未接主控下发/实例 NIC/启动门禁、路由网关或跨节点；旧节点仍为 Linux Bridge，不能把旧 profile 指向 OVS。详见 [fabric README](../internal/fabric/README.md)。
+- 独立财务资源适配 CLI：`aster-billing-plugin` 复用原公开商品/请求/六字段结果协议与固定 HTTPS 安全 transport，显式 send、只读 lookup；不是支付渠道、不由 runtime-plugin manager 加载、不自动证明付款或更新服务，也不替代财务原生持久开通链。详见 [适配器 README](../plugins/billingconnector/README.md)。
 
-机器 API、管理会话、节点 mTLS 是独立安全边界。迁移不是热迁移，源 fence 不经 API 自动解除；任一侧未知时保持占位，不能双启动。节点 journal 首次存储写升级为 schema 2，不能直接回退到只认识 schema 1 的旧 binary。
+机器 API、管理会话、节点 mTLS 是独立安全边界。迁移不是热迁移，源 fence 不经 API 自动解除；任一侧未知时保持占位，不能双启动。节点 journal 首次存储写升级为 schema 2，不能直接回退到只认识 schema 1 的旧 binary。**主控 MySQL 已新增 migration 005 / schema 5，不能只更换旧主控 binary 回滚**；须停写、备份，按兼容版本或已演练完整数据库恢复流程处理，不自动删网络表或释放未知租约。
 
 这些是实现与测试范围，不是实际虚拟机验收结论。具体 API 见 [CONSOLE_API.md](CONSOLE_API.md)，安装和恢复门槛见 [主控运维](../deploy/controller-OPERATIONS.md) 与 [被控运维](../NODE_README.md)。
 
@@ -49,7 +55,7 @@
 | 运维 | 监控、任务日志、告警、容量、审计、升级/回退、灾难恢复 | 脱敏与保留策略、磁盘满/掉线/重启/证书过期；原生 systemd 和 TLS |
 | 财务兼容 | 商品资源映射、已付开通、状态核对、后续续费/挂起策略 | 不改金额、支付幂等、币种及历史快照；账务和资源状态不可互相冒充 |
 
-本轮实现管理台、权限、实例及停止态存储/冷迁移代码路径，并测试协议、持久性和权限边界；真实 KVM 宿主验收后补。未完成项不能上架承诺，所有目标都要逐项经过代码、真实环境与 UI 验收后才改为已完成。
+本轮在管理台、权限、实例及停止态存储/冷迁移路径上，新增受限实时读数、集中 IPAM/VPC 管理、独立 OVS 核心及财务资源适配 CLI，并测试协议、持久性和权限边界。IPAM 的真实 MySQL 测试与 OVS runner 测试分开记录；它们不等于 DB→fabric→VM gate 已接通。真实 KVM/OVS 宿主验收后补。未完成项不能上架承诺，所有目标都要逐项经过代码、真实环境与 UI 验收后才改为已完成。
 
 ## 宿主机要求和安全
 
@@ -75,4 +81,4 @@
 
 ## 仍未交付的完整产品范围
 
-客户主控 SSO/MFA、受控 VNC、热迁移/HA、定时备份计划与异地对象存储、独立数据盘/扩容、重装救援、VPC/IPv6/安全组、带宽计量、排空自动调度、告警/日志外送与保留轮转、无 root 的 API 权限分离，以及生产安装/升级/灾难恢复演练仍未完成。应用运行事件已统一JSON白名单、审计支持精确只读筛选；journald独立限额仅提供可选模板，尚未完成生产留存/外送验收。区域/节点/preset 的信任根仍由 root 私有配置管理，网页只允许查看及维护切换，不开放任意 endpoint/证书上传。不能将此轮更新宣传为上述全部能力已经生产可用。
+客户主控 SSO/MFA、受控 VNC、热迁移/HA、定时备份计划与异地对象存储、独立数据盘/扩容、重装救援、路由 VPC/DB→fabric→VM-start gate/IPv6/安全组、跨节点私网/浮动 IP/NAT/LB、历史带宽计量、排空自动调度、告警/日志外送与保留轮转、无 root 的 API 权限分离，以及生产安装/升级/灾难恢复演练仍未完成。应用运行事件已统一JSON白名单、审计支持精确只读筛选；journald独立限额仅提供可选模板，尚未完成生产留存/外送验收。区域/节点/preset 的信任根仍由 root 私有配置管理，网页只允许查看及维护切换，不开放任意 endpoint/证书上传。VPC 管理对象只表示计划，独立 OVS 核心不包含路由网关/DHCP/DNS、802.1Q uplink、共享 IP 组限速或流量配额，亦没有生产服务安装/VM 启动接线。不能将此轮更新宣传为上述全部能力已经生产可用。

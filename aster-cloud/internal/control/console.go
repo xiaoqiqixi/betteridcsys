@@ -2,6 +2,7 @@ package control
 
 import (
 	"aster/cloud/internal/identity"
+	"aster/cloud/internal/networking"
 	"aster/cloud/internal/nodeproto"
 	"context"
 	"database/sql"
@@ -21,6 +22,9 @@ type Console struct {
 	Identity *identity.Service
 	Worker   *OperationWorker
 	Runner   *OperationRunner
+	// MetricsRPC is an internal dependency seam, never request configuration.
+	// Production uses only root-approved, pinned-mTLS NodeClient destinations.
+	MetricsRPC func(context.Context, NodeProfile) (MetricsReader, error)
 }
 
 func (c Console) Handler() http.Handler {
@@ -39,7 +43,7 @@ func (c Console) Handler() http.Handler {
 			return
 		}
 		permission := "instances.read"
-		if path == "/console/v1/nodes" || strings.HasPrefix(path, "/console/v1/nodes/") {
+		if path == "/console/v1/nodes" || strings.HasPrefix(path, "/console/v1/nodes/") || strings.HasPrefix(path, "/console/v1/networks/") {
 			permission = "nodes.read"
 		}
 		if path == "/console/v1/audit" {
@@ -92,6 +96,14 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "AUTH_REQUIRED")
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/console/v1/networks/") {
+		nodes := make([]string, 0, len(c.Config.Nodes))
+		for _, n := range c.Config.Nodes {
+			nodes = append(nodes, n.ID)
+		}
+		networking.NewHandler(&networking.Store{DB: c.Store.DB}, nodes).ServeHTTP(w, r)
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/console/v1/"), "/")
 	if r.Method == http.MethodGet && len(parts) == 1 && parts[0] == "audit" {
 		c.audits(w, r)
@@ -136,6 +148,9 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 			return
 		case len(parts) == 1 && parts[0] == "instances":
 			c.instances(w, r)
+			return
+		case len(parts) == 3 && parts[0] == "instances" && parts[2] == "metrics" && nodeproto.ValidID(parts[1]):
+			c.instanceMetrics(w, r, parts[1])
 			return
 		case len(parts) == 3 && parts[0] == "instances" && parts[2] == "observation" && nodeproto.ValidID(parts[1]):
 			v, e := c.Store.Instance(ctx, parts[1])

@@ -4,6 +4,7 @@ import App from "./App.vue";
 import InstancesPage from "./pages/InstancesPage.vue";
 import InstanceDetailPage from "./pages/InstanceDetailPage.vue";
 import NodesPage from "./pages/NodesPage.vue";
+import NetworksPage from "./pages/NetworksPage.vue";
 import OperationsPage from "./pages/OperationsPage.vue";
 import OperationDetailPage from "./pages/OperationDetailPage.vue";
 import AuditPage from "./pages/AuditPage.vue";
@@ -26,6 +27,12 @@ const router = createRouter({
     {
       path: "/nodes",
       component: NodesPage,
+      meta: { permission: "nodes.read" },
+    },
+    { path: "/networks", redirect: "/networks/vpcs" },
+    {
+      path: "/networks/:kind(vpcs|pools|leases)",
+      component: NetworksPage,
       meta: { permission: "nodes.read" },
     },
     {

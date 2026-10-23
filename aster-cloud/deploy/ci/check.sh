@@ -9,12 +9,28 @@ cd "$repo"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/aster-cloud-check.XXXXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
 # No credential is echoed. SQL fixtures accept only explicitly named test DBs.
-go test -mod=readonly -race -count=1 -v -timeout=10m ./... | tee "$scratch/tests.log"
+# The protected-policy connector case genuinely requires root ownership. Run it
+# separately below, rather than adding an owner bypass or tolerating a skipped
+# MySQL acceptance case. Every other test still runs with race instrumentation.
+root_tls='^TestRootTLSConnectorUsesExistingProtectedTransport$'
+go test -mod=readonly -race -count=1 -v -skip "$root_tls" -timeout=10m ./... | tee "$scratch/tests.log"
 if grep -q -- '--- SKIP:' "$scratch/tests.log"; then
   echo 'MySQL acceptance must not skip any test.' >&2; exit 1
+fi
+go test -mod=readonly -race -c -o "$scratch/connector.test" ./plugins/billingconnector
+if [[ $(id -u) == 0 ]]; then
+  "$scratch/connector.test" -test.v -test.run "$root_tls" | tee "$scratch/root-tls.log"
+else
+  sudo -- "$scratch/connector.test" -test.v -test.run "$root_tls" | tee "$scratch/root-tls.log"
+fi
+grep -q -- '^--- PASS: TestRootTLSConnectorUsesExistingProtectedTransport ' "$scratch/root-tls.log"
+if grep -qE -- '--- (SKIP|FAIL):' "$scratch/root-tls.log"; then
+  echo 'Protected root TLS acceptance must not skip or fail.' >&2; exit 1
 fi
 go vet -mod=readonly ./...
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs=false -o "$scratch/aster-controller" ./cmd/aster-controller
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs=false -o "$scratch/aster-node" ./cmd/aster-node
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs=false -o "$scratch/aster-network" ./cmd/aster-network
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs=false -o "$scratch/aster-billing-plugin" ./cmd/aster-billing-plugin
 # These checks do not install libvirt, start a node daemon, or create a VM.
 echo 'PASS: controller/node Go, real MySQL and static Linux builds; not a real KVM guest acceptance.'

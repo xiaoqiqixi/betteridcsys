@@ -6,7 +6,14 @@ import {
   NavigationFailureType,
   useRouter,
 } from "vue-router";
-import { Server, Network, ListChecks, ShieldCheck, Users } from "@lucide/vue";
+import {
+  Server,
+  Network,
+  Waypoints,
+  ListChecks,
+  ShieldCheck,
+  Users,
+} from "@lucide/vue";
 import { useConsole } from "../context";
 const { tone = "sidebar" } = defineProps<{ tone?: "sidebar" | "surface" }>();
 const emit = defineEmits<{ navigate: [] }>();
@@ -27,6 +34,12 @@ const links = computed(() =>
       path: "/nodes",
       label: tr("节点", "Nodes"),
       icon: Network,
+      permission: "nodes.read",
+    },
+    {
+      path: "/networks/vpcs",
+      label: tr("网络与 IP", "Networks & IP"),
+      icon: Waypoints,
       permission: "nodes.read",
     },
     {
@@ -80,7 +93,12 @@ async function follow(
       v-slot="{ href, navigate, isActive, isExactActive, route }"
       ><a
         :href="href"
-        :class="{ 'is-current': isActive }"
+        :class="{
+          'is-current':
+            isActive ||
+            (link.path === '/networks/vpcs' &&
+              router.currentRoute.value.path.startsWith('/networks/')),
+        }"
         :aria-current="isExactActive ? 'page' : undefined"
         @click="follow($event, navigate, route.fullPath)"
         ><component :is="link.icon" :size="19" aria-hidden="true" /><span>{{

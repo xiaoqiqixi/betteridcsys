@@ -73,6 +73,29 @@ func (m *Manager) Handler() http.Handler {
 			return
 		}
 		switch {
+		case strings.HasPrefix(r.URL.Path, "/v1/instances/") && strings.HasSuffix(r.URL.Path, "/metrics"):
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				respond(w, 405, errorBody("METHOD_NOT_ALLOWED"))
+				return
+			}
+			if r.URL.RawQuery != "" || r.URL.ForceQuery {
+				respond(w, 400, errorBody("INVALID_QUERY"))
+				return
+			}
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/instances/"), "/metrics")
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+			metrics, err := m.ObserveMetrics(ctx, id)
+			if err != nil {
+				status := 409
+				if errors.Is(err, ErrNotFound) {
+					status = 404
+				}
+				respond(w, status, errorBody("LIVE_INSTANCE_METRICS_UNCONFIRMED"))
+				return
+			}
+			respond(w, 200, metrics)
 		case strings.HasPrefix(r.URL.Path, "/v1/instances/") && r.Method == "GET":
 			id := strings.TrimPrefix(r.URL.Path, "/v1/instances/")
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

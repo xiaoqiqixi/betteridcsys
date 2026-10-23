@@ -20,6 +20,7 @@ import StateBlock from "../components/StateBlock.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import ActionDialog from "../components/ActionDialog.vue";
 import InstanceObservationPanel from "../components/InstanceObservationPanel.vue";
+import InstanceMetricsPanel from "../components/InstanceMetricsPanel.vue";
 import MigrationWizard from "../components/MigrationWizard.vue";
 const route = useRoute(),
   {
@@ -171,7 +172,8 @@ function tabKey(event: KeyboardEvent) {
           class="tab-content"
         >
           <template v-if="tab === 'overview'"
-            ><div class="detail-grid">
+            ><InstanceMetricsPanel :instance="instance" />
+            <div class="detail-grid">
               <article class="content-section">
                 <h2>{{ tr("资源规格", "Resources") }}</h2>
                 <dl class="detail-pairs">

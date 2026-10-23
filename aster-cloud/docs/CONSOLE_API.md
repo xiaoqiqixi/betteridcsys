@@ -57,6 +57,7 @@
 | GET `/instances?cursor=...` | `instances.read` | `{items:[Instance],next_cursor:string\|null}`，最多 100 |
 | GET `/instances/{id}` | `instances.read` | `{instance,operations,artifacts,migrations}` |
 | GET `/instances/{id}/observation` | `instances.read` | `{observation}`，实际只读节点观测；节点不可达则错误，不伪造在线 |
+| GET `/instances/{id}/metrics` | `instances.read` | `{metrics}`，按需读取该实例的 libvirt 监控采样；不轮询、不计费、不更改任务 |
 | GET `/operations?cursor=...&instance_id=...` | `instances.read` | `{items:[Operation],next_cursor:string\|null}`，最多 100；过滤可省略 |
 | GET `/operations/{id}` | `instances.read` | `{operation}`，数据库持久化进度 |
 | GET `/nodes` | `nodes.read` | `{items:[Node],next_cursor:null}`；最多 100，当前无完整节点分页 |
@@ -72,6 +73,13 @@
 - `Artifact`：`id,instance_id,node_id,kind,state,created_at,updated_at`；只在 detail 且有 `storage.read` 时返回，否则 `artifacts:[]`。manifest/disk hash 不公开。
 - `Migration`：`id,instance_id,source_node_id,target_node_id,phase,created_at,updated_at`；只在 detail 且有 `migration.manage` 时返回，否则 `migrations:[]`。fence、manifest、target profile 与冻结 resources 证据不公开。
 - `observation`：`protocol,node_id,instance_id,owner_ref,hostname,state,ipv4,mac,observed_at,source_fenced,target_pending`。这是一次经过 mTLS、所有权与域定义验证的读；不会自动解决 uncertain operation、迁移或财务状态。
+- `metrics`：独立 `aster.node.metrics/1` 合同，固定 `protocol,node_id,instance_id,owner_ref,hostname,state,observed_at,vcpus` 及下列八个 nullable 计数。主控验证 node/instance/owner/hostname/vCPU 与数据库一致，采样不超过 60 秒、未来偏差不超过 5 秒；远端读取后再次核对实例归属和放置，防止迁移中的旧节点结果被当作当前结果。
+  - `cpu_time_ns`：域累计 CPU 时间，纳秒，不是 CPU 百分比。
+  - `memory_rss_kib`：宿主 QEMU 驻留内存；`memory_actual_kib`：当前 balloon 分配；`memory_unused_kib`：客户机报告空闲值，可能未提供或陈旧。不据此伪造客户机内存使用率。
+  - `block_read_bytes,block_write_bytes`：仅系统盘 `vda` 的累计读写字节，不含 seed 光驱或宿主其他磁盘。
+  - `network_receive_bytes,network_transmit_bytes`：受管单网卡、客户机视角的累计接收/发送字节；不是已结算流量或周期用量。
+  - 八个计数都为 canonical uint64 十进制**字符串或 null**，零值为 `"0"`，缺项不得用零替代；全部键必须存在。客户端须用 BigInt 等保留精度，不得先转浮点数。节点不返回宿主路径、网卡设备名或命令输出。
+  - 新接口不接受 query，不支持写方法。节点 busy、未解决操作、无法确认归属/采样时拒绝；主控返回结构化错误，不回退旧数据或演示数据。网页仅点击时 GET，超 60 秒明确标记上次采样；离开实例或会话切换丢弃迟到响应。无历史采样、计费写入、自动重试或告警承诺。
 - `Node`：`id,datacenter_id,maintenance,heartbeat_at,online,free_cpu,free_memory_mib,free_disk_gib,reserved_cpu,reserved_memory_mib,reserved_disk_gib`。online 仅在节点仍被 root 配置、非维护且认证心跳新鲜时为 true。free 与 reserved 是保守容量口径，不能简单视为完整可售调度器。
 - `Audit`：`id,source,actor,action,target,created_at`。`source` 为 `resource` 或 `identity`；两个来源 ID 空间独立，不能只靠数字 ID 去重。不是原始宿主 journald、HTTP access log 或虚拟机控制台输出。
 
@@ -90,6 +98,14 @@ operation 的 `actor_id` 是不可变的意图创建者，不等于后来点击�
 - 数据库迁移 004 仅添加两张审计表各 action/actor/target + time/id 索引。部分未记账 DDL 可在精确核对已有索引后重新进入；同名错误定义拒绝，全部完成后才记录迁移 SHA。不删除历史事件，也不提供自动保留清理或防篡改外部归档；**节点 journal 与幂等/恢复记录不能当作普通日志裁剪**。
 
 ## 4. 写入、幂等与显式派发
+
+### 网络资源管理
+
+新增 `/console/v1/networks/{vpcs,pools,leases}` 列表、创建及 `/{id}` 原记录查询，完整字段见 [网络/IPAM API](NETWORK_API.md)。GET 需要 `nodes.read`；POST 同时需要 `nodes.read`、`nodes.manage` 和真实会话 CSRF。首建 201，同 actor/完整意图重放 200，跨 actor/类别/参数复用 ID 为 409。这里的列表按 ID 升序，游标为原样返回的小写 32-hex ID 或 null，不沿用实例/审计的 cursor 格式。
+
+这些写入只持久化 `planned` 网络、地址池和 `reserved` 地址，**不调用节点、不把实例标记为已联网**。管理页不自动重发创建；丢失回包后保留原 ID 与完整意图，仅 GET 原记录核对。未知状态、退出/切换会话或迟到回包不能清除防重记录。地址顺序变化不产生新的地址池创建意图。没有自动释放、超时回收或未确认解绑后的重新分配。
+
+以下表格继续描述既有实例操作，不能将网络资源 ID 用作 VM 操作派发 ID。
 
 | Method / path | 输入/权限 | 成功 |
 | --- | --- | --- |
