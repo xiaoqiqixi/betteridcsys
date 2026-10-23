@@ -97,6 +97,9 @@ func (m *Manager) AcceptStorage(task nodeproto.TypedStorageTask, raw []byte) (no
 		if !ok || instance.OwnerRef != task.OwnerRef {
 			return reject("INSTANCE_OWNERSHIP_REJECTED")
 		}
+		if !instance.Network.IsZero() {
+			return reject("OVS_STORAGE_CONTRACT_UNSUPPORTED")
+		}
 		if task.Action == "snapshot_list" || task.Action == "backup_list" {
 			kind := "snapshot"
 			if task.Action == "backup_list" {

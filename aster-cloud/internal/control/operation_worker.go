@@ -70,9 +70,9 @@ func (w OperationWorker) binding(ctx context.Context, op string) (Operation, Nod
 		if e != nil || intent.Approval.TransferID != o.ID || intent.Approval.ArtifactID != o.ArtifactID || intent.Approval.NodeID != o.NodeID || intent.Approval.InstanceID != o.InstanceID {
 			return o, p, ErrState
 		}
-	case nodeproto.Protocol:
+	case nodeproto.Protocol, nodeproto.NetworkProtocol:
 		t, e := nodeproto.DecodeTask(o.Request)
-		if e != nil || t.OperationID != o.ID || t.InstanceID != o.InstanceID || t.NodeID != o.NodeID || t.Action != o.Action {
+		if e != nil || t.OperationID != o.ID || t.InstanceID != o.InstanceID || t.NodeID != o.NodeID || t.Action != o.Action || t.Protocol != o.Protocol {
 			return o, p, ErrState
 		}
 	case nodeproto.StorageProtocol:
@@ -106,10 +106,16 @@ func (w OperationWorker) Dispatch(ctx context.Context, op string) (out Operation
 	if o.Protocol == TransferProtocol {
 		return w.dispatchTransfer(ctx, o)
 	}
+	if o.Protocol == nodeproto.NetworkProtocol {
+		task, e := nodeproto.DecodeTask(o.Request)
+		if e != nil || !w.Config.approvesTaskNetwork(task) {
+			return o, ErrState
+		}
+	}
 	// Resolve/configure TLS before claim. Once sending is committed, never POST again.
 	var rpc NodeRPC
 	var srpc StorageRPC
-	if o.Protocol == nodeproto.Protocol {
+	if o.Protocol == nodeproto.Protocol || o.Protocol == nodeproto.NetworkProtocol {
 		rpc, e = w.power(ctx, p)
 	} else {
 		srpc, e = w.storage(ctx, p)
@@ -168,7 +174,7 @@ func (w OperationWorker) Reconcile(ctx context.Context, op string) (out Operatio
 	}
 	var status string
 	var storage *nodeproto.StorageResult
-	if o.Protocol == nodeproto.Protocol {
+	if o.Protocol == nodeproto.Protocol || o.Protocol == nodeproto.NetworkProtocol {
 		rpc, e := w.power(ctx, p)
 		if e != nil {
 			return o, e

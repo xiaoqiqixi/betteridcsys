@@ -22,6 +22,7 @@ import zlib
 
 CORE_VERSION = "0.5.9"
 PAYMENT_MIN_CORE_VERSION = "0.5.3"
+RESOURCE_MIN_CORE_VERSION = "0.5.9"
 FILES = frozenset({"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"})
 MAX_ARCHIVE = 80 << 20
 MAX_BINARY = 64 << 20
@@ -31,6 +32,8 @@ DIGEST = re.compile(r"[a-f0-9]{64}\Z")
 MANIFEST_KEYS = {"schema", "id", "version", "protocol", "core_min", "core_max_exclusive", "capabilities", "executable", "sha256"}
 SELECTION_KEYS = {"enabled", "id", "version", "manifest_sha256", "worker_uid", "client_uid", "socket", "allowed_targets"}
 PAYMENT_ID = re.compile(r"payment\.[a-z][a-z0-9-]{0,47}\Z")
+RESOURCE_ID = re.compile(r"resource\.[a-z][a-z0-9-]{0,47}\Z")
+CONTROLLER_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 MERCHANT_ID = re.compile(r"[!-~]{1,128}\Z")
 
 
@@ -39,11 +42,14 @@ def plugin_kind(identifier):
         return "smtp"
     if isinstance(identifier, str) and identifier != "payment.disabled" and PAYMENT_ID.fullmatch(identifier):
         return "payment"
+    if isinstance(identifier, str) and RESOURCE_ID.fullmatch(identifier):
+        return "resource"
     raise Rejected("Unsupported runtime plugin identity.")
 
 
 def package_prefix(identifier):
-    return "aster-smtp" if plugin_kind(identifier) == "smtp" else "aster-payment-" + identifier.removeprefix("payment.")
+    kind = plugin_kind(identifier)
+    return "aster-smtp" if kind == "smtp" else "aster-" + kind + "-" + identifier.removeprefix(kind + ".")
 
 
 class Rejected(Exception):
@@ -162,13 +168,15 @@ def validate_manifest(value, core):
         raise Rejected("Unsupported runtime manifest.")
     kind = plugin_kind(value["id"])
     expected_keys = MANIFEST_KEYS | ({"payment"} if kind == "payment" else set())
-    capabilities = ["smtp.send"] if kind == "smtp" else ["payment.checkout", "payment.verify_callback"]
+    capabilities = {"smtp": ["smtp.send"], "payment": ["payment.checkout", "payment.verify_callback"], "resource": ["resource.send", "resource.lookup"]}[kind]
     if set(value) != expected_keys or type(value["schema"]) is not int or value["schema"] != 1 or value["protocol"] != "aster." + kind + "/1" or value["capabilities"] != capabilities or value["executable"] != "plugin" or not isinstance(value["sha256"], str) or not DIGEST.fullmatch(value["sha256"]):
         raise Rejected("Unsupported runtime manifest.")
     if kind == "payment":
         validate_payment(value["payment"])
         if version_tuple(core) < version_tuple(PAYMENT_MIN_CORE_VERSION) or version_tuple(value["core_min"]) < version_tuple(PAYMENT_MIN_CORE_VERSION):
             raise Rejected("Payment runtime protocol requires Core 0.5.3 or newer.")
+    if kind == "resource" and (version_tuple(core) < version_tuple(RESOURCE_MIN_CORE_VERSION) or version_tuple(value["core_min"]) < version_tuple(RESOURCE_MIN_CORE_VERSION)):
+        raise Rejected("Resource runtime protocol requires Core 0.5.9 with resource support or newer.")
     version_tuple(value["version"])
     if not version_tuple(value["core_min"]) <= version_tuple(core) < version_tuple(value["core_max_exclusive"]):
         raise Rejected("Plugin is incompatible with the selected core version.")
@@ -261,7 +269,7 @@ def unpack_archive(compressed, raw_resources=False):
             raise Rejected("Archive contains an unsafe path.")
         if root is None:
             root = parts[0]
-        if parts[0] != root or not re.fullmatch(r"aster-(?:smtp|payment-[a-z][a-z0-9-]{0,47})-(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})-linux-amd64" + suffix, root):
+        if parts[0] != root or not re.fullmatch(r"aster-(?:smtp|(?:payment|resource)-[a-z][a-z0-9-]{0,47})-(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})-linux-amd64" + suffix, root):
             raise Rejected("Archive root does not identify a runtime package.")
         data_start = offset + 512
         offset = data_start + (size + 511) // 512 * 512
@@ -451,19 +459,21 @@ def validate_targets(targets):
 
 
 def validate_policy(value):
-    if not isinstance(value, dict) or not {"schema", "revision"} <= set(value) <= {"schema", "revision", "smtp", "payment"} or type(value["schema"]) is not int or value["schema"] != 1 or type(value["revision"]) is not int or not 1 <= value["revision"] <= (1 << 64) - 1:
+    if not isinstance(value, dict) or not {"schema", "revision"} <= set(value) <= {"schema", "revision", "smtp", "payment", "resource"} or type(value["schema"]) is not int or value["schema"] != 1 or type(value["revision"]) is not int or not 1 <= value["revision"] <= (1 << 64) - 1:
         raise Rejected("Unsupported plugin policy.")
-    for kind in ("smtp", "payment"):
+    for kind in ("smtp", "payment", "resource"):
         if kind not in value:
             continue
         selected = value[kind]
-        expected_keys = SELECTION_KEYS | ({"merchant_id"} if kind == "payment" else set())
+        expected_keys = SELECTION_KEYS | ({"merchant_id"} if kind == "payment" else {"controller_id"} if kind == "resource" else set())
         if not isinstance(selected, dict) or set(selected) != expected_keys or type(selected["enabled"]) is not bool or plugin_kind(selected["id"]) != kind or not isinstance(selected["manifest_sha256"], str) or not DIGEST.fullmatch(selected["manifest_sha256"]):
             raise Rejected("Unsupported runtime selection.")
         if kind == "payment" and (not isinstance(selected["merchant_id"], str) or not MERCHANT_ID.fullmatch(selected["merchant_id"])):
             raise Rejected("Payment requires an explicit non-secret merchant identity.")
+        if kind == "resource" and (not isinstance(selected["controller_id"], str) or not CONTROLLER_ID.fullmatch(selected["controller_id"])):
+            raise Rejected("Resource requires an explicit controller identity.")
         version_tuple(selected["version"])
-        if any(type(selected[key]) is not int or not 1 <= selected[key] <= (1 << 32) - 1 for key in ("worker_uid", "client_uid")) or selected["worker_uid"] == selected["client_uid"]:
+        if any(type(selected[key]) is not int or not (0 if kind == "resource" and key == "client_uid" else 1) <= selected[key] <= (1 << 32) - 1 for key in ("worker_uid", "client_uid")) or selected["worker_uid"] == selected["client_uid"] or kind == "resource" and selected["client_uid"] != 0:
             raise Rejected("Separate non-root worker and API identities are required.")
         absolute(selected["socket"])
         if len(selected["socket"]) > 100:
@@ -475,6 +485,12 @@ def validate_policy(value):
         smtp, payment = value["smtp"], value["payment"]
         if smtp["worker_uid"] == payment["worker_uid"] or smtp["worker_uid"] == payment["client_uid"] or payment["worker_uid"] == smtp["client_uid"] or smtp["socket"] == payment["socket"]:
             raise Rejected("Runtime slots require separate workers and sockets.")
+    if "resource" in value:
+        resource = value["resource"]
+        for kind in ("smtp", "payment"):
+            other = value.get(kind)
+            if other and (resource["worker_uid"] in (other["worker_uid"], other["client_uid"]) or resource["socket"] == other["socket"]):
+                raise Rejected("Resource requires a separate worker and socket.")
     return value
 
 
@@ -536,7 +552,7 @@ def write_policy(parent_fd, name, policy):
 def mutate_policy(root, path, action, revision, core=CORE_VERSION, selection=None, version=None, trust=_Trust(), *, kind="smtp"):
     if type(revision) is not int or revision < 0 or revision >= (1 << 64) - 1:
         raise Rejected("An explicit valid current revision is required.")
-    if kind not in ("smtp", "payment"):
+    if kind not in ("smtp", "payment", "resource"):
         raise Rejected("Unsupported runtime slot.")
     root_fd = protected_open(root, True, trust)
     parent, name = os.path.split(absolute(path))
@@ -554,6 +570,10 @@ def mutate_policy(root, path, action, revision, core=CORE_VERSION, selection=Non
                 _, manifest_hash = installed_manifest(root, selected.get("id"), selected.get("version"), core, trust)
                 selected["manifest_sha256"] = manifest_hash
                 policy[kind] = selected
+            elif action == "remove":
+                if kind != "resource" or kind not in policy or policy[kind]["enabled"]:
+                    raise Rejected("Only a disabled resource selection can be removed before a legacy core rollback.")
+                del policy[kind]
             elif action in ("enable", "disable", "rollback"):
                 if kind not in policy:
                     raise Rejected("Select an installed plugin before changing its state.")
@@ -608,9 +628,9 @@ def main(argv=None):
         command.add_argument("--binary")
         command.add_argument("--binary-sha256")
     commands.add_parser("status")
-    for name in ("select", "enable", "disable", "rollback"):
+    for name in ("select", "enable", "disable", "rollback", "remove"):
         command = commands.add_parser(name)
-        command.add_argument("--kind", choices=["smtp", "payment"])
+        command.add_argument("--kind", choices=["smtp", "payment", "resource"])
         command.add_argument("--revision", required=True, type=int)
         if name == "select":
             command.add_argument("--id", required=True)
@@ -620,6 +640,7 @@ def main(argv=None):
             command.add_argument("--socket", required=True)
             command.add_argument("--target", action="append", type=parse_target, default=[])
             command.add_argument("--merchant-id")
+            command.add_argument("--controller-id")
         if name == "rollback":
             command.add_argument("--version", required=True)
     options = parser.parse_args(argv)
@@ -641,6 +662,8 @@ def main(argv=None):
                 selection = {"id": options.id, "version": options.version, "worker_uid": options.worker_uid, "client_uid": options.client_uid, "socket": options.socket, "allowed_targets": options.target}
                 if options.merchant_id is not None:
                     selection["merchant_id"] = options.merchant_id
+                if options.controller_id is not None:
+                    selection["controller_id"] = options.controller_id
             kind = options.kind or (plugin_kind(options.id) if options.action == "select" else "smtp")
             result = mutate_policy(options.root, options.policy, options.action, options.revision, options.core_version, selection, getattr(options, "version", None), kind=kind)
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))

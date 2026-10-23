@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,18 @@ import (
 // deliberately use the existing deterministic consoleRPC fake. They do not
 // claim actual libvirt/KVM, guest networking or production deployment acceptance.
 const consoleHTTPPassword = "synthetic console integration password 123"
+
+var ownedControllerDBPrefix = regexp.MustCompile(`^aster_cloud_test_[0-9a-f]{12,24}_$`)
+
+func controllerFixtureDatabasePrefix(raw string) (string, error) {
+	if raw == "" {
+		return "aster_cloud_test_console_http_", nil
+	}
+	if !ownedControllerDBPrefix.MatchString(raw) {
+		return "", ErrInput
+	}
+	return raw, nil
+}
 
 // Bootstrap requires an empty identity table. Even an explicitly supplied
 // private test DSN may already contain another suite's accounts: borrow only its
@@ -56,7 +69,12 @@ func consoleHTTPStore(t *testing.T) *SQLStore {
 	if err != nil {
 		t.Fatal("invalid console HTTP fixture")
 	}
-	name := "aster_cloud_test_console_http_" + id()[:16]
+	prefix, err := controllerFixtureDatabasePrefix(os.Getenv("ASTER_CLOUD_TEST_DB_PREFIX"))
+	if err != nil {
+		admin.Close()
+		t.Fatal("refuse non-random controller fixture database prefix")
+	}
+	name := prefix + id()[:16]
 	if _, err = admin.Exec("CREATE DATABASE `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"); err != nil {
 		admin.Close()
 		t.Fatal("cannot create independent console HTTP fixture")

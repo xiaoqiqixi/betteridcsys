@@ -179,3 +179,20 @@ func TestHostProvisioningReconcileOnlyReadsRemote(t *testing.T) {
 		}
 	}
 }
+
+func TestHostResourceRouteHasNoFallbackAndDoesNotClaimUnavailablePlugin(t *testing.T) {
+	for _, cfg := range [][4]string{{"unknown", "", "", ""}, {"https", "/missing", "/plugins", "/policy"}, {"resource", "/https-policy", "/plugins", "/policy"}, {"resource", "", "", "/policy"}, {"resource", "", "/plugins", ""}} {
+		if prepare, e := hostProvisioningTransport(cfg[0], cfg[1], cfg[2], cfg[3]); e == nil || prepare != nil {
+			t.Fatal("ambiguous route allowed", cfg)
+		}
+	}
+	prepare, e := hostProvisioningTransport("resource", "", "/not-installed-aster-plugins", "/not-installed-aster-policy")
+	if e != nil {
+		t.Fatal(e)
+	}
+	store, transport := hostFixture()
+	_, e = performProvisioning(t.Context(), store, store.request.OperationID, false, prepare)
+	if e == nil || store.state != "queued" || transport.sends != 0 || !reflect.DeepEqual(store.events, []string{"read"}) {
+		t.Fatal("unavailable resource plugin claimed/fell back", e, store.events)
+	}
+}

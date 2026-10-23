@@ -99,6 +99,17 @@ func (e *Executor) Apply(ctx context.Context, t Topology, confirm string) (Recei
 		return Receipt{}, err
 	}
 	defer l.close()
+	if l.activationPending() {
+		return Receipt{}, ErrUncertain
+	}
+	return e.applyLocked(ctx, p, l, false)
+}
+
+// applyLocked never acquires a second flock. Activation may permit ofport reuse
+// only after it has independently confirmed whole-bridge drop isolation.
+func (e *Executor) applyLocked(ctx context.Context, p Plan, l *ledger, isolated bool) (Receipt, error) {
+	t := p.Topology
+	var err error
 	for _, r := range l.state.Records {
 		if r.Receipt.Revision == t.Revision {
 			if r.Receipt.Digest != p.Digest {
@@ -181,7 +192,7 @@ func (e *Executor) Apply(ctx context.Context, t Topology, confirm string) (Recei
 	// quarantined, not silently adopted. Removed (unused) old ports are safe.
 	for _, old := range previous {
 		for _, b := range bindings {
-			if old.OFPort == b.OFPort && (old.InterfaceID != b.InterfaceID || old.InstanceID != b.InstanceID || old.OwnerRef != b.OwnerRef || old.VPCID != b.VPCID) {
+			if !isolated && old.OFPort == b.OFPort && (old.InterfaceID != b.InterfaceID || old.InstanceID != b.InstanceID || old.OwnerRef != b.OwnerRef || old.VPCID != b.VPCID) {
 				return fail("port_identity_changed", false)
 			}
 		}

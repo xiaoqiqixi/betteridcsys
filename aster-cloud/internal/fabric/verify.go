@@ -65,6 +65,13 @@ func (e *Executor) VerifyLive(ctx context.Context) (LiveVerification, error) {
 		return LiveVerification{}, err
 	}
 	defer l.close()
+	if l.activationPending() {
+		return LiveVerification{}, ErrUncertain
+	}
+	return e.verifyLocked(ctx, l)
+}
+
+func (e *Executor) verifyLocked(ctx context.Context, l *ledger) (LiveVerification, error) {
 	if len(l.state.Records) == 0 {
 		return LiveVerification{}, ErrUncertain
 	}

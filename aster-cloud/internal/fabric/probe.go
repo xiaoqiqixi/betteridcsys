@@ -118,6 +118,10 @@ var meterStatsRE = regexp.MustCompile(`(?:^|[ ,\n])stats(?:[ ,\n]|$)`)
 var meterDropRE = regexp.MustCompile(`(?:^|[ ,\n])type=drop(?:[ ,\n]|$)`)
 
 func (e *Executor) probe(ctx context.Context, p Plan) ([]binding, bool, error) {
+	return e.probeActivation(ctx, p, nil, false)
+}
+
+func (e *Executor) probeActivation(ctx context.Context, p Plan, intent *ActivationIntent, bootstrap bool) ([]binding, bool, error) {
 	owned := false
 	if _, err := e.run(ctx, Vsctl, "--timeout=3", "br-exists", e.Config.Bridge); err != nil {
 		return nil, owned, err
@@ -208,6 +212,26 @@ func (e *Executor) probe(ctx context.Context, p Plan) ([]binding, bool, error) {
 			return nil, owned, ErrUnavailable
 		}
 		ids, err := ovsMap(row[3])
+		if err == nil && intent != nil {
+			var expected *PortIntent
+			for j := range intent.Ports {
+				if TAPName(intent.Ports[j].InstanceID) == name {
+					expected = &intent.Ports[j]
+					break
+				}
+			}
+			if expected == nil || ids["iface-id"] != expected.InterfaceID || ids["attached-mac"] != expected.MAC || ids["vm-id"] != DomainID(expected.InstanceID) || ids["iface-status"] != "active" {
+				return nil, owned, ErrUnavailable
+			}
+			labels := map[string]string{"aster-node-id": e.Config.NodeID, "aster-owner": expected.OwnerRef, "aster-instance": expected.InstanceID, "aster-vpc": expected.VPCID}
+			for key, value := range labels {
+				actual, present := ids[key]
+				if actual != value && (!bootstrap || expected.InstanceID != intent.InstanceID || present) {
+					return nil, owned, ErrUnavailable
+				}
+				ids[key] = value
+			}
+		}
 		if err != nil || ids["aster-node-id"] != e.Config.NodeID || !idRE.MatchString(ids["aster-instance"]) || ids["iface-id"] != InterfaceID(ids["aster-instance"]) || !idRE.MatchString(ids["aster-owner"]) || !idRE.MatchString(ids["aster-vpc"]) {
 			return nil, owned, ErrUnavailable
 		}

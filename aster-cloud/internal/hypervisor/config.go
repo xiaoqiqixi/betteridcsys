@@ -55,28 +55,29 @@ type StorageConfig struct {
 }
 
 type Config struct {
-	Storage                             StorageConfig    `json:"storage"`
-	NodeID                              string           `json:"node_id"`
-	DatacenterID                        string           `json:"datacenter_id"`
-	NodeGroupID                         string           `json:"node_group_id"`
-	Listen                              string           `json:"listen"`
-	AllowPublicListen                   bool             `json:"allow_public_listen"`
-	Certificate                         string           `json:"certificate"`
-	PrivateKey                          string           `json:"private_key"`
-	ControllerCA                        string           `json:"controller_ca"`
-	ExpectedControllerCertificateSHA256 string           `json:"expected_controller_certificate_sha256"`
-	StateDirectory                      string           `json:"state_directory"`
-	StorageID                           string           `json:"storage_id"`
-	StorageDirectory                    string           `json:"storage_directory"`
-	Images                              map[string]Image `json:"images"`
-	Network                             Network          `json:"network"`
-	AllowIsolatedNoNIC                  bool             `json:"allow_isolated_no_nic"`
-	AllowUnmeteredDefault               bool             `json:"allow_unmetered_default"`
-	AllowDelete                         bool             `json:"allow_delete"`
-	Maintenance                         bool             `json:"maintenance"`
-	CPUAllocationLimit                  int              `json:"cpu_allocation_limit"`
-	MemoryAllocationLimitMiB            int              `json:"memory_allocation_limit_mib"`
-	DiskAllocationLimitGiB              int              `json:"disk_allocation_limit_gib"`
+	OVSProfiles                         map[string]OVSProfile `json:"ovs_profiles,omitempty"`
+	Storage                             StorageConfig         `json:"storage"`
+	NodeID                              string                `json:"node_id"`
+	DatacenterID                        string                `json:"datacenter_id"`
+	NodeGroupID                         string                `json:"node_group_id"`
+	Listen                              string                `json:"listen"`
+	AllowPublicListen                   bool                  `json:"allow_public_listen"`
+	Certificate                         string                `json:"certificate"`
+	PrivateKey                          string                `json:"private_key"`
+	ControllerCA                        string                `json:"controller_ca"`
+	ExpectedControllerCertificateSHA256 string                `json:"expected_controller_certificate_sha256"`
+	StateDirectory                      string                `json:"state_directory"`
+	StorageID                           string                `json:"storage_id"`
+	StorageDirectory                    string                `json:"storage_directory"`
+	Images                              map[string]Image      `json:"images"`
+	Network                             Network               `json:"network"`
+	AllowIsolatedNoNIC                  bool                  `json:"allow_isolated_no_nic"`
+	AllowUnmeteredDefault               bool                  `json:"allow_unmetered_default"`
+	AllowDelete                         bool                  `json:"allow_delete"`
+	Maintenance                         bool                  `json:"maintenance"`
+	CPUAllocationLimit                  int                   `json:"cpu_allocation_limit"`
+	MemoryAllocationLimitMiB            int                   `json:"memory_allocation_limit_mib"`
+	DiskAllocationLimitGiB              int                   `json:"disk_allocation_limit_gib"`
 }
 
 func hashString(s string) bool {
@@ -185,10 +186,13 @@ func (c Config) Validate() error {
 			return fmt.Errorf("image: %w", err)
 		}
 	}
-	if !c.AllowUnmeteredDefault {
+	if !c.AllowUnmeteredDefault && (c.Network.Enabled || c.AllowIsolatedNoNIC || len(c.OVSProfiles) == 0) {
 		return errors.New("zero-bandwidth/transfer default requires explicit operator approval")
 	}
 	if err := c.Network.Validate(); err != nil {
+		return err
+	}
+	if err := c.validateOVSProfiles(); err != nil {
 		return err
 	}
 	return c.validateStorage()
@@ -228,7 +232,14 @@ func (n Network) Validate() error {
 			return errors.New("invalid DNS")
 		}
 	}
-	for _, key := range n.SSHAuthorizedKeys {
+	return validateSSHKeys(n.SSHAuthorizedKeys)
+}
+
+func validateSSHKeys(keys []string) error {
+	if len(keys) == 0 {
+		return errors.New("approved SSH public keys required")
+	}
+	for _, key := range keys {
 		parts := strings.Fields(key)
 		if len(parts) < 2 || parts[0] != "ssh-ed25519" || strings.ContainsAny(key, "\r\n") {
 			return errors.New("only approved Ed25519 SSH public keys")

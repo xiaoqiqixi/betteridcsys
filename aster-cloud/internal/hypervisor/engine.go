@@ -1,6 +1,7 @@
 package hypervisor
 
 import (
+	"aster/cloud/internal/fabric"
 	"aster/cloud/internal/nodeproto"
 	"bytes"
 	"context"
@@ -56,6 +57,9 @@ func (OSRunner) Run(ctx context.Context, binary string, args ...string) ([]byte,
 }
 
 type Manager struct {
+	loadOVSConfig func(string) (fabric.Config, error)  // nil in production
+	ovsFactory    func(fabric.Config) (ovsGate, error) // deterministic test seam
+
 	Config          Config
 	Ledger          *Ledger
 	Runner          Runner
@@ -124,11 +128,14 @@ func (m *Manager) Accept(task nodeproto.NodeTask, raw []byte) (nodeproto.NodeRes
 		if !ok {
 			return reject("INSTANCE_NOT_FOUND")
 		}
-		if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
+		if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.Network != task.Network || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
 			return reject("OWNERSHIP_OR_STATE_REJECTED")
 		}
 		if task.Action == "delete" && (!m.Config.AllowDelete || task.ConfirmInstanceID != instance.ID) {
 			return reject("DELETE_DISABLED_OR_UNCONFIRMED")
+		}
+		if !instance.Network.IsZero() && task.Action == "reboot" {
+			return reject("OVS_REBOOT_REQUIRES_SHUTDOWN_START")
 		}
 		prepared = &instance
 		quarantine := instance
@@ -240,7 +247,7 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 		}
 		instance := *prepared
 		var e error
-		if e = m.create(ctx, instance); e != nil {
+		if e = m.create(ctx, instance, task, result.RequestSHA256); e != nil {
 			instance.State = "uncertain"
 			return finish("uncertain", "CREATE_OUTCOME_UNCERTAIN", &instance)
 		}
@@ -251,7 +258,7 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 		return finish("uncertain", "RESERVATION_MISSING", nil)
 	}
 	instance := *prepared
-	if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
+	if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.Network != task.Network || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
 		return finish("rejected", "OWNERSHIP_OR_STATE_REJECTED", nil)
 	}
 	if task.Action == "delete" && (!m.Config.AllowDelete || task.ConfirmInstanceID != instance.ID) {
@@ -263,6 +270,36 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 	state, e := m.state(ctx, instance.Domain)
 	if e != nil {
 		return finish("uncertain", "DOMAIN_STATE_UNAVAILABLE", nil)
+	}
+	if !instance.Network.IsZero() && (task.Action == "start" || task.Action == "shutdown" || task.Action == "force_off") {
+		var err error
+		switch task.Action {
+		case "start":
+			if state == "running" {
+				err = m.checkOVS(ctx, instance, task, result.RequestSHA256)
+			} else if state == "shut off" {
+				err = m.startOVS(ctx, instance, task, result.RequestSHA256)
+			} else {
+				return finish("rejected", "DOMAIN_STATE_REJECTED", nil)
+			}
+			if err == nil {
+				instance.State = "running"
+			}
+		default:
+			cmd := "shutdown"
+			if task.Action == "force_off" {
+				cmd = "destroy"
+			}
+			err = m.stopOVS(ctx, instance, task, result.RequestSHA256, cmd)
+			if err == nil {
+				instance.State = "shut off"
+			}
+		}
+		if err != nil {
+			instance.State = "uncertain"
+			return finish("uncertain", "OVS_LIFECYCLE_UNCONFIRMED", &instance)
+		}
+		return finish("succeeded", "", &instance)
 	}
 	var command string
 	switch task.Action {
@@ -301,6 +338,11 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 	case "delete":
 		if state != "shut off" {
 			return finish("rejected", "DELETE_REQUIRES_POWER_OFF", &instance)
+		}
+		if !instance.Network.IsZero() {
+			if err := m.stopOVS(ctx, instance, task, result.RequestSHA256, "destroy"); err != nil {
+				return finish("uncertain", "OVS_DETACH_UNCONFIRMED", nil)
+			}
 		}
 		command = "undefine"
 	default:
@@ -397,11 +439,20 @@ func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
 	if _, ok := c.Images[r.ImageID]; !ok {
 		return Instance{}, ErrUnsupported
 	}
-	if r.SystemStorageID != c.StorageID || r.DataDiskGiB != 0 || r.DataStorageID != "" || r.NetworkType != "normal" || r.BandwidthMbps != 0 || r.InboundBandwidthMbps != 0 || r.TransferGiB != 0 || !c.AllowUnmeteredDefault || r.IPv6Count != 0 || r.TrafficDirection != "all" {
+	if r.SystemStorageID != c.StorageID || r.DataDiskGiB != 0 || r.DataStorageID != "" || r.TransferGiB != 0 || r.IPv6Count != 0 || r.TrafficDirection != "all" {
 		return Instance{}, ErrUnsupported
 	}
-	if r.IPv4Count != 0 && r.IPv4Count != 1 || r.IPv4Count == 0 && !c.AllowIsolatedNoNIC || r.IPv4Count == 1 && !c.Network.Enabled {
-		return Instance{}, ErrUnsupported
+	if !t.Network.IsZero() {
+		if t.Protocol != nodeproto.NetworkProtocol || !t.Network.ValidFor(t) {
+			return Instance{}, ErrUnsupported
+		}
+		if _, p, e := m.approvedOVS(t.Network); e != nil || len(p.SSHAuthorizedKeys) == 0 {
+			return Instance{}, ErrUnsupported
+		}
+	} else {
+		if r.NetworkType != "normal" || r.BandwidthMbps != 0 || r.InboundBandwidthMbps != 0 || !c.AllowUnmeteredDefault || r.IPv4Count != 0 && r.IPv4Count != 1 || r.IPv4Count == 0 && !c.AllowIsolatedNoNIC || r.IPv4Count == 1 && !c.Network.Enabled {
+			return Instance{}, ErrUnsupported
+		}
 	}
 	cpu, memory, disk := 0, 0, 0
 	used := map[string]bool{}
@@ -413,6 +464,9 @@ func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
 		memory += i.Resources.MemoryMiB
 		disk += i.Resources.SystemDiskGiB
 		used[i.IPv4] = true
+		if !t.Network.IsZero() && !i.Network.IsZero() && (i.Network.LeaseID == t.Network.LeaseID || fabric.TAPName(i.ID) == fabric.TAPName(t.InstanceID)) {
+			return Instance{}, ErrConflict
+		}
 	}
 	if cpu+r.CPUCores > c.CPUAllocationLimit || memory+r.MemoryMiB > c.MemoryAllocationLimitMiB || disk+r.SystemDiskGiB > c.DiskAllocationLimitGiB {
 		return Instance{}, errors.New("allocation budget exhausted")
@@ -427,7 +481,15 @@ func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
 	}
 	instance := Instance{ID: t.InstanceID, OwnerRef: t.OwnerRef, Hostname: t.Hostname, Domain: "aster-" + t.InstanceID, Directory: filepath.Join(c.StorageDirectory, "aster-"+t.InstanceID), Resources: r, State: "reserved"}
 	instance.Disk = filepath.Join(instance.Directory, "system.qcow2")
-	if r.IPv4Count == 1 {
+	if !t.Network.IsZero() {
+		if used[t.Network.IPv4] {
+			return Instance{}, ErrConflict
+		}
+		instance.Network = t.Network
+		instance.IPv4 = t.Network.IPv4
+		instance.MAC = t.Network.MAC
+		instance.Seed = filepath.Join(instance.Directory, "seed.iso")
+	} else if r.IPv4Count == 1 {
 		for _, ip := range c.Network.Addresses {
 			if !used[ip] {
 				instance.IPv4 = ip
@@ -443,7 +505,7 @@ func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
 	}
 	return instance, nil
 }
-func (m *Manager) create(ctx context.Context, i Instance) error {
+func (m *Manager) create(ctx context.Context, i Instance, task nodeproto.NodeTask, sha string) error {
 	if err := ownedPath(m.Config.StorageDirectory, false, true); err != nil {
 		return err
 	}
@@ -494,7 +556,7 @@ func (m *Manager) create(ctx context.Context, i Instance) error {
 	if json.Unmarshal(raw, &info) != nil || info.Format != "qcow2" || info.VirtualSize == 0 || info.VirtualSize > uint64(i.Resources.SystemDiskGiB)<<30 || info.Backing != "" || bytes.Contains(info.Specific, []byte("data-file")) {
 		return errors.New("base image must be flat qcow2 and fit system disk")
 	}
-	if i.IPv4 != "" {
+	if i.IPv4 != "" && i.Network.IsZero() {
 		if err = m.verifyNetwork(ctx); err != nil {
 			return err
 		}
@@ -517,7 +579,12 @@ func (m *Manager) create(ctx context.Context, i Instance) error {
 		return err
 	}
 	if i.IPv4 != "" {
-		if err = m.seed(ctx, i); err != nil {
+		if !i.Network.IsZero() {
+			err = m.seedOVS(ctx, i)
+		} else {
+			err = m.seed(ctx, i)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -537,6 +604,9 @@ func (m *Manager) create(ctx context.Context, i Instance) error {
 	}
 	if err = m.assertOwned(ctx, i); err != nil {
 		return err
+	}
+	if !i.Network.IsZero() {
+		return m.startOVS(ctx, i, task, sha)
 	}
 	if _, err = m.virsh(ctx, "start", i.Domain); err != nil {
 		return err
@@ -599,10 +669,6 @@ func (m *Manager) seed(ctx context.Context, i Instance) error {
 	n := m.Config.Network
 	prefix, _ := netip.ParsePrefix(n.CIDR)
 	q := func(s string) string { raw, _ := json.Marshal(s); return string(raw) }
-	body := "#cloud-config\nssh_pwauth: false\ndisable_root: true\nusers:\n  - name: aster\n    lock_passwd: true\n    groups: [sudo]\n    sudo: ['ALL=(ALL) NOPASSWD:ALL']\n    shell: /bin/bash\n    ssh_authorized_keys:\n"
-	for _, key := range n.SSHAuthorizedKeys {
-		body += "      - " + q(key) + "\n"
-	}
 	network := fmt.Sprintf("version: 2\nethernets:\n  aster0:\n    match:\n      macaddress: %s\n    set-name: aster0\n    dhcp4: false\n    dhcp6: false\n    accept-ra: false\n    link-local: []\n    addresses: [%s]\n    routes:\n      - to: 0.0.0.0/0\n        via: %s\n", q(i.MAC), q(fmt.Sprintf("%s/%d", i.IPv4, prefix.Bits())), q(n.Gateway))
 	if len(n.DNS) > 0 {
 		network += "    nameservers:\n      addresses: ["
@@ -613,6 +679,14 @@ func (m *Manager) seed(ctx context.Context, i Instance) error {
 			network += q(dns)
 		}
 		network += "]\n"
+	}
+	return m.seedFiles(ctx, i, n.SSHAuthorizedKeys, network)
+}
+func (m *Manager) seedFiles(ctx context.Context, i Instance, keys []string, network string) error {
+	q := func(s string) string { raw, _ := json.Marshal(s); return string(raw) }
+	body := "#cloud-config\nssh_pwauth: false\ndisable_root: true\nusers:\n  - name: aster\n    lock_passwd: true\n    groups: [sudo]\n    sudo: ['ALL=(ALL) NOPASSWD:ALL']\n    shell: /bin/bash\n    ssh_authorized_keys:\n"
+	for _, key := range keys {
+		body += "      - " + q(key) + "\n"
 	}
 	for file, data := range map[string]string{"user-data": body, "meta-data": "instance-id: " + q(i.ID) + "\nlocal-hostname: " + q(i.Hostname) + "\n", "network-config": network} {
 		if err := writeExclusive(filepath.Join(i.Directory, file), []byte(data)); err != nil {
@@ -631,10 +705,11 @@ func (m *Manager) state(ctx context.Context, domain string) (string, error) {
 }
 
 type ownershipXML struct {
-	XMLName    xml.Name `xml:"urn:aster:node:1 instance"`
-	InstanceID string   `xml:"instance_id,attr"`
-	OwnerRef   string   `xml:"owner_ref,attr"`
-	NodeID     string   `xml:"node_id,attr"`
+	NetworkSHA256 string   `xml:"network_sha256,attr,omitempty"`
+	XMLName       xml.Name `xml:"urn:aster:node:1 instance"`
+	InstanceID    string   `xml:"instance_id,attr"`
+	OwnerRef      string   `xml:"owner_ref,attr"`
+	NodeID        string   `xml:"node_id,attr"`
 }
 type diskXML struct {
 	Device string `xml:"device,attr"`
@@ -652,6 +727,25 @@ type diskXML struct {
 	} `xml:"target"`
 	ReadOnly *struct{} `xml:"readonly,omitempty"`
 }
+type nicPortXML struct {
+	Isolated string `xml:"isolated,attr"`
+}
+type nicFilterXML struct {
+	Filter     string         `xml:"filter,attr"`
+	Parameters []parameterXML `xml:"parameter"`
+}
+type nicVirtualPortXML struct {
+	Type       string `xml:"type,attr"`
+	Parameters struct {
+		InterfaceID string `xml:"interfaceid,attr"`
+	} `xml:"parameters"`
+}
+type nicTargetXML struct {
+	Dev string `xml:"dev,attr"`
+}
+type nicLinkXML struct {
+	State string `xml:"state,attr"`
+}
 type interfaceXML struct {
 	Type string `xml:"type,attr"`
 	MAC  struct {
@@ -663,19 +757,18 @@ type interfaceXML struct {
 	Model struct {
 		Type string `xml:"type,attr"`
 	} `xml:"model"`
-	Port struct {
-		Isolated string `xml:"isolated,attr"`
-	} `xml:"port"`
-	Filter struct {
-		Filter     string         `xml:"filter,attr"`
-		Parameters []parameterXML `xml:"parameter"`
-	} `xml:"filterref"`
+	Port        *nicPortXML        `xml:"port,omitempty"`
+	Filter      *nicFilterXML      `xml:"filterref,omitempty"`
+	VirtualPort *nicVirtualPortXML `xml:"virtualport,omitempty"`
+	Target      *nicTargetXML      `xml:"target,omitempty"`
+	Link        *nicLinkXML        `xml:"link,omitempty"`
 }
 type parameterXML struct {
 	Name  string `xml:"name,attr"`
 	Value string `xml:"value,attr"`
 }
 type domainXML struct {
+	UUID    string   `xml:"uuid,omitempty"`
 	XMLName xml.Name `xml:"domain"`
 	Type    string   `xml:"type,attr"`
 	Name    string   `xml:"name"`
@@ -719,6 +812,11 @@ func (m *Manager) domainXML(i Instance) ([]byte, error) {
 	d.OnPoweroff = "destroy"
 	d.OnReboot = "restart"
 	d.OnCrash = "preserve"
+	if !i.Network.IsZero() {
+		d.UUID = fabric.DomainID(i.ID)
+		d.OnReboot = "destroy"
+		d.Metadata.Instance.NetworkSHA256 = i.Network.Digest()
+	}
 	d.Devices.Emulator = Emulator
 	disk := diskXML{Type: "file", Device: "disk"}
 	disk.Driver = &struct {
@@ -742,9 +840,20 @@ func (m *Manager) domainXML(i Instance) ([]byte, error) {
 		nic.MAC.Address = i.MAC
 		nic.Source.Bridge = m.Config.Network.Bridge
 		nic.Model.Type = "virtio"
-		nic.Port.Isolated = "yes"
-		nic.Filter.Filter = m.Config.Network.Filter
-		nic.Filter.Parameters = []parameterXML{{"IP", i.IPv4}, {"MAC", i.MAC}, {"CTRL_IP_LEARNING", "none"}}
+		if i.Network.IsZero() {
+			nic.Port = &nicPortXML{Isolated: "yes"}
+			nic.Filter = &nicFilterXML{Filter: m.Config.Network.Filter, Parameters: []parameterXML{{"IP", i.IPv4}, {"MAC", i.MAC}, {"CTRL_IP_LEARNING", "none"}}}
+		} else {
+			c, _, e := m.approvedOVS(i.Network)
+			if e != nil {
+				return nil, e
+			}
+			nic.Source.Bridge = c.Bridge
+			nic.Target = &nicTargetXML{Dev: fabric.TAPName(i.ID)}
+			nic.Link = &nicLinkXML{State: "down"}
+			nic.VirtualPort = &nicVirtualPortXML{Type: "openvswitch"}
+			nic.VirtualPort.Parameters.InterfaceID = i.Network.InterfaceID
+		}
 		d.Devices.Interfaces = []interfaceXML{nic}
 	}
 	return xml.MarshalIndent(d, "", "  ")
@@ -814,12 +923,16 @@ func (m *Manager) assertOwned(ctx context.Context, i Instance) error {
 		if len(domain.Devices.Interfaces) != 0 {
 			return ErrOwnership
 		}
+	} else if !i.Network.IsZero() {
+		if e := m.assertOVSDomain(i, domain, false); e != nil {
+			return e
+		}
 	} else {
 		if len(domain.Devices.Interfaces) != 1 {
 			return ErrOwnership
 		}
 		nic := domain.Devices.Interfaces[0]
-		if nic.Type != "bridge" || nic.MAC.Address != i.MAC || nic.Source.Bridge != m.Config.Network.Bridge || nic.Port.Isolated != "yes" || nic.Model.Type != "virtio" || nic.Filter.Filter != m.Config.Network.Filter {
+		if nic.Type != "bridge" || nic.MAC.Address != i.MAC || nic.Source.Bridge != m.Config.Network.Bridge || nic.Port == nil || nic.Filter == nil || nic.VirtualPort != nil || nic.Port.Isolated != "yes" || nic.Model.Type != "virtio" || nic.Filter.Filter != m.Config.Network.Filter {
 			return ErrOwnership
 		}
 		params := map[string]string{}

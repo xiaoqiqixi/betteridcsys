@@ -41,11 +41,25 @@ func networkTables() []tableSpec {
 	}
 }
 func CheckMigration(ctx context.Context, db SchemaReader, allowMissing bool) error {
+	return checkTables(ctx, db, allowMissing, networkTables())
+}
+
+func CheckTaskBindingMigration(ctx context.Context, db SchemaReader, allowMissing bool) error {
+	tables := []tableSpec{{
+		name:    "controller_instance_networks",
+		columns: []columnSpec{baseID("instance_id"), baseID("operation_id"), ascii("node_id", "varchar", 64), hashColumn(), ascii("network_sha256", "char", 64), {"binding", "mediumblob", "", 0, 0}, createdColumn()},
+		indexes: []indexSpec{{"PRIMARY", true, []string{"instance_id"}}, {"controller_instance_network_operation", true, []string{"operation_id"}}, {"controller_instance_network_node", false, []string{"node_id", "instance_id"}}},
+	}}
+	return checkTables(ctx, db, allowMissing, tables)
+}
+
+func checkTables(ctx context.Context, db SchemaReader, allowMissing bool, tables []tableSpec) error {
 	if db == nil {
 		return ErrUnavailable
 	}
-	for _, table := range networkTables() {
-		var engine, collation, kind string
+	for _, table := range tables {
+		var engine, collation sql.NullString
+		var kind string
 		e := db.QueryRowContext(ctx, "SELECT ENGINE,TABLE_COLLATION,TABLE_TYPE FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?", table.name).Scan(&engine, &collation, &kind)
 		if e == sql.ErrNoRows && allowMissing {
 			continue
@@ -56,7 +70,7 @@ func CheckMigration(ctx context.Context, db SchemaReader, allowMissing bool) err
 			}
 			return ErrUnavailable
 		}
-		if engine != "InnoDB" || collation != "utf8mb4_bin" || kind != "BASE TABLE" {
+		if !engine.Valid || engine.String != "InnoDB" || !collation.Valid || collation.String != "utf8mb4_bin" || kind != "BASE TABLE" {
 			return ErrConflict
 		}
 		rows, e := db.QueryContext(ctx, "SELECT COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,CHARACTER_MAXIMUM_LENGTH,COLLATION_NAME,DATETIME_PRECISION,EXTRA FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? ORDER BY ORDINAL_POSITION", table.name)

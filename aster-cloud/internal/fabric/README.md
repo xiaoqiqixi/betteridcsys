@@ -1,9 +1,10 @@
 # Root-only OVS fabric executor (development)
 
-This module is a native executable dataplane core, **not** an installed service,
-UI integration, VM-start gate, complete routed VPC, or a real-host acceptance.
-Existing `aster-node` still uses its approved Linux bridge. Never point that
-profile at an OVS bridge or start a newly OVS-configured VM through the old path.
+This module supplies a native dataplane CLI and an **embedded node lifecycle
+gate**. It is not an installed service, a routed/cross-node VPC or a real-host
+acceptance. The legacy node/1 Linux-bridge profile must never point at an OVS
+bridge. New OVS VM operations must use the explicit network task/profile path;
+CLI success alone never authorizes a VM start.
 
 ## Root approvals
 
@@ -19,7 +20,7 @@ The already-prepared bridge must have:
 - no foreign flow cookies or `NORMAL` rules, no foreign meter IDs;
 - only Linux TAP interfaces (verified using kernel `tun_flags`).
 
-Every existing guest Interface must be independently root-marked with
+For standalone CLI operation, every existing guest Interface must be independently root-marked with
 `external_ids:iface-id=<fabric.InterfaceID(instance_id)>`, `aster-node-id`,
 `aster-owner`, `aster-instance`, and `aster-vpc`. If `iface-status` is present,
 it must be `active`. `InterfaceID` is a deterministic SHA-256-derived UUIDv8.
@@ -44,6 +45,7 @@ aster-network plan --config /etc/aster-network/config.json --topology /etc/aster
 aster-network apply --config /etc/aster-network/config.json --topology /etc/aster-network/topology.json --confirm-bridge aster-vpc
 aster-network status --config /etc/aster-network/config.json
 aster-network verify --config /etc/aster-network/config.json
+aster-network fingerprint --config /etc/aster-network/config.json
 ```
 
 `verify` is a separate **root-only live readback**, accepting only the fixed
@@ -61,8 +63,68 @@ The returned `aster.fabric.live/1` observation binds the current revision,
 topology digest and hashed identity map to its observation time. It is **not** a
 signed attestation, durable lease, atomic cross-system snapshot, permanent VM
 start permit, internet-connectivity test or billing success. Another root writer
-can change the host after readback. VM start/resume still needs an integrated
-quiescent admission gate and a separate network execution contract.
+can change the host after readback. Only the embedded quiescent admission gate, together with the node's explicit
+network contract and ownership checks, may use it within a start/resume transition.
+
+
+## Embedded lifecycle admission
+
+`Executor.Inspect(ctx)` checks read-only bridge prerequisites without creating
+a journal, including the first empty bridge. Existing unresolved journal state
+blocks readiness; inspection does not prove applied rules or guest connectivity.
+
+`Executor.Activate(ctx, ActivationIntent, bootstrap, release)` holds a single
+exclusive cross-process flock across the **entire** transition. A schema-2
+write-ahead activation record binds the exact operation/request hash and copied,
+canonical full-node port intent. An interrupted/uncertain record blocks further
+apply/activate/deactivate and live status verification. Older schema-1 binaries
+reject schema 2 instead of silently discarding its admission fence. Existing
+schema-1 CLI journals remain readable by the new executable.
+
+The gate proves the configured dedicated bridge and flow ownership, installs
+and reads back whole-bridge drop before `bootstrap`. The trusted compiled node
+callback must independently verify its domain and start it paused with link down;
+there is no shell callback. `TAPName(instance)` is a deterministic 15-byte `ast`
+name (prefix collisions are rejected across the supplied inventory),
+`DomainID(instance)` and `InterfaceID(instance)` are distinct name-derived
+UUIDv8 values. The node must pin all three and the MAC in its domain XML.
+
+After bootstrap the gate verifies real kernel TAP type, exact bridge membership,
+name, libvirt `iface-id`, `attached-mac`, `vm-id` and active interface status.
+Only the target's missing aster labels may be added with a fixed `set Interface`
+command; conflicting labels are never adopted. No bridge/NIC is created or
+moved. All current ofports are then freshly resolved under isolation. They are
+not request identity or approval fields. Source/destination meters and flows
+are applied, read back and checked against the full stable identity map before
+`release` may set link up and resume the independently owned paused VM. The lock
+remains held through the callback, a second live verification and durable
+completion. No historical receipt skips this sequence; replay never reruns a
+callback or yields a cached live permit.
+
+`PortIntent.Enabled=false` retains exact identity validation for a present
+uncertain/stopped peer but produces no allow flow or meter. Missing enabled
+running peers fail closed. An invalid target, unknown TAP, foreign interface,
+changed map, command/storage error or callback error/panic never triggers automatic
+resume. After programming/possible release, failure attempts one bounded
+whole-bridge safety quarantine, records uncertainty and returns no live proof.
+The node must independently return its target to paused/link-down state on any
+failure: the fabric does not issue hypervisor commands. Other guests on the
+explicitly exclusive bridge are interrupted by quarantine too.
+
+`Deactivate(ctx, intent, stop)` requires the target disabled, isolates before
+its trusted stop/delete callback, then requires that target TAP **absent** and
+rebuilds only remaining confirmed-running peers. This removes stale ofport
+allow rules before shutdown/deletion can make an ofport reusable.
+`Check(ctx, intent)` is a shared-lock, `--read-only` verification of the currently
+applied exact bindings for an already-running target; it never applies or repairs.
+`fingerprint` emits only canonical config SHA-256 (`json.Marshal(Config)`), node
+ID and protocol, so separately root-approved node/controller profiles can pin the
+same config without exposing its path. The local profile map, not network input,
+selects the protected config file.
+
+This gate provides single-host, static private IPv4 peer networking only. It does
+not add gateway reachability, NAT, DHCP, Internet access, underlay/tunnel peers or
+cross-node routing. The fake-runner tests are not real OVS/KVM traffic acceptance.
 
 ## Model and limits
 
@@ -116,7 +178,7 @@ manual recovery; never delete its journal as a retry technique.
 Receipts retain at most 64 revisions (bounded 8 MiB journal); the limit fails
 closed and is not silently pruned. A production archival design and real OVS/KVM
 traffic, host reboot, drop/limit accuracy and hostile port-race acceptance remain
-required. Probe/readback cannot replace an integrated VM-start network gate.
+required. The gate cannot fence an unrelated root writer that bypasses its lock.
 
 Official references actually read:
 
@@ -125,3 +187,5 @@ Official references actually read:
 - [OVSDB schema / Interface identifiers](https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.txt)
 - [OVS v2.17.0 ofctl implementation: read-only command flag and diff-flows](https://raw.githubusercontent.com/openvswitch/ovs/v2.17.0/utilities/ovs-ofctl.c)
 - [Upstream meter formatter](https://github.com/openvswitch/ovs/blob/main/lib/ofp-meter.c) and [older multiline test format](https://mail.openvswitch.org/pipermail/ovs-dev/2023-April/403605.html). The v2.17 meter formatter itself could not be fetched during this review; these source checks do not replace an installed Ubuntu22 package test.
+
+Additional official bootstrap references actually read: [libvirt Domain XML](https://libvirt.org/formatdomain.html), [virsh start](https://www.libvirt.org/manpages/virsh.html#start), and [libvirt v8.0.0 OVS interface identity initialization](https://raw.githubusercontent.com/libvirt/libvirt/v8.0.0/src/util/virnetdevopenvswitch.c). A paused start may fall back to running with unsupported drivers: independent link-down plus bridge quarantine and an observed paused-state check are mandatory.

@@ -1,6 +1,7 @@
 package hypervisor
 
 import (
+	"aster/cloud/internal/fabric"
 	"aster/cloud/internal/nodeproto"
 	"context"
 	"errors"
@@ -216,7 +217,11 @@ func parseInstanceMetrics(raw []byte, i Instance, now time.Time) (nodeproto.Inst
 	}
 	if v, present := fields["net.count"]; present && v.value == "1" {
 		name, ok := fields["net.0.name"]
-		if i.IPv4 == "" || !ok || !name.text || !metricInterface.MatchString(name.value) {
+		validName := metricInterface.MatchString(name.value)
+		if !i.Network.IsZero() {
+			validName = name.value == fabric.TAPName(i.ID)
+		}
+		if i.IPv4 == "" || !ok || !name.text || !validName {
 			return result, errMetrics
 		}
 		result.NetworkReceiveBytes = read("net.0.rx.bytes")

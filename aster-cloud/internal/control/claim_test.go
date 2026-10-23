@@ -1,9 +1,11 @@
 package control
 
 import (
+	"aster/cloud/internal/nodeproto"
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -30,6 +32,7 @@ func (claimDriver) Open(key string) (driver.Conn, error) {
 
 type claimFixture struct {
 	job                            Job
+	instance                       Instance
 	otherState                     string
 	executions, commits, rollbacks int
 }
@@ -62,6 +65,12 @@ func (c *claimConn) QueryContext(_ context.Context, q string, args []driver.Name
 		return &claimRows{columns: strings.Split(jobColumns, ","), values: []driver.Value{j.OperationID, j.OrderID, j.ControllerID, j.RequestSHA, j.RequestJSON, j.InstanceID, j.NodeID, j.NodeProfileSHA, j.NodeRequestSHA, j.NodeRequest, j.State, j.CreatedAt, j.UpdatedAt}}, nil
 	case strings.Contains(q, "FROM controller_nodes"):
 		return &claimRows{columns: []string{"maintenance", "heartbeat_at", "profile_sha256"}, values: []driver.Value{false, c.s.job.CreatedAt, c.s.job.NodeProfileSHA}}, nil
+	case strings.Contains(q, "FROM controller_instances WHERE id=?"):
+		v := c.s.instance
+		raw, _ := json.Marshal(v.Resources)
+		return &claimRows{columns: []string{"id", "owner_ref", "node_id", "hostname", "state", "resources", "created_at", "updated_at"}, values: []driver.Value{v.ID, v.OwnerRef, v.NodeID, v.Hostname, v.State, raw, v.CreatedAt, v.UpdatedAt}}, nil
+	case strings.Contains(q, "FROM controller_instance_networks WHERE instance_id=?"):
+		return &claimRows{columns: []string{"operation_id", "node_id", "request_sha256", "network_sha256", "binding"}, empty: true}, nil
 	}
 	return nil, ErrInput
 }
@@ -79,12 +88,13 @@ type claimRows struct {
 	columns []string
 	values  []driver.Value
 	read    bool
+	empty   bool
 }
 
 func (r *claimRows) Columns() []string { return r.columns }
 func (r *claimRows) Close() error      { return nil }
 func (r *claimRows) Next(dest []driver.Value) error {
-	if r.read {
+	if r.read || r.empty {
 		return io.EOF
 	}
 	copy(dest, r.values)
@@ -96,6 +106,15 @@ func TestSQLClaimPreservesQueueForEveryUnprovenNodeState(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			now := time.Now().UTC()
 			fixture := &claimFixture{job: Job{OperationID: id(), OrderID: id(), ControllerID: "main", RequestSHA: strings.Repeat("a", 64), RequestJSON: []byte("{}"), InstanceID: id(), NodeID: "approved-node", NodeProfileSHA: strings.Repeat("b", 64), NodeRequestSHA: strings.Repeat("c", 64), NodeRequest: []byte("{}"), State: "accepted", CreatedAt: now, UpdatedAt: now}, otherState: state}
+			p := testProfile()
+			p.ID = fixture.job.NodeID
+			fixture.instance = Instance{ID: fixture.job.InstanceID, OwnerRef: id(), NodeID: p.ID, Hostname: "claim-fixture", State: "reserved", Resources: testResources(p), CreatedAt: now, UpdatedAt: now}
+			task := nodeproto.NodeTask{Protocol: nodeproto.Protocol, OperationID: fixture.job.OperationID, NodeID: p.ID, Action: "create", InstanceID: fixture.instance.ID, OwnerRef: fixture.instance.OwnerRef, Hostname: fixture.instance.Hostname, Resources: fixture.instance.Resources}
+			var bindErr error
+			fixture.job.NodeRequest, fixture.job.NodeRequestSHA, bindErr = task.BytesAndDigest()
+			if bindErr != nil {
+				t.Fatal(bindErr)
+			}
 			key := id()
 			claimFixtures.Store(key, fixture)
 			defer claimFixtures.Delete(key)

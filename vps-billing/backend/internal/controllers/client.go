@@ -232,12 +232,37 @@ func (p Policy) client(ctx context.Context, id string, owner uint32, lookup func
 	if selected == nil {
 		return nil, ErrUnavailable
 	}
-	u, prefixes, valid := selected.endpoint()
-	if !valid {
-		return nil, ErrUnavailable
-	}
+
 	token, err := readHostFile(selected.TokenFile, true, 4096, owner)
 	if err != nil {
+		return nil, ErrUnavailable
+	}
+	var ca []byte
+	if selected.CAFile != "" {
+		ca, err = readHostFile(selected.CAFile, false, 64<<10, owner)
+		if err != nil {
+			return nil, ErrUnavailable
+		}
+	}
+	return credentialClient(ctx, *selected, token, ca, lookup)
+}
+
+// CredentialClient is for a separately approved resource worker's fixed,
+// systemd-delivered credentials. It accepts no filesystem path and does not
+// alter LoadPolicy/Client ownership rules. Callers must approve the profile
+// outside any user-controlled request before calling this constructor.
+func CredentialClient(ctx context.Context, profile Profile, token, ca []byte) (*Client, error) {
+	if profile.TokenFile != "" || profile.CAFile != "" {
+		return nil, ErrUnavailable
+	}
+	return credentialClient(ctx, profile, token, ca, net.DefaultResolver.LookupNetIP)
+}
+func credentialClient(ctx context.Context, selected Profile, token, ca []byte, lookup func(context.Context, string, string) ([]netip.Addr, error)) (*Client, error) {
+	if ctx == nil || ctx.Err() != nil || !selected.Enabled || !controllerID.MatchString(selected.ID) || len(token) > 4096 || len(ca) > 64<<10 {
+		return nil, ErrUnavailable
+	}
+	u, prefixes, valid := selected.endpoint()
+	if !valid {
 		return nil, ErrUnavailable
 	}
 	credential := strings.TrimSpace(string(token))
@@ -250,10 +275,9 @@ func (p Policy) client(ctx context.Context, id string, owner uint32, lookup func
 		}
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: u.Hostname()}
-	if selected.CAFile != "" {
-		raw, err := readHostFile(selected.CAFile, false, 64<<10, owner)
+	if len(ca) > 0 {
 		pool := x509.NewCertPool()
-		if err != nil || !pool.AppendCertsFromPEM(raw) {
+		if !pool.AppendCertsFromPEM(ca) {
 			return nil, ErrUnavailable
 		}
 		tlsConfig.RootCAs = pool
@@ -274,7 +298,7 @@ func (p Policy) client(ctx context.Context, id string, owner uint32, lookup func
 		addresses[i] = address
 	}
 	sort.Slice(addresses, func(i, j int) bool { return addresses[i].Less(addresses[j]) })
-	return &Client{id: id, endpoint: u, address: net.JoinHostPort(addresses[0].String(), portFor(u)), tls: tlsConfig, token: credential}, nil
+	return &Client{id: selected.ID, endpoint: u, address: net.JoinHostPort(addresses[0].String(), portFor(u)), tls: tlsConfig, token: credential}, nil
 }
 
 func (c *Client) Send(ctx context.Context, request Request) (Result, error) {

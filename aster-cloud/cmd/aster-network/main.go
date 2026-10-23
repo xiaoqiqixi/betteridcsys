@@ -3,6 +3,8 @@ package main
 import (
 	"aster/cloud/internal/fabric"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,7 +18,7 @@ func run(args []string, out, stderr io.Writer) int {
 		return 2
 	}
 	command := args[0]
-	if command != "plan" && command != "status" && command != "apply" && command != "verify" {
+	if command != "plan" && command != "status" && command != "apply" && command != "verify" && command != "fingerprint" {
 		return 2
 	}
 	f := flag.NewFlagSet("aster-network", flag.ContinueOnError)
@@ -32,7 +34,7 @@ func run(args []string, out, stderr io.Writer) int {
 		_ = json.NewEncoder(stderr).Encode(map[string]any{"error": map[string]string{"code": code}})
 		return 1
 	}
-	if command == "verify" {
+	if command == "verify" || command == "fingerprint" {
 		invalid := false
 		f.Visit(func(option *flag.Flag) {
 			if option.Name != "config" {
@@ -46,6 +48,17 @@ func run(args []string, out, stderr io.Writer) int {
 	c, e := fabric.LoadConfig(*config)
 	if e != nil {
 		return failure("FABRIC_CONFIG_REJECTED")
+	}
+	if command == "fingerprint" {
+		if os.Geteuid() != 0 {
+			return failure("FABRIC_CONFIG_REJECTED")
+		}
+		raw, _ := json.Marshal(c)
+		sum := sha256.Sum256(raw)
+		if json.NewEncoder(out).Encode(map[string]string{"protocol": "aster.fabric.config/1", "node_id": c.NodeID, "sha256": hex.EncodeToString(sum[:])}) != nil {
+			return 1
+		}
+		return 0
 	}
 	if command == "verify" {
 		executor, err := fabric.NewExecutor(c, fabric.OSRunner{})
@@ -106,7 +119,7 @@ func run(args []string, out, stderr io.Writer) int {
 func main() {
 	code := run(os.Args[1:], os.Stdout, os.Stderr)
 	if code == 2 {
-		fmt.Fprintln(os.Stderr, "usage: aster-network plan|status|verify|apply --config FILE [--topology FILE] [--confirm-bridge BRIDGE] [--revision N]")
+		fmt.Fprintln(os.Stderr, "usage: aster-network plan|status|verify|fingerprint|apply --config FILE [--topology FILE] [--confirm-bridge BRIDGE] [--revision N]")
 	}
 	os.Exit(code)
 }

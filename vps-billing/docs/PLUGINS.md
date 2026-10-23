@@ -163,3 +163,7 @@ Core 不自动重试 RPC。SMTP 传输仅对 MAIL 前已明确的暂时失败最
 客户结账和服务商通知已有专用接口。支付尝试先于渠道调用持久化，结果不确定时不会自动创建第二次付款；取消也会排除已有支付尝试。安装工具对支付启停及回退须使用 `--kind payment`，停用或回退不会删除在途记录。完整协议、合成示例、原始通知与通用应答合同见[支付接入指南](PAYMENT_PLUGINS.md)。当前未提供渠道查询、撤销、退款、对账或资源开通，特定明文／XML／签名应答还需扩展协议。
 
 `PAYMENT_PROVIDER=payment.disabled`、`EMAIL_PROVIDER=email.disabled` 和 `INTEGRATIONS_CONFIG_FILE` 是保留的旧编译期配置边界，不安装或启用运行时插件。当前服务器只允许两个禁用 ID 的空配置；不要改为真实渠道 ID 或 `email.smtp`。运行时选择以受保护的 `plugins.json` 审批为准，支付状态通过 `GET /api/v1/admin/plugins` 查看；这些审批不会授予插件数据库或服务管理权限。
+
+## 资源插件
+
+本轮 main 另提供受保护、独立进程的 `resource.aster-cloud` worker，支持通过本系统插件管理器安装/审批/回滚以及原持久化资源 job 的 host-only 派发；不属于支付渠道，也不是 Web 任意执行入口。它只读取专用 systemd credentials，不读取财务数据库。见 [RESOURCE_PLUGINS.md](RESOURCE_PLUGINS.md) 的构建、安装、配置、对账和兼容性说明。旧公开 Release 尚不含该协议，真实 KVM/生产 service 验收与离线包校验分开记录。

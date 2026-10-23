@@ -144,7 +144,7 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 				failure(w, 400, "INVALID_QUERY")
 				return
 			}
-			output(w, 200, map[string]any{"items": c.Config.Presets})
+			output(w, 200, map[string]any{"items": publicPresets(c.Config.Presets)})
 			return
 		case len(parts) == 1 && parts[0] == "instances":
 			c.instances(w, r)

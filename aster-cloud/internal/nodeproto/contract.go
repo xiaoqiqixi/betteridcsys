@@ -21,6 +21,7 @@ var hostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type NodeTask struct {
+	Network     NetworkBinding          `json:"network,omitzero"`
 	Protocol    string                  `json:"protocol"`
 	OperationID string                  `json:"operation_id"`
 	NodeID      string                  `json:"node_id"`
@@ -44,7 +45,10 @@ type NodeResult struct {
 func ValidID(value string) bool     { return hexID.MatchString(value) }
 func ValidNodeID(value string) bool { return nodeID.MatchString(value) }
 func (t NodeTask) Valid() bool {
-	if t.Protocol != Protocol || !ValidID(t.OperationID) || !ValidNodeID(t.NodeID) || !ValidID(t.InstanceID) || !ValidID(t.OwnerRef) || !hostname.MatchString(t.Hostname) {
+	if (t.Protocol != Protocol && t.Protocol != NetworkProtocol) || !ValidID(t.OperationID) || !ValidNodeID(t.NodeID) || !ValidID(t.InstanceID) || !ValidID(t.OwnerRef) || !hostname.MatchString(t.Hostname) {
+		return false
+	}
+	if t.Protocol == Protocol && !t.Network.IsZero() || t.Protocol == NetworkProtocol && !t.Network.ValidFor(t) {
 		return false
 	}
 	switch t.Action {
@@ -68,7 +72,7 @@ func (t NodeTask) BytesAndDigest() ([]byte, string, error) {
 	return raw, Digest(raw), nil
 }
 func (r NodeResult) Matches(t NodeTask, requestSHA string) bool {
-	if !t.Valid() || r.Protocol != Protocol || r.OperationID != t.OperationID || r.InstanceID != t.InstanceID || !digest.MatchString(requestSHA) || r.RequestSHA256 != requestSHA {
+	if !t.Valid() || r.Protocol != t.Protocol || r.OperationID != t.OperationID || r.InstanceID != t.InstanceID || !digest.MatchString(requestSHA) || r.RequestSHA256 != requestSHA {
 		return false
 	}
 	switch r.Status {
@@ -95,6 +99,13 @@ func DecodeTask(raw []byte) (NodeTask, error) {
 		return NodeTask{}, ErrInvalid
 	}
 	allowed := map[string]bool{"protocol": true, "operation_id": true, "node_id": true, "action": true, "instance_id": true, "owner_ref": true, "hostname": true, "resources": true, "confirm_instance_id": true}
+	if task.Protocol == NetworkProtocol {
+		allowed["network"] = true
+		n, err := decodeNetworkBinding(fields["network"])
+		if err != nil || n != task.Network {
+			return NodeTask{}, ErrInvalid
+		}
+	}
 	for key, value := range fields {
 		if !allowed[key] || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return NodeTask{}, ErrInvalid

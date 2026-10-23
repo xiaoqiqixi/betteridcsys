@@ -28,3 +28,12 @@ func TestVerifyAcceptsOnlyFixedPrivateConfigNotTopologyRevisionOrBridge(t *testi
 		t.Fatal(code, out.String(), err.String())
 	}
 }
+
+func TestFingerprintAcceptsOnlyPrivateConfigAndDoesNotEchoPaths(t *testing.T) {
+	for _, args := range [][]string{{"fingerprint", "--config", "/private/secret-token", "--topology", ""}, {"fingerprint", "--config", "/private/secret-token", "--revision", "0"}, {"fingerprint", "--config", "/private/secret-token", "--confirm-bridge", "aster-vpc"}} {
+		var out, stderr bytes.Buffer
+		if code := run(args, &out, &stderr); code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "INVALID_ARGUMENTS") || strings.Contains(stderr.String(), "secret-token") {
+			t.Fatal(code, out.String(), stderr.String())
+		}
+	}
+}

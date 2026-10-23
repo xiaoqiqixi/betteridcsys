@@ -28,3 +28,11 @@ func New(ctx context.Context, policyPath, controllerID string) (*Client, error) 
 	}
 	return policy.Client(ctx, controllerID)
 }
+
+// NewCredentialTransport is only for a host-approved resource worker using
+// fixed systemd credentials, never browser-selected endpoint/credentials.
+// Profile file paths must be empty; the original HTTPS/CIDR/DNS/CA/no-redial
+// validation and exact result guard are retained by the shared transport.
+func NewCredentialTransport(ctx context.Context, profile Profile, token, ca []byte) (*Client, error) {
+	return controllers.CredentialClient(ctx, profile, token, ca)
+}

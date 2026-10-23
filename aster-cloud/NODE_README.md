@@ -18,8 +18,9 @@ acceptance is claimed. The operator explicitly deferred real-host acceptance.
 - Flat SHA-approved qcow2 base image; no backing image/data-file chain; overlay
   virtual size must fit the requested system disk. Bases must remain immutable
   for the full lifetime of all backing overlays, not just during initial hashing.
-- CPU, memory (128 MiB steps), system disk, configured image/storage, normal
-  network only. No data disks, VPC, IPv6, bandwidth shaping or transfer metering.
+- CPU, memory (128 MiB steps), system disk, configured image/storage, legacy
+  normal network or separately pinned single-host OVS private IPv4 profile.
+  No routed/cross-node VPC, data disks, IPv6, queue shaping or transfer metering.
   **Every unsupported resource is rejected**, never ignored or downgraded.
 - Zero bandwidth/transfer is allowed **only** with `allow_unmetered_default=true`:
   it means an approved unmetered/default network, NOT an enforced quota of zero.
@@ -75,7 +76,8 @@ hot-state migration is implemented; retain the journal and alert on growth.
 
 Unknown outcomes retain disk/address reservations, are never automatically
 rolled back or retried, and block further mutations on that instance. Successful
-create means **libvirt reports the owned domain running**, not that guest boot,
+create means **libvirt reports the owned domain running** (and, for OVS, the
+exact gate completed), not that guest boot,
 SSH, public networking or a billing-service activation succeeded. Reboot command
 acknowledgement remains uncertain because state=running cannot prove a reboot.
 
@@ -394,3 +396,68 @@ Parsing is bounded and refuses duplicate, malformed, overflow, cross-domain or
 unexpected device data. Output never includes host disk paths or tap names.
 Current tests cover deterministic runners and real pinned mTLS, not actual KVM
 counter accuracy, guest-agent freshness or historical monitoring/alerts.
+
+
+## OVS profile: integrated lifecycle, not an alternate CLI
+
+New `aster.node/2` requests carry a strict immutable network binding: owner,
+instance, node, lease/pool/VPC, private CIDR/IP, deterministic MAC/interface UUID,
+VLAN metadata, positive ingress/egress Mbps, profile ID and canonical fabric
+config SHA-256. Legacy `aster.node/1` bytes and behavior are unchanged. The
+controller reserves IPAM and stores the binding in the same transaction as the
+instance and task; the node never selects a lease from a guessed current pool.
+The financial request/digest, money, payment and sold product snapshots are not
+rewritten. Profile IDs are local root approvals, not paths supplied by clients.
+
+Review `deploy/node-ovs.example.json`, `deploy/fabric-private.example.json`,
+`deploy/node-ovs.conf.example` and `deploy/controller-ovs.example.json` together.
+Examples intentionally fail validation until every placeholder/approval is set.
+The OVS-only example disables the unmetered legacy fallback. Before enabling:
+
+1. Prepare and externally review an **empty dedicated** `aster-` OVS bridge,
+   fail-mode secure, OpenFlow14, no controller/uplink/foreign port or flow, with
+   required root OVS labels from [fabric README](internal/fabric/README.md).
+   Do not move the SSH/public/finance NIC. No installer creates a bridge.
+2. Protect the fabric config root:root 0600; its independent state directory is
+   root:root 0700, outside node/storage/artifact/inbox roots. The optional systemd
+   drop-in grants only that exact state directory write access. Keep node TLS,
+   approved image SHA and Ed25519 keys under the existing ownership checks.
+3. Read `aster-network fingerprint --config /etc/aster-node/fabric/private-v1.json`
+   and pin the returned canonical config SHA in the matching controller profile.
+   Raw file whitespace is not the fingerprint. Do not repurpose an existing sold
+   preset: create a new versioned `ovs-vpc-...-v1` ID and matching owner/pool.
+4. Run doctor read-only, then complete isolated host acceptance before sales.
+   Empty bridge readiness does not prove VM network connectivity. Existing
+   uncertain fabric state cannot be cleared by doctor or a historical receipt.
+
+Creation defines a persistent **link-down** OVS NIC with fixed TAP/domain/interface
+IDs and `on_reboot=destroy`. Under one fabric lock, the gate installs whole-bridge
+drop, bootstraps `virsh start --paused`, verifies paused/link-down state, resolves
+current TAP/ofport identities, applies and reads back exact isolation/meters,
+then enables the live link and resumes. The lock stays through final verification
+and durable completion. Ubuntu22 libvirt8 `domif-getlink/setlink` default to live
+active-domain state; they have **no `--live` option**. Persistent link remains down.
+An already-running start only checks the current gate; it never repairs/restarts.
+A shut-off start repeats the new gate sequence, never reuses an old start permit.
+
+Shutdown/force-off/drop-before-delete isolates first and confirms TAP disappearance
+before rebuilding remaining known-running peers. This can briefly interrupt all
+VMs on the approved bridge. Failures retain uncertainty/IP/disk reservations; a
+failed activation additionally attempts bounded, ownership-checked link-down and
+suspend, never destructive stop or repeated start. Failure of that safety attempt
+is not isolation proof. Old power-only reconcile is refused for OVS. Direct
+reboot and old storage/restore/migration contracts are refused: use explicit
+shutdown then start, and do not use legacy restore as a network-gate bypass.
+
+Node journal upgrades to schema 3 and fabric journal to schema 2; older binaries
+must reject them. No downgrade/pruning/reset is supplied. **The fabric currently
+retains 64 mutations per bridge**, including starts/stops and CLI revisions;
+reaching the bound blocks mutations, including further guarded shutdown. Safe
+archival with replay identity retention is still a production prerequisite, not
+a license to remove journals. Keep this development slice off real customer nodes.
+
+Only single-host private L2 IPv4 peers and per-IP drop policing are implemented.
+No gateway/default route/DNS is invented in NoCloud; no routing, VXLAN, public
+Internet, floating IP, NAT or DHCP service is implied. See
+[gate tests and limits](docs/OVS_VM_GATE_VALIDATION.md) and
+[unimplemented overlay design](docs/OVERLAY_DESIGN.md).

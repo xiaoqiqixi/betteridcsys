@@ -21,16 +21,43 @@ var (
 
 type Capability nodeproto.Capabilities
 
-// No optional resource is silently ignored. Phase one deliberately rejects
-// data disks, VPCs and non-default bandwidth/traffic rather than pretending them.
+// Legacy support remains unchanged. VPC support requires an independently
+// approved profile and explicit positive ingress/egress limits.
 func (c Capability) Supports(r controllerapi.Resources, node NodeProfile) bool {
+	return c.SupportsNetwork(r, node, "")
+}
+func vpcResources(r controllerapi.Resources) bool {
+	return r.NetworkType == "vpc" && r.IPv4Count == 1 && r.IPv6Count == 0 && r.BandwidthMbps >= 1 && r.BandwidthMbps <= 100000 && r.InboundBandwidthMbps >= 1 && r.InboundBandwidthMbps <= 100000 && r.TransferGiB == 0 && r.TrafficDirection == "all"
+}
+
+func (c Capability) SupportsNetwork(r controllerapi.Resources, node NodeProfile, profileID string) bool {
 	spec := controllerapi.ProductSpec{Mode: "custom", ControllerID: "check", Resources: &r}
-	return spec.Valid() && c.Protocol == nodeproto.Protocol && c.NodeID == node.ID && !c.Maintenance && c.Hypervisor == "libvirt-kvm" &&
+	base := spec.Valid() && c.Protocol == nodeproto.Protocol && c.NodeID == node.ID && !c.Maintenance && c.Hypervisor == "libvirt-kvm" &&
 		r.ComputeNodeID == node.ID && r.DatacenterID == node.DatacenterID && r.NodeGroupID == node.GroupID &&
-		contains(c.ImageIDs, r.ImageID) && contains(c.StorageIDs, r.SystemStorageID) && r.NetworkType == "normal" && r.IPv4Count == 1 && r.IPv6Count == 0 && contains(c.NetworkProfiles, "normal-static-ipv4-dedicated-bridge") &&
-		r.DataDiskGiB == 0 && r.DataStorageID == "" && r.BandwidthMbps == 0 && r.InboundBandwidthMbps == 0 && r.TransferGiB == 0 &&
+		contains(c.ImageIDs, r.ImageID) && contains(c.StorageIDs, r.SystemStorageID) && r.DataDiskGiB == 0 && r.DataStorageID == "" && contains(c.Actions, "create")
+	if !base || !c.validNetworkCapabilities() {
+		return false
+	}
+	if profileID != "" {
+		return vpcResources(r) && contains(c.NetworkProfiles, nodeproto.OVSNetworkCapability) && contains(c.OVSNetworkProfiles, profileID) && containsInt(c.IPv4Counts, 1) && containsInt(c.IPv6Counts, 0)
+	}
+	return r.NetworkType == "normal" && r.IPv4Count == 1 && r.IPv6Count == 0 && contains(c.NetworkProfiles, "normal-static-ipv4-dedicated-bridge") && r.BandwidthMbps == 0 && r.InboundBandwidthMbps == 0 && r.TransferGiB == 0 &&
 		r.TrafficDirection == "all" && containsInt(c.IPv4Counts, r.IPv4Count) && containsInt(c.IPv6Counts, r.IPv6Count) &&
 		containsInt(c.BandwidthMbps, 0) && containsInt(c.TransferGiB, 0) && contains(c.Actions, "create")
+}
+
+func (c Capability) validNetworkCapabilities() bool {
+	if len(c.OVSNetworkProfiles) > 256 || (len(c.OVSNetworkProfiles) > 0) != contains(c.NetworkProfiles, nodeproto.OVSNetworkCapability) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, profile := range c.OVSNetworkProfiles {
+		if !nodeproto.ValidNodeID(profile) || seen[profile] {
+			return false
+		}
+		seen[profile] = true
+	}
+	return true
 }
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
@@ -57,9 +84,13 @@ func id() string {
 }
 
 type Candidate struct {
-	Node       NodeProfile
-	ProfileSHA string
-	Resources  controllerapi.Resources
+	Node              NodeProfile
+	ProfileSHA        string
+	Resources         controllerapi.Resources
+	NetworkProfileID  string
+	NetworkPoolID     string
+	NetworkProfileSHA string
+	NetworkOwnerRef   string
 }
 type Job struct {
 	OperationID    string    `json:"operation_id"`

@@ -50,7 +50,7 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 	if used != 0 {
 		return Operation{}, false, ErrConflict
 	}
-	candidates := c.Candidates(controllerapi.Request{Product: controllerapi.ProductSpec{Mode: "preset", ControllerID: c.ControllerID, RemoteProductID: in.PresetID}})
+	candidates := c.Candidates(controllerapi.Request{OwnerRef: in.OwnerRef, Product: controllerapi.ProductSpec{Mode: "preset", ControllerID: c.ControllerID, RemoteProductID: in.PresetID}})
 	if len(candidates) != 1 {
 		return Operation{}, false, ErrInput
 	}
@@ -58,10 +58,8 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 	r := candidate.Resources
 	p := candidate.Node
 	task := nodeproto.NodeTask{Protocol: nodeproto.Protocol, OperationID: op, NodeID: p.ID, Action: "create", InstanceID: op, OwnerRef: in.OwnerRef, Hostname: in.Hostname, Resources: r}
-	raw, sha, e := task.BytesAndDigest()
-	if e != nil {
-		return Operation{}, false, ErrInput
-	}
+	var raw []byte
+	var sha string
 	var maintenance bool
 	var seen sql.NullTime
 	var profile string
@@ -72,7 +70,7 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 		return Operation{}, false, ErrCapacity
 	}
 	var caps Capability
-	if maintenance || !seen.Valid || !heartbeatFresh(&seen.Time, now, time.Duration(c.HeartbeatTTLSeconds)*time.Second) || profile != candidate.ProfileSHA || !strict(capsRaw, &caps) || !caps.Supports(r, p) {
+	if maintenance || !seen.Valid || !heartbeatFresh(&seen.Time, now, time.Duration(c.HeartbeatTTLSeconds)*time.Second) || profile != candidate.ProfileSHA || !strict(capsRaw, &caps) || !caps.SupportsNetwork(r, p, candidate.NetworkProfileID) {
 		return Operation{}, false, ErrCapacity
 	}
 	if e = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(cpu),0),COALESCE(SUM(memory_mib),0),COALESCE(SUM(disk_gib),0) FROM controller_reservations WHERE node_id=? AND released=FALSE", p.ID).Scan(&rc, &rm, &rd); e != nil {
@@ -84,10 +82,21 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 	if _, e = tx.ExecContext(ctx, "INSERT INTO controller_instances(id,owner_ref,node_id,hostname,state,resources,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", op, in.OwnerRef, p.ID, in.Hostname, "reserved", mustJSON(r), now, now); e != nil {
 		return Operation{}, false, e
 	}
+	task, e = bindCreateNetwork(ctx, tx, task, candidate, now)
+	if e != nil {
+		return Operation{}, false, e
+	}
+	raw, sha, e = task.BytesAndDigest()
+	if e != nil {
+		return Operation{}, false, ErrInput
+	}
+	if e = insertNetworkBinding(ctx, tx, task, sha, now); e != nil {
+		return Operation{}, false, e
+	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO controller_reservations(operation_id,node_id,cpu,memory_mib,disk_gib,released,created_at) VALUES(?,?,?,?,?,FALSE,?)", op, p.ID, r.CPUCores, r.MemoryMiB, r.SystemDiskGiB, now); e != nil {
 		return Operation{}, false, e
 	}
-	o := Operation{ID: op, ActorID: actor, InstanceID: op, NodeID: p.ID, Action: "create", State: "accepted", CreatedAt: now, UpdatedAt: now, ProfileSHA: p.Digest(), IntentSHA: fingerprint, Protocol: nodeproto.Protocol, Request: raw, RequestSHA: sha}
+	o := Operation{ID: op, ActorID: actor, InstanceID: op, NodeID: p.ID, Action: "create", State: "accepted", CreatedAt: now, UpdatedAt: now, ProfileSHA: p.Digest(), IntentSHA: fingerprint, Protocol: task.Protocol, Request: raw, RequestSHA: sha}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO controller_operations("+strings.TrimSuffix(operationColumns, ",seq")+") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", o.ID, o.ActorID, o.InstanceID, o.NodeID, o.ProfileSHA, o.Action, o.ArtifactID, o.TargetNodeID, o.IntentSHA, o.Protocol, o.Request, o.RequestSHA, o.State, o.CreatedAt, o.UpdatedAt); e != nil {
 		return Operation{}, false, e
 	}

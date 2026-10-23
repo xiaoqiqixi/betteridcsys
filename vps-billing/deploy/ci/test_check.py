@@ -25,6 +25,14 @@ class CheckScriptTest(unittest.TestCase):
         project = self.source / "vps-billing"
         for directory in ("backend", "frontend", "tests", "deploy/ci", "deploy/scripts"):
             (project / directory).mkdir(parents=True, exist_ok=True)
+        (project / "deploy/ci/resource_package_gate.py").write_text("# checked separately\n")
+        (project / "deploy/ci/check-resource-package.sh").write_text(textwrap.dedent('''\
+            #!/usr/bin/env bash
+            set -eu
+            [[ -z ${ASTER_MYSQL_TEST_DSN+x} ]]
+            printf 'resource package\\n' >> "$CI_TEST_EVENTS"
+            exit "${CI_TEST_RESOURCE_PACKAGE_FAIL:-0}"
+        '''))
         (project / "backend/go.mod").write_text("module test.invalid/fixture\n")
         (project / "frontend/package-lock.json").write_text("{}\n")
         (project / "deploy/ci/test_release_pipeline.py").write_text(
@@ -180,6 +188,20 @@ class CheckScriptTest(unittest.TestCase):
         self.assertFalse(self.events.exists())
         self.assertFalse(self.pid_file.exists())
 
+    def test_missing_resource_gate_stops_before_any_build(self):
+        (self.source / "vps-billing/deploy/ci/check-resource-package.sh").unlink()
+        result = self.run_check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Source checkout is missing deploy/ci/check-resource-package.sh", result.stderr)
+        self.assertFalse(self.events.exists())
+
+    def test_resource_package_failure_survives_tee_and_stops_frontend(self):
+        result = self.run_check(CI_TEST_RESOURCE_PACKAGE_FAIL="9")
+        self.assertEqual(result.returncode, 9, result.stdout + result.stderr)
+        self.assertEqual(self.events.read_text().splitlines(), ["go test", "go vet", "go list", "go build", "resource package"])
+        self.assertFalse(self.pid_file.exists())
+        self.assertNotIn("All required checks passed", result.stdout)
+
     def test_skipped_go_test_fails_closed(self):
         result = self.run_check(CI_TEST_GO_SKIP="1")
         self.assertEqual(result.returncode, 1)
@@ -220,7 +242,7 @@ class CheckScriptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("All required checks passed", result.stdout)
         self.assertEqual(self.events.read_text().splitlines(), [
-            "go test", "go vet", "go list", "go build", "npm ci --include=dev --no-audit --no-fund",
+            "go test", "go vet", "go list", "go build", "resource package", "npm ci --include=dev --no-audit --no-fund",
             "npm run typecheck", "npm test", "npm run build", "npm run format:check",
         ])
         self.assert_api_stopped()

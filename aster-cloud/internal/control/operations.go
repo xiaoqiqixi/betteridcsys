@@ -194,14 +194,27 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		return Operation{}, false, ErrState
 	}
 	o := Operation{ID: op, ActorID: actor, InstanceID: instance, NodeID: v.NodeID, Action: in.Action, ArtifactID: in.ArtifactID, TargetNodeID: in.TargetNodeID, IntentSHA: fingerprint, State: "accepted", CreatedAt: now, UpdatedAt: now}
+	network, e := instanceNetworkBinding(ctx, tx, v)
+	if e != nil {
+		return Operation{}, false, e
+	}
+	if !network.IsZero() && !networkActionSupported(in.Action) {
+		return Operation{}, false, ErrState
+	}
 	st := nodeproto.TypedStorageTask{Protocol: nodeproto.StorageProtocol, OperationID: op, NodeID: v.NodeID, Action: in.Action, InstanceID: v.ID, OwnerRef: v.OwnerRef, ArtifactID: in.ArtifactID}
 	switch in.Action {
 	case "start", "shutdown", "reboot", "force_off", "delete":
 		t := nodeproto.NodeTask{Protocol: nodeproto.Protocol, OperationID: op, NodeID: v.NodeID, Action: in.Action, InstanceID: v.ID, OwnerRef: v.OwnerRef, Hostname: v.Hostname, Resources: v.Resources}
+		if !network.IsZero() {
+			t.Protocol, t.Network = nodeproto.NetworkProtocol, network
+		}
 		if in.Action == "delete" {
 			t.ConfirmInstanceID = v.ID
 		}
-		o.Protocol = nodeproto.Protocol
+		if !c.approvesTaskNetwork(t) {
+			return Operation{}, false, ErrState
+		}
+		o.Protocol = t.Protocol
 		o.Request, o.RequestSHA, e = t.BytesAndDigest()
 	case "snapshot_create", "backup_create":
 		if v.State != "shutoff" {
@@ -370,6 +383,23 @@ func (s *SQLStore) ClaimOperation(ctx context.Context, op string, c Config, now 
 	p, ok := c.Node(o.NodeID)
 	if !ok || p.Digest() != o.ProfileSHA || o.State != "accepted" {
 		return Operation{}, ErrState
+	}
+	if o.Protocol == nodeproto.Protocol || o.Protocol == nodeproto.NetworkProtocol {
+		task, err := nodeproto.DecodeTask(o.Request)
+		if err != nil || nodeproto.Digest(o.Request) != o.RequestSHA || task.Protocol != o.Protocol || task.OperationID != o.ID || task.InstanceID != o.InstanceID || task.Action != o.Action {
+			return Operation{}, ErrState
+		}
+		if err = validateTaskNetwork(ctx, tx, task); err != nil {
+			return Operation{}, err
+		}
+	} else {
+		var networked int
+		if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_instance_networks WHERE instance_id=?", o.InstanceID).Scan(&networked); e != nil {
+			return Operation{}, e
+		}
+		if networked != 0 {
+			return Operation{}, ErrState
+		}
 	}
 	var occupied int
 	for _, q := range []string{"SELECT COUNT(*) FROM controller_jobs WHERE node_id=? AND CAST(state AS BINARY) NOT IN ('accepted','succeeded','rejected')", "SELECT COUNT(*) FROM controller_operations WHERE node_id=? AND CAST(state AS BINARY) NOT IN ('accepted','succeeded','rejected')"} {

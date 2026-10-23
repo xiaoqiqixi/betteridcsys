@@ -29,17 +29,26 @@ type command struct {
 	args   []string
 }
 type fakeOVS struct {
-	mu         sync.Mutex
-	calls      []command
-	topology   Topology
-	failAt     int
-	driftAt    int
-	probes     int
-	foreign    bool
-	controller bool
-	physical   bool
-	flows      string
-	meters     map[int]int
+	mu          sync.Mutex
+	calls       []command
+	topology    Topology
+	names       map[string]string
+	externalIDs map[string]map[string]string
+	failAt      int
+	driftAt     int
+	probes      int
+	foreign     bool
+	controller  bool
+	physical    bool
+	flows       string
+	meters      map[int]int
+}
+
+func (f *fakeOVS) name(p Port) string {
+	if name, ok := f.names[p.InstanceID]; ok {
+		return name
+	}
+	return "vnet" + strconv.Itoa(p.OFPort)
 }
 
 func (f *fakeOVS) Run(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -54,6 +63,25 @@ func (f *fakeOVS) Run(ctx context.Context, binary string, args ...string) ([]byt
 	}
 	s := strings.Join(args, " ")
 	if binary == Vsctl {
+		if len(args) == 8 && args[0] == "--timeout=3" && args[1] == "set" && args[2] == "Interface" {
+			for _, p := range f.topology.Ports {
+				if f.name(p) == args[3] {
+					ids := f.externalIDs[p.InstanceID]
+					if ids == nil {
+						return nil, ErrInvalid
+					}
+					for _, arg := range args[4:] {
+						kv := strings.SplitN(arg, "=", 2)
+						if len(kv) != 2 || !strings.HasPrefix(kv[0], "external_ids:aster-") {
+							return nil, ErrInvalid
+						}
+						ids[strings.TrimPrefix(kv[0], "external_ids:")] = kv[1]
+					}
+					return nil, nil
+				}
+			}
+			return nil, ErrInvalid
+		}
 		if strings.Contains(s, "br-exists") {
 			return nil, nil
 		}
@@ -67,7 +95,7 @@ func (f *fakeOVS) Run(ctx context.Context, binary string, args ...string) ([]byt
 		if strings.Contains(s, "list-ifaces") {
 			names := []string{}
 			for _, p := range f.topology.Ports {
-				names = append(names, "vnet"+strconv.Itoa(p.OFPort))
+				names = append(names, f.name(p))
 			}
 			return []byte(strings.Join(names, "\n")), nil
 		}
@@ -79,7 +107,16 @@ func (f *fakeOVS) Run(ctx context.Context, binary string, args ...string) ([]byt
 					p.InstanceID = strings.Repeat("8", 32)
 					p.InterfaceID = InterfaceID(p.InstanceID)
 				}
-				data = append(data, []any{"vnet" + strconv.Itoa(p.OFPort), p.OFPort, "", []any{"map", [][]string{{"aster-node-id", "node-a"}, {"iface-id", p.InterfaceID}, {"aster-owner", p.OwnerRef}, {"aster-instance", p.InstanceID}, {"aster-vpc", p.VPCID}}}})
+				ids := map[string]string{"aster-node-id": "node-a", "iface-id": p.InterfaceID, "aster-owner": p.OwnerRef, "aster-instance": p.InstanceID, "aster-vpc": p.VPCID}
+				if custom, ok := f.externalIDs[p.InstanceID]; ok {
+					ids = custom
+				}
+				items := [][]string{}
+				for k, v := range ids {
+					items = append(items, []string{k, v})
+				}
+				sort.Slice(items, func(i, j int) bool { return items[i][0] < items[j][0] })
+				data = append(data, []any{f.name(p), p.OFPort, "", []any{"map", items}})
 			}
 			return json.Marshal(map[string]any{"headings": []string{"name", "ofport", "type", "external_ids"}, "data": data})
 		}
