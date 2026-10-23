@@ -84,6 +84,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 				return e
 			}
 		}
+		if migration.Version == 7 {
+			if e = networking.CheckOverlayMigration(ctx, conn, true); e != nil {
+				return e
+			}
+		}
 		if migration.Version == 4 {
 			existingIndexes, e = auditIndexMigrationPlan(ctx, conn, migration.SQL)
 			if e != nil {
@@ -112,6 +117,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		}
 		if migration.Version == 6 {
 			if e = networking.CheckTaskBindingMigration(ctx, conn, false); e != nil {
+				return e
+			}
+		}
+		if migration.Version == 7 {
+			if e = networking.CheckOverlayMigration(ctx, conn, false); e != nil {
 				return e
 			}
 		}
@@ -150,7 +160,10 @@ func (s *SQLStore) Check(ctx context.Context) error {
 	if e := (&networking.Store{DB: s.DB}).Check(ctx); e != nil {
 		return e
 	}
-	return networking.CheckTaskBindingMigration(ctx, s.DB, false)
+	if e := networking.CheckTaskBindingMigration(ctx, s.DB, false); e != nil {
+		return e
+	}
+	return networking.CheckOverlayMigration(ctx, s.DB, false)
 }
 func (s *SQLStore) locked(ctx context.Context) (*sql.Tx, error) {
 	// ponytail: one database gate serializes mutations; replace with ordered node/
@@ -281,6 +294,9 @@ func (s *SQLStore) Admit(ctx context.Context, r controllerapi.Request, candidate
 			return Job{}, false, e
 		}
 		if e = insertNetworkBinding(ctx, tx, task, j.NodeRequestSHA, now); e != nil {
+			return Job{}, false, e
+		}
+		if e = reserveOverlayCreation(ctx, tx, candidate, task, now); e != nil {
 			return Job{}, false, e
 		}
 		if _, e = tx.ExecContext(ctx, "INSERT INTO controller_reservations(operation_id,node_id,cpu,memory_mib,disk_gib,released,created_at) VALUES(?,?,?,?,?,FALSE,?)", j.OperationID, n.ID, rsc.CPUCores, rsc.MemoryMiB, rsc.SystemDiskGiB, now); e != nil {

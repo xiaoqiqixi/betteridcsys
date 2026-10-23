@@ -44,6 +44,44 @@ jobs:
       - name: Workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/cloud.yml
 
+  native-ovs-parser:
+    name: Native OVS parser and encoder (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Install parser only (no OVS service or kernel datapath)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y openvswitch-common
+          /usr/bin/ovs-ofctl --version
+      - name: Parse production flows and inspect real encoded meters; no skips
+        working-directory: aster-cloud
+        env:
+          ASTER_NATIVE_OVS_PARSER: '1'
+        run: |
+          set -euo pipefail
+          go test -mod=readonly -race -count=1 -timeout=3m -json ./internal/fabric -run '^TestNativeOVSParser' | tee native-ovs-parser.jsonl
+          python3 - <<'PYTEST'
+          import json
+          events = [json.loads(line) for line in open('native-ovs-parser.jsonl')]
+          assert not any(e['Action'] in ('skip', 'fail') for e in events), 'native parser gate skipped or failed'
+          expected = {'TestNativeOVSParserFlows', 'TestNativeOVSParserMeters'}
+          passed = {e.get('Test') for e in events if e['Action'] == 'pass'}
+          assert expected <= passed, 'required native parser tests did not execute'
+          PYTEST
+
   management-ui:
     name: Vue management console checks
     runs-on: ubuntu-24.04

@@ -93,6 +93,9 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 	if e = insertNetworkBinding(ctx, tx, task, sha, now); e != nil {
 		return Operation{}, false, e
 	}
+	if e = reserveOverlayCreation(ctx, tx, candidate, task, now); e != nil {
+		return Operation{}, false, e
+	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO controller_reservations(operation_id,node_id,cpu,memory_mib,disk_gib,released,created_at) VALUES(?,?,?,?,?,FALSE,?)", op, p.ID, r.CPUCores, r.MemoryMiB, r.SystemDiskGiB, now); e != nil {
 		return Operation{}, false, e
 	}

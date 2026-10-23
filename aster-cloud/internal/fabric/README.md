@@ -1,8 +1,16 @@
 # Root-only OVS fabric executor (development)
 
-This module supplies a native dataplane CLI and an **embedded node lifecycle
-gate**. It is not an installed service, a routed/cross-node VPC or a real-host
-acceptance. The legacy node/1 Linux-bridge profile must never point at an OVS
+**Current update:** the sections below describe the original single-host contract.
+Explicit overlay lifecycle, gateway forwarding, multi-node barriers, durable
+archival and recovery are now implemented separately. See
+[network contract](../../docs/OVERLAY_DESIGN.md) and [recovery](RECOVERY.md).
+The old 64-operation lifetime ceiling no longer applies. No real KVM/OVS
+traffic acceptance is implied.
+
+
+The base single-host contract supplies a native dataplane CLI and an **embedded
+node lifecycle gate**. The separately approved overlay contract extends it with
+VXLAN and gateway forwarding (see above). Neither is a real-host acceptance. The legacy node/1 Linux-bridge profile must never point at an OVS
 bridge. New OVS VM operations must use the explicit network task/profile path;
 CLI success alone never authorizes a VM start.
 
@@ -122,7 +130,7 @@ ID and protocol, so separately root-approved node/controller profiles can pin th
 same config without exposing its path. The local profile map, not network input,
 selects the protected config file.
 
-This gate provides single-host, static private IPv4 peer networking only. It does
+The original ActivationIntent contract provides single-host, static private IPv4 peer networking only. It does
 not add gateway reachability, NAT, DHCP, Internet access, underlay/tunnel peers or
 cross-node routing. The fake-runner tests are not real OVS/KVM traffic acceptance.
 
@@ -145,7 +153,8 @@ OVSDB VLAN tags do **not** provide isolation for explicit OpenFlow outputs.
 Each guest's source-egress and destination-ingress meter is a drop policer,
 `Mbps * 1000` kilobits/second, **not a queued shaper or billing traffic quota**.
 No gateway/router, NAT, DHCP, DNS service, IPv6, security-group statefulness,
-cross-node overlay or VM NIC attachment is supplied by this module.
+cross-node overlay is supplied by topology schema 1 alone; explicit overlay
+configuration and the embedded lifecycle integration provide separate contracts.
 
 ## Failure semantics
 
@@ -171,12 +180,13 @@ This disruptive policy is only for the explicitly confirmed dedicated bridge,
 never host/public bridges. `verify` does not perform this quarantine.
 The same revision/digest returns its original receipt without executing commands;
 changed reuse conflicts. Any uncertain/interrupted record blocks new revisions.
-There is no automatic retry, bridge cleanup, reset or uncertainty-clearing API.
+There is no automatic retry, bridge cleanup or journal reset. Explicit new
+recovery operations are described in RECOVERY.md; they retain original unknown results.
 Keep the state directory and perform independent root investigation before any
 manual recovery; never delete its journal as a retry technique.
 
-Receipts retain at most 64 revisions (bounded 8 MiB journal); the limit fails
-closed and is not silently pruned. A production archival design and real OVS/KVM
+Receipts use bounded active pages with hash-linked immutable historical archives;
+no history is silently pruned. Real OVS/KVM
 traffic, host reboot, drop/limit accuracy and hostile port-race acceptance remain
 required. The gate cannot fence an unrelated root writer that bypasses its lock.
 

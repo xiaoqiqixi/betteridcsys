@@ -3,6 +3,7 @@ package hypervisor
 import (
 	"aster/cloud/internal/fabric"
 	"aster/cloud/internal/nodeproto"
+	"aster/cloud/internal/overlayproto"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -57,8 +58,11 @@ func (OSRunner) Run(ctx context.Context, binary string, args ...string) ([]byte,
 }
 
 type Manager struct {
-	loadOVSConfig func(string) (fabric.Config, error)  // nil in production
-	ovsFactory    func(fabric.Config) (ovsGate, error) // deterministic test seam
+	readOverlaySnapshot func(fabric.OverlayConfig) (overlayproto.Snapshot, string, error)
+	loadOVSConfig       func(string) (fabric.Config, error)  // nil in production
+	ovsFactory          func(fabric.Config) (ovsGate, error) // deterministic test seam
+	loadOverlayConfig   func(string) (fabric.OverlayConfig, error)
+	overlayFactory      func(fabric.Config) (overlayGate, error)
 
 	Config          Config
 	Ledger          *Ledger
@@ -112,6 +116,12 @@ func (m *Manager) Accept(task nodeproto.NodeTask, raw []byte) (nodeproto.NodeRes
 	}
 	if m.active {
 		return reject("NODE_BUSY")
+	}
+	if !task.Network.IsZero() && m.Ledger.HasPendingNetworkProfile(task.Network.ProfileID, task.OperationID) {
+		return reject("UNRESOLVED_NETWORK_PROFILE_OPERATION")
+	}
+	if err := m.checkOverlayAdmission(task); err != nil {
+		return reject("OVERLAY_ADMISSION_UNCONFIRMED")
 	}
 	var prepared *Instance
 	if task.Action == "create" {
@@ -747,6 +757,9 @@ type nicLinkXML struct {
 	State string `xml:"state,attr"`
 }
 type interfaceXML struct {
+	MTU *struct {
+		Size int `xml:"size,attr"`
+	} `xml:"mtu,omitempty"`
 	Type string `xml:"type,attr"`
 	MAC  struct {
 		Address string `xml:"address,attr"`
@@ -853,6 +866,15 @@ func (m *Manager) domainXML(i Instance) ([]byte, error) {
 			nic.Link = &nicLinkXML{State: "down"}
 			nic.VirtualPort = &nicVirtualPortXML{Type: "openvswitch"}
 			nic.VirtualPort.Parameters.InterfaceID = i.Network.InterfaceID
+			if m.Config.OVSProfiles[i.Network.ProfileID].OverlayConfig != "" {
+				o, _, err := m.approvedOverlay(i.Network.ProfileID)
+				if err != nil {
+					return nil, err
+				}
+				nic.MTU = &struct {
+					Size int `xml:"size,attr"`
+				}{o.GuestMTU}
+			}
 		}
 		d.Devices.Interfaces = []interfaceXML{nic}
 	}

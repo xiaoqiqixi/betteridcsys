@@ -158,3 +158,13 @@ func (s *Store) Check(ctx context.Context) error {
 	}
 	return CheckMigration(ctx, s.DB, false)
 }
+
+func CheckOverlayMigration(ctx context.Context, db SchemaReader, allowMissing bool) error {
+	tables := []tableSpec{
+		{"controller_overlay_vpcs", []columnSpec{baseID("id"), ascii("cluster_id", "varchar", 64), baseID("owner_ref"), {"name", "varchar", "utf8mb4_bin", 80, 0}, ascii("cidr", "varchar", 18), {"vni", "int", "", 0, 0}, hashColumn(), baseID("actor_id"), createdColumn()}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_overlay_vpc_vni", true, []string{"cluster_id", "vni"}}, {"controller_overlay_vpc_cluster", false, []string{"cluster_id", "id"}}}},
+		{"controller_overlay_epochs", []columnSpec{baseID("id"), ascii("cluster_id", "varchar", 64), {"epoch", "bigint", "", 0, 0}, baseID("actor_id"), hashColumn(), ascii("snapshot_sha256", "char", 64), {"snapshot", "mediumblob", "", 0, 0}, {"recovery", "mediumblob", "", 0, 0}, baseID("superseded_by"), ascii("phase", "varchar", 16), ascii("state", "varchar", 16), createdColumn(), {"updated_at", "datetime", "", 0, 6}}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_overlay_cluster_epoch", true, []string{"cluster_id", "epoch"}}}},
+		{"controller_overlay_tasks", []columnSpec{baseID("operation_id"), baseID("epoch_id"), ascii("node_id", "varchar", 64), ascii("phase", "varchar", 16), ascii("node_profile_sha256", "char", 64), hashColumn(), ascii("state", "varchar", 16), {"receipt", "mediumblob", "", 0, 0}, {"updated_at", "datetime", "", 0, 6}}, []indexSpec{{"PRIMARY", true, []string{"operation_id"}}, {"controller_overlay_task_phase", true, []string{"epoch_id", "phase", "node_id"}}}},
+		{"controller_overlay_members", []columnSpec{baseID("instance_id"), ascii("cluster_id", "varchar", 64), baseID("vpc_id"), ascii("address", "varchar", 15), baseID("lease_id"), ascii("network_sha256", "char", 64), createdColumn()}, []indexSpec{{"PRIMARY", true, []string{"instance_id"}}, {"controller_overlay_member_address", true, []string{"vpc_id", "address"}}, {"controller_overlay_member_lease", true, []string{"lease_id"}}, {"controller_overlay_member_cluster", false, []string{"cluster_id", "instance_id"}}}},
+	}
+	return checkTables(ctx, db, allowMissing, tables)
+}

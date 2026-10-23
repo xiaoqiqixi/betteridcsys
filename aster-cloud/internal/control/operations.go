@@ -198,6 +198,11 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 	if e != nil {
 		return Operation{}, false, e
 	}
+	if !network.IsZero() {
+		if e = overlayLifecycleGate(ctx, tx, instance); e != nil {
+			return Operation{}, false, e
+		}
+	}
 	if !network.IsZero() && !networkActionSupported(in.Action) {
 		return Operation{}, false, ErrState
 	}

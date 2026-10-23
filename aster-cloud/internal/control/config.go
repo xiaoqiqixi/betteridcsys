@@ -3,6 +3,7 @@ package control
 import (
 	"aster/billing/controllerapi"
 	"aster/cloud/internal/nodeproto"
+	"aster/cloud/internal/overlayproto"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -34,6 +35,7 @@ type Config struct {
 	Nodes               []NodeProfile    `json:"nodes"`
 	Presets             []Preset         `json:"presets"`
 	NetworkProfiles     []NetworkProfile `json:"network_profiles,omitempty"`
+	OverlayClusters     []OverlayCluster `json:"overlay_clusters,omitempty"`
 }
 type NodeProfile struct {
 	ID                      string   `json:"id"`
@@ -63,6 +65,61 @@ type NetworkProfile struct {
 	ProfileSHA256       string `json:"profile_sha256"`
 	ConfigurationSHA256 string `json:"configuration_sha256,omitempty"`
 }
+type OverlayMapping struct {
+	NodeID     string `json:"node_id"`
+	LocalVPCID string `json:"local_vpc_id"`
+	VPCID      string `json:"vpc_id"`
+}
+type OverlayCluster struct {
+	ClusterID string                    `json:"cluster_id"`
+	Profiles  []overlayproto.ProfilePin `json:"profiles"`
+	Mappings  []OverlayMapping          `json:"mappings,omitempty"`
+}
+
+func (c Config) OverlayCluster(id string) (OverlayCluster, bool) {
+	for _, x := range c.OverlayClusters {
+		if x.ClusterID == id {
+			return x, true
+		}
+	}
+	return OverlayCluster{}, false
+}
+func (c Config) validOverlayClusters() bool {
+	if len(c.OverlayClusters) > 32 {
+		return false
+	}
+	seen := map[string]bool{}
+	profiles := map[string]bool{}
+	for _, cluster := range c.OverlayClusters {
+		if !nodeproto.ValidNodeID(cluster.ClusterID) || seen[cluster.ClusterID] || len(cluster.Profiles) < 1 || len(cluster.Profiles) > 32 {
+			return false
+		}
+		seen[cluster.ClusterID] = true
+		nodes := map[string]bool{}
+		if len(cluster.Mappings) > 128 {
+			return false
+		}
+		mappingKeys := map[string]bool{}
+		for _, pin := range cluster.Profiles {
+			_, ok := c.Node(pin.NodeID)
+			key := pin.NodeID + ":" + pin.ProfileID
+			if !ok || nodes[pin.NodeID] || profiles[key] || !nodeproto.ValidNodeID(pin.ProfileID) || !overlayproto.ValidSHA(pin.ProfileSHA256) {
+				return false
+			}
+			nodes[pin.NodeID] = true
+			profiles[key] = true
+		}
+		for _, m := range cluster.Mappings {
+			key := m.NodeID + ":" + m.LocalVPCID
+			if !nodes[m.NodeID] || !nodeproto.ValidID(m.LocalVPCID) || !nodeproto.ValidID(m.VPCID) || mappingKeys[key] {
+				return false
+			}
+			mappingKeys[key] = true
+		}
+	}
+	return true
+}
+
 type Secrets struct{ Billing, AdminRead, AdminWrite string }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
@@ -150,6 +207,9 @@ func (c Config) Valid() bool {
 			return false
 		}
 		seen[n.ID] = true
+	}
+	if !c.validOverlayClusters() {
+		return false
 	}
 	if len(c.NetworkProfiles) > 256 {
 		return false
@@ -245,6 +305,13 @@ func (c Config) Candidates(r controllerapi.Request) []Candidate {
 			}
 			candidate.NetworkProfileID, candidate.NetworkPoolID, candidate.NetworkProfileSHA = profile.ID, profile.PoolID, profile.ProfileSHA256
 			candidate.NetworkOwnerRef = profile.OwnerRef
+			for _, cluster := range c.OverlayClusters {
+				for _, pin := range cluster.Profiles {
+					if pin.NodeID == n.ID && pin.ProfileID == profileID {
+						candidate.Overlay = &OverlayAdmission{ControllerID: c.ControllerID, Cluster: cluster, Nodes: append([]NodeProfile{}, c.Nodes...)}
+					}
+				}
+			}
 		} else if profileID != "" {
 			return Candidate{}, false
 		}

@@ -83,7 +83,13 @@ func id() string {
 	return hex.EncodeToString(b[:])
 }
 
+type OverlayAdmission struct {
+	ControllerID string
+	Cluster      OverlayCluster
+	Nodes        []NodeProfile
+}
 type Candidate struct {
+	Overlay           *OverlayAdmission
 	Node              NodeProfile
 	ProfileSHA        string
 	Resources         controllerapi.Resources

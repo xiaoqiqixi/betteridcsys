@@ -1,7 +1,10 @@
 package main
 
 import (
+	"aster/cloud/internal/fabric"
 	"bytes"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -35,5 +38,53 @@ func TestFingerprintAcceptsOnlyPrivateConfigAndDoesNotEchoPaths(t *testing.T) {
 		if code := run(args, &out, &stderr); code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "INVALID_ARGUMENTS") || strings.Contains(stderr.String(), "secret-token") {
 			t.Fatal(code, out.String(), stderr.String())
 		}
+	}
+}
+
+func TestOverlayFingerprintOnlyAcceptsPrivateConfigAndNeverEchoesPaths(t *testing.T) {
+	for _, extra := range [][]string{{"--topology", ""}, {"--revision", "0"}, {"--confirm-bridge", "aster-vpc"}} {
+		args := append([]string{"overlay-fingerprint", "--config", "/private/secret-token"}, extra...)
+		var out, stderr bytes.Buffer
+		if code := run(args, &out, &stderr); code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "INVALID_ARGUMENTS") || strings.Contains(stderr.String(), "secret-token") {
+			t.Fatal(code, out.String(), stderr.String())
+		}
+	}
+	var out, stderr bytes.Buffer
+	if code := run([]string{"overlay-fingerprint", "--config", "/private/secret-token"}, &out, &stderr); code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "OVERLAY_CONFIG_REJECTED") || strings.Contains(stderr.String(), "secret-token") {
+		t.Fatal(code, out.String(), stderr.String())
+	}
+}
+
+func TestOverlayExampleFailsClosedUntilOperatorApproval(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/overlay-private.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fabric.DecodeOverlayConfig(raw); err == nil {
+		t.Fatal("unreviewed deployment example was executable")
+	}
+	var cfg fabric.OverlayConfig
+	if err = json.Unmarshal(raw, &cfg); err != nil || cfg.Base.DedicatedAck || cfg.UnderlayTrustedAck {
+		t.Fatal("example silently approves host mutation", err)
+	}
+	cfg.Base.DedicatedAck = true
+	cfg.UnderlayTrustedAck = true
+	raw, _ = json.Marshal(cfg)
+	approved, err := fabric.DecodeOverlayConfig(raw)
+	if err != nil {
+		t.Fatal("example contains invalid fields in addition to explicit approvals", err)
+	}
+	sha, err := fabric.OverlayConfigSHA256(approved)
+	if err != nil || len(sha) != 64 {
+		t.Fatal("approved config cannot be fingerprinted", err)
+	}
+	pretty, _ := json.MarshalIndent(approved, "", "  ")
+	decoded, err := fabric.DecodeOverlayConfig(pretty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := fabric.OverlayConfigSHA256(decoded)
+	if sha != other {
+		t.Fatal("whitespace changed root object fingerprint")
 	}
 }

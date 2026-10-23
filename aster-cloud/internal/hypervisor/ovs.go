@@ -17,6 +17,7 @@ import (
 // pins the canonical fabric config SHA, so reusing an ID cannot move old guests.
 type OVSProfile struct {
 	FabricConfig      string   `json:"fabric_config"`
+	OverlayConfig     string   `json:"overlay_config,omitempty"`
 	SSHAuthorizedKeys []string `json:"ssh_authorized_keys"`
 }
 type ovsGate interface {
@@ -41,6 +42,12 @@ func (c Config) validateOVSProfiles() error {
 		f, err := fabric.LoadConfig(p.FabricConfig)
 		if err != nil || f.NodeID != c.NodeID || bridges[f.Bridge] || states[f.StateDirectory] || f.Bridge == c.Network.Bridge {
 			return ErrUnsupported
+		}
+		if p.OverlayConfig != "" {
+			o, err := fabric.LoadOverlayConfig(p.OverlayConfig)
+			if err != nil || o.Base != f {
+				return ErrUnsupported
+			}
 		}
 		for _, d := range []string{c.StateDirectory, c.StorageDirectory, c.Storage.Directory, c.Storage.InboxDirectory} {
 			if d != "" && (d == f.StateDirectory || strings.HasPrefix(d, f.StateDirectory+"/") || strings.HasPrefix(f.StateDirectory, d+"/")) {
@@ -70,6 +77,17 @@ func (m *Manager) gateFor(n nodeproto.NetworkBinding) (ovsGate, error) {
 	c, _, err := m.approvedOVS(n)
 	if err != nil {
 		return nil, err
+	}
+	if m.Config.OVSProfiles[n.ProfileID].OverlayConfig != "" {
+		oc, og, err := m.approvedOverlay(n.ProfileID)
+		if err != nil {
+			return nil, err
+		}
+		gate, ok := og.(overlayLifecycleGate)
+		if !ok {
+			return nil, ErrUnsupported
+		}
+		return overlayLifecycleAdapter{oc, gate, n.Digest()}, nil
 	}
 	if m.ovsFactory != nil {
 		return m.ovsFactory(c)
@@ -276,7 +294,7 @@ func (m *Manager) stopOVS(ctx context.Context, i Instance, t nodeproto.NodeTask,
 		if s == "shut off" {
 			return nil
 		}
-		if s != "running" {
+		if s != "running" && !(s == "paused" && command == "destroy") {
 			return ErrOwnership
 		}
 		if _, e = m.virsh(ctx, command, i.Domain); e != nil {
@@ -308,7 +326,27 @@ func (m *Manager) seedOVS(ctx context.Context, i Instance) error {
 		return e
 	}
 	prefix := strings.Split(i.Network.CIDR, "/")[1]
-	return m.seedFiles(ctx, i, p.SSHAuthorizedKeys, fmt.Sprintf("version: 2\nethernets:\n  aster0:\n    match:\n      macaddress: %q\n    set-name: aster0\n    dhcp4: false\n    dhcp6: false\n    accept-ra: false\n    link-local: []\n    addresses: [%q]\n", i.MAC, i.IPv4+"/"+prefix))
+	network := fmt.Sprintf("version: 2\nethernets:\n  aster0:\n    match:\n      macaddress: %q\n    set-name: aster0\n    dhcp4: false\n    dhcp6: false\n    accept-ra: false\n    link-local: []\n    addresses: [%q]\n", i.MAC, i.IPv4+"/"+prefix)
+	if p.OverlayConfig != "" {
+		o, _, err := m.approvedOverlay(i.Network.ProfileID)
+		if err != nil {
+			return err
+		}
+		network += fmt.Sprintf("    mtu: %d\n", o.GuestMTU)
+		for _, route := range o.GuestNetworks {
+			if route.LocalVPCID != i.Network.VPCID {
+				continue
+			}
+			if route.OwnerRef != i.OwnerRef || route.CIDR != i.Network.CIDR || route.GatewayIPv4 == i.IPv4 {
+				return ErrOwnership
+			}
+			network += "    routes:\n"
+			for _, prefix := range route.AllowedPrefixes {
+				network += fmt.Sprintf("      - to: %q\n        via: %q\n", prefix, route.GatewayIPv4)
+			}
+		}
+	}
+	return m.seedFiles(ctx, i, p.SSHAuthorizedKeys, network)
 }
 
 func (m *Manager) assertOVSDomain(i Instance, d domainXML, inactive bool) error {
@@ -320,6 +358,12 @@ func (m *Manager) assertOVSDomain(i Instance, d domainXML, inactive bool) error 
 		return ErrOwnership
 	}
 	n := d.Devices.Interfaces[0]
+	if m.Config.OVSProfiles[i.Network.ProfileID].OverlayConfig != "" {
+		o, _, err := m.approvedOverlay(i.Network.ProfileID)
+		if err != nil || n.MTU == nil && o.GuestMTU != 1500 || n.MTU != nil && n.MTU.Size != o.GuestMTU {
+			return ErrOwnership
+		}
+	}
 	if n.Type != "bridge" || n.MAC.Address != i.MAC || n.Source.Bridge != c.Bridge || n.Model.Type != "virtio" || n.Filter != nil || n.Port != nil || n.Target == nil || n.Target.Dev != fabric.TAPName(i.ID) || n.VirtualPort == nil || n.VirtualPort.Type != "openvswitch" || n.VirtualPort.Parameters.InterfaceID != i.Network.InterfaceID || n.Link == nil || (n.Link.State != "down" && n.Link.State != "up") || inactive && n.Link.State != "down" {
 		return ErrOwnership
 	}

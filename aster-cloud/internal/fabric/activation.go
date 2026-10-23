@@ -108,6 +108,9 @@ type activationRecord struct {
 }
 
 func (l *ledger) activationPending() bool {
+	if l.state.Recovery != nil && l.state.Recovery.State != "completed" {
+		return true
+	}
 	for _, a := range l.state.Activations {
 		if a.State != "completed" {
 			return true
@@ -122,7 +125,7 @@ func (l *ledger) validateActivations() error {
 		}
 		return nil
 	}
-	if l.state.Schema != 2 || l.state.Activations == nil || len(l.state.Activations) > 64 {
+	if (l.state.Schema != 2 && l.state.Schema != 3) || l.state.Activations == nil || len(l.state.Activations) > 64 {
 		return ErrUnavailable
 	}
 	seen := map[string]bool{}
@@ -247,13 +250,17 @@ func (e *Executor) transition(ctx context.Context, input ActivationIntent, boots
 		return LiveVerification{}, err
 	}
 	defer l.close()
-	if l.activationPending() || len(l.state.Activations) >= 64 || len(l.state.Records) >= 64 {
+	if err := l.legacyGuard(); err != nil {
+		return LiveVerification{}, err
+	}
+	if l.activationPending() {
 		return LiveVerification{}, ErrUncertain
 	}
-	for _, a := range l.state.Activations {
-		if a.Intent.OperationID == in.OperationID {
-			return LiveVerification{}, ErrConflict
-		}
+	if l.operationSeen(in.OperationID) {
+		return LiveVerification{}, ErrConflict
+	}
+	if l.compact() != nil {
+		return LiveVerification{}, ErrUnavailable
 	}
 	revision := int64(1)
 	for _, r := range l.state.Records {
@@ -277,7 +284,9 @@ func (e *Executor) transition(ctx context.Context, input ActivationIntent, boots
 			return LiveVerification{}, ErrConflict
 		}
 	}
-	l.state.Schema = 2
+	if l.state.Schema < 2 {
+		l.state.Schema = 2
+	}
 	l.state.Activations = append(l.state.Activations, activationRecord{in, sha, "preparing", "recorded", time.Now().UTC().Format(time.RFC3339Nano)})
 	index := len(l.state.Activations) - 1
 	stage := func(s string) error {
@@ -431,6 +440,9 @@ func (e *Executor) Check(ctx context.Context, input ActivationIntent) (LiveVerif
 		return LiveVerification{}, err
 	}
 	defer l.close()
+	if err := l.legacyGuard(); err != nil {
+		return LiveVerification{}, err
+	}
 	if l.activationPending() || len(l.state.Records) == 0 {
 		return LiveVerification{}, ErrUncertain
 	}
@@ -485,6 +497,10 @@ func (e *Executor) Inspect(ctx context.Context) error {
 		if openErr != nil {
 			return ErrUnavailable
 		}
+		if err := l.legacyGuard(); err != nil {
+			l.close()
+			return err
+		}
 		pending := l.activationPending()
 		for _, r := range l.state.Records {
 			if r.Receipt.State != "applied" {
@@ -497,6 +513,9 @@ func (e *Executor) Inspect(ctx context.Context) error {
 		}
 	} else if !os.IsNotExist(statErr) {
 		return ErrUnavailable
+	}
+	if err := legacyOverlayGuard(e.Config); err != nil {
+		return err
 	}
 	reader := *e
 	reader.readOnly = true

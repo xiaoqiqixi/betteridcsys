@@ -115,7 +115,7 @@ ReserveInput：`pool_id,instance_id,owner_ref,address`。空 address 按数值�
 
 ## 显式 VPC 任务：主控/IPAM 同事务绑定
 
-这不是将已有 normal 套餐“升级”成私网。旧 `aster.node/1` 请求字节及其 normal/default-bandwidth 语义保持不变；新任务必须明确使用 `aster.node/2`，`network_type=vpc`、IPv4=1/IPv6=0、两个方向 **1–100000 Mbps**、transfer=0、traffic_direction=all，且没有 data disk。0 带宽继续表示旧合同的主控默认，不能猜成正数、无限或 fabric 限速。当前 VPC 是单宿主 L2；没有默认路由、网关服务、NAT/DHCP、IPv6 或跨宿主私网。
+这不是将已有 normal 套餐“升级”成私网。旧 `aster.node/1` 请求字节及其 normal/default-bandwidth 语义保持不变；新任务必须明确使用 `aster.node/2`，`network_type=vpc`、IPv4=1/IPv6=0、两个方向 **1–100000 Mbps**、transfer=0、traffic_direction=all，且没有 data disk。0 带宽继续表示旧合同的主控默认，不能猜成正数、无限或 fabric 限速。本节的原 node/2 基础 VPC 合同仍是单宿主 L2，不隐含默认路由、NAT/DHCP 或 IPv6。新增的跨节点 VPC / 受控网关使用独立 root 审批的 `aster.overlay/1`，不修改这些原绑定；见 [overlay 控制合同](OVERLAY_CONTROL.md)。
 
 根配置 `network_profiles` 选择固定 node/pool/owner，并冻结实际 `fabric.Config` 的规范 Go JSON SHA256（不是原配置文件文本 SHA）。网页、财务请求不能提交 bridge、宿主路径、OpenFlow、ofport 或外部 URL。节点能力还必须同时公告 `ovs-vpc-singlehost/1` 和匹配的 `ovs_network_profiles` ID；没有新能力的旧节点明确拒绝，不回退普通 Linux bridge。
 

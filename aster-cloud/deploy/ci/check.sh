@@ -11,9 +11,13 @@ trap 'rm -rf -- "$scratch"' EXIT
 # No credential is echoed. SQL fixtures accept only explicitly named test DBs.
 # The protected-policy connector case genuinely requires root ownership. Run it
 # separately below, rather than adding an owner bypass or tolerating a skipped
-# MySQL acceptance case. Every other test still runs with race instrumentation.
+# MySQL acceptance case. The independently required native OVS matrix is routed
+# explicitly below; all other tests still run with race instrumentation.
 root_tls='^TestRootTLSConnectorUsesExistingProtectedTransport$'
-go test -mod=readonly -race -count=1 -v -skip "$root_tls" -timeout=10m ./... | tee "$scratch/tests.log"
+# Parser/encoder tests require the distribution OVS binary and run without skips
+# in the separate required Ubuntu22/24 native-ovs-parser matrix.
+separate_native='^(TestRootTLSConnectorUsesExistingProtectedTransport|TestNativeOVSParserFlows|TestNativeOVSParserMeters)$'
+go test -mod=readonly -race -count=1 -v -skip "$separate_native" -timeout=10m ./... | tee "$scratch/tests.log"
 if grep -q -- '--- SKIP:' "$scratch/tests.log"; then
   echo 'MySQL acceptance must not skip any test.' >&2; exit 1
 fi

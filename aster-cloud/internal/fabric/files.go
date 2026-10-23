@@ -85,17 +85,21 @@ type record struct {
 	Bindings []binding `json:"bindings"`
 }
 type journal struct {
-	Activations []activationRecord `json:"activations,omitempty"`
-	Schema      int                `json:"schema"`
-	NodeID      string             `json:"node_id"`
-	Bridge      string             `json:"bridge"`
-	Records     []record           `json:"records"`
+	OverlayProfileSHA256 string             `json:"overlay_profile_sha256,omitempty"`
+	ArchiveHead          string             `json:"archive_head,omitempty"`
+	Recovery             *recoveryRecord    `json:"recovery,omitempty"`
+	Activations          []activationRecord `json:"activations,omitempty"`
+	Schema               int                `json:"schema"`
+	NodeID               string             `json:"node_id"`
+	Bridge               string             `json:"bridge"`
+	Records              []record           `json:"records"`
 }
 type ledger struct {
-	cfg   Config
-	lock  *os.File
-	state journal
-	fault func(string) error
+	cfg     Config
+	lock    *os.File
+	state   journal
+	fault   func(string) error
+	history []journal
 }
 
 func openLedger(c Config, write bool, fault func(string) error) (*ledger, error) {
@@ -184,45 +188,13 @@ func openLedger(c Config, write bool, fault func(string) error) (*ledger, error)
 		return nil, ErrUnavailable
 	}
 	raw, e := readPrivate(path, uint32(os.Geteuid()), 8<<20)
-	if e != nil || decodeJournal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2) || l.state.NodeID != c.NodeID || l.state.Bridge != c.Bridge || l.state.Records == nil || len(l.state.Records) > 64 {
+	if e != nil || decodeJournal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2 && l.state.Schema != 3) || l.state.NodeID != c.NodeID || l.state.Bridge != c.Bridge || l.state.Records == nil || len(l.state.Records) > 64 {
 		l.close()
 		return nil, ErrUnavailable
 	}
-	if l.validateActivations() != nil {
+	if l.validateState(l.state) != nil || l.loadArchives() != nil {
 		l.close()
 		return nil, ErrUnavailable
-	}
-	seen := map[int64]bool{}
-	lastRevision := int64(0)
-	for _, r := range l.state.Records {
-		p, e := Compile(r.Topology)
-		if e != nil || r.Receipt.Schema != 1 || r.Receipt.NodeID != c.NodeID || r.Topology.NodeID != c.NodeID || r.Receipt.Revision != r.Topology.Revision || r.Receipt.Digest != p.Digest || seen[r.Receipt.Revision] || r.Receipt.Revision <= lastRevision {
-			l.close()
-			return nil, ErrUnavailable
-		}
-		seen[r.Receipt.Revision] = true
-		lastRevision = r.Receipt.Revision
-		at, te := time.Parse(time.RFC3339Nano, r.Receipt.UpdatedAt)
-		if te != nil || !strings.HasSuffix(r.Receipt.UpdatedAt, "Z") || at.Year() < 1 || !validStage(r.Receipt.Stage) || r.Bindings == nil || len(r.Bindings) > 128 || !validBindings(r.Bindings) {
-			l.close()
-			return nil, ErrUnavailable
-		}
-		switch r.Receipt.State {
-		case "intent":
-			if r.Receipt.Stage != "recorded" {
-				l.close()
-				return nil, ErrUnavailable
-			}
-		case "applied":
-			if r.Receipt.Stage != "verified" || !matchesTopology(r.Bindings, p) {
-				l.close()
-				return nil, ErrUnavailable
-			}
-		case "uncertain":
-		default:
-			l.close()
-			return nil, ErrUnavailable
-		}
 	}
 	return l, nil
 }
@@ -256,15 +228,35 @@ func decodeJournal(raw []byte, j *journal) error {
 		return ErrUnavailable
 	}
 	keys := []string{"schema", "node_id", "bridge", "records"}
-	if header.Schema == 2 {
+	if header.Schema == 2 || header.Schema == 3 {
 		keys = append(keys, "activations")
+	}
+	if header.Schema == 3 {
+		keys = append(keys, "archive_head")
+		var f map[string]json.RawMessage
+		if json.Unmarshal(raw, &f) != nil {
+			return ErrUnavailable
+		}
+		if _, ok := f["overlay_profile_sha256"]; ok {
+			keys = append(keys, "overlay_profile_sha256")
+		}
+		if _, ok := f["recovery"]; ok {
+			keys = append(keys, "recovery")
+		}
 	}
 	if object(raw, keys, j) != nil {
 		return ErrUnavailable
 	}
 	var root map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &root)
-	if header.Schema == 2 {
+	if header.Schema == 3 {
+		if raw, ok := root["recovery"]; ok {
+			if decodeRecovery(raw, Config{NodeID: j.NodeID}) != nil {
+				return ErrUnavailable
+			}
+		}
+	}
+	if header.Schema == 2 || header.Schema == 3 {
 		var items []json.RawMessage
 		if json.Unmarshal(root["activations"], &items) != nil || len(items) > 64 {
 			return ErrUnavailable
@@ -408,5 +400,55 @@ func Status(c Config, revision int64) (Receipt, error) {
 			return interrupted(r), nil
 		}
 	}
+	for _, j := range l.history {
+		for _, r := range j.Records {
+			if revision == r.Receipt.Revision {
+				return interrupted(r.Receipt), nil
+			}
+		}
+	}
 	return Receipt{}, errors.New("FABRIC_RECEIPT_NOT_FOUND")
+}
+
+func (l *ledger) validateState(j journal) error {
+	if j.OverlayProfileSHA256 != "" && (j.Schema != 3 || !validSHA(j.OverlayProfileSHA256)) {
+		return ErrUnavailable
+	}
+	previous := l.state
+	l.state = j
+	defer func() { l.state = previous }()
+	if err := l.validateActivations(); err != nil {
+		return ErrUnavailable
+	}
+	seen := map[int64]bool{}
+	lastRevision := int64(0)
+	for _, r := range l.state.Records {
+		p, e := Compile(r.Topology)
+		if e != nil || r.Receipt.Schema != 1 || r.Receipt.NodeID != l.cfg.NodeID || r.Topology.NodeID != l.cfg.NodeID || r.Receipt.Revision != r.Topology.Revision || r.Receipt.Digest != p.Digest || seen[r.Receipt.Revision] || r.Receipt.Revision <= lastRevision {
+			return ErrUnavailable
+		}
+		seen[r.Receipt.Revision] = true
+		lastRevision = r.Receipt.Revision
+		at, te := time.Parse(time.RFC3339Nano, r.Receipt.UpdatedAt)
+		if te != nil || !strings.HasSuffix(r.Receipt.UpdatedAt, "Z") || at.Year() < 1 || !validStage(r.Receipt.Stage) || r.Bindings == nil || len(r.Bindings) > 128 || !validBindings(r.Bindings) {
+			return ErrUnavailable
+		}
+		switch r.Receipt.State {
+		case "intent":
+			if r.Receipt.Stage != "recorded" {
+				return ErrUnavailable
+			}
+		case "applied":
+			if r.Receipt.Stage != "verified" || !matchesTopology(r.Bindings, p) {
+				return ErrUnavailable
+			}
+		case "uncertain":
+		default:
+			return ErrUnavailable
+		}
+	}
+	if validateRecovery(j) != nil {
+		return ErrUnavailable
+	}
+	return nil
 }

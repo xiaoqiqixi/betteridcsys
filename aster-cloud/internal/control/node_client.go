@@ -80,6 +80,9 @@ func (c *NodeClient) call(ctx context.Context, method, path string, body []byte,
 	return raw, e
 }
 func (c *NodeClient) callStatus(ctx context.Context, method, path string, body []byte, sha string) ([]byte, int, error) {
+	return c.callStatusTimed(ctx, method, path, body, sha, 10*time.Second, 6*time.Second)
+}
+func (c *NodeClient) callStatusTimed(ctx context.Context, method, path string, body []byte, sha string, total, header time.Duration) ([]byte, int, error) {
 	req, e := http.NewRequestWithContext(ctx, method, c.profile.Endpoint+path, bytes.NewReader(body))
 	if e != nil {
 		return nil, 0, ErrUnavailable
@@ -95,14 +98,14 @@ func (c *NodeClient) callStatus(ctx context.Context, method, path string, body [
 	}
 	var dials atomic.Int32
 	dialer := net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}
-	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, ForceAttemptHTTP2: false, TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}, TLSClientConfig: c.tls.Clone(), TLSHandshakeTimeout: 4 * time.Second, ResponseHeaderTimeout: 6 * time.Second, MaxResponseHeaderBytes: 16 << 10, DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, ForceAttemptHTTP2: false, TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}, TLSClientConfig: c.tls.Clone(), TLSHandshakeTimeout: 4 * time.Second, ResponseHeaderTimeout: header, MaxResponseHeaderBytes: 16 << 10, DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 		if !dials.CompareAndSwap(0, 1) {
 			return nil, ErrUnavailable
 		}
 		return dialer.DialContext(ctx, network, c.address)
 	}}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: transport, Timeout: total, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, e := client.Do(req)
 	if e != nil {
 		return nil, 0, ErrUnavailable

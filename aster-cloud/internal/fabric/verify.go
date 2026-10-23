@@ -31,6 +31,9 @@ type LiveVerification struct {
 // readOnlyCommand is a second boundary: future changes to shared probe helpers
 // cannot accidentally turn VerifyLive into an apply or quarantine operation.
 func readOnlyCommand(c Config, binary string, args []string) bool {
+	if overlayReadOnlyCommand(c, binary, args) {
+		return true
+	}
 	if binary == Vsctl {
 		if len(args) == 3 && args[0] == "--timeout=3" && (args[1] == "br-exists" || args[1] == "list-ifaces") {
 			return args[2] == c.Bridge
@@ -65,6 +68,9 @@ func (e *Executor) VerifyLive(ctx context.Context) (LiveVerification, error) {
 		return LiveVerification{}, err
 	}
 	defer l.close()
+	if err := l.legacyGuard(); err != nil {
+		return LiveVerification{}, err
+	}
 	if l.activationPending() {
 		return LiveVerification{}, ErrUncertain
 	}

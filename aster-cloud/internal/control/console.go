@@ -17,11 +17,13 @@ import (
 )
 
 type Console struct {
-	Store    *SQLStore
-	Config   Config
-	Identity *identity.Service
-	Worker   *OperationWorker
-	Runner   *OperationRunner
+	Store         *SQLStore
+	Config        Config
+	Identity      *identity.Service
+	Worker        *OperationWorker
+	Runner        *OperationRunner
+	OverlayWorker *OverlayWorker
+	OverlayRunner *OverlayRunner
 	// MetricsRPC is an internal dependency seam, never request configuration.
 	// Production uses only root-approved, pinned-mTLS NodeClient destinations.
 	MetricsRPC func(context.Context, NodeProfile) (MetricsReader, error)
@@ -43,7 +45,7 @@ func (c Console) Handler() http.Handler {
 			return
 		}
 		permission := "instances.read"
-		if path == "/console/v1/nodes" || strings.HasPrefix(path, "/console/v1/nodes/") || strings.HasPrefix(path, "/console/v1/networks/") {
+		if path == "/console/v1/nodes" || strings.HasPrefix(path, "/console/v1/nodes/") || strings.HasPrefix(path, "/console/v1/networks/") || strings.HasPrefix(path, "/console/v1/overlays/") {
 			permission = "nodes.read"
 		}
 		if path == "/console/v1/audit" {
@@ -94,6 +96,10 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 	user, ok := identity.Actor(ctx)
 	if !ok {
 		failure(w, 401, "AUTH_REQUIRED")
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/console/v1/overlays/") {
+		c.overlays(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/console/v1/networks/") {

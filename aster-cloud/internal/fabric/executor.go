@@ -47,19 +47,20 @@ func (OSRunner) Run(ctx context.Context, binary string, args ...string) ([]byte,
 }
 
 type Executor struct {
-	Config   Config
-	Runner   Runner
-	tap      func(string) error
-	euid     func() int
-	fault    func(string) error
-	readOnly bool
+	Config          Config
+	Runner          Runner
+	tap             func(string) error
+	euid            func() int
+	fault           func(string) error
+	readOnly        bool
+	overlayUnderlay func(OverlayConfig) error
 }
 
 func NewExecutor(c Config, r Runner) (*Executor, error) {
 	if !c.Validate() || r == nil {
 		return nil, ErrInvalid
 	}
-	return &Executor{Config: c, Runner: r, tap: tapInterface, euid: os.Geteuid}, nil
+	return &Executor{Config: c, Runner: r, tap: tapInterface, euid: os.Geteuid, overlayUnderlay: verifyOverlayUnderlay}, nil
 }
 func (e *Executor) run(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	if e.readOnly && !readOnlyCommand(e.Config, binary, args) {
@@ -99,6 +100,9 @@ func (e *Executor) Apply(ctx context.Context, t Topology, confirm string) (Recei
 		return Receipt{}, err
 	}
 	defer l.close()
+	if err := l.legacyGuard(); err != nil {
+		return Receipt{}, err
+	}
 	if l.activationPending() {
 		return Receipt{}, ErrUncertain
 	}
@@ -110,7 +114,7 @@ func (e *Executor) Apply(ctx context.Context, t Topology, confirm string) (Recei
 func (e *Executor) applyLocked(ctx context.Context, p Plan, l *ledger, isolated bool) (Receipt, error) {
 	t := p.Topology
 	var err error
-	for _, r := range l.state.Records {
+	for _, r := range l.allRecords() {
 		if r.Receipt.Revision == t.Revision {
 			if r.Receipt.Digest != p.Digest {
 				return Receipt{}, ErrConflict
@@ -139,7 +143,7 @@ func (e *Executor) applyLocked(ctx context.Context, p Plan, l *ledger, isolated 
 			}
 		}
 	}
-	if len(l.state.Records) >= 64 {
+	if !isolated && l.compact() != nil {
 		return Receipt{}, ErrUnavailable
 	}
 	r := record{Topology: p.Topology, Receipt: Receipt{Schema: 1, NodeID: t.NodeID, Revision: t.Revision, Digest: p.Digest, State: "intent", Stage: "recorded", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}, Bindings: []binding{}}
@@ -205,6 +209,14 @@ func (e *Executor) applyLocked(ctx context.Context, p Plan, l *ledger, isolated 
 	for _, r := range l.state.Records[:index] {
 		old, _ := Compile(r.Topology)
 		allowedMeters = append(allowedMeters, old.Meters...)
+	}
+	if l.state.Recovery != nil && l.state.Recovery.State != "completed" {
+		for _, j := range l.history {
+			for _, r := range j.Records {
+				old, _ := Compile(r.Topology)
+				allowedMeters = append(allowedMeters, old.Meters...)
+			}
+		}
 	}
 	if e.checkMeters(ctx, allowedMeters, false) != nil {
 		return fail("foreign_meters_rejected", false)
