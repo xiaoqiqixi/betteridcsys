@@ -72,8 +72,15 @@ After the original five-epoch flow, the visible public-IP UI must:
    real Console handler commits**. It buffers that one response, flushes its genuine 201 headers with the exact
    original body length, then raises `http.ErrAbortHandler` to truncate that body.
    Closing before response headers can provoke an implicit transport replay;
-   the regression separately verifies both HTTP/1.1 and HTTP/2 TLS expose the
-   committed headers then an incomplete JSON body with exactly one server POST. It changes no UI request/body,
+   a failed header flush immediately fails the test and the final fixture requires
+   an explicit successful-flush proof. The regression separately verifies both
+   HTTP/1.1 and HTTP/2 TLS expose the committed headers then an incomplete JSON
+   body with exactly one server POST. Firefox may suppress Playwright's `response`
+   event when the HTTP/2 stream resets; browser evidence instead requires exactly
+   one original `requestfailed` event and one attempt. If a response event is
+   emitted, it must be 201, never a replayed 200. A network failure alone proves
+   no business success: only the exact original-operation GET below confirms the
+   immutable allocation result. It changes no UI request/body,
    invents no success and performs no extra POST. The browser must keep the
    result unknown, then click **核对原操作** and clear it only after exactly one
    GET of that original operation matches its exact submitted intent. The browser

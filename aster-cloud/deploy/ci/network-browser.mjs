@@ -25,7 +25,7 @@ const { firefox } = await import(pathToFileURL(path.join(required('PLAYWRIGHT_MO
 const report = {
   schema: 1, status: 'running', passed: false, strict_tls: true, real_mysql: true,
   node_rpc: 'Isolated deterministic test substitute; no real KVM or host networking actions.',
-  checks: [], screenshots: [], console_errors: [], requests: [], public_ip_write_attempts: [],
+  checks: [], screenshots: [], console_errors: [], requests: [], public_ip_write_attempts: [], public_ip_failed_writes: [],
 };
 let phase = 'launch', context, page, signedIn = false;
 const sensitive = new Set([credentials.password]);
@@ -286,6 +286,16 @@ try {
       // Count UI write attempts even when a committed response is intentionally
       // lost. No request headers, idempotency key or body enters the artifact.
       report.public_ip_write_attempts.push({ method: request.method(), path: url.pathname });
+    }
+  });
+
+  page.on('requestfailed', request => {
+    const url = new URL(request.url());
+    if (url.origin === base.origin && url.pathname.startsWith('/console/v1/public-ips/') && request.method() === 'POST') {
+      // Observe the actual transport failure, not an assumed response event:
+      // Firefox may suppress response when the HTTP/2 body is reset. Persist
+      // only the safe route/method, never transport diagnostics or payloads.
+      report.public_ip_failed_writes.push({ method: request.method(), path: url.pathname });
     }
   });
 
@@ -716,14 +726,24 @@ try {
   assert.equal(reconciliationReads() - readsBefore, 1);
   assert.equal(writeAttempts('/leases') - allocationBefore, 1);
   assert.equal(await page.locator('.ip-pending').count(), 0);
+  const allocationFailures = report.public_ip_failed_writes.filter(r => r.method === 'POST' && r.path === '/console/v1/public-ips/leases');
+  assert.equal(allocationFailures.length, 1, 'The original allocation must have exactly one observed failed transport, not a fabricated application success');
   const allocationResponses = report.requests.filter(r => r.method === 'POST' && r.path === '/console/v1/public-ips/leases');
-  assert.equal(allocationResponses.length, 1, 'The committed allocation must have exactly one observed POST response');
-  assert.equal(allocationResponses[0].status, 201, 'The original committed 201 headers must precede the deliberately incomplete JSON body');
+  assert(allocationResponses.length <= 1, 'A failed allocation must not gain an implicit replay response');
+  // A truncated HTTP/2 stream need not publish a Playwright response event.
+  // When it does, only the real committed 201 is valid, never a replayed 200.
+  // Server-side checked Flush + both real TLS protocol regressions independently
+  // prove the genuine 201 headers; only the exact original-operation GET proves
+  // the business result. A network failure by itself proves no success.
+  assert(allocationResponses.every(r => r.status === 201), 'Any original response headers must be the committed 201');
   const pendingOperation = (await read(`/public-ips/operations/${pendingOperationID}`)).operation;
   assert.equal(pendingOperation.id, pendingOperationID);
   assert.equal(pendingOperation.action, 'lease.allocate');
-  assert.equal(pendingOperation.request.address, '8.8.4.3');
-  assert.equal(pendingOperation.request.vpc_id, credentials.vpc_id);
+  assert.equal(pendingOperation.target_resource_id, '');
+  assert.deepEqual(pendingOperation.request, {
+    pool_id: pool.id, owner_ref: credentials.owner_ref, vpc_id: credentials.vpc_id,
+    node_id: publicApproval.node_id, profile_id: publicApproval.profile_id, address: '8.8.4.3',
+  }, 'Only the exact immutable original allocation intent can clear unknown');
   const firstLeaseID = pendingOperation.result.lease.id;
   assert.equal(firstLeaseID, pendingOperationID);
   const firstLease = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;

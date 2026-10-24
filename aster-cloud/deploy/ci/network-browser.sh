@@ -161,7 +161,7 @@ assert value.get('public_ip_lease_count') == 2
 for name in ('public_pool_created', 'public_pool_extended', 'public_pool_state_managed',
              'public_ip_bound', 'public_ip_unbound_after_all_release_receipts',
              'public_ip_reclaimed_and_reallocated', 'public_ip_lease_history_retained',
-             'public_ip_post_commit_ack_lost'):
+             'public_ip_post_commit_ack_lost', 'public_ip_fault_headers_flushed'):
     assert value.get(name) is True, 'Required public IP fixture evidence missing'
 
 report = json.loads((output / 'report.json').read_text())
@@ -172,6 +172,7 @@ for name in ('public_ip_pool_managed', 'public_ip_pool_extended',
              'public_ip_reclaimed_and_reallocated', 'original_five_epochs_preserved'):
     assert report.get(name) is True, 'Required visible public IP workflow missing'
 assert len(report.get('public_ip_write_attempts', [])) == 7
+assert report.get('public_ip_failed_writes') == [{'method': 'POST', 'path': '/console/v1/public-ips/leases'}], 'Only the single original allocation transport fault is permitted'
 
 for path in output.iterdir():
     assert path.is_file() and not path.is_symlink()
