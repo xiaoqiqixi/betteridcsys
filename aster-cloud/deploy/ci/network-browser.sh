@@ -49,6 +49,59 @@ export NO_PROXY='localhost,127.0.0.1,::1' no_proxy='localhost,127.0.0.1,::1'
 mkdir -p "$cloud/artifacts"
 mkdir "$BROWSER_ARTIFACT_DIR" || fail 'Refuse to mix results with an existing browser artifact directory.'
 mkdir "$FIREFOX_PROFILE_DIR"
+printf 'PROCESS_START' >"$scratch/fixture-phase"
+sanitize_fixture_failure() {
+  python3 - "$scratch/fixture.log" "$BROWSER_ARTIFACT_DIR/fixture.json" "$ci/network-browser-fixture.gotxt" "$scratch/fixture-phase" "$1" <<'PYFIXTURE'
+import json, pathlib, re, sys
+log_path, result_path, source_path, phase_path = map(pathlib.Path, sys.argv[1:5])
+reason = sys.argv[5]
+assert reason in {'fixture_startup_failed', 'fixture_readiness_timeout', 'fixture_test_failed'}
+text = log_path.read_text(errors='replace') if log_path.exists() else ''
+source = source_path.read_text().splitlines()
+# Export only fixed codes and line numbers from the checked-out source. The
+# matching t.Fatal prefix is an allowlist, never copied from the private log.
+fatal = {}
+for line, content in enumerate(source, 1):
+    match = re.search(r'\bt\.Fatalf?\(\s*("(?:[^"\\]|\\.)*")', content)
+    if match:
+        try: fatal[line] = json.loads(match.group(1))
+        except ValueError: pass
+locations, calls = [], []
+for content in text.splitlines():
+    match = re.match(r'^\s*(?:owned_nat_browser_fixture_test\.go|network-browser-fixture\.gotxt):(\d+):\s?(.*)$', content)
+    if not match: continue
+    line, private_message = int(match.group(1)), match.group(2)
+    if not 1 <= line <= len(source): continue
+    location = {'source': 'network-browser-fixture.gotxt', 'line': line}
+    if line in fatal and private_message.startswith(fatal[line]):
+        locations.append({**location, 'code': 'FIXTURE_ASSERTION'})
+    elif line not in fatal:
+        # t.Helper may report the caller rather than its internal assertion.
+        # This is explicitly a source location, not a claimed exact t.Fatal.
+        calls.append({**location, 'code': 'FIXTURE_SOURCE_LOCATION'})
+unique = []
+for item in locations or calls:
+    if item not in unique: unique.append(item)
+phases = {'PROCESS_START', 'OVERLAY_INITIALIZATION', 'NAT_APPROVAL', 'PARTICIPANT_CAPABILITIES', 'DIRECT_NODE_SETUP', 'DIRECT_POOL_SETUP', 'INITIAL_EPOCH_PLAN', 'INITIAL_EPOCH_RELEASE', 'INITIAL_HISTORY_CAPTURE', 'IDENTITY_SETUP', 'LOOPBACK_LISTENER', 'CREDENTIAL_HANDOFF', 'BROWSER_READY'}
+phase = phase_path.read_text().strip() if phase_path.exists() else ''
+if phase not in phases: phase = 'UNKNOWN'
+checks = {
+    'financial/node historical snapshot changed': 'financial_or_node_history_changed',
+    'initial network snapshot changed': 'network_history_changed',
+    'initial node receipt changed': 'node_receipt_history_changed',
+    'required browser plan/reconcile/recovery/VPC persistence did not execute': 'required_browser_operations_missing',
+    'durable browser evidence unavailable': 'durable_evidence_unavailable',
+    'browser fixture exceeded bounded lifetime': 'fixture_lifetime_exceeded',
+    'DATA RACE': 'race_detected',
+}
+codes = [reason] + [code for fragment, code in checks.items() if fragment in text]
+value = {'passed': False, 'codes': codes, 'phase': phase, 'source_locations': unique[-8:]}
+result_path.write_text(json.dumps(value, indent=2) + '\n')
+print('Backend fixture result: ' + ', '.join(codes) + '; phase=' + phase)
+for item in value['source_locations']:
+    print(item['code'] + ': ' + item['source'] + ':' + str(item['line']))
+PYFIXTURE
+}
 cat >"$scratch/ca.cnf" <<'CA'
 [req]
 prompt=no
@@ -101,11 +154,19 @@ if grep -qE -- '--- (SKIP|FAIL):' "$scratch/response-fault.log"; then fail 'Resp
 fixture_pid=$!
 ready=false
 for ((attempt = 0; attempt < 900; attempt++)); do
-  kill -0 "$fixture_pid" 2>/dev/null || fail 'Private browser fixture stopped before readiness; raw logs withheld.'
+  if ! kill -0 "$fixture_pid" 2>/dev/null; then
+    stop_fixture
+    sanitize_fixture_failure fixture_startup_failed
+    fail 'Private browser fixture stopped before readiness; only fixed diagnostics exported.'
+  fi
   if [[ -s $BROWSER_CREDENTIALS_FILE ]] && grep -q 'READY: loopback HTTPS' "$scratch/fixture.log"; then ready=true; break; fi
   sleep 0.1
 done
-[[ $ready == true ]] || fail 'Browser fixture readiness timed out.'
+if [[ $ready != true ]]; then
+  stop_fixture
+  sanitize_fixture_failure fixture_readiness_timeout
+  fail 'Browser fixture readiness timed out; only fixed diagnostics exported.'
+fi
 curl --fail --silent --show-error --cacert "$scratch/ca.pem" --resolve localhost:5447:127.0.0.1 --max-time 10 "$BASE_URL/" -o /dev/null
 # Only this new private NSS profile gets the CA; never modify host trust or
 # browser global policy, and never use ignoreHTTPSErrors or click through TLS.
@@ -119,23 +180,7 @@ node "$ci/network-browser.mjs" >"$scratch/browser.log" 2>&1 || browser_status=$?
 # including when UI checks fail. A screenshot or an accepted POST is not enough.
 stop_fixture
 if [[ $fixture_status != 0 ]]; then
-  python3 - "$scratch/fixture.log" "$BROWSER_ARTIFACT_DIR/fixture.json" <<'PYFAIL'
-import json, pathlib, sys
-text = pathlib.Path(sys.argv[1]).read_text(errors='replace')
-# Fixed vocabulary only: never serialize exception text, query/DSN or raw logs.
-checks = {
-    'financial/node historical snapshot changed': 'financial_or_node_history_changed',
-    'initial network snapshot changed': 'network_history_changed',
-    'initial node receipt changed': 'node_receipt_history_changed',
-    'required browser plan/reconcile/recovery/VPC persistence did not execute': 'required_browser_operations_missing',
-    'durable browser evidence unavailable': 'durable_evidence_unavailable',
-    'browser fixture exceeded bounded lifetime': 'fixture_lifetime_exceeded',
-    'DATA RACE': 'race_detected',
-}
-codes = [code for fragment, code in checks.items() if fragment in text] or ['fixture_test_failed']
-pathlib.Path(sys.argv[2]).write_text(json.dumps({'passed': False, 'codes': codes}))
-print('Backend fixture result: ' + ', '.join(codes))
-PYFAIL
+  sanitize_fixture_failure fixture_test_failed
 fi
 [[ $browser_status == 0 ]] || fail 'Actual browser UI acceptance failed; inspect sanitized report.json, not private logs.'
 [[ $fixture_status == 0 ]] || fail 'Backend durable-history acceptance failed; private fixture logs withheld.'

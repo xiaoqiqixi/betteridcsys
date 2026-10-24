@@ -3,6 +3,7 @@ package fabric
 import (
 	"aster/cloud/internal/overlayproto"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -190,6 +191,24 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 			return e.prepareNAT(ctx, c, l, s)
 		}}, {"program", e.programNAT}, {"release", e.releaseNAT}} {
 			if err := phase.run(ctx, c, l, s); err != nil {
+				// Fixed isolated fixture data only. Keep exact readback enforcement;
+				// expose the first structural difference rather than guessing at a
+				// normalization exception or accepting a failed native program.
+				objects, compileErr := compileNAT(c, s, p, false)
+				raw, _ := json.Marshal(nftObject{"nftables": objects})
+				want, _, wantErr := normalizeNFT(raw)
+				actual, exists, readErr := e.natRules(ctx, p)
+				t.Logf("NATIVE_NAT_DIAGNOSTIC compile=%v want=%v read=%v exists=%v", compileErr, wantErr, readErr, exists)
+				var wanted, got []json.RawMessage
+				if json.Unmarshal(want, &wanted) == nil && json.Unmarshal(actual, &got) == nil {
+					t.Logf("NATIVE_NAT_OBJECT_COUNTS want=%d actual=%d", len(wanted), len(got))
+					for i := 0; i < len(wanted) && i < len(got); i++ {
+						if string(wanted[i]) != string(got[i]) {
+							t.Logf("NATIVE_NAT_FIRST_DIFF index=%d want=%s actual=%s", i, wanted[i], got[i])
+							break
+						}
+					}
+				}
 				t.Fatal(label+" "+phase.name, err)
 			}
 		}

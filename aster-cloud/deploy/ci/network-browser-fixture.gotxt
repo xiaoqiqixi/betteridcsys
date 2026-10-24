@@ -43,7 +43,16 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(dist, "index.html")); err != nil || !info.Mode().IsRegular() {
 		t.Fatal("built UI index required")
 	}
+	// Fixed stage markers are private diagnostics only. No accounts, SQL, TLS
+	// material or dynamic errors enter the exported failure result.
+	phase := func(stage string) {
+		if err := os.WriteFile(filepath.Join(caseDir, "fixture-phase"), []byte(stage), 0600); err != nil {
+			t.Fatal("private fixture phase unavailable")
+		}
+	}
+	phase("OVERLAY_INITIALIZATION")
 	f := mysqlOverlayFixture(t)
+	phase("NAT_APPROVAL")
 	gateway, policies := f.approveNAT(t)
 	// Safe controller projection only: the synthetic public address is never
 	// configured on the runner and the node RPC remains an explicit substitute.
@@ -69,6 +78,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 		node NodeProfile
 		caps Capability
 	}
+	phase("PARTICIPANT_CAPABILITIES")
 	ingressHeartbeats := []ingressHeartbeat{}
 	for _, pin := range f.config.OverlayClusters[0].Profiles {
 		p, ok := f.config.Node(pin.NodeID)
@@ -88,6 +98,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	// A separate normal-public node/pool cannot overlap the existing NAT stock.
 	// Only deterministic node RPC is substituted; admission, frozen node/3 tasks,
 	// operation dispatch/results, generation and MySQL resource state remain real.
+	phase("DIRECT_NODE_SETUP")
 	directNode, directNow := mysqlNode(t, f.store)
 	directRoot := DirectPublicProfile{ClusterID: "public-direct", NodeID: directNode.ID, ProfileID: nodeproto.DirectPublicProfile, ProfileSHA256: strings.Repeat("c", 64), CIDR: "9.9.9.0/24", GatewayIPv4: "9.9.9.1", PublicIPv4s: []string{"9.9.9.2"}}
 	f.config.Nodes = append(f.config.Nodes, directNode)
@@ -102,6 +113,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	if err = f.store.Heartbeat(ctx, directNode, directCaps, directNow, time.Minute); err != nil {
 		t.Fatal("direct node heartbeat unavailable")
 	}
+	phase("DIRECT_POOL_SETUP")
 	directPool, _, _, err := f.store.CreatePublicIPPool(ctx, f.config, f.actor, id(), PublicIPPoolInput{ClusterID: directRoot.ClusterID, Name: "实例直绑池", CIDR: directRoot.CIDR, Addresses: directRoot.PublicIPv4s, Enabled: true}, f.now)
 	if err != nil {
 		t.Fatal("direct public fixture pool unavailable")
@@ -114,13 +126,16 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 		t.Fatal("fixture VPC name unavailable")
 	}
 	f.vpc.Name = "业务内网"
+	phase("INITIAL_EPOCH_PLAN")
 	epoch, _, err := f.store.PlanOverlayEpoch(ctx, f.config, f.actor, id(), OverlayEpochInput{ClusterID: f.vpc.ClusterID, Members: f.members, Gateways: []overlayproto.Gateway{gateway}, NATPolicies: &policies}, f.now)
 	if err != nil {
 		t.Fatal("initial epoch unavailable")
 	}
 	rpc := &overlayFakeRPC{}
 	worker := f.worker(rpc)
+	phase("INITIAL_EPOCH_RELEASE")
 	advanceOverlayFixture(t, worker, epoch.ID)
+	phase("INITIAL_HISTORY_CAPTURE")
 	initialTasks, err := f.store.OverlayTasks(ctx, epoch.ID)
 	if err != nil {
 		t.Fatal("initial node receipts unavailable")
@@ -136,6 +151,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	worker.Now = func() time.Time { return time.Now().UTC() }
 	rpc.lose = "program" // One lost ACK: receipt exists; GET reconcile must not re-POST.
 	const origin = "https://localhost:5447"
+	phase("IDENTITY_SETUP")
 	auth, err := identity.New(f.store.DB, identity.Config{Origin: origin})
 	if err != nil {
 		t.Fatal("fixture identity unavailable")
@@ -159,6 +175,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		files.ServeHTTP(w, r)
 	}))
+	phase("LOOPBACK_LISTENER")
 	listener, err := net.Listen("tcp", "127.0.0.1:5447")
 	if err != nil {
 		t.Fatal("owned loopback listener unavailable")
@@ -169,10 +186,12 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	go func() {
 		serverDone <- server.ServeTLS(listener, filepath.Join(caseDir, "server.pem"), filepath.Join(caseDir, "server.key"))
 	}()
+	phase("CREDENTIAL_HANDOFF")
 	credentials, err := json.Marshal(map[string]any{"email": email, "password": password, "origin": origin, "actor_id": browserActor.ID, "owner_ref": f.vpc.OwnerRef, "vpc_id": f.vpc.ID, "epoch_id": epoch.ID, "members": f.members, "gateway": gateway, "direct_node_id": directNode.ID, "direct_pool_id": directPool.ID})
 	if err != nil || os.WriteFile(filepath.Join(caseDir, "browser-credentials.json"), credentials, 0600) != nil {
 		t.Fatal("private fixture credentials unavailable")
 	}
+	phase("BROWSER_READY")
 	t.Log("READY: loopback HTTPS, independent MySQL; simulated node RPC, no VM commands")
 	lastDirectHeartbeat := time.Now()
 	ticker := time.NewTicker(100 * time.Millisecond)
