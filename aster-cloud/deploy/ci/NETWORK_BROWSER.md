@@ -69,11 +69,17 @@ After the original five-epoch flow, the visible public-IP UI must:
    its original address; extension is one separate immutable operation.
 2. Allocate `8.8.4.3` to the exact fixture VPC/customer/node/profile. The fixture
    deliberately loses this first allocation's response **after the unchanged
-   real Console handler commits**. It buffers that one response then raises
-   `http.ErrAbortHandler` to close/reset it. It changes no UI request/body,
+   real Console handler commits**. It buffers that one response, flushes its genuine 201 headers with the exact
+   original body length, then raises `http.ErrAbortHandler` to truncate that body.
+   Closing before response headers can provoke an implicit transport replay;
+   the regression separately verifies both HTTP/1.1 and HTTP/2 TLS expose the
+   committed headers then an incomplete JSON body with exactly one server POST. It changes no UI request/body,
    invents no success and performs no extra POST. The browser must keep the
    result unknown, then click **核对原操作** and clear it only after exactly one
-   GET of that original operation matches its exact submitted intent. Both
+   GET of that original operation matches its exact submitted intent. The browser
+   clicks the real reconciliation button only once its busy/disabled state clears
+   after the POST settles; a pre-send pending indicator is not a commit boundary.
+   It never races a direct evidence GET against a still-processing allocation. Both
    browser attempts and server allocation POST counts prohibit silent replay.
 3. Select the allocated address through **公网地址绑定** and complete epoch 6,
    including all six exact node phase receipts. The bound lease must display a

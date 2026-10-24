@@ -87,6 +87,10 @@ type OverlayAdmission struct {
 	ControllerID string
 	Cluster      OverlayCluster
 	Nodes        []NodeProfile
+	// RootClusters is controller-local admission context, never part of the
+	// financial request, node task, network binding or persisted snapshot.
+	// Public IP isolation must resolve legacy NAT in every approved cluster.
+	RootClusters []OverlayCluster `json:"-"`
 }
 type Candidate struct {
 	Overlay           *OverlayAdmission

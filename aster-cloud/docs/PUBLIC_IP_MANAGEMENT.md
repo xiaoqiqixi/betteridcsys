@@ -84,6 +84,9 @@ fallback 排除。更换出口通过原 epoch 屏障与 conntrack 撤销清除�
 完整 canonical request。资源变更、库存/active、固定结果日志和审计在同一
 `controller_lock` 事务提交，审计失败整体回滚。配置规划、恢复、实例预留
 与最后一次实际 dispatch 都重核租约和 root 批准。
+实例自动预留携带仅存在内存中的完整集群 root 解析上下文：其它集群正常使用
+不同公网地址不应阻塞创建；相同地址或无法核实的旧 pin 仍拒绝。这个上下文
+不进入财务请求、节点请求或历史快照。
 
 | 接口（前缀 `/console/v1/public-ips`） | 用途 |
 | --- | --- |
@@ -112,6 +115,7 @@ GET 原操作并核对 actor/action/target/request/result，不能关弹窗、�
 - 单元/实库：并发末 IP、跨池/CIDR重复、越 root/VPC/owner/node、显式未租
   地址拒绝、隐式旁路、pool禁用、追加库存、回收历史、ACK固定结果、审计回滚、
   profile迁移、未知/部分回执、超过64个历史epoch、JSON与响应预算。
+  双集群实库回归同时覆盖后台与财务触发的实例预留，不跳过跨集群隔离校验。
 - Ubuntu22/24 原生强制入口：真实第二IP TCP/UDP SNAT/DNAT、地址切换撤旧
   TCP/映射、禁用和解绑、缺地址安全拒绝。只在隔离namespace/veth内跑。
 - 真实MySQL浏览器：原5版本/30唯一POST后新增创建池、补充、丢allocation ACK、

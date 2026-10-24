@@ -705,6 +705,20 @@ try {
   const pendingOperationID = (await page.locator('.ip-pending code').innerText()).trim();
   assert(/^[a-f0-9]{32}$/.test(pendingOperationID));
   assert.equal(writeAttempts('/leases') - allocationBefore, 1);
+  const reconciliationReads = () => report.requests.filter(r => r.method === 'GET' && r.path === `/console/v1/public-ips/operations/${pendingOperationID}`).length;
+  const readsBefore = reconciliationReads();
+  // Pending is intentionally published BEFORE send, so visibility alone is not
+  // completion. The real button remains disabled/busy until the POST settles.
+  // Playwright's click waits for that enabled state; no delay, polling GET or
+  // write retry substitutes for the genuine completed-response/error boundary.
+  await page.getByRole('dialog').getByRole('button', { name: '核对原操作', exact: true }).click();
+  await dialogClosed();
+  assert.equal(reconciliationReads() - readsBefore, 1);
+  assert.equal(writeAttempts('/leases') - allocationBefore, 1);
+  assert.equal(await page.locator('.ip-pending').count(), 0);
+  const allocationResponses = report.requests.filter(r => r.method === 'POST' && r.path === '/console/v1/public-ips/leases');
+  assert.equal(allocationResponses.length, 1, 'The committed allocation must have exactly one observed POST response');
+  assert.equal(allocationResponses[0].status, 201, 'The original committed 201 headers must precede the deliberately incomplete JSON body');
   const pendingOperation = (await read(`/public-ips/operations/${pendingOperationID}`)).operation;
   assert.equal(pendingOperation.id, pendingOperationID);
   assert.equal(pendingOperation.action, 'lease.allocate');
@@ -712,13 +726,6 @@ try {
   assert.equal(pendingOperation.request.vpc_id, credentials.vpc_id);
   const firstLeaseID = pendingOperation.result.lease.id;
   assert.equal(firstLeaseID, pendingOperationID);
-  const reconciliationReads = () => report.requests.filter(r => r.method === 'GET' && r.path === `/console/v1/public-ips/operations/${pendingOperationID}`).length;
-  const readsBefore = reconciliationReads();
-  await page.getByRole('dialog').getByRole('button', { name: '核对原操作', exact: true }).click();
-  await dialogClosed();
-  assert.equal(reconciliationReads() - readsBefore, 1);
-  assert.equal(writeAttempts('/leases') - allocationBefore, 1);
-  assert.equal(await page.locator('.ip-pending').count(), 0);
   const firstLease = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;
   assert.equal(firstLease.state, 'reserved');
   assert.equal(firstLease.binding_state, 'reserved');
