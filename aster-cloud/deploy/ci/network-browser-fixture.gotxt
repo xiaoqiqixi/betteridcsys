@@ -97,10 +97,10 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	defer runner.Close()
 	mux := http.NewServeMux()
 	console := Console{Store: f.store, Config: f.config, Identity: auth, OverlayWorker: &worker, OverlayRunner: runner}
-	var publicAllocationACKLost atomic.Bool
+	var publicAllocationACKLost, publicAllocationHeadersFlushed atomic.Bool
 	var publicAllocationPosts atomic.Int32
 	consoleHandler := console.Handler()
-	mux.Handle("/console/v1/", publicBrowserACKFault(consoleHandler, &publicAllocationACKLost, &publicAllocationPosts))
+	mux.Handle("/console/v1/", publicBrowserACKFault(t, consoleHandler, &publicAllocationACKLost, &publicAllocationHeadersFlushed, &publicAllocationPosts))
 	files := http.FileServer(http.Dir(dist))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -269,7 +269,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 			}
 			var active, inventory, operationCount int
 			var savedActive string
-			if !publicAllocationACKLost.Load() || publicAllocationPosts.Load() != 2 || released != 1 || reserved != 1 || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_active").Scan(&active) != nil || active != 1 || f.store.DB.QueryRow("SELECT lease_id FROM controller_public_ip_active WHERE address='8.8.4.3'").Scan(&savedActive) != nil || savedActive != activeLease || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_inventory").Scan(&inventory) != nil || inventory != 2 || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_operations").Scan(&operationCount) != nil || operationCount != 7 {
+			if !publicAllocationACKLost.Load() || !publicAllocationHeadersFlushed.Load() || publicAllocationPosts.Load() != 2 || released != 1 || reserved != 1 || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_active").Scan(&active) != nil || active != 1 || f.store.DB.QueryRow("SELECT lease_id FROM controller_public_ip_active WHERE address='8.8.4.3'").Scan(&savedActive) != nil || savedActive != activeLease || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_inventory").Scan(&inventory) != nil || inventory != 2 || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_operations").Scan(&operationCount) != nil || operationCount != 7 {
 				t.Fatal("public pool allocation/reclamation inventory is not exclusive and durable")
 			}
 			for action, count := range map[string]int{"pool.create": 1, "pool.extend": 1, "pool.state": 2, "lease.allocate": 2, "lease.release": 1} {
@@ -279,7 +279,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 				}
 			}
 			// Fixed schema: no emails, IDs, credentials, DSNs, cookies, SQL or logs.
-			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts, "public_egress_enabled": true, "public_egress_disabled": true, "pure_internet_reenabled": true, "original_node_post_prefix_count": 30, "public_pool_created": true, "public_pool_extended": true, "public_pool_state_managed": true, "public_ip_bound": true, "public_ip_unbound_after_all_release_receipts": true, "public_ip_reclaimed_and_reallocated": true, "public_ip_lease_history_retained": true, "public_ip_post_commit_ack_lost": publicAllocationACKLost.Load(), "public_ip_operations": operationCount, "public_ip_lease_count": len(leases)})
+			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts, "public_egress_enabled": true, "public_egress_disabled": true, "pure_internet_reenabled": true, "original_node_post_prefix_count": 30, "public_pool_created": true, "public_pool_extended": true, "public_pool_state_managed": true, "public_ip_bound": true, "public_ip_unbound_after_all_release_receipts": true, "public_ip_reclaimed_and_reallocated": true, "public_ip_lease_history_retained": true, "public_ip_post_commit_ack_lost": publicAllocationACKLost.Load(), "public_ip_fault_headers_flushed": publicAllocationHeadersFlushed.Load(), "public_ip_operations": operationCount, "public_ip_lease_count": len(leases)})
 			if err != nil || os.WriteFile(filepath.Join(caseDir, "fixture.json"), result, 0600) != nil {
 				t.Fatal("sanitized durable result unavailable")
 			}
@@ -305,7 +305,8 @@ func publicBrowserReleaseProof(t *testing.T, ctx context.Context, f overlayFixtu
 // Flushing matters: a close before response headers can be transparently replayed
 // by the browser transport as an apparently unprocessed request. Once headers
 // are received, incomplete JSON remains unknown without an implicit redial.
-func publicBrowserACKFault(next http.Handler, lost *atomic.Bool, posts *atomic.Int32) http.Handler {
+func publicBrowserACKFault(t *testing.T, next http.Handler, lost, flushed *atomic.Bool, posts *atomic.Int32) http.Handler {
+	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		allocation := r.Method == http.MethodPost && r.URL.Path == "/console/v1/public-ips/leases"
 		if allocation {
@@ -323,7 +324,11 @@ func publicBrowserACKFault(next http.Handler, lost *atomic.Bool, posts *atomic.I
 		if capture.Code == http.StatusCreated && capture.Body.Len() > 0 && lost.CompareAndSwap(false, true) {
 			w.Header().Set("Content-Length", strconv.Itoa(capture.Body.Len()))
 			w.WriteHeader(capture.Code)
-			_ = http.NewResponseController(w).Flush()
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				t.Error("public allocation response-fault headers could not be flushed")
+				panic(http.ErrAbortHandler)
+			}
+			flushed.Store(true)
 			panic(http.ErrAbortHandler) // HTTP/1 closes or HTTP/2 resets only this body.
 		}
 		w.WriteHeader(capture.Code)
@@ -341,7 +346,7 @@ func TestOwnedPublicIPResponseFault(t *testing.T) {
 			name, protocol = "http2", 2
 		}
 		t.Run(name, func(t *testing.T) {
-			var lost, committed atomic.Bool
+			var lost, flushed, committed atomic.Bool
 			var posts atomic.Int32
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodPost {
@@ -355,7 +360,7 @@ func TestOwnedPublicIPResponseFault(t *testing.T) {
 				}
 				output(w, 200, map[string]bool{"committed": true})
 			})
-			server := httptest.NewUnstartedServer(publicBrowserACKFault(handler, &lost, &posts))
+			server := httptest.NewUnstartedServer(publicBrowserACKFault(t, handler, &lost, &flushed, &posts))
 			server.EnableHTTP2 = h2
 			server.StartTLS()
 			t.Cleanup(server.Close)
@@ -372,7 +377,7 @@ func TestOwnedPublicIPResponseFault(t *testing.T) {
 			}
 			body, readErr := io.ReadAll(response.Body)
 			response.Body.Close()
-			if response.ProtoMajor != protocol || response.StatusCode != http.StatusCreated || readErr == nil || len(body) != 0 || !lost.Load() || !committed.Load() || posts.Load() != 1 {
+			if response.ProtoMajor != protocol || response.StatusCode != http.StatusCreated || readErr == nil || len(body) != 0 || !lost.Load() || !flushed.Load() || !committed.Load() || posts.Load() != 1 {
 				t.Fatal("fault must occur after commit and real headers, before complete JSON, without replay", response.ProtoMajor, response.StatusCode, readErr, len(body), posts.Load())
 			}
 			proof, err := client.Get(server.URL + "/console/v1/public-ips/operations/original")
