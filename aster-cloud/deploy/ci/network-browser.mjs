@@ -1038,12 +1038,16 @@ try {
   async function dispatchNodeTask(id) {
     const before = posts('/dispatch'); const task = (await read(`/operations/${id}`)).operation; assert.equal(task.state,'accepted');
     await page.getByRole('button',{name:'派发任务',exact:true}).click(); await page.getByRole('dialog').locator('input').fill(id);
-    await page.getByRole('button',{name:'确认派发',exact:true}).click(); await dialogClosed();
+    const dispatchResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/console/v1/operations/${id}/dispatch` && r.request().method() === 'POST');
+    await page.getByRole('button',{name:'确认派发',exact:true}).click();
+    assert.equal((await dispatchResponse).status(),202,'authorized explicit node task dispatch must be accepted');
+    await dialogClosed();
     const deadline = Date.now()+30000;
     let current;
     while(Date.now()<deadline) {current = (await read(`/operations/${id}`)).operation; if(current.state === 'succeeded' || current.state === 'rejected') break; await page.waitForTimeout(200);}
     assert.equal(current.state,'succeeded'); assert.equal(posts('/dispatch') - before,1); return current;
   }
+  phase = 'direct-public-create-dispatch';
   await dispatchNodeTask(createdIntent.id);
   let directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
   assert.equal(directCurrent.binding_state,'bound'); assert.equal(directCurrent.instance_id,createdIntent.instance_id); assert.equal(directCurrent.binding_generation,1);
@@ -1057,11 +1061,13 @@ try {
   await directInstancePanel(); await noticesExpireNaturally('direct creation notice expires before actual instance resource screenshots');
   await page.setViewportSize({width:390,height:844}); await noOverflow('390px instance direct public panel has no overflow'); await screenshot('mobile-direct-public-instance');
   await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop instance direct public panel has no overflow'); await screenshot('desktop-direct-public-instance');
+  phase = 'direct-public-shutdown';
   await page.getByRole('button',{name:'关机',exact:true}).click(); await page.getByLabel('确认实例 ID',{exact:true}).fill(createdIntent.instance_id);
   const stopResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/console/v1/instances/${createdIntent.instance_id}/operations` && r.request().method() === 'POST' && r.status() === 202);
   await page.getByRole('dialog').getByRole('button',{name:'创建任务',exact:true}).click(); const stopIntent = (await (await stopResponse).json()).operation;
   await page.getByRole('dialog').getByRole('link',{name:'查看原任务',exact:true}).click(); await page.getByRole('heading',{name:'任务详情',exact:true}).waitFor(); await dispatchNodeTask(stopIntent.id);
   await directInstancePanel();
+  phase = 'direct-public-detach';
   await vmCard(direct.id).getByRole('button',{name:'解绑',exact:true}).click(); await page.getByRole('dialog').locator('.resource-confirmation input').fill(direct.address);
   await page.getByRole('dialog').getByRole('button',{name:'解绑公网地址',exact:true}).click(); await dialogClosed();
   directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
@@ -1073,9 +1079,11 @@ try {
   const detachTaskURL = new URL(await detachTaskLink.getAttribute('href'),base);
   assert.equal(detachTaskURL.origin,new URL(base).origin);
   assert.equal(detachTaskURL.hash,`#/operations/${directCurrent.operation_id}`);
+  phase = 'direct-public-detach-dispatch';
   await detachTaskLink.click(); await page.getByRole('heading',{name:'任务详情',exact:true}).waitFor(); await dispatchNodeTask(directCurrent.operation_id);
   await directInstancePanel(); directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
   assert.equal(directCurrent.binding_state,'unbound'); assert.equal(directCurrent.releasable,true);
+  phase = 'direct-public-reclaim';
   await vmCard(direct.id).getByRole('button',{name:'回收',exact:true}).click(); await page.getByRole('dialog').locator('.resource-confirmation input').fill(direct.address);
   await page.getByRole('dialog').getByRole('button',{name:'回收公网地址',exact:true}).click(); await dialogClosed();
   assert.equal((await read(`/public-ips/resources/${direct.id}`)).resource.state,'released');

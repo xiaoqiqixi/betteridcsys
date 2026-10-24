@@ -359,7 +359,8 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 			consoleError(w, e)
 			return
 		}
-		if !user.Can(OperationPermission(o.Action)) {
+		permission := OperationPermission(o.Action)
+		if permission == "" || !user.Can(permission) || publicIPBindingAction(o.Action) && (!user.Can("nodes.read") || !user.Can("nodes.manage")) {
 			failure(w, 403, "FORBIDDEN")
 			return
 		}

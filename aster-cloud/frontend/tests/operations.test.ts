@@ -1190,3 +1190,51 @@ describe("decoded task-route equivalence", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("public binding task permissions", () => {
+  it.each(["public_adopt", "public_detach"])(
+    "%s requires the same three permissions for dispatch and read-only reconciliation",
+    async (action) => {
+      const { context, calls } = mockContext(() => ({ operation }));
+      const router = await routing();
+      const config = provided(context);
+      const task = { ...operation, action, state: "accepted" };
+      const wrapper = mount(OperationActions, {
+        ...config,
+        props: { operation: task },
+        global: { ...config.global, plugins: [router] },
+      });
+      cleanups.push(() => wrapper.unmount());
+      const required = ["nodes.read", "nodes.manage", "instances.manage"];
+      const hasButton = (name: string) =>
+        wrapper.findAll("button").some((button) => button.text() === name);
+      for (const state of ["accepted", "uncertain"]) {
+        await wrapper.setProps({ operation: { ...task, state } });
+        const label = state === "accepted" ? "派发任务" : "核对结果";
+        for (const missing of required) {
+          context.session.user.value = {
+            ...context.session.user.value!,
+            role: "custom",
+            permissions: [
+              "instances.read",
+              ...required.filter((p) => p !== missing),
+            ],
+          };
+          await flushPromises();
+          expect(
+            hasButton(label),
+            `must not expose ${state} without ${missing}`,
+          ).toBe(false);
+        }
+        context.session.user.value = {
+          ...context.session.user.value!,
+          role: "custom",
+          permissions: ["instances.read", ...required],
+        };
+        await flushPromises();
+        expect(hasButton(label)).toBe(true);
+      }
+      expect(calls).toHaveLength(0);
+    },
+  );
+});

@@ -58,7 +58,7 @@ function allowed(
     /^[a-f0-9]{32}$/.test(operation.id) &&
     session.can(actionPermission(operation.action)) &&
     (!["public_adopt", "public_detach"].includes(operation.action) ||
-      session.can("nodes.manage")) &&
+      (session.can("nodes.read") && session.can("nodes.manage"))) &&
     (action === "dispatch"
       ? operation.state === "accepted"
       : ["sending", "dispatched", "uncertain"].includes(operation.state))
