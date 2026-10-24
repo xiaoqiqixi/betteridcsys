@@ -7,11 +7,21 @@ import (
 )
 
 func (c Console) retirementView(ctx context.Context, m *Migration) error {
+	if m.Phase != "active" {
+		return nil
+	}
 	prepare, e := c.Store.Operation(ctx, m.SourceOperationID)
+	if errors.Is(e, ErrNotFound) {
+		// Retirement metadata is an additive storage/2 projection. Historical
+		// storage/1 rows did not require a retained console source operation.
+		// Absence is not proof of retirement or permission to delete: the write
+		// path still requires the exact original source task and target receipt.
+		return nil
+	}
 	if e != nil {
 		return e
 	}
-	if prepare.Protocol != nodeproto.StorageDirectProtocol || m.Phase != "active" {
+	if prepare.Protocol != nodeproto.StorageDirectProtocol {
 		return nil
 	}
 	m.SourceRetirementState = "required"

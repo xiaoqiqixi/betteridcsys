@@ -1067,7 +1067,13 @@ try {
   directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
   assert.equal(directCurrent.binding_state,'pending'); assert.equal(directCurrent.binding_generation,2); assert.equal(directCurrent.epoch_id,''); assert(directCurrent.operation_id);
   assert.equal(await vmCard(direct.id).getByRole('button',{name:'回收',exact:true}).isDisabled(),true);
-  await page.locator('.resource-next').getByRole('link',{name:'继续关联任务',exact:true}).click(); await page.getByRole('heading',{name:'任务详情',exact:true}).waitFor(); await dispatchNodeTask(directCurrent.operation_id);
+  // The instance refresh can remount its public-resource panel after admission.
+  // Continue through the durable row link, not an ephemeral local ACK banner.
+  const detachTaskLink = vmCard(direct.id).getByRole('link',{name:'查看关联任务',exact:true});
+  const detachTaskURL = new URL(await detachTaskLink.getAttribute('href'),base);
+  assert.equal(detachTaskURL.origin,new URL(base).origin);
+  assert.equal(detachTaskURL.hash,`#/operations/${directCurrent.operation_id}`);
+  await detachTaskLink.click(); await page.getByRole('heading',{name:'任务详情',exact:true}).waitFor(); await dispatchNodeTask(directCurrent.operation_id);
   await directInstancePanel(); directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
   assert.equal(directCurrent.binding_state,'unbound'); assert.equal(directCurrent.releasable,true);
   await vmCard(direct.id).getByRole('button',{name:'回收',exact:true}).click(); await page.getByRole('dialog').locator('.resource-confirmation input').fill(direct.address);
