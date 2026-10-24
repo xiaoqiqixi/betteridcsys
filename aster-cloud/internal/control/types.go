@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -47,6 +48,23 @@ func (c Capability) SupportsNetwork(r controllerapi.Resources, node NodeProfile,
 }
 
 func (c Capability) validNetworkCapabilities() bool {
+	if (c.DirectPublicNetwork != nil) != contains(c.NetworkProfiles, nodeproto.DirectPublicCapability) {
+		return false
+	}
+	if p := c.DirectPublicNetwork; p != nil {
+		if len(p.Addresses) < 1 || len(p.Addresses) > 4096 {
+			return false
+		}
+		seen := map[string]bool{}
+		for _, a := range p.Addresses {
+			b := nodeproto.DirectPublicBinding{Schema: 1, Generation: 1, LeaseID: strings.Repeat("1", 32), PoolID: strings.Repeat("2", 32), NodeID: c.NodeID, OwnerRef: strings.Repeat("3", 32), InstanceID: strings.Repeat("4", 32), ProfileID: p.ProfileID, ProfileSHA256: p.ProfileSHA256, CIDR: p.CIDR, Gateway: p.Gateway, IPv4: a, MAC: "52:54:00:00:00:01"}
+			if !b.ValidIdentity() || seen[a] {
+				return false
+			}
+			seen[a] = true
+		}
+	}
+
 	if len(c.OVSNetworkProfiles) > 256 || (len(c.OVSNetworkProfiles) > 0) != contains(c.NetworkProfiles, nodeproto.OVSNetworkCapability) {
 		return false
 	}
@@ -93,14 +111,15 @@ type OverlayAdmission struct {
 	RootClusters []OverlayCluster `json:"-"`
 }
 type Candidate struct {
-	Overlay           *OverlayAdmission
-	Node              NodeProfile
-	ProfileSHA        string
-	Resources         controllerapi.Resources
-	NetworkProfileID  string
-	NetworkPoolID     string
-	NetworkProfileSHA string
-	NetworkOwnerRef   string
+	DirectPublicRequired bool
+	Overlay              *OverlayAdmission
+	Node                 NodeProfile
+	ProfileSHA           string
+	Resources            controllerapi.Resources
+	NetworkProfileID     string
+	NetworkPoolID        string
+	NetworkProfileSHA    string
+	NetworkOwnerRef      string
 }
 type Job struct {
 	OperationID    string    `json:"operation_id"`

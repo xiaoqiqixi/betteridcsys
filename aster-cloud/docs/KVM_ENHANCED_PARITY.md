@@ -1,6 +1,6 @@
 # KVM 加强版功能对照与开发验收规格
 
-2026-10-23。本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。
+2026-10-24。本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。
 
 ## 1. 对标范围与不变边界
 
@@ -70,8 +70,19 @@
 `frontend/src/pages/PublicIPsPage.vue`。已实现公网 IPv4 NAT 专用池、追加库存、
 全局唯一租约、实际出口选择、完整解绑确认回收、权限与审计，见
 [公网 IP 管理](PUBLIC_IP_MANAGEMENT.md)。主控 schema 现为 8；既有迁移不改。
-不是任意 VM 弹性 IP、IPv6、热迁移或物理路由自动发布。下面原 A11 的
+该段为 schema8 NAT 增量，后续 schema9 能力见下段；IPv6、热迁移或物理路由自动发布仍未实现。下面原 A11 的
 网关/DNS/分组差距仍在；不能用新 NAT 出口租约冒充原创建地址可任意释放。
+
+## 2026-10-24 VM 公网直绑及浮动 IP 增量
+
+新增 A19：`migrations/009_public_ip_resources.sql`、`internal/control/public_ip_resource_*`、
+`internal/nodeproto/direct_public.go`、`internal/hypervisor/direct_public.go`、
+`internal/fabric/floating_ip.go` 及管理台对应组件。schema9 与 node journal5；
+旧 NAT 租约和历史合同不改。新建普通网络 VM 真正使用指定公网 IP，已有 VM 仅停止态
+同 IP/MAC 接管；浮动 IP 为独立 owner/VPC 资源，通过全组 epoch 连接目标专属
+SNAT/整地址 DNAT，可移动到同 VPC 的跨节点成员。普通直绑冷迁移保持 IP/MAC，
+支持单独确认源退役后的回迁；不冒充 VPC guest 磁盘迁移或热迁移。
+见 [完整合同与限制](VM_PUBLIC_IP_MANAGEMENT.md)。真实 KVM/上联仍 `realhost-required`。
 
 ## 4. 加强版核心网络差距（最高优先级）
 
@@ -86,7 +97,7 @@ R1/R4/R5/R6/R7/R10 是功能依据；具体执行器选型须再查 Ubuntu/libvi
 | VLAN 隔离 | `implemented-partial` A11 的 node/VLAN 唯一预留 + A12 的 VPC metadata 微分段 | 当前用 VLAN 编号作 bridge 内 OpenFlow metadata 标签，并非已提供 802.1Q trunk/access；来宾 tagged frame 默认 drop。物理 802.1Q 上联/跨节点 VLAN trunk 仍 `missing`；A16 的 VXLAN 不能冒充它，不能把 OVSDB tag 当显式 flow 隔离。 |
 | 节点内/跨节点私网 | `implemented-partial` A12/A16；`realhost-required` | 已实现固定 VXLAN peer/VNI、MTU 约束、精确 ARP/IPv4 身份与全节点 epoch 屏障，无 flooding/LOCAL/NORMAL。运营者须提供受信 underlay；双宿主 VM 包流、欺骗/速率与连续故障恢复仍待真机验收。 |
 | VPC、子网、路由及客户归属 | `implemented-partial` A11/A12/A14/A16/A17 | 已有原 IPAM 冻结绑定、全局 VPC、root 批准网关目的前缀、跨节点成员、创建屏障及后台完整配置/恢复。planned/reserved 不等于已联网；完整子网生命周期、自助网络、动态路由与真机包流验收仍缺。 |
-| 浮动/弹性公网 IP | `implemented-partial` A18，仅 NAT 出口；任意 VM EIP 仍 `missing` | NAT 出口已有独立 owner 租约、唯一绑定及确认解绑回收；不是任意 VM 公网网卡。未知状态不转绑，迁移不能静默换 IP/释放旧 IP，物理验收仍后置。 |
+| 浮动/弹性公网 IP | `implemented-partial` A18/A19；`realhost-required` | 独立直绑/浮动资源、全局互斥、确认分配/解绑/回收、同 owner/VPC 跨节点成员切换、普通直绑地址保持冷迁移。运行中热换主 IP、多公网 NIC、VPC 磁盘迁移/HA 未实现；物理验收后置。 |
 | NAT 端口转发/共享建站 | `implemented-partial` A17/A18；`realhost-required` | 已有 root 批准的公网 TCP/UDP/ICMP echo 出站、精确 TCP/UDP DNAT、源/端口校验、全节点屏障、规则读回与 conntrack 撤销。A18 接池、分配、实际地址选择和确认回收；IPv6/hairpin/ICMP DNAT、域名共享建站及真实上联/KVM 验收仍缺，不占宿主 SSH/财务端口。 |
 | 租户安全组 | `missing`；A3 固定防欺骗不是安全组 | 入/出方向、协议/CIDR/端口范围、优先级/状态语义明确；默认策略、规则版本、原子替换、绑定读回。IPv4/IPv6/ARP/NDP 及失败时旧策略保留。 |
 | IP-MAC 绑定与反欺骗 | `implemented-partial` A3/A12；`realhost-required` | 旧 bridge filter 和新 OVS exact IP/MAC/ARP+VPC metadata 与嵌入 gate 分别有测试，不互相替代。必须实测同桥非托管端口、ofport 重用、双标签、宿主服务攻击及断电恢复。 |

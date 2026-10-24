@@ -8,7 +8,7 @@ There is **no live KVM node**: the existing deterministic node RPC test double
 records receipts and loses exactly one `program` acknowledgement. Actual Linux
 NAT packet flow is checked separately in the Ubuntu 22.04/24.04 `native-nat`
 matrix; browser acceptance does not establish physical cross-node reachability.
-The public addresses `8.8.4.2`, `8.8.4.3` and `8.8.4.4` in this fixture are
+The public addresses `8.8.4.2`, `8.8.4.3`, `8.8.4.4` and `9.9.9.2` in this fixture are
 **synthetic controller approval metadata**: they are not assigned, contacted,
 claimed as owned, or configured as runner routes. This is not a private root
 NAT profile or provider-ownership proof; the real native namespace gate checks
@@ -52,9 +52,9 @@ for the test result. Passing additionally requires database assertions that
 plan, VPC creation, lost-ACK reconciliation and recovery actually persisted,
 and that original financial/node request bytes, network snapshot bytes and
 initial node receipts stayed unchanged. UI success alone is not sufficient.
-The fixture additionally requires exactly **seven epochs, two VPCs and forty-two
-unique node task POSTs**; its original first thirty POSTs must remain the
-unchanged five-epoch, no-explicit-public-address prefix. Epoch 1 is the original prefix-only snapshot. Through
+The fixture additionally requires exactly **ten epochs, two VPCs and sixty
+unique overlay node task POSTs**, plus three direct node/3 POSTs; its original first thirty POSTs must remain the
+unchanged five-epoch, no-explicit-public-address prefix. Its first forty-two tasks retain the original seven NAT/network epochs with no floating policy. Epoch 1 is the original prefix-only snapshot. Through
 visible UI controls, epoch 2 enables public IPv4 Internet while retaining its
 explicit route and DNAT mapping, epoch 3 recovers that selection after the lost
 ACK, epoch 4 disables SNAT/Internet and removes routes/mappings, and epoch 5
@@ -101,11 +101,51 @@ After the original five-epoch flow, the visible public-IP UI must:
    the typed-IP-confirmed **回收公网 IP** action available.
 6. Reallocate the same address into a distinct reserved lease. The released
    original lease and all original five network snapshots/receipts remain
-   intact. The database must end with one pool, two immutable inventory
+   intact. At this stage the NAT workflow retains one pool, two immutable inventory
    addresses, two lease-history rows, one exclusive active reservation and
    exactly seven public-IP operations (create, extend, two pool-state changes,
    two allocations and one reclamation). Old allocation-operation results stay
    `reserved`, not rewritten to mirror their later mutable lease state.
+
+## VM direct addresses and independent floating IPs
+
+The same mandatory job then continues through visible controls, not a separate
+optional test or API-only demonstration:
+
+1. Allocate `8.8.4.4` as an independent floating IP. Explicitly choose the exact
+   owner/VPC/profile/VM, type the VM ID and check full TCP/UDP-port + ICMP public
+   exposure consent. Epoch 8 binds the original VM through all six phase receipts.
+2. Atomically move that same resource/address to the same owner's VM on the other
+   node in epoch 9. Until completion the current projection remains pending and
+   cannot be reclaimed; epoch 8 remains byte-for-byte unchanged.
+3. Unbind in epoch 10, prove every node's prepare/program/release receipt, then
+   reclaim and reallocate the same address into a distinct resource. Original
+   allocation results and all original seven NAT/network snapshots/receipts remain
+   immutable. A pending removal alone must never free inventory.
+4. A separate fixture-approved normal network and `9.9.9.0/24` pool supply
+   `9.9.9.2`. Allocate it via the new UI, select its exact resource in the real
+   CreateInstanceDialog, and explicitly dispatch the real persisted creation task.
+   The browser freezes resource ID plus `public_ip_expected_generation: 0`; the task is node/3 with exact IP, MAC, owner, node, profile and generation.
+5. View the current binding in the instance public-address panel, explicitly
+   create/dispatch shutdown, then plan/dispatch exact public detachment and reclaim.
+   This is never presented as live primary-IP replacement. The fixture compares
+   the three actual substitute Send responses to the exact frozen MySQL requests
+   and successful controller operation states; it does not invent results later.
+
+The final database requires three VM resource-history rows, nine immutable VM
+resource operations (**allocate 3, bind 2, unbind 2, release 2**), two NAT lease
+history rows and their original seven UI operations. The fixture-seeded direct
+pool adds one separate inventory operation: eight total legacy pool/NAT operations,
+two pools, three inventory addresses and exactly two exclusive active claims.
+Every active row must resolve to one reserved NAT lease or VM resource. The
+released direct address must have no claim. Creation and shutdown are controller
+operations, not counted among those nine resource operations.
+
+The separate typed UI/API tests cover generation conflicts and durable full-intent
+unknown reconciliation, including recovery-only detachment with the exact original
+epoch SHA. Recovery does not restore a public binding. Its public-resource POST
+only plans a new epoch; only GET original-operation proof can resolve a lost ACK.
+No physical VM or provider allocation is claimed by this deterministic node fixture.
 
 All writes use visible Vue controls. The script's `fetch` evidence is GET-only;
 no component-state mutation, response-body replacement, TLS bypass, write retry
@@ -133,7 +173,7 @@ The original fourteen screenshots remain, including the two
 `*-public-egress-editor.png` images showing the Internet-only editor. Eighteen
 additional desktop/mobile images show pool creation, extension, inventory,
 allocation, bound NAT selection, bound leases, reclamation, lease history and
-English/dark lease presentation. New dialogs and list pages are measured at
+English/dark lease presentation. Twelve further real images show floating binding and bound/history resources, direct creation and the instance public panel: **44 PNGs total**. New dialogs and list pages are measured at
 1440, 390 and 320 CSS pixels for actual horizontal overflow. Final
 Chinese/light and English/dark overview screenshots are taken after epoch 5 and
 must show its persisted public mode and synthetic egress IPv4. Plan and recovery
@@ -147,4 +187,4 @@ and that changing locale removes the previous-language notice. Final screenshots
 wait for the real five-second information notice expiry, with the pointer moved
 away; they never hide DOM, click dismiss, mock clocks or edit application state.
 The first measured package provisioning took 21m48s, so the job permits 40 minutes;
-the 12-minute fixture lifetime and page-operation deadlines remain unchanged.
+the expanded fixture has an 18-minute lifetime and a 21-minute Go test deadline; individual page-operation deadlines remain bounded.

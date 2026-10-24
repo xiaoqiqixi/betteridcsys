@@ -16,6 +16,8 @@ export function sizeMiB(value: number) {
 }
 export const actionNames: Record<string, [string, string]> = {
   create: ["创建实例", "Create instance"],
+  public_adopt: ["接纳实例公网地址", "Adopt VM public address"],
+  public_detach: ["解除实例公网地址", "Detach VM public address"],
   start: ["启动", "Start"],
   shutdown: ["关机", "Shut down"],
   reboot: ["重启", "Restart"],
@@ -32,6 +34,7 @@ export const actionNames: Record<string, [string, string]> = {
   migrate_transfer: ["安全传输", "Transfer migration data"],
   migrate_import: ["导入目标节点", "Import to target"],
   migrate_activate: ["激活目标实例", "Activate target"],
+  migrate_retire_source: ["退役迁移源", "Retire migration source"],
 };
 export const failureNames: Record<string, [string, string]> = {
   public_ip_exhausted: [
@@ -99,6 +102,22 @@ export const auditNames: Record<string, [string, string]> = {
   ],
   "public_ip.lease.allocate": ["公网 IP 已分配", "Public IP allocated"],
   "public_ip.lease.release": ["公网 IP 已回收", "Public IP reclaimed"],
+  "public_ip.resource.allocate": [
+    "实例公网地址已分配",
+    "VM public address allocated",
+  ],
+  "public_ip.resource.bind": [
+    "公网地址绑定已规划",
+    "Public address binding planned",
+  ],
+  "public_ip.resource.unbind": [
+    "公网地址解绑已规划",
+    "Public address detachment planned",
+  ],
+  "public_ip.resource.release": [
+    "实例公网地址已回收",
+    "VM public address reclaimed",
+  ],
   "overlay.vpc.created": ["VPC 已创建", "VPC created"],
   "overlay.epoch.planned": ["网络变更已规划", "Network change planned"],
   "overlay.member.reserved": ["网络成员已预留", "Network member reserved"],

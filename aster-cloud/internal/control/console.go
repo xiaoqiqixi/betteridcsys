@@ -154,7 +154,7 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 				failure(w, 400, "INVALID_QUERY")
 				return
 			}
-			output(w, 200, map[string]any{"items": publicPresets(c.Config.Presets)})
+			output(w, 200, map[string]any{"items": publicPresetsWithConfig(c.Config)})
 			return
 		case len(parts) == 1 && parts[0] == "instances":
 			c.instances(w, r)
@@ -189,6 +189,18 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 			}
 			// This is a read, not resolution of any unknown operation or payment.
 			output(w, 200, map[string]any{"observation": observed})
+			return
+		case len(parts) == 3 && parts[0] == "instances" && nodeproto.ValidID(parts[1]) && parts[2] == "migration-targets":
+			if !user.Can("migration.manage") || !user.Can("nodes.read") {
+				failure(w, 403, "FORBIDDEN")
+				return
+			}
+			targets, e := c.Store.MigrationTargets(ctx, c.Config, parts[1], time.Now().UTC())
+			if e != nil {
+				consoleError(w, e)
+				return
+			}
+			output(w, 200, targets)
 			return
 		case len(parts) == 2 && parts[0] == "instances" && nodeproto.ValidID(parts[1]):
 			v, e := c.Store.Instance(ctx, parts[1])
@@ -271,6 +283,10 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 		if !readConsoleJSON(w, r, &in) {
 			return
 		}
+		if in.PublicIPResourceID != "" && !user.Can("nodes.manage") {
+			failure(w, 403, "FORBIDDEN")
+			return
+		}
 		op := r.Header.Get("Idempotency-Key")
 		if !nodeproto.ValidID(op) {
 			failure(w, 400, "IDEMPOTENCY_KEY_REQUIRED")
@@ -294,12 +310,34 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 			failure(w, 403, "FORBIDDEN")
 			return
 		}
+		if strings.HasPrefix(input.Action, "migrate_") {
+			v, err := c.Store.Instance(ctx, parts[1])
+			if err != nil {
+				consoleError(w, err)
+				return
+			}
+			var known int
+			if err = c.Store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_public_ip_bindings WHERE epoch_id='' AND (instance_id=? OR previous_instance_id=?)", v.ID, v.ID).Scan(&known); err != nil {
+				consoleError(w, err)
+				return
+			}
+			if (c.Config.directRequired(v.NodeID) || known > 0) && (!user.Can("nodes.manage") || !user.Can("instances.manage")) {
+				failure(w, 403, "FORBIDDEN")
+				return
+			}
+		}
 		op := r.Header.Get("Idempotency-Key")
 		if !nodeproto.ValidID(op) {
 			failure(w, 400, "IDEMPOTENCY_KEY_REQUIRED")
 			return
 		}
-		operation, _, e := c.Store.CreateOperation(ctx, c.Config, user.ID, parts[1], op, input, time.Now().UTC())
+		var operation Operation
+		var e error
+		if input.Action == "migrate_retire_source" {
+			operation, _, e = c.worker().CreateRetireSource(ctx, user.ID, parts[1], op, input)
+		} else {
+			operation, _, e = c.Store.CreateOperation(ctx, c.Config, user.ID, parts[1], op, input, time.Now().UTC())
+		}
 		if e != nil {
 			consoleError(w, e)
 			return
@@ -523,7 +561,16 @@ func (c Console) migrations(ctx context.Context, instance string) ([]Migration, 
 		}
 		out = append(out, v)
 	}
-	return out, rows.Err()
+	if e = rows.Err(); e != nil {
+		return nil, e
+	}
+	rows.Close()
+	for i := range out {
+		if e = c.retirementView(ctx, &out[i]); e != nil {
+			return nil, e
+		}
+	}
+	return out, nil
 }
 func (c Console) maintenanceAs(ctx context.Context, actor, node string, on bool) error {
 	tx, e := c.Store.locked(ctx)

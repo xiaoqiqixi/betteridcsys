@@ -173,8 +173,11 @@ func decodeSignedManifest(raw []byte) (nodeproto.SignedStorageManifest, string, 
 		return s, "", e
 	}
 	m := s.Manifest
-	if m.Protocol != nodeproto.StorageProtocol || !nodeproto.ValidID(m.ArtifactID) || !nodeproto.ValidID(m.InstanceID) || !nodeproto.ValidID(m.OwnerRef) || !nodeproto.ValidNodeID(m.NodeID) || m.SourceDomain != "aster-"+m.InstanceID || !hashString(m.DiskSHA256) || !hashString(m.ImageSHA256) || m.DiskBytes < 1 || m.DiskBytes > (int64(m.Resources.SystemDiskGiB)+1)<<30 || m.VirtualBytes < 1 || m.Resources.SystemDiskGiB < 1 || m.VirtualBytes > uint64(m.Resources.SystemDiskGiB)<<30 || m.ImageID != m.Resources.ImageID {
+	if (m.Protocol != nodeproto.StorageProtocol && m.Protocol != nodeproto.StorageDirectProtocol) || !nodeproto.ValidID(m.ArtifactID) || !nodeproto.ValidID(m.InstanceID) || !nodeproto.ValidID(m.OwnerRef) || !nodeproto.ValidNodeID(m.NodeID) || m.SourceDomain != "aster-"+m.InstanceID || !hashString(m.DiskSHA256) || !hashString(m.ImageSHA256) || m.DiskBytes < 1 || m.DiskBytes > (int64(m.Resources.SystemDiskGiB)+1)<<30 || m.VirtualBytes < 1 || m.Resources.SystemDiskGiB < 1 || m.VirtualBytes > uint64(m.Resources.SystemDiskGiB)<<30 || m.ImageID != m.Resources.ImageID {
 		return s, "", errors.New("invalid artifact manifest")
+	}
+	if m.Protocol == nodeproto.StorageProtocol && !m.DirectPublic.IsZero() || m.Protocol == nodeproto.StorageDirectProtocol && !m.DirectPublic.ValidFor(nodeproto.NodeTask{NodeID: m.NodeID, InstanceID: m.InstanceID, OwnerRef: m.OwnerRef, Resources: m.Resources}) {
+		return s, "", errors.New("artifact direct network binding rejected")
 	}
 	task := nodeproto.NodeTask{Protocol: nodeproto.Protocol, NodeID: m.NodeID, OperationID: "11111111111111111111111111111111", Action: "create", InstanceID: m.InstanceID, OwnerRef: m.OwnerRef, Hostname: m.Hostname}
 	if !task.Valid() {
@@ -211,6 +214,12 @@ func (m *Manager) readImport(task nodeproto.TypedStorageTask, requireApproval bo
 	}
 	if manifest.Kind != "migration" || manifest.NodeID != task.SourceNodeID || manifest.TargetNodeID != m.Config.NodeID || manifest.TargetNodeID != task.TargetNodeID || manifest.ArtifactID != task.ArtifactID || manifest.InstanceID != task.InstanceID || manifest.OwnerRef != task.OwnerRef || manifest.ExportOperationID != task.SourceOperationID || manifest.FenceToken != task.FenceToken || hash != task.ManifestSHA256 || !nodeproto.ValidID(manifest.ExportOperationID) || !hashString(manifest.FenceToken) {
 		return manifest, "", errors.New("migration binding rejected")
+	}
+	if task.Protocol != manifest.Protocol || !nodeproto.SameDirectAddress(manifest.DirectPublic, task.DirectPublic) || !task.DirectPublic.IsZero() && task.DirectPublic.Generation != manifest.DirectPublic.Generation+1 {
+		return manifest, "", errors.New("migration must preserve exact public guest identity")
+	}
+	if !task.DirectPublic.IsZero() && m.approvedDirect(task.DirectPublic) != nil {
+		return manifest, "", errors.New("target public network not approved")
 	}
 	image, ok := m.Config.Images[manifest.ImageID]
 	if !ok || image.SHA256 != manifest.ImageSHA256 {
@@ -264,6 +273,7 @@ func (m *Manager) approveInboxWithAttestation(ctx context.Context, artifactID, r
 	}
 	a := signed.Manifest
 	task := nodeproto.TypedStorageTask{Protocol: nodeproto.StorageProtocol, NodeID: m.Config.NodeID, OperationID: "11111111111111111111111111111111", Action: "migrate_import", InstanceID: a.InstanceID, OwnerRef: a.OwnerRef, ArtifactID: artifactID, TargetNodeID: m.Config.NodeID, SourceNodeID: a.NodeID, SourceOperationID: a.ExportOperationID, ManifestSHA256: hash, FenceToken: reviewedFenceToken}
+	bindDirectImportTask(&task, a)
 	if !task.Valid() {
 		return nodeproto.ErrInvalid
 	}

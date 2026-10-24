@@ -21,15 +21,16 @@ var hostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type NodeTask struct {
-	Network     NetworkBinding          `json:"network,omitzero"`
-	Protocol    string                  `json:"protocol"`
-	OperationID string                  `json:"operation_id"`
-	NodeID      string                  `json:"node_id"`
-	Action      string                  `json:"action"`
-	InstanceID  string                  `json:"instance_id"`
-	OwnerRef    string                  `json:"owner_ref"`
-	Hostname    string                  `json:"hostname"`
-	Resources   controllerapi.Resources `json:"resources"`
+	DirectPublic DirectPublicBinding     `json:"direct_public,omitzero"`
+	Network      NetworkBinding          `json:"network,omitzero"`
+	Protocol     string                  `json:"protocol"`
+	OperationID  string                  `json:"operation_id"`
+	NodeID       string                  `json:"node_id"`
+	Action       string                  `json:"action"`
+	InstanceID   string                  `json:"instance_id"`
+	OwnerRef     string                  `json:"owner_ref"`
+	Hostname     string                  `json:"hostname"`
+	Resources    controllerapi.Resources `json:"resources"`
 	// Delete additionally requires the operator-configured allow_delete and this exact ID.
 	ConfirmInstanceID string `json:"confirm_instance_id,omitempty"`
 }
@@ -45,15 +46,17 @@ type NodeResult struct {
 func ValidID(value string) bool     { return hexID.MatchString(value) }
 func ValidNodeID(value string) bool { return nodeID.MatchString(value) }
 func (t NodeTask) Valid() bool {
-	if (t.Protocol != Protocol && t.Protocol != NetworkProtocol) || !ValidID(t.OperationID) || !ValidNodeID(t.NodeID) || !ValidID(t.InstanceID) || !ValidID(t.OwnerRef) || !hostname.MatchString(t.Hostname) {
+	if (t.Protocol != Protocol && t.Protocol != NetworkProtocol && t.Protocol != DirectPublicProtocol) || !ValidID(t.OperationID) || !ValidNodeID(t.NodeID) || !ValidID(t.InstanceID) || !ValidID(t.OwnerRef) || !hostname.MatchString(t.Hostname) {
 		return false
 	}
-	if t.Protocol == Protocol && !t.Network.IsZero() || t.Protocol == NetworkProtocol && !t.Network.ValidFor(t) {
+	if t.Protocol != DirectPublicProtocol && !t.DirectPublic.IsZero() || t.Protocol == DirectPublicProtocol && (!t.Network.IsZero() || !t.DirectPublic.ValidFor(t)) || t.Protocol == Protocol && !t.Network.IsZero() || t.Protocol == NetworkProtocol && !t.Network.ValidFor(t) {
 		return false
 	}
 	switch t.Action {
 	case "create", "start", "shutdown", "reboot", "force_off":
 		return t.ConfirmInstanceID == ""
+	case "public_adopt", "public_detach":
+		return t.Protocol == DirectPublicProtocol && t.ConfirmInstanceID == t.InstanceID
 	case "delete":
 		return t.ConfirmInstanceID == t.InstanceID
 	default:
@@ -103,6 +106,13 @@ func DecodeTask(raw []byte) (NodeTask, error) {
 		allowed["network"] = true
 		n, err := decodeNetworkBinding(fields["network"])
 		if err != nil || n != task.Network {
+			return NodeTask{}, ErrInvalid
+		}
+	}
+	if task.Protocol == DirectPublicProtocol {
+		allowed["direct_public"] = true
+		b, err := decodeDirectPublic(fields["direct_public"])
+		if err != nil || b != task.DirectPublic {
 			return NodeTask{}, ErrInvalid
 		}
 	}

@@ -126,6 +126,11 @@ func (e *Executor) probeNAT(ctx context.Context, c OverlayConfig, s overlayproto
 			uplinkOnLink = true
 		}
 	}
+	for _, f := range s.FloatingIPs {
+		if f.NodeID == c.Base.NodeID && f.ProfileID == p.ID && !outsideIPs[f.PublicIPv4] {
+			return ErrUnavailable
+		}
+	}
 	if !outsideIPs[p.PublicIPv4] || !outsideIPs[selected] || !uplinkOnLink {
 		return ErrUnavailable
 	}

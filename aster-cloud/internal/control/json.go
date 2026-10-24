@@ -87,7 +87,7 @@ func shape(raw []byte, t reflect.Type) bool {
 			allowed[tag] = true
 			v, ok := fields[tag]
 			if !ok {
-				if strings.Contains(f.Tag.Get("json"), ",omitempty") {
+				if strings.Contains(f.Tag.Get("json"), ",omitempty") || strings.Contains(f.Tag.Get("json"), ",omitzero") {
 					continue
 				}
 				return false

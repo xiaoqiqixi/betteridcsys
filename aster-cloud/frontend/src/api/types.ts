@@ -65,7 +65,8 @@ export type Action =
   | "migrate_prepare"
   | "migrate_transfer"
   | "migrate_import"
-  | "migrate_activate";
+  | "migrate_activate"
+  | "migrate_retire_source";
 export interface Operation {
   id: string;
   instance_id: string;
@@ -86,6 +87,8 @@ export interface Artifact {
   created_at: string;
 }
 export interface Migration {
+  source_retirement_state?: "required" | "pending" | "succeeded" | "blocked";
+  source_retirement_operation_id?: string;
   id: string;
   instance_id: string;
   source_node_id: string;
@@ -141,6 +144,7 @@ export interface UserInput {
 }
 
 export interface Preset {
+  direct_public_required?: boolean;
   id: string;
   node_id: string;
   resources: Resources;

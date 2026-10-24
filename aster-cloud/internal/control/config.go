@@ -22,20 +22,21 @@ import (
 )
 
 type Config struct {
-	Schema              int              `json:"schema"`
-	ControllerID        string           `json:"controller_id"`
-	Listen              string           `json:"listen"`
-	TLSCertFile         string           `json:"tls_cert_file"`
-	TLSKeyFile          string           `json:"tls_key_file"`
-	DSNFile             string           `json:"dsn_file"`
-	BillingTokenFile    string           `json:"billing_token_file"`
-	AdminReadTokenFile  string           `json:"admin_read_token_file"`
-	AdminWriteTokenFile string           `json:"admin_write_token_file"`
-	HeartbeatTTLSeconds int              `json:"heartbeat_ttl_seconds"`
-	Nodes               []NodeProfile    `json:"nodes"`
-	Presets             []Preset         `json:"presets"`
-	NetworkProfiles     []NetworkProfile `json:"network_profiles,omitempty"`
-	OverlayClusters     []OverlayCluster `json:"overlay_clusters,omitempty"`
+	Schema               int                   `json:"schema"`
+	ControllerID         string                `json:"controller_id"`
+	Listen               string                `json:"listen"`
+	TLSCertFile          string                `json:"tls_cert_file"`
+	TLSKeyFile           string                `json:"tls_key_file"`
+	DSNFile              string                `json:"dsn_file"`
+	BillingTokenFile     string                `json:"billing_token_file"`
+	AdminReadTokenFile   string                `json:"admin_read_token_file"`
+	AdminWriteTokenFile  string                `json:"admin_write_token_file"`
+	HeartbeatTTLSeconds  int                   `json:"heartbeat_ttl_seconds"`
+	Nodes                []NodeProfile         `json:"nodes"`
+	Presets              []Preset              `json:"presets"`
+	NetworkProfiles      []NetworkProfile      `json:"network_profiles,omitempty"`
+	OverlayClusters      []OverlayCluster      `json:"overlay_clusters,omitempty"`
+	DirectPublicProfiles []DirectPublicProfile `json:"direct_public_profiles,omitempty"`
 }
 type NodeProfile struct {
 	ID                      string   `json:"id"`
@@ -212,6 +213,9 @@ func LoadConfig(path string) (Config, Secrets, error) {
 	return c, Secrets{b, r, w}, nil
 }
 func (c Config) Valid() bool {
+	if !c.validDirectPublicProfiles() {
+		return false
+	}
 	if c.Schema != 1 || !nodeproto.ValidNodeID(c.ControllerID) || c.HeartbeatTTLSeconds < 10 || c.HeartbeatTTLSeconds > 300 || len(c.Nodes) > 64 || c.Nodes == nil || c.Presets == nil || len(c.Presets) > 256 {
 		return false
 	}
@@ -278,8 +282,11 @@ func (c Config) NetworkProfile(id string) (NetworkProfile, bool) {
 // Current root approval is checked without rebuilding a task from mutable
 // presets. Removing/changing a profile blocks new writes, not GET reconciliation.
 func (c Config) approvesTaskNetwork(t nodeproto.NodeTask) bool {
+	if t.Protocol == nodeproto.DirectPublicProtocol {
+		return t.Network.IsZero() && (directCleanupAction(t.Action) && t.DirectPublic.ValidFor(t) || c.approvesDirectPublic(t.DirectPublic))
+	}
 	if t.Protocol == nodeproto.Protocol {
-		return t.Network.IsZero()
+		return t.Network.IsZero() && t.DirectPublic.IsZero() && (!c.directRequired(t.NodeID) || t.Resources.NetworkType != "normal" || t.Resources.IPv4Count != 1 || t.Action != "create" && t.Action != "start" && t.Action != "reboot")
 	}
 	if t.Protocol != nodeproto.NetworkProtocol || !t.Network.ValidFor(t) {
 		return false
@@ -319,7 +326,7 @@ func (c Config) Candidates(r controllerapi.Request) []Candidate {
 		return nil
 	}
 	add := func(n NodeProfile, resources controllerapi.Resources, profileID string) (Candidate, bool) {
-		candidate := Candidate{Node: n, ProfileSHA: n.Digest(), Resources: resources}
+		candidate := Candidate{Node: n, ProfileSHA: n.Digest(), Resources: resources, DirectPublicRequired: c.directRequired(n.ID) && resources.NetworkType == "normal"}
 		if resources.NetworkType == "vpc" {
 			profile, ok := c.NetworkProfile(profileID)
 			if !ok || profile.NodeID != n.ID || profile.OwnerRef != r.OwnerRef || !vpcResources(resources) {

@@ -46,18 +46,20 @@ type Artifact struct {
 	ManifestSHA string    `json:"-"`
 }
 type Migration struct {
-	ID                string                  `json:"id"`
-	InstanceID        string                  `json:"instance_id"`
-	SourceNodeID      string                  `json:"source_node_id"`
-	TargetNodeID      string                  `json:"target_node_id"`
-	Phase             string                  `json:"phase"`
-	CreatedAt         time.Time               `json:"created_at"`
-	UpdatedAt         time.Time               `json:"updated_at"`
-	TargetProfileSHA  string                  `json:"-"`
-	SourceOperationID string                  `json:"-"`
-	ManifestSHA       string                  `json:"-"`
-	FenceToken        string                  `json:"-"`
-	Resources         controllerapi.Resources `json:"-"`
+	SourceRetirementState       string                  `json:"source_retirement_state,omitempty"`
+	SourceRetirementOperationID string                  `json:"source_retirement_operation_id,omitempty"`
+	ID                          string                  `json:"id"`
+	InstanceID                  string                  `json:"instance_id"`
+	SourceNodeID                string                  `json:"source_node_id"`
+	TargetNodeID                string                  `json:"target_node_id"`
+	Phase                       string                  `json:"phase"`
+	CreatedAt                   time.Time               `json:"created_at"`
+	UpdatedAt                   time.Time               `json:"updated_at"`
+	TargetProfileSHA            string                  `json:"-"`
+	SourceOperationID           string                  `json:"-"`
+	ManifestSHA                 string                  `json:"-"`
+	FenceToken                  string                  `json:"-"`
+	Resources                   controllerapi.Resources `json:"-"`
 }
 
 func OperationPermission(action string) string {
@@ -70,14 +72,14 @@ func OperationPermission(action string) string {
 		return "storage.manage"
 	case "snapshot_restore", "backup_restore":
 		return "storage.restore"
-	case "migrate_prepare", "migrate_transfer", "migrate_import", "migrate_activate":
+	case "migrate_prepare", "migrate_transfer", "migrate_import", "migrate_activate", "migrate_retire_source":
 		return "migration.manage"
 	}
 	return ""
 }
 func dangerous(action string) bool {
 	switch action {
-	case "reboot", "force_off", "delete", "snapshot_restore", "snapshot_delete", "backup_restore", "backup_delete", "migrate_prepare", "migrate_transfer", "migrate_activate":
+	case "reboot", "force_off", "delete", "snapshot_restore", "snapshot_delete", "backup_restore", "backup_delete", "migrate_prepare", "migrate_transfer", "migrate_activate", "migrate_retire_source":
 		return true
 	}
 	return false
@@ -89,7 +91,7 @@ func (in OperationInput) valid(instance string) bool {
 	switch in.Action {
 	case "snapshot_create", "backup_create":
 		return in.ArtifactID == "" && in.TargetNodeID == ""
-	case "snapshot_restore", "snapshot_delete", "backup_verify", "backup_restore", "backup_delete", "migrate_transfer", "migrate_import", "migrate_activate":
+	case "snapshot_restore", "snapshot_delete", "backup_verify", "backup_restore", "backup_delete", "migrate_transfer", "migrate_import", "migrate_activate", "migrate_retire_source":
 		return nodeproto.ValidID(in.ArtifactID) && in.TargetNodeID == ""
 	case "migrate_prepare":
 		return in.ArtifactID == "" && nodeproto.ValidNodeID(in.TargetNodeID)
@@ -142,6 +144,9 @@ func scanMigration(row interface{ Scan(...any) error }) (Migration, error) {
 const migrationColumns = "id,instance_id,source_node_id,target_node_id,target_profile_sha256,source_operation_id,target_resources,manifest_sha256,fence_token,phase,created_at,updated_at"
 
 func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instance, op string, in OperationInput, now time.Time) (Operation, bool, error) {
+	return s.createOperation(ctx, c, actor, instance, op, in, now, nil)
+}
+func (s *SQLStore) createOperation(ctx context.Context, c Config, actor, instance, op string, in OperationInput, now time.Time, retire *nodeproto.StorageResult) (Operation, bool, error) {
 	if !nodeproto.ValidID(actor) || !nodeproto.ValidID(instance) || !nodeproto.ValidID(op) || !in.valid(instance) {
 		return Operation{}, false, ErrInput
 	}
@@ -155,6 +160,9 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		return Operation{}, false, e
 	}
 	defer tx.Rollback()
+	if e = publicResourceIDUnusedTx(ctx, tx, op); e != nil {
+		return Operation{}, false, e
+	}
 	prior, e := scanOperation(tx.QueryRowContext(ctx, "SELECT "+operationColumns+" FROM controller_operations WHERE id=?", op))
 	if e == nil {
 		if prior.ActorID != actor || prior.IntentSHA != fingerprint {
@@ -194,6 +202,27 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		return Operation{}, false, ErrState
 	}
 	o := Operation{ID: op, ActorID: actor, InstanceID: instance, NodeID: v.NodeID, Action: in.Action, ArtifactID: in.ArtifactID, TargetNodeID: in.TargetNodeID, IntentSHA: fingerprint, State: "accepted", CreatedAt: now, UpdatedAt: now}
+	if !strings.HasPrefix(in.Action, "migrate_") || in.Action == "migrate_prepare" {
+		if e = directPublicInstanceGateTx(ctx, tx, c, v); e != nil {
+			return Operation{}, false, e
+		}
+	}
+	direct, e := instanceDirectPublicTx(ctx, tx, v)
+	if e != nil {
+		return Operation{}, false, e
+	}
+	if direct.IsZero() && (in.Action == "start" || in.Action == "reboot" || strings.HasPrefix(in.Action, "migrate_")) {
+		known, err := instanceHadDirectPublicTx(ctx, tx, v.ID)
+		if err != nil {
+			return Operation{}, false, err
+		}
+		if known {
+			return Operation{}, false, ErrState
+		}
+	}
+	if c.directRequired(v.NodeID) && direct.IsZero() && strings.HasPrefix(in.Action, "migrate_") {
+		return Operation{}, false, ErrState
+	}
 	network, e := instanceNetworkBinding(ctx, tx, v)
 	if e != nil {
 		return Operation{}, false, e
@@ -207,11 +236,19 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		return Operation{}, false, ErrState
 	}
 	st := nodeproto.TypedStorageTask{Protocol: nodeproto.StorageProtocol, OperationID: op, NodeID: v.NodeID, Action: in.Action, InstanceID: v.ID, OwnerRef: v.OwnerRef, ArtifactID: in.ArtifactID}
+	if !direct.IsZero() {
+		st.Protocol = nodeproto.StorageDirectProtocol
+		st.DirectPublic = direct
+	}
 	switch in.Action {
 	case "start", "shutdown", "reboot", "force_off", "delete":
 		t := nodeproto.NodeTask{Protocol: nodeproto.Protocol, OperationID: op, NodeID: v.NodeID, Action: in.Action, InstanceID: v.ID, OwnerRef: v.OwnerRef, Hostname: v.Hostname, Resources: v.Resources}
 		if !network.IsZero() {
 			t.Protocol, t.Network = nodeproto.NetworkProtocol, network
+		}
+		if !direct.IsZero() {
+			t.Protocol = nodeproto.DirectPublicProtocol
+			t.DirectPublic = direct
 		}
 		if in.Action == "delete" {
 			t.ConfirmInstanceID = v.ID
@@ -253,6 +290,11 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		if v.State != "shutoff" || moving != 0 || in.TargetNodeID == v.NodeID {
 			return Operation{}, false, ErrState
 		}
+		if !direct.IsZero() {
+			if _, err := directResourcePlacementTx(ctx, tx, c, v.ID, in.TargetNodeID); err != nil {
+				return Operation{}, false, err
+			}
+		}
 		target, ok := c.Node(in.TargetNodeID)
 		if !ok {
 			return Operation{}, false, ErrInput
@@ -275,6 +317,14 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 			return Operation{}, false, ErrCapacity
 		}
 		resources.SystemStorageID = caps.StorageIDs[0]
+		if !direct.IsZero() {
+			targetBinding := direct
+			targetBinding.NodeID = target.ID
+			targetBinding.Generation++
+			if !directCapabilityMatches(caps, targetBinding) {
+				return Operation{}, false, ErrCapacity
+			}
+		}
 		if maintenance || !seen.Valid || !heartbeatFresh(&seen.Time, now, time.Duration(c.HeartbeatTTLSeconds)*time.Second) || profile != target.Digest() || !strict(capsRaw, &caps) || !caps.Supports(resources, target) {
 			return Operation{}, false, ErrCapacity
 		}
@@ -322,6 +372,13 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		if e != nil {
 			return Operation{}, false, ErrInput
 		}
+	case "migrate_retire_source":
+		st, e = buildRetireSourceTx(ctx, tx, c, o, v, retire)
+		if e != nil {
+			return Operation{}, false, e
+		}
+		o.NodeID = st.NodeID
+		o.TargetNodeID = st.TargetNodeID
 	case "migrate_import", "migrate_activate":
 		m, e := scanMigration(tx.QueryRowContext(ctx, "SELECT "+migrationColumns+" FROM controller_migrations WHERE id=?", in.ArtifactID))
 		if e != nil {
@@ -340,6 +397,13 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		o.NodeID = target.ID
 		o.TargetNodeID = target.ID
 		st.NodeID = target.ID
+		if !direct.IsZero() {
+			st.DirectPublic.NodeID = target.ID
+			st.DirectPublic.Generation++
+			if !c.approvesDirectPublic(st.DirectPublic) {
+				return Operation{}, false, ErrState
+			}
+		}
 		st.SourceNodeID = m.SourceNodeID
 		st.TargetNodeID = target.ID
 		st.SourceOperationID = m.SourceOperationID
@@ -355,10 +419,15 @@ func (s *SQLStore) CreateOperation(ctx context.Context, c Config, actor, instanc
 		return Operation{}, false, e
 	}
 	if o.Protocol == "" {
-		o.Protocol = nodeproto.StorageProtocol
+		o.Protocol = st.Protocol
 		o.Request, o.RequestSHA, e = st.BytesAndDigest()
 		if e != nil {
 			return Operation{}, false, ErrInput
+		}
+	}
+	if in.Action == "migrate_prepare" && !direct.IsZero() {
+		if e = freezeDirectMigrationTx(ctx, tx, o, direct, now); e != nil {
+			return Operation{}, false, e
 		}
 	}
 	p, ok := c.Node(o.NodeID)
@@ -389,15 +458,21 @@ func (s *SQLStore) ClaimOperation(ctx context.Context, op string, c Config, now 
 	if !ok || p.Digest() != o.ProfileSHA || o.State != "accepted" {
 		return Operation{}, ErrState
 	}
-	if o.Protocol == nodeproto.Protocol || o.Protocol == nodeproto.NetworkProtocol {
+	if o.Protocol == nodeproto.Protocol || o.Protocol == nodeproto.NetworkProtocol || o.Protocol == nodeproto.DirectPublicProtocol {
 		task, err := nodeproto.DecodeTask(o.Request)
 		if err != nil || nodeproto.Digest(o.Request) != o.RequestSHA || task.Protocol != o.Protocol || task.OperationID != o.ID || task.InstanceID != o.InstanceID || task.Action != o.Action {
+			return Operation{}, ErrState
+		}
+		if !c.approvesTaskNetwork(task) {
 			return Operation{}, ErrState
 		}
 		if err = validateTaskNetwork(ctx, tx, task); err != nil {
 			return Operation{}, err
 		}
 	} else {
+		if e = validateDirectStorageTx(ctx, tx, c, o); e != nil {
+			return Operation{}, e
+		}
 		var networked int
 		if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_instance_networks WHERE instance_id=?", o.InstanceID).Scan(&networked); e != nil {
 			return Operation{}, e
@@ -496,7 +571,7 @@ func (s *SQLStore) CompleteOperation(ctx context.Context, c Config, op, status s
 	if o.State != "sending" && o.State != "dispatched" && o.State != "uncertain" {
 		return Operation{}, ErrState
 	}
-	if status == "succeeded" && o.Protocol == nodeproto.StorageProtocol {
+	if status == "succeeded" && (o.Protocol == nodeproto.StorageProtocol || o.Protocol == nodeproto.StorageDirectProtocol) {
 		task, e := nodeproto.DecodeStorageTask(o.Request)
 		if e != nil || storage == nil || !storage.Matches(task, o.RequestSHA) {
 			return Operation{}, ErrState
@@ -509,8 +584,11 @@ func (s *SQLStore) CompleteOperation(ctx context.Context, c Config, op, status s
 		if o.Action == "migrate_prepare" && (storage.SourceNodeID != o.NodeID || storage.TargetNodeID != o.TargetNodeID || !shaRE.MatchString(storage.FenceToken)) {
 			return Operation{}, ErrState
 		}
-		if o.Action == "migrate_import" || o.Action == "migrate_activate" {
+		if o.Action == "migrate_import" || o.Action == "migrate_activate" || o.Action == "migrate_retire_source" {
 			if storage.ManifestSHA256 != task.ManifestSHA256 || storage.SourceNodeID != task.SourceNodeID || storage.TargetNodeID != task.TargetNodeID || storage.FenceToken != task.FenceToken {
+				return Operation{}, ErrState
+			}
+			if o.Action == "migrate_retire_source" && (storage.Items == nil || len(storage.Items) != 0) {
 				return Operation{}, ErrState
 			}
 		}
@@ -531,6 +609,8 @@ func (s *SQLStore) CompleteOperation(ctx context.Context, c Config, op, status s
 			_, e = tx.ExecContext(ctx, "UPDATE controller_artifacts SET state='ready',manifest_sha256=?,updated_at=? WHERE id=?", storage.ManifestSHA256, now, o.ArtifactID)
 		case "snapshot_delete", "backup_delete":
 			_, e = tx.ExecContext(ctx, "UPDATE controller_artifacts SET state='deleted',updated_at=? WHERE id=?", now, o.ArtifactID)
+		case "migrate_retire_source":
+			e = completeRetireSourceTx(ctx, tx, o, now)
 		case "migrate_prepare":
 			_, e = tx.ExecContext(ctx, "UPDATE controller_migrations SET phase='prepared',manifest_sha256=?,fence_token=?,updated_at=? WHERE id=?", storage.ManifestSHA256, storage.FenceToken, now, o.ArtifactID)
 		case "migrate_transfer":
@@ -549,6 +629,15 @@ func (s *SQLStore) CompleteOperation(ctx context.Context, c Config, op, status s
 			target, ok := c.Node(o.NodeID)
 			if !ok || target.Digest() != o.ProfileSHA || migration.TargetProfileSHA != o.ProfileSHA {
 				return Operation{}, ErrState
+			}
+			if o.Protocol == nodeproto.StorageDirectProtocol {
+				task, err := nodeproto.DecodeStorageTask(o.Request)
+				if err != nil {
+					return Operation{}, ErrState
+				}
+				if err = completeDirectMigrationTx(ctx, tx, c, o, task, now); err != nil {
+					return Operation{}, err
+				}
 			}
 			v.Resources = migration.Resources
 			raw, _ := json.Marshal(v.Resources)

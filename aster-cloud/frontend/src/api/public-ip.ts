@@ -44,6 +44,7 @@ export interface PublicIPApproval {
   profile_sha256: string;
   public_ipv4s: string[];
   allow_internet_egress: boolean;
+  allow_floating_ip?: boolean;
 }
 export interface PublicIPOptions {
   complete: true;
@@ -136,7 +137,9 @@ export function validPublicIPOptions(v: unknown): v is PublicIPOptions {
         x.public_ipv4s.every(publicIPv4) &&
         unique(x.public_ipv4s, (ip) => ip) &&
         x.public_ipv4s.length <= 65 &&
-        typeof x.allow_internet_egress === "boolean",
+        typeof x.allow_internet_egress === "boolean" &&
+        (x.allow_floating_ip === undefined ||
+          typeof x.allow_floating_ip === "boolean"),
     )
   );
 }

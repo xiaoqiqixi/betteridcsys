@@ -84,3 +84,24 @@ GitHub 的最终 Ubuntu22/24、原生 MySQL（禁止 SKIP）、管理台、依�
 当前是首条安全垂直链，不是完整云平台：没有管理UI、多用户RBAC/MFA/客户自助控制、完整分页、HA和日志保留/外部审计。主控API暂用root私有策略与独立scoped token；非特权分离待实现。节点单worker、私有JSON journal有64MiB上限，未知结果保留容量，主控容量有刻意保守双扣，不能声称完整高吞吐调度。
 
 原始证据在 ignored `vps-billing/artifacts/cloud-20261022/`；功能目标与后续门槛见 [ARCHITECTURE.md](ARCHITECTURE.md)。本目录不附在财务0.5.9六资产，不创建独立主控正式Release。
+
+## 2026-10-24 VM 公网直绑 / 浮动 IP 增量
+
+本轮实现与部署边界见 [VM 公网管理](VM_PUBLIC_IP_MANAGEMENT.md)，不沿用 NAT-only
+提交 af17f3c 的绿色状态作为本轮验收。逐项原始命令、red/green、同提交 GitHub
+run/job、浏览器实库 proof 与截图另存 `artifacts/vm-public-ip-20261024/`。
+
+必须执行：全量 Go race/vet、原协议字节与完整历史回归、真实隔离 MySQL（包括
+并发末地址、跨owner/VPC、stale generation、source unknown、retire伪回执、事务审计
+回滚、漂移与恢复解绑）、前端格式/类型/单测/构建/依赖扫描、真实API浏览器。
+Ubuntu22/24 mandatory native NAT 入口在原测试内扩展整地址 TCP/UDP/ICMP、真实
+源/目标地址、切换后 conntrack 撤旧及解绑；同矩阵另用发行版 `virt-xml-validate`
+验证 CLI 生成的精确公网 filter，不启动 libvirt 或改变宿主规则。
+
+本机 Darwin 缺 MySQL 与 Linux namespace 时的 skip 必须逐项列出；CI 的实库和原生
+矩阵拒绝 skip，不能把“编译通过”当作上述测试已跑。Go 1.27.3 与锁定 Node24.19.0
+用于最终门禁。TLS 浏览器使用隔离临时 profile/CA，不扩大用户系统信任，不忽略证书错误。
+
+真 KVM、跨物理宿主、真实公网/上联、宿主重启、原生安装升级/整机备份恢复继续
+按用户要求后置；本轮不据此宣称全部 KVM 加强版或生产部署验收完成。
+代码只提交 main，不创建标签或 Release。金额/支付/历史财务快照源码无改动。

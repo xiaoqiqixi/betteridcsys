@@ -142,7 +142,7 @@ func (m *Manager) Doctor(ctx context.Context) DoctorReport {
 func (m *Manager) Capabilities(ctx context.Context) nodeproto.Capabilities {
 	capacity, _ := HostCapacity(m.Config.StorageDirectory)
 	for _, instance := range m.Ledger.Instances() {
-		if instance.State == "deleted" {
+		if instance.State == "deleted" || instance.PublicRetired {
 			continue
 		}
 		capacity.CPUCoresAllocated += instance.Resources.CPUCores
@@ -188,12 +188,33 @@ func (m *Manager) Capabilities(ctx context.Context) nodeproto.Capabilities {
 		}
 		c.Limitations = append(c.Limitations, "Base OVS is single-host private IPv4; separately approved overlay profiles add pinned VXLAN peers and gateway allowlists. Both use per-IP drop meters; restart is explicit shutdown then start. OVS backup/restore/migration requires a future bound storage contract.")
 	}
+	if sha, e := DirectNetworkSHA256(m.Config.Network); e == nil {
+		approved := []string{}
+		hostIPs, hostErr := m.directHostIPv4s()
+		hostSet := map[string]bool{}
+		for _, ip := range hostIPs {
+			hostSet[ip] = true
+		}
+		for _, ip := range m.Config.Network.Addresses {
+			b := nodeproto.DirectPublicBinding{Generation: 1, Schema: 1, LeaseID: strings.Repeat("1", 32), PoolID: strings.Repeat("2", 32), NodeID: m.Config.NodeID, OwnerRef: strings.Repeat("3", 32), InstanceID: strings.Repeat("4", 32), ProfileID: nodeproto.DirectPublicProfile, ProfileSHA256: sha, CIDR: m.Config.Network.CIDR, Gateway: m.Config.Network.Gateway, IPv4: ip, MAC: "52:54:00:00:00:01"}
+			if b.ValidIdentity() && hostErr == nil && !hostSet[ip] {
+				approved = append(approved, ip)
+			}
+		}
+		if len(approved) > 0 {
+			c.DirectPublicNetwork = &nodeproto.DirectPublicApproval{ProfileID: nodeproto.DirectPublicProfile, ProfileSHA256: sha, CIDR: m.Config.Network.CIDR, Gateway: m.Config.Network.Gateway, Addresses: approved}
+			c.NetworkProfiles = append(c.NetworkProfiles, nodeproto.DirectPublicCapability)
+		}
+	}
 	doctor := m.Doctor(ctx)
 	if !doctor.Ready {
 		c.Maintenance = true
 		c.Limitations = append(c.Limitations, "Host doctor prerequisites are incomplete; no mutation is advertised.")
 	} else if !c.Maintenance {
 		c.Actions = []string{"create", "start", "shutdown", "reboot", "force_off"}
+		if c.DirectPublicNetwork != nil {
+			c.Actions = append(c.Actions, "public_adopt", "public_detach")
+		}
 		if m.Config.AllowDelete {
 			c.Actions = append(c.Actions, "delete")
 		}

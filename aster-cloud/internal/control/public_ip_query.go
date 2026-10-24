@@ -145,8 +145,8 @@ func (s *SQLStore) PublicIPOperations(ctx context.Context, actor, cursor string)
 	return publicIPBudgetPage(items, func(v PublicIPOperation) string { return v.ID })
 }
 func (s *SQLStore) PublicIPOptions(ctx context.Context, c Config) (PublicIPOptions, error) {
-	out := PublicIPOptions{Clusters: []PublicIPClusterOption{}, Approvals: []PublicIPApproval{}, VPCs: []OverlayVPC{}, Complete: true}
-	if !c.validOverlayClusters() {
+	out := PublicIPOptions{DirectApprovals: append([]DirectPublicProfile{}, c.DirectPublicProfiles...), Clusters: []PublicIPClusterOption{}, Approvals: []PublicIPApproval{}, VPCs: []OverlayVPC{}, Complete: true}
+	if !c.validOverlayClusters() || !c.validDirectPublicProfiles() {
 		return out, ErrState
 	}
 	tx, e := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
@@ -154,8 +154,18 @@ func (s *SQLStore) PublicIPOptions(ctx context.Context, c Config) (PublicIPOptio
 		return out, e
 	}
 	defer tx.Rollback()
+	seenClusters := map[string]bool{}
+	for _, p := range c.DirectPublicProfiles {
+		if !seenClusters[p.ClusterID] {
+			out.Clusters = append(out.Clusters, PublicIPClusterOption{p.ClusterID})
+			seenClusters[p.ClusterID] = true
+		}
+	}
 	for _, cluster := range c.OverlayClusters {
-		out.Clusters = append(out.Clusters, PublicIPClusterOption{cluster.ClusterID})
+		if !seenClusters[cluster.ClusterID] {
+			seenClusters[cluster.ClusterID] = true
+			out.Clusters = append(out.Clusters, PublicIPClusterOption{cluster.ClusterID})
+		}
 		for _, p := range cluster.NATProfiles {
 			addresses := []string{}
 			if approvedPublicIPAddress(p, p.PublicIPv4) {
@@ -171,7 +181,7 @@ func (s *SQLStore) PublicIPOptions(ctx context.Context, c Config) (PublicIPOptio
 			if owner == "" {
 				return out, ErrState
 			}
-			out.Approvals = append(out.Approvals, PublicIPApproval{cluster.ClusterID, p.NodeID, p.VPCID, owner, p.ProfileID, p.ProfileSHA256, addresses, p.AllowInternetEgress})
+			out.Approvals = append(out.Approvals, PublicIPApproval{cluster.ClusterID, p.NodeID, p.VPCID, owner, p.ProfileID, p.ProfileSHA256, addresses, p.AllowInternetEgress, p.AllowFloatingIP})
 		}
 		rows, err := tx.QueryContext(ctx, "SELECT "+overlayVPCColumns+" FROM controller_overlay_vpcs WHERE cluster_id=? ORDER BY id LIMIT 33", cluster.ClusterID)
 		if err != nil {
@@ -195,6 +205,10 @@ func (s *SQLStore) PublicIPOptions(ctx context.Context, c Config) (PublicIPOptio
 		if count > 32 {
 			return out, ErrCapacity
 		}
+	}
+	out.ResourceTargets, e = publicResourceTargetsTx(ctx, tx, c)
+	if e != nil {
+		return out, e
 	}
 	if !publicIPProjectionFits(out) {
 		return out, ErrCapacity

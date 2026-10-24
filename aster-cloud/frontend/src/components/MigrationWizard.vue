@@ -4,8 +4,9 @@ import { RouterLink } from "vue-router";
 import { useConsole } from "../context";
 import { useQuery } from "../composables/query";
 import { useMutation } from "../composables/mutation";
-import { operationResponse, validNode, validPage } from "../api/client";
-import type { Instance, Migration, Node, Page } from "../api/types";
+import { operationResponse } from "../api/client";
+import { validMigrationTargets } from "../api/migration-targets";
+import type { Instance, Migration } from "../api/types";
 import UiOverlay from "./UiOverlay.vue";
 import UiSelect from "./UiSelect.vue";
 import UiButton from "./UiButton.vue";
@@ -22,8 +23,8 @@ const {
   notify,
 } = useConsole();
 const nodes = useQuery(
-  () => "/nodes",
-  (v): v is Page<Node> => validPage(v, validNode),
+  () => `/instances/${props.instance.id}/migration-targets`,
+  validMigrationTargets,
 );
 const mutation = useMutation(),
   target = shallowRef(""),
@@ -58,10 +59,14 @@ const allowed = computed(() =>
 );
 const options = computed(() =>
   (nodes.data.value?.items || [])
-    .filter(
-      (n) => n.id !== props.instance.node_id && n.online && !n.maintenance,
-    )
-    .map((n) => ({ value: n.id, label: `${n.id} · ${n.datacenter_id}` })),
+    .filter((n) => n.node_id !== props.instance.node_id)
+    .map((n) => ({
+      value: n.node_id,
+      label: n.eligible
+        ? n.node_id
+        : `${n.node_id} · ${tr("不符合迁移条件", "Not eligible for migration")}`,
+      disabled: !n.eligible,
+    })),
 );
 const name = computed(() => props.instance.hostname || props.instance.id);
 watch(
@@ -81,6 +86,10 @@ async function submit() {
   if (
     !allowed.value ||
     !target.value ||
+    (stage.value === 0 &&
+      !nodes.data.value?.items.some(
+        (n) => n.node_id === target.value && n.eligible,
+      )) ||
     confirmation.value !== props.instance.id ||
     mutation.pendingKey.value
   )
@@ -199,14 +208,14 @@ async function submit() {
             v-model="target"
             :label="tr('选择目标节点', 'Choose target node')"
             :options="options"
-            :placeholder="tr('选择在线节点', 'Choose an online node')"
+            :placeholder="tr('选择兼容节点', 'Choose a compatible node')"
             :disabled="mutation.busy.value || !!mutation.pendingKey.value"
         /></label>
-        <p v-if="nodes.data.value?.next_cursor" class="field-note">
+        <p v-if="!nodes.loading.value && !nodes.error.value" class="field-note">
           {{
             tr(
-              "仅显示当前页节点；未列出的节点暂不可选择。",
-              "Only the current page is shown; other nodes cannot be selected here.",
+              "仅可选择后端已核验网络、容量和迁移条件的节点；公网直绑必须保留原地址与 MAC。",
+              "Only nodes verified for network, capacity and migration compatibility are selectable. A direct public address and MAC must remain unchanged.",
             )
           }}
         </p></StateBlock
@@ -247,6 +256,10 @@ async function submit() {
         :disabled="
           !allowed ||
           !target ||
+          (stage === 0 &&
+            !nodes.data.value?.items.some(
+              (n) => n.node_id === target && n.eligible,
+            )) ||
           confirmation !== instance.id ||
           !!mutation.pendingKey.value
         "

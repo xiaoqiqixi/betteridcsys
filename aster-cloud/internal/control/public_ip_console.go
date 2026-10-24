@@ -14,6 +14,11 @@ import (
 )
 
 func (c Console) publicIPs(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/console/v1/public-ips/resources") || strings.HasPrefix(r.URL.Path, "/console/v1/public-ips/resource-operations") {
+		c.publicIPResources(w, r)
+		return
+	}
+
 	actor, ok := identity.Actor(r.Context())
 	if !ok || !actor.Enabled || !actor.Can("nodes.read") {
 		failure(w, 403, "FORBIDDEN")

@@ -154,7 +154,13 @@ export const validDetail = (x: unknown): x is InstanceDetail =>
         "phase",
         "created_at",
         "updated_at",
-      ].every((k) => text(v[k])),
+      ].every((k) => text(v[k])) &&
+      (v.source_retirement_state === undefined ||
+        ["required", "pending", "succeeded", "blocked"].includes(
+          String(v.source_retirement_state),
+        )) &&
+      (v.source_retirement_operation_id === undefined ||
+        /^[a-f0-9]{32}$/.test(String(v.source_retirement_operation_id))),
   );
 export const validObservation = (x: unknown): x is InstanceObservation =>
   record(x) &&
@@ -304,7 +310,7 @@ export interface ApiClient {
     body: unknown,
     key: string,
     guard: (v: unknown) => v is T,
-    expectedStatus?: number,
+    expectedStatus?: number | readonly number[],
   ): Promise<T>;
   setCSRF(value: string): void;
 }
@@ -319,7 +325,7 @@ export function createApiClient(
     key: string,
     guard: (v: unknown) => v is T,
     signal?: AbortSignal,
-    expectedStatus?: number,
+    expectedStatus?: number | readonly number[],
   ): Promise<T> {
     if (
       !/^\/[a-z0-9/?=&_%.-]+$/i.test(path) ||
@@ -397,7 +403,12 @@ export function createApiClient(
           response.status,
         );
       }
-      if (expectedStatus !== undefined && response.status !== expectedStatus)
+      if (
+        expectedStatus !== undefined &&
+        !(typeof expectedStatus === "number"
+          ? response.status === expectedStatus
+          : expectedStatus.includes(response.status))
+      )
         throw new ApiError(writing ? "unknown" : "invalid");
       if (!guard(data)) throw new ApiError(writing ? "unknown" : "invalid");
       return data;

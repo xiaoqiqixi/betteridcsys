@@ -35,6 +35,7 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	})
 	e, _, c, s := internetNATFixture(t)
 	p := c.NATProfiles[0]
+	p.AllowFloatingIP = true // Independent whole-address grant, not a port-range expansion.
 	// Two real source addresses on the same dedicated veth; a third approved
 	// reserve stays unconfigured. Selection is controller intent, provisioning
 	// and its bounded approval remain independent root operations.
@@ -105,7 +106,7 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	s.Profiles[0].ProfileSHA256 = sha
 	s.NATPolicies[0].ProfileSHA256, _ = NATProfileSHA256(p)
 	e.Runner = nativeNATRunner{insideNS: insideNS, outsideNS: outsideNS, insidePeer: inPeer, outsidePeer: p.OutsidePeer}
-	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 	defer cancel()
 	l, err := openLedger(c.Base, true, nil)
 	if err != nil {
@@ -255,5 +256,89 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	}
 	if err = e.verifyNAT(ctx, c, l, s, true); err != nil {
 		t.Fatal("public final readback", err)
+	}
+	// Reuse the owned isolated topology to exercise the new independent floating
+	// resource through real nft/conntrack. No OVS or KVM success is inferred.
+	target, other := s.Members[0], s.Members[1]
+	command(NATIP, "-n", insideNS, "addr", "add", other.IPv4+"/24", "dev", inPeer)
+	for _, m := range []string{target.IPv4, other.IPv4} {
+		startNativeNATServer(t, insideNS, m+":2444")
+		startNativeNATServer(t, insideNS, m+":2445", "udp4")
+	}
+	// The uplink's own IP is intentionally denied; use an ordinary public client
+	// address on the isolated peer, with an explicit route-preferred source.
+	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4+"/32", "dev", p.OutsidePeer, "src", publicRemote)
+	nsha, _ := NATProfileSHA256(p)
+	fip := overlayproto.FloatingIP{ResourceID: strings.Repeat("c", 32), NodeID: c.Base.NodeID, VPCID: target.VPCID, OwnerRef: target.OwnerRef, ProfileID: p.ID, ProfileSHA256: nsha, GatewayInstanceID: p.GatewayInstanceID, InstanceID: target.InstanceID, TargetIPv4: target.IPv4, PublicIPv4: p.PublicIPv4}
+	s.FloatingIPs = []overlayproto.FloatingIP{fip}
+	missing = s
+	missing.FloatingIPs = append([]overlayproto.FloatingIP{}, s.FloatingIPs...)
+	missing.FloatingIPs[0].PublicIPv4 = p.PublicIPv4s[1]
+	if err := e.probeNAT(ctx, c, missing, p); err == nil {
+		t.Fatal("floating root grant confused with configured usable address")
+	}
+	apply("bind floating public IP")
+	checkFloating := func(want string) {
+		t.Helper()
+		for _, network := range []string{"tcp4", "udp4"} {
+			url, port := "http://"+p.PublicIPv4+":2444", "2444"
+			if network == "udp4" {
+				url, port = p.PublicIPv4+":2445", "2445"
+			}
+			out, err := nativeNATClient(outsideNS, url, network)
+			if err != nil || !strings.Contains(string(out), "NAT_LOCAL="+want+":"+port) || !strings.Contains(string(out), "NAT_REMOTE="+publicRemote+":") {
+				dumpNativeNAT(t, p)
+				t.Fatal("floating target/source/port preservation", network, want, err, string(out))
+			}
+		}
+		if out, err := nativeNATClient(outsideNS, p.PublicIPv4, "icmp4"); err != nil || !strings.Contains(string(out), "NAT_ICMP_REPLY="+p.PublicIPv4) {
+			t.Fatal("floating inbound ICMP", err, string(out))
+		}
+		if out, err := nativeNATClient(insideNS, "http://"+publicRemote+":18081"); err != nil || !strings.Contains(string(out), "NAT_REMOTE="+p.PublicIPv4+":") {
+			t.Fatal("floating VM outbound identity", err, string(out))
+		}
+		for _, addr := range blocked {
+			if out, err := nativeNATClient(insideNS, "http://"+addr+":18081"); err == nil {
+				t.Fatal("floating reached protected destination", addr, string(out))
+			}
+		}
+		if out, err := nativeNATClient(outsideNS, "http://"+want+":2444"); err == nil {
+			t.Fatal("peer private route bypassed floating DNAT", string(out))
+		}
+	}
+	checkFloating(target.IPv4)
+	held = startNativeNATHeldClient(t, insideNS, "http://"+publicRemote+":18081")
+	s.FloatingIPs[0].InstanceID, s.FloatingIPs[0].TargetIPv4 = other.InstanceID, other.IPv4
+	if err = e.prepareNAT(ctx, c, l, s); err != nil {
+		t.Fatal("floating move prepare", err)
+	}
+	if err = e.programNAT(ctx, c, l, s); err != nil {
+		t.Fatal("floating move program", err)
+	}
+	if out, err := nativeNATClient(outsideNS, "http://"+p.PublicIPv4+":2444"); err == nil {
+		t.Fatal("floating move released before all phases", string(out))
+	}
+	if err = e.releaseNAT(ctx, c, l, s); err != nil {
+		t.Fatal("floating move release", err)
+	}
+	assertHeldRevoked(held, "old VM kept an established floating source after move")
+	command(NATIP, "-n", insideNS, "route", "replace", "default", "via", g.IPv4, "dev", inPeer, "src", other.IPv4)
+	checkFloating(other.IPv4)
+	s.FloatingIPs = nil
+	apply("detach floating public IP")
+	for _, network := range []string{"tcp4", "udp4"} {
+		url := "http://" + p.PublicIPv4 + ":2444"
+		if network == "udp4" {
+			url = p.PublicIPv4 + ":2445"
+		}
+		if out, err := nativeNATClient(outsideNS, url, network); err == nil {
+			t.Fatal("reclaimed floating mapping survived", network, string(out))
+		}
+	}
+	if out, err := nativeNATClient(insideNS, "http://"+publicRemote+":18081"); err == nil {
+		t.Fatal("detached VM kept floating source", string(out))
+	}
+	if err = e.verifyNAT(ctx, c, l, s, true); err != nil {
+		t.Fatal("floating detach final readback", err)
 	}
 }

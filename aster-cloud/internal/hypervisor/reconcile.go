@@ -25,7 +25,10 @@ func (m *Manager) Reconcile(ctx context.Context, id string) (nodeproto.NodeResul
 		return op.Result, errors.New("only accepted/uncertain operations can be reconciled")
 	}
 	instance, ok := m.Ledger.Instance(op.Task.InstanceID)
-	if !ok || instance.OwnerRef != op.Task.OwnerRef || instance.Resources != op.Task.Resources || instance.Hostname != op.Task.Hostname || instance.Network != op.Task.Network {
+	if ok && (op.Task.Action == "public_adopt" || op.Task.Action == "public_detach") {
+		return m.reconcileDirect(ctx, op, instance)
+	}
+	if !ok || instance.OwnerRef != op.Task.OwnerRef || instance.Resources != op.Task.Resources || instance.Hostname != op.Task.Hostname || instance.Network != op.Task.Network || !directTaskMatches(instance, op.Task) {
 		return op.Result, ErrOwnership
 	}
 	// A running VM is not evidence of a completed fabric activation. The old
@@ -57,4 +60,32 @@ func (m *Manager) Reconcile(ctx context.Context, id string) (nodeproto.NodeResul
 	}
 	instance.State = desired
 	return m.Ledger.Finish(id, "succeeded", "READONLY_RECONCILED_FROM_"+op.Result.Status, &instance)
+}
+
+// A stopped domain with the exact frozen direct NIC metadata and explicit link
+// state can prove completion after a crash between libvirt define and journal
+// save. It does not rerun define, mutate a guest or infer success from power alone.
+func (m *Manager) reconcileDirect(ctx context.Context, op Operation, i Instance) (nodeproto.NodeResult, error) {
+	t := op.Task
+	if t.Protocol != nodeproto.DirectPublicProtocol || !i.Network.IsZero() || i.SourceFence != nil || i.TargetBinding != nil || i.ID != t.InstanceID || i.OwnerRef != t.OwnerRef || i.Resources != t.Resources || i.Hostname != t.Hostname || i.IPv4 != t.DirectPublic.IPv4 || i.MAC != t.DirectPublic.MAC || t.Action == "public_adopt" && m.approvedDirect(t.DirectPublic) != nil {
+		return op.Result, ErrOwnership
+	}
+	i.DirectPublic = t.DirectPublic
+	i.DirectPublicDetached = t.Action == "public_detach"
+	if e := m.assertOwned(ctx, i); e != nil {
+		return op.Result, e
+	}
+	state, e := m.state(ctx, i.Domain)
+	if e != nil || state != "shut off" {
+		return op.Result, errors.New("DIRECT_PUBLIC_READBACK_UNCONFIRMED")
+	}
+	if !i.DirectPublicDetached {
+		for _, other := range m.Ledger.Instances() {
+			if other.ID != i.ID && other.State != "deleted" && !other.DirectPublicDetached && (other.IPv4 == i.IPv4 || other.DirectPublic.LeaseID == i.DirectPublic.LeaseID) {
+				return op.Result, ErrConflict
+			}
+		}
+	}
+	i.State = "shut off"
+	return m.Ledger.Finish(t.OperationID, "succeeded", "DIRECT_PUBLIC_READONLY_RECONCILED", &i)
 }

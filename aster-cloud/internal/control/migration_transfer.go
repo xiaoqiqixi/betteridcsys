@@ -58,6 +58,7 @@ type transferRelay struct {
 	source, target *NodeClient
 	intent         TransferIntent
 	instance       Instance
+	direct         nodeproto.DirectPublicBinding
 }
 type transferManifest struct {
 	raw      []byte
@@ -137,7 +138,25 @@ func (w OperationWorker) transferClients(ctx context.Context, o Operation) (tran
 	if err != nil {
 		return transferRelay{}, err
 	}
-	return transferRelay{source: s, target: d, intent: t, instance: v}, nil
+	var direct nodeproto.DirectPublicBinding
+	prepare, e := w.Store.Operation(ctx, t.Approval.SourceOperationID)
+	if e != nil {
+		return transferRelay{}, e
+	}
+	stored, e := nodeproto.DecodeStorageTask(prepare.Request)
+	if e != nil {
+		return transferRelay{}, e
+	}
+	direct = stored.DirectPublic
+	if !direct.IsZero() {
+		targetBinding := direct
+		targetBinding.NodeID = target.ID
+		targetBinding.Generation++
+		if !w.Config.approvesDirectPublic(targetBinding) {
+			return transferRelay{}, ErrState
+		}
+	}
+	return transferRelay{source: s, target: d, intent: t, instance: v, direct: direct}, nil
 }
 func (w OperationWorker) dispatchTransfer(ctx context.Context, o Operation) (Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
@@ -318,7 +337,7 @@ func (r transferRelay) readManifest(ctx context.Context) (transferManifest, erro
 	}
 	m := signed.Manifest
 	inner, _ := json.Marshal(m)
-	if nodeproto.Digest(inner) != a.ManifestSHA256 || m.Protocol != nodeproto.StorageProtocol || m.Kind != "migration" || m.ArtifactID != a.ArtifactID || m.NodeID != a.SourceNodeID || m.InstanceID != a.InstanceID || m.OwnerRef != a.OwnerRef || m.TargetNodeID != a.TargetNodeID || m.ExportOperationID != a.SourceOperationID || m.FenceToken != a.FenceToken || m.SourceDomain != "aster-"+m.InstanceID || m.Hostname != r.instance.Hostname || m.Resources != r.instance.Resources || m.ImageID != m.Resources.ImageID || !shaRE.MatchString(m.ImageSHA256) || !shaRE.MatchString(m.DiskSHA256) || m.Resources.SystemDiskGiB < 1 || m.Resources.SystemDiskGiB > (1<<20) || m.DiskBytes < 1 || m.DiskBytes > ((int64(m.Resources.SystemDiskGiB)+1)<<30) || m.VirtualBytes < 1 || m.VirtualBytes > uint64(m.Resources.SystemDiskGiB)<<30 {
+	if nodeproto.Digest(inner) != a.ManifestSHA256 || (m.Protocol != nodeproto.StorageProtocol || !m.DirectPublic.IsZero()) && r.direct.IsZero() || !r.direct.IsZero() && (m.Protocol != nodeproto.StorageDirectProtocol || m.DirectPublic != r.direct) || m.Kind != "migration" || m.ArtifactID != a.ArtifactID || m.NodeID != a.SourceNodeID || m.InstanceID != a.InstanceID || m.OwnerRef != a.OwnerRef || m.TargetNodeID != a.TargetNodeID || m.ExportOperationID != a.SourceOperationID || m.FenceToken != a.FenceToken || m.SourceDomain != "aster-"+m.InstanceID || m.Hostname != r.instance.Hostname || m.Resources != r.instance.Resources || m.ImageID != m.Resources.ImageID || !shaRE.MatchString(m.ImageSHA256) || !shaRE.MatchString(m.DiskSHA256) || m.Resources.SystemDiskGiB < 1 || m.Resources.SystemDiskGiB > (1<<20) || m.DiskBytes < 1 || m.DiskBytes > ((int64(m.Resources.SystemDiskGiB)+1)<<30) || m.VirtualBytes < 1 || m.VirtualBytes > uint64(m.Resources.SystemDiskGiB)<<30 {
 		return transferManifest{}, ErrState
 	}
 	if _, err = time.Parse(time.RFC3339Nano, m.CreatedAt); err != nil {

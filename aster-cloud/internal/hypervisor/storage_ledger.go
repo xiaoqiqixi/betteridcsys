@@ -45,8 +45,11 @@ func (l *Ledger) ClaimStorage(task nodeproto.TypedStorageTask, sha string) (node
 		}
 		return copyStorageResult(op.Result), false, nil
 	}
-	result := nodeproto.StorageResult{Protocol: nodeproto.StorageProtocol, OperationID: task.OperationID, RequestSHA256: sha, InstanceID: task.InstanceID, ArtifactID: task.ArtifactID, Status: "accepted", SourceNodeID: task.SourceNodeID, TargetNodeID: task.TargetNodeID, ManifestSHA256: task.ManifestSHA256, FenceToken: task.FenceToken, Items: []nodeproto.StorageArtifact{}}
+	result := nodeproto.StorageResult{Protocol: task.Protocol, OperationID: task.OperationID, RequestSHA256: sha, InstanceID: task.InstanceID, ArtifactID: task.ArtifactID, Status: "accepted", SourceNodeID: task.SourceNodeID, TargetNodeID: task.TargetNodeID, ManifestSHA256: task.ManifestSHA256, FenceToken: task.FenceToken, Items: []nodeproto.StorageArtifact{}}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if task.Protocol == nodeproto.StorageDirectProtocol && l.state.Schema < 5 {
+		l.state.Schema = 5
+	}
 	if l.state.Schema < 2 {
 		l.state.Schema = 2
 	}
@@ -103,6 +106,12 @@ func (l *Ledger) FinishStorage(id, status, code string, result nodeproto.Storage
 		op.Recovery = &x
 	}
 	l.state.StorageOperations[id] = op
+	if status == "succeeded" && op.Task.Action == "migrate_retire_source" && instance != nil && instance.PublicRetired && instance.State == "retired" {
+		if l.state.PublicRetirements == nil {
+			l.state.PublicRetirements = map[string]PublicRetirement{}
+		}
+		l.state.PublicRetirements[publicRetirementKey(instance.ID, instance.DirectPublic.Generation)] = PublicRetirement{Binding: instance.DirectPublic, OperationID: id, Proof: op.Task.RetireProof, Fence: *instance.SourceFence}
+	}
 	if instance != nil {
 		l.state.Instances[instance.ID] = cloneInstance(*instance)
 	}

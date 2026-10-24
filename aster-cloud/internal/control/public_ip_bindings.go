@@ -167,7 +167,7 @@ func validatePublicIPSnapshotTx(ctx context.Context, tx *sql.Tx, c Config, snaps
 			return err
 		}
 	}
-	return nil
+	return validateFloatingPublicResourcesTx(ctx, tx, c, snapshot, seen)
 }
 func decoratePublicIPLeaseTx(ctx context.Context, tx *sql.Tx, c Config, v *PublicIPLease) {
 	if v.State == "released" {

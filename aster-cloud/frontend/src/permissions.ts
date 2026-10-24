@@ -4,6 +4,8 @@ export function actionPermission(action: string) {
     case "create":
     case "start":
     case "shutdown":
+    case "public_adopt":
+    case "public_detach":
       return "instances.manage";
     case "reboot":
     case "force_off":
@@ -22,6 +24,7 @@ export function actionPermission(action: string) {
     case "migrate_transfer":
     case "migrate_import":
     case "migrate_activate":
+    case "migrate_retire_source":
       return "migration.manage";
     default:
       return "";

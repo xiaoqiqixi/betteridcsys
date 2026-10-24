@@ -3,6 +3,7 @@ package hypervisor
 
 import (
 	"aster/cloud/internal/nodeproto"
+	"aster/cloud/internal/overlayproto"
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
@@ -32,6 +33,7 @@ type Image struct {
 	SHA256 string `json:"sha256"`
 }
 type Network struct {
+	RequirePublicLease          bool     `json:"require_public_lease,omitempty"`
 	Enabled                     bool     `json:"enabled"`
 	DedicatedBridgeAcknowledged bool     `json:"dedicated_bridge_acknowledged"`
 	Bridge                      string   `json:"bridge"`
@@ -199,9 +201,12 @@ func (c Config) Validate() error {
 }
 func (n Network) Validate() error {
 	if !n.Enabled {
+		if n.RequirePublicLease {
+			return errors.New("public lease mode requires enabled dedicated network")
+		}
 		return nil
 	}
-	if !n.DedicatedBridgeAcknowledged || !bridgeName.MatchString(n.Bridge) || !strings.HasPrefix(n.Filter, "aster-") || !safeName.MatchString(n.Filter) || !hashString(n.FilterSHA256) || len(n.Addresses) == 0 || len(n.SSHAuthorizedKeys) == 0 {
+	if !n.DedicatedBridgeAcknowledged || !bridgeName.MatchString(n.Bridge) || !strings.HasPrefix(n.Filter, "aster-") || !safeName.MatchString(n.Filter) || !hashString(n.FilterSHA256) || len(n.Addresses) == 0 && !n.RequirePublicLease || len(n.SSHAuthorizedKeys) == 0 {
 		return errors.New("approved dedicated bridge/filter/IPv4 pool/SSH keys required")
 	}
 	prefix, err := netip.ParsePrefix(n.CIDR)
@@ -213,10 +218,13 @@ func (n Network) Validate() error {
 	if err != nil || !gateway.Is4() || !prefix.Contains(gateway) {
 		return errors.New("invalid gateway")
 	}
+	if n.RequirePublicLease && (n.CIDR != prefix.String() || !overlayproto.PublicInternetIPv4(n.Gateway) || gateway == prefix.Addr() || !prefix.Contains(gateway.Next()) || len(n.Addresses) > 4096) {
+		return errors.New("direct public lease mode requires canonical public gateway and bounded address approvals")
+	}
 	seen := map[string]bool{}
 	for _, raw := range n.Addresses {
 		ip, e := netip.ParseAddr(raw)
-		if e != nil || !ip.Is4() || !prefix.Contains(ip) || ip == gateway || ip == prefix.Addr() || ip.IsUnspecified() || ip.IsMulticast() || seen[raw] {
+		if e != nil || !ip.Is4() || n.RequirePublicLease && !overlayproto.PublicInternetIPv4(raw) || !prefix.Contains(ip) || ip == gateway || ip == prefix.Addr() || ip.IsUnspecified() || ip.IsMulticast() || seen[raw] {
 			return errors.New("invalid/duplicate allocated IPv4")
 		}
 		b := ip.As4()
@@ -228,7 +236,7 @@ func (n Network) Validate() error {
 	}
 	for _, raw := range n.DNS {
 		ip, e := netip.ParseAddr(raw)
-		if e != nil || !ip.Is4() || ip.IsUnspecified() || ip.IsMulticast() {
+		if e != nil || !ip.Is4() || ip.IsUnspecified() || ip.IsMulticast() || n.RequirePublicLease && !overlayproto.PublicInternetIPv4(raw) {
 			return errors.New("invalid DNS")
 		}
 	}

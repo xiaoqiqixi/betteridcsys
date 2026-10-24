@@ -12,15 +12,17 @@ import (
 )
 
 type CreateInstanceInput struct {
-	Hostname string `json:"hostname"`
-	OwnerRef string `json:"owner_ref"`
-	PresetID string `json:"preset_id"`
+	Hostname                   string  `json:"hostname"`
+	OwnerRef                   string  `json:"owner_ref"`
+	PresetID                   string  `json:"preset_id"`
+	PublicIPResourceID         string  `json:"public_ip_resource_id,omitempty"`
+	PublicIPExpectedGeneration *uint64 `json:"public_ip_expected_generation,omitempty"`
 }
 
 // CreateInstance is explicitly a staff resource action. It never creates a fake
 // financial order or changes a payment/financial snapshot to authorize it.
 func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op string, in CreateInstanceInput, now time.Time) (Operation, bool, error) {
-	if !nodeproto.ValidID(actor) || !nodeproto.ValidID(op) || !nodeproto.ValidID(in.OwnerRef) {
+	if !nodeproto.ValidID(actor) || !nodeproto.ValidID(op) || !nodeproto.ValidID(in.OwnerRef) || (in.PublicIPResourceID != "") != (in.PublicIPExpectedGeneration != nil) {
 		return Operation{}, false, ErrInput
 	}
 	intent, _ := json.Marshal(struct {
@@ -33,6 +35,9 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 		return Operation{}, false, e
 	}
 	defer tx.Rollback()
+	if e = publicResourceIDUnusedTx(ctx, tx, op); e != nil {
+		return Operation{}, false, e
+	}
 	prior, e := scanOperation(tx.QueryRowContext(ctx, "SELECT "+operationColumns+" FROM controller_operations WHERE id=?", op))
 	if e == nil {
 		if prior.ActorID != actor || prior.IntentSHA != fingerprint {
@@ -73,6 +78,16 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 	if maintenance || !seen.Valid || !heartbeatFresh(&seen.Time, now, time.Duration(c.HeartbeatTTLSeconds)*time.Second) || profile != candidate.ProfileSHA || !strict(capsRaw, &caps) || !caps.SupportsNetwork(r, p, candidate.NetworkProfileID) {
 		return Operation{}, false, ErrCapacity
 	}
+	if in.PublicIPResourceID != "" {
+		resource, e := scanPublicResource(tx.QueryRowContext(ctx, "SELECT "+publicResourceColumns+" FROM controller_public_ip_resources WHERE id=?", in.PublicIPResourceID))
+		if e != nil {
+			return Operation{}, false, e
+		}
+		root, ok := directPublicProfile(c, resource.ClusterID, resource.NodeID, resource.ProfileID)
+		if !ok || !directCapabilityMatches(caps, directPublicBinding(resource, root, op)) {
+			return Operation{}, false, ErrCapacity
+		}
+	}
 	if e = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(cpu),0),COALESCE(SUM(memory_mib),0),COALESCE(SUM(disk_gib),0) FROM controller_reservations WHERE node_id=? AND released=FALSE", p.ID).Scan(&rc, &rm, &rd); e != nil {
 		return Operation{}, false, e
 	}
@@ -83,6 +98,10 @@ func (s *SQLStore) CreateInstance(ctx context.Context, c Config, actor, op strin
 		return Operation{}, false, e
 	}
 	task, e = bindCreateNetwork(ctx, tx, task, candidate, now)
+	if e != nil {
+		return Operation{}, false, e
+	}
+	task, e = bindCreateDirectPublicTx(ctx, tx, c, task, in.PublicIPResourceID, in.PublicIPExpectedGeneration, now)
 	if e != nil {
 		return Operation{}, false, e
 	}

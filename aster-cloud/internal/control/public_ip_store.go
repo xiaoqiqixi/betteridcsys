@@ -143,6 +143,9 @@ func publicOperationDigest(action, target string, request json.RawMessage) strin
 	return overlayproto.Digest(raw)
 }
 func publicReplay(ctx context.Context, tx *sql.Tx, actor, op, action, target string, request json.RawMessage) (PublicIPOperation, bool, error) {
+	if e := publicResourceIDUnusedTx(ctx, tx, op); e != nil {
+		return PublicIPOperation{}, false, e
+	}
 	v, err := scanPublicOperation(tx.QueryRowContext(ctx, "SELECT "+publicOperationColumns+" FROM controller_public_ip_operations WHERE id=?", op))
 	if err == nil {
 		if v.ActorID != actor || v.Action != action || v.TargetResourceID != target || v.RequestSHA256 != publicOperationDigest(action, target, request) {
@@ -171,13 +174,21 @@ func publicMutationValid(actor, op string, now time.Time) bool {
 }
 func publicPoolApproved(c Config, in PublicIPPoolInput) bool {
 	cluster, ok := c.OverlayCluster(in.ClusterID)
-	if !ok || !c.validOverlayClusters() {
+	if !c.validOverlayClusters() || !c.validDirectPublicProfiles() {
 		return false
+	}
+	if !ok {
+		cluster = OverlayCluster{}
 	}
 	for _, a := range in.Addresses {
 		found := false
 		for _, p := range cluster.NATProfiles {
 			found = found || approvedPublicIPAddress(p, a)
+		}
+		for _, p := range c.DirectPublicProfiles {
+			if p.ClusterID == in.ClusterID {
+				found = found || directPublicAddressApproved(p, a)
+			}
 		}
 		if !found {
 			return false

@@ -44,7 +44,8 @@ type OverlayEpochInput struct {
 	Gateways      []overlayproto.Gateway `json:"gateways"`
 	// nil preserves the preceding NAT intent; an explicit empty list removes it.
 	// A pointer keeps these distinct in the idempotency digest.
-	NATPolicies *[]overlayproto.NATPolicy `json:"nat_policies,omitempty"`
+	NATPolicies *[]overlayproto.NATPolicy  `json:"nat_policies,omitempty"`
+	FloatingIPs *[]overlayproto.FloatingIP `json:"floating_ips,omitempty"`
 }
 type OverlayEpoch struct {
 	ID             string                 `json:"id"`
@@ -263,10 +264,22 @@ func canonicalOverlayInput(in OverlayEpochInput) (OverlayEpochInput, string, err
 		}
 		in.NATPolicies = &policies
 	}
+
+	if in.FloatingIPs != nil {
+		if *in.FloatingIPs == nil || len(*in.FloatingIPs) > 128 {
+			return in, "", ErrInput
+		}
+		values := append([]overlayproto.FloatingIP{}, (*in.FloatingIPs)...)
+		sort.Slice(values, func(i, j int) bool { return values[i].ResourceID < values[j].ResourceID })
+		in.FloatingIPs = &values
+	}
 	b, _ := json.Marshal(in)
 	return in, overlayproto.Digest(b), nil
 }
 func (s *SQLStore) PlanOverlayEpoch(ctx context.Context, c Config, actor, op string, in OverlayEpochInput, now time.Time) (OverlayEpoch, bool, error) {
+	if in.FloatingIPs != nil {
+		return OverlayEpoch{}, false, ErrInput
+	}
 	if !nodeproto.ValidID(actor) || !nodeproto.ValidID(op) || !validOverlayTime(now) {
 		return OverlayEpoch{}, false, ErrInput
 	}
@@ -338,6 +351,13 @@ func (s *SQLStore) PlanOverlayEpoch(ctx context.Context, c Config, actor, op str
 func buildOverlaySnapshot(ctx context.Context, tx *sql.Tx, c Config, cluster OverlayCluster, previous OverlayEpoch, in OverlayEpochInput, now time.Time, recovery bool) (overlayproto.Snapshot, string, error) {
 	snapshot := overlayproto.Snapshot{Protocol: overlayproto.Protocol, ClusterID: in.ClusterID, Epoch: in.ExpectedEpoch + 1, PreviousSHA256: previous.SnapshotSHA256, Profiles: append([]overlayproto.ProfilePin{}, cluster.Profiles...), VPCs: []overlayproto.VPC{}, Members: []overlayproto.Member{}, Gateways: in.Gateways}
 	snapshot.NATPolicies = previous.Snapshot.NATPolicies
+	snapshot.FloatingIPs = previous.Snapshot.FloatingIPs
+	if in.FloatingIPs != nil {
+		snapshot.FloatingIPs = *in.FloatingIPs
+	}
+	if recovery && in.FloatingIPs == nil {
+		snapshot.FloatingIPs = recoveryFloatingPins(cluster, snapshot.FloatingIPs)
+	}
 	if in.NATPolicies != nil {
 		snapshot.NATPolicies = *in.NATPolicies
 	}

@@ -173,7 +173,7 @@ async function languageChangeClearsNotice() {
   check('language switch removes the genuine previous-language notice immediately');
 }
 async function read(suffix) {
-  assert(/^\/(overlays|public-ips)\//.test(suffix) && !suffix.includes('://'));
+  assert(/^\/(overlays|public-ips|instances|operations)\//.test(suffix) && !suffix.includes('://'));
   return page.evaluate(async suffix => {
     const response = await fetch(`/console/v1${suffix}`, { method: 'GET', credentials: 'same-origin' });
     if (!response.ok) throw new Error(`Read-only evidence request failed (${response.status})`);
@@ -278,7 +278,7 @@ try {
   page.on('pageerror', error => report.console_errors.push(safeMessage(error)));
   page.on('response', response => {
     const url = new URL(response.url()), request = response.request();
-    if (url.origin === base.origin && /^\/console\/v1\/(overlays|public-ips)\//.test(url.pathname)) {
+    if (url.origin === base.origin && /^\/console\/v1\/(overlays|public-ips|instances|operations)(?:\/|$)/.test(url.pathname)) {
       // Deliberately no headers, bodies, query strings or cookie data.
       report.requests.push({ method: request.method(), path: url.pathname, status: response.status() });
     }
@@ -615,6 +615,7 @@ try {
   await dialogClosed();
   await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
   await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
+  await pick('集群', 'cluster-fixture');
   const publicOptions = await read('/public-ips/options');
   assert.equal(publicOptions.complete, true);
   const publicApproval = publicOptions.approvals.find(a => a.vpc_id === credentials.vpc_id);
@@ -629,6 +630,7 @@ try {
     if (await page.locator('.network-tabs').count() === 0) await networkOverview({ requireCanPlan: false });
     await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
     await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
+    if ((await page.getByRole('combobox', {name:'集群',exact:true}).innerText()).trim() !== 'cluster-fixture') await pick('集群','cluster-fixture');
     await page.getByRole('button', { name: '地址池', exact: true }).click();
     await poolCard().waitFor();
   }
@@ -636,6 +638,7 @@ try {
     if (await page.locator('.network-tabs').count() === 0) await networkOverview({ requireCanPlan: false });
     await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
     await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
+    if ((await page.getByRole('combobox', {name:'集群',exact:true}).innerText()).trim() !== 'cluster-fixture') await pick('集群','cluster-fixture');
     await page.getByRole('button', { name: '分配记录', exact: true }).click();
     await page.locator('.ip-record').first().waitFor();
   }
@@ -914,6 +917,181 @@ try {
   report.public_ip_bound_and_detached = true;
   report.public_ip_reclaimed_and_reallocated = true;
   report.original_five_epochs_preserved = true;
+
+  // New VM resources do not replace the historical NAT workflow above. All
+  // writes below are real visible controls, followed by GET-only exact proof.
+  phase = 'floating-public-allocation';
+  await page.getByRole('button', { name: 'Language & appearance', exact: true }).click();
+  await pick('Language', '简体中文'); await pick('外观', '浅色');
+  await page.getByRole('button', {name:'完成',exact:true}).click(); await dialogClosed();
+  const originalSeven = [...originalFive, await read(`/overlays/epochs/${boundPlan.id}`), await read(`/overlays/epochs/${unboundPlan.id}`)];
+  const vmCard = id => page.locator(`.vm-public-resource[data-resource-id="${id}"]`);
+  async function resourcesView(cluster = 'cluster-fixture') {
+    await page.goto(new URL(`#/networks/public-ips?view=resources&cluster=${cluster}`, base).href, {waitUntil:'networkidle'});
+    await page.getByRole('heading', {name:'实例公网地址',exact:true}).waitFor();
+    await page.locator('.vm-public-panel').waitFor();
+  }
+  async function vmAllocation(mode, address, poolLabel, cluster = 'cluster-fixture') {
+    await resourcesView(cluster);
+    await pick('实例公网地址池',poolLabel);
+    await page.getByRole('button',{name:'分配实例地址',exact:true}).click();
+    await pick('公网地址使用方式',mode === 'floating' ? '独立浮动 IP' : '虚拟机公网直绑');
+    if (mode === 'floating') await pick('浮动 IP 所属 VPC',`${publicVPC.name} · ${publicVPC.cidr}`);
+    else await pick('选择客户引用', credentials.owner_ref);
+    await pick('公网网络配置', mode === 'floating' ? `${publicApproval.node_id} · ${publicApproval.profile_id}` : `${credentials.direct_node_id} · normal-public-ipv4`);
+    await pick('实例公网地址',address);
+    await page.getByRole('dialog').getByRole('button',{name:'分配实例公网 IP',exact:true}).click();
+    await dialogClosed();
+    const current = (await read(`/public-ips/resources?cluster_id=${cluster}`)).items.filter(r => r.address === address && r.state === 'reserved');
+    assert.equal(current.length,1); assert.equal(current[0].mode,mode); assert.equal(current[0].binding_state,'unbound'); assert.equal(current[0].binding_generation,0);
+    await vmCard(current[0].id).waitFor(); return current[0];
+  }
+  const floating = await vmAllocation('floating','8.8.4.4','公网出口池 · 8.8.4.0/24');
+  const floatingAllocationOperation = (await read(`/public-ips/resource-operations/${floating.id}`)).operation;
+  const resourceOptions = await read('/public-ips/options');
+  assert.equal(resourceOptions.complete,true); assert.equal(resourceOptions.approvals.find(a => a.vpc_id === credentials.vpc_id).allow_floating_ip,true);
+  const floatTargets = credentials.members.map(m => resourceOptions.resource_targets.find(t => t.instance_id === m.instance_id && t.mode === 'floating'));
+  assert(floatTargets.every(Boolean)); assert.notEqual(floatTargets[0].node_id,floatTargets[1].node_id);
+  async function bindFloating(target, expectedEpoch, moving = false) {
+    await vmCard(floating.id).getByRole('button',{name:moving ? '更换实例' : '绑定实例',exact:true}).click();
+    await pick('绑定目标实例',`${target.ipv4} · ${target.node_id} · ${target.instance_id}`);
+    await page.getByRole('dialog').locator('.resource-confirmation input').fill(target.instance_id);
+    const title = moving ? '更换绑定实例' : '绑定公网地址';
+    assert.equal(await page.getByRole('dialog').getByRole('button',{name:title,exact:true}).isDisabled(),true);
+    assert((await page.getByRole('dialog').innerText()).includes('TCP、UDP 全端口和 ICMP'));
+    await page.getByRole('dialog').locator('.floating-consent input').check();
+    if (!moving) {
+      await dialogExcludesNotices('floating bind dialog isolates genuine background notices');
+      await noOverflow('desktop floating bind confirmation has no overflow'); await screenshot('desktop-floating-ip-binding',false);
+      await page.setViewportSize({width:390,height:844}); await noOverflow('390px floating bind confirmation has no overflow'); await screenshot('mobile-floating-ip-binding',false);
+      await page.setViewportSize({width:320,height:844}); await noOverflow('320px floating bind confirmation has no overflow');
+      await page.setViewportSize({width:1440,height:1000});
+    }
+    await page.getByRole('dialog').getByRole('button',{name:title,exact:true}).click(); await dialogClosed();
+    const r = (await read(`/public-ips/resources/${floating.id}`)).resource;
+    assert.equal(r.binding_state,'pending'); assert.equal(r.instance_id,target.instance_id); assert.equal(r.binding_generation,expectedEpoch - 7); assert(r.epoch_id);
+    const detail = await read(`/overlays/epochs/${r.epoch_id}`);
+    assert.equal(detail.epoch.epoch,expectedEpoch); assert.equal(detail.epoch.state,'pending');
+    assert.equal(detail.epoch.snapshot.floating_ips.length,1); assert.equal(detail.epoch.snapshot.floating_ips[0].instance_id,target.instance_id);
+    assert.equal(detail.epoch.snapshot.floating_ips[0].public_ipv4,'8.8.4.4');
+    assert.equal(await vmCard(floating.id).getByRole('button',{name:'回收',exact:true}).isDisabled(),true);
+    await page.locator('.resource-next').getByRole('link',{name:'继续关联任务',exact:true}).click();
+    await page.getByRole('heading',{name:/网络变更/}).waitFor();
+    const completed = await advanceUntilStopped(r.epoch_id); assert.equal(completed.epoch.state,'succeeded'); assert.equal(completed.tasks.length,6);
+    const result = (await read(`/public-ips/resources/${floating.id}`)).resource;
+    assert.equal(result.binding_state,'bound'); assert.equal(result.instance_id,target.instance_id); assert.equal(result.releasable,false);
+    await resourcesView(); await vmCard(floating.id).waitFor(); return completed;
+  }
+  const floatingBound = await bindFloating(floatTargets[0],8);
+  check('floating allocation binds the exact original VM through six persisted epoch8 tasks with explicit full-protocol public consent');
+  await noticesExpireNaturally('floating binding notice expires naturally before actual resource screenshots');
+  await page.setViewportSize({width:390,height:844}); await noOverflow('390px floating bound resource has no overflow'); await screenshot('mobile-floating-ip-bound');
+  await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop floating bound resource has no overflow'); await screenshot('desktop-floating-ip-bound');
+  const floatingMoved = await bindFloating(floatTargets[1],9,true);
+  assert.notEqual(floatingMoved.epoch.snapshot.floating_ips[0].instance_id,floatingBound.epoch.snapshot.floating_ips[0].instance_id);
+  assert.equal(floatingMoved.epoch.snapshot.floating_ips[0].resource_id,floating.id);
+  assert.equal(floatingMoved.epoch.snapshot.floating_ips[0].public_ipv4,floating.address);
+  const preservedBound = await read(`/overlays/epochs/${floatingBound.epoch.id}`);
+  assert.deepEqual(preservedBound.epoch.snapshot,floatingBound.epoch.snapshot); assert.deepEqual(receiptProof(preservedBound),receiptProof(floatingBound));
+  check('floating move preserves its address/resource and crosses nodes only after all epoch9 phases, leaving original epoch8 immutable');
+  await vmCard(floating.id).getByRole('button',{name:'解绑',exact:true}).click();
+  await page.getByRole('dialog').locator('.resource-confirmation input').fill(floating.address);
+  await page.getByRole('dialog').getByRole('button',{name:'解绑公网地址',exact:true}).click(); await dialogClosed();
+  const pendingFloatDetach = (await read(`/public-ips/resources/${floating.id}`)).resource;
+  assert.equal(pendingFloatDetach.binding_state,'pending'); assert.equal(pendingFloatDetach.releasable,false); assert.equal(pendingFloatDetach.binding_generation,3);
+  assert.equal(await vmCard(floating.id).getByRole('button',{name:'回收',exact:true}).isDisabled(),true);
+  await page.locator('.resource-next').getByRole('link',{name:'继续关联任务',exact:true}).click(); await page.getByRole('heading',{name:/网络变更/}).waitFor();
+  const floatDetached = await advanceUntilStopped(pendingFloatDetach.epoch_id);
+  assert.equal(floatDetached.epoch.epoch,10); assert.equal(floatDetached.epoch.state,'succeeded'); assert.deepEqual(floatDetached.epoch.snapshot.floating_ips || [],[]);
+  await resourcesView(); const detachedFloat = (await read(`/public-ips/resources/${floating.id}`)).resource;
+  assert.equal(detachedFloat.binding_state,'unbound'); assert.equal(detachedFloat.releasable,true);
+  await vmCard(floating.id).getByRole('button',{name:'回收',exact:true}).click(); await page.getByRole('dialog').locator('.resource-confirmation input').fill(floating.address);
+  await page.getByRole('dialog').getByRole('button',{name:'回收公网地址',exact:true}).click(); await dialogClosed();
+  assert.equal((await read(`/public-ips/resources/${floating.id}`)).resource.state,'released');
+  const newFloating = await vmAllocation('floating','8.8.4.4','公网出口池 · 8.8.4.0/24'); assert.notEqual(newFloating.id,floating.id);
+  assert.deepEqual((await read(`/public-ips/resource-operations/${floating.id}`)).operation,floatingAllocationOperation);
+  check('floating unbind epoch10 must complete all node releases before reclamation; reallocation retains immutable allocation history');
+  for (const before of originalSeven) {const after = await read(`/overlays/epochs/${before.epoch.id}`); assert.equal(after.epoch.snapshot_sha256,before.epoch.snapshot_sha256); assert.deepEqual(after.epoch.snapshot,before.epoch.snapshot); assert.deepEqual(receiptProof(after),receiptProof(before));}
+  check('all original seven NAT/network epoch snapshots and exact receipts remain unchanged after floating bind, move, unbind and reallocation');
+
+  phase = 'direct-public-create';
+  const direct = await vmAllocation('direct','9.9.9.2','实例直绑池 · 9.9.9.0/24','public-direct');
+  await page.goto(new URL('#/instances',base).href,{waitUntil:'networkidle'});
+  await page.getByRole('button',{name:'创建实例',exact:true}).click();
+  await page.getByRole('combobox',{name:'选择预设规格',exact:true}).click();
+  await page.getByRole('option',{name:/^browser-direct-public ·/}).click();
+  await page.getByLabel('主机名',{exact:false}).fill('browser-public-vm');
+  await page.getByLabel('归属客户 ID',{exact:false}).fill(credentials.owner_ref);
+  await pick('选择直绑公网地址','9.9.9.2');
+  await noOverflow('desktop exact direct public VM creation has no overflow'); await screenshot('desktop-direct-public-create',false);
+  await page.setViewportSize({width:390,height:844}); await noOverflow('390px direct public VM creation has no overflow'); await screenshot('mobile-direct-public-create',false);
+  await page.setViewportSize({width:320,height:844}); await noOverflow('320px direct public VM creation has no overflow'); await page.setViewportSize({width:1440,height:1000});
+  const createResponse = page.waitForResponse(r => new URL(r.url()).pathname === '/console/v1/instances' && r.request().method() === 'POST' && r.status() === 202);
+  await page.getByRole('dialog').getByRole('button',{name:'创建任务',exact:true}).click();
+  const createTransport = await createResponse;
+  const frozenCreateBody = createTransport.request().postDataJSON();
+  assert.equal(frozenCreateBody.public_ip_resource_id,direct.id); assert.equal(frozenCreateBody.public_ip_expected_generation,0); assert.equal(frozenCreateBody.owner_ref,credentials.owner_ref); assert.equal(frozenCreateBody.preset_id,'browser-direct-public');
+  const createdIntent = (await createTransport.json()).operation;
+  assert(createdIntent && /^[a-f0-9]{32}$/.test(createdIntent.id));
+  await page.getByRole('dialog').getByRole('link',{name:'查看原任务',exact:true}).click();
+  await page.getByRole('heading',{name:'任务详情',exact:true}).waitFor();
+  async function dispatchNodeTask(id) {
+    const before = posts('/dispatch'); const task = (await read(`/operations/${id}`)).operation; assert.equal(task.state,'accepted');
+    await page.getByRole('button',{name:'派发任务',exact:true}).click(); await page.getByRole('dialog').locator('input').fill(id);
+    await page.getByRole('button',{name:'确认派发',exact:true}).click(); await dialogClosed();
+    const deadline = Date.now()+30000;
+    let current;
+    while(Date.now()<deadline) {current = (await read(`/operations/${id}`)).operation; if(current.state === 'succeeded' || current.state === 'rejected') break; await page.waitForTimeout(200);}
+    assert.equal(current.state,'succeeded'); assert.equal(posts('/dispatch') - before,1); return current;
+  }
+  await dispatchNodeTask(createdIntent.id);
+  let directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
+  assert.equal(directCurrent.binding_state,'bound'); assert.equal(directCurrent.instance_id,createdIntent.instance_id); assert.equal(directCurrent.binding_generation,1);
+  let vm = (await read(`/instances/${createdIntent.instance_id}`)).instance;
+  assert.equal(vm.resources.network_type,'normal'); assert.equal(vm.node_id,credentials.direct_node_id); assert.equal(vm.state,'running');
+  check('visible VM creation freezes the exact approved resource into node3 and real controller dispatch confirms its persisted binding');
+  async function directInstancePanel() {
+    await page.goto(new URL(`#/instances/${createdIntent.instance_id}`,base).href,{waitUntil:'networkidle'});
+    await page.getByRole('tab',{name:'公网地址',exact:true}).click(); await vmCard(direct.id).waitFor();
+  }
+  await directInstancePanel(); await noticesExpireNaturally('direct creation notice expires before actual instance resource screenshots');
+  await page.setViewportSize({width:390,height:844}); await noOverflow('390px instance direct public panel has no overflow'); await screenshot('mobile-direct-public-instance');
+  await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop instance direct public panel has no overflow'); await screenshot('desktop-direct-public-instance');
+  await page.getByRole('button',{name:'关机',exact:true}).click(); await page.getByLabel('确认实例 ID',{exact:true}).fill(createdIntent.instance_id);
+  const stopResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/console/v1/instances/${createdIntent.instance_id}/operations` && r.request().method() === 'POST' && r.status() === 202);
+  await page.getByRole('dialog').getByRole('button',{name:'创建任务',exact:true}).click(); const stopIntent = (await (await stopResponse).json()).operation;
+  await page.getByRole('dialog').getByRole('link',{name:'查看原任务',exact:true}).click(); await page.getByRole('heading',{name:'任务详情',exact:true}).waitFor(); await dispatchNodeTask(stopIntent.id);
+  await directInstancePanel();
+  await vmCard(direct.id).getByRole('button',{name:'解绑',exact:true}).click(); await page.getByRole('dialog').locator('.resource-confirmation input').fill(direct.address);
+  await page.getByRole('dialog').getByRole('button',{name:'解绑公网地址',exact:true}).click(); await dialogClosed();
+  directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
+  assert.equal(directCurrent.binding_state,'pending'); assert.equal(directCurrent.binding_generation,2); assert.equal(directCurrent.epoch_id,''); assert(directCurrent.operation_id);
+  assert.equal(await vmCard(direct.id).getByRole('button',{name:'回收',exact:true}).isDisabled(),true);
+  await page.locator('.resource-next').getByRole('link',{name:'继续关联任务',exact:true}).click(); await page.getByRole('heading',{name:'任务详情',exact:true}).waitFor(); await dispatchNodeTask(directCurrent.operation_id);
+  await directInstancePanel(); directCurrent = (await read(`/public-ips/resources/${direct.id}`)).resource;
+  assert.equal(directCurrent.binding_state,'unbound'); assert.equal(directCurrent.releasable,true);
+  await vmCard(direct.id).getByRole('button',{name:'回收',exact:true}).click(); await page.getByRole('dialog').locator('.resource-confirmation input').fill(direct.address);
+  await page.getByRole('dialog').getByRole('button',{name:'回收公网地址',exact:true}).click(); await dialogClosed();
+  assert.equal((await read(`/public-ips/resources/${direct.id}`)).resource.state,'released');
+  assert.equal((await read(`/instances/${createdIntent.instance_id}`)).instance.state,'shutoff');
+  check('direct address is reclaimed only after visible shutdown, exact node3 detachment dispatch and confirmed server state, never a hot IP replacement');
+  assert.equal(writeAttempts(),16);
+  report.floating_bound_moved_unbound = true; report.floating_reclaimed_reallocated = true;
+  report.direct_created_dispatched_detached_reclaimed = true; report.first_seven_epochs_retained = true;
+  await resourcesView(); await noticesExpireNaturally('new resource history notice expires naturally before final screenshots');
+  await page.setViewportSize({width:390,height:844}); await noOverflow('390px floating history and reallocated address has no overflow'); await screenshot('mobile-floating-ip-history');
+  await page.setViewportSize({width:320,height:844}); await noOverflow('320px floating history has no overflow');
+  await page.setViewportSize({width:1440,height:1000}); await screenshot('desktop-floating-ip-history');
+  await page.getByRole('button',{name:'语言与外观',exact:true}).click(); await pick('界面语言','English'); await pick('Appearance','Dark'); await page.getByRole('button',{name:'Done',exact:true}).click(); await dialogClosed();
+  await page.setViewportSize({width:390,height:844}); await noOverflow('390px English dark floating history has no overflow'); await screenshot('mobile-floating-ip-english-dark');
+  await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop English dark floating history has no overflow'); await screenshot('desktop-floating-ip-english-dark');
+  assert.equal(await page.locator('select').count(),0);
+  await page.goto(new URL(`#/instances/${createdIntent.instance_id}`,base).href,{waitUntil:'networkidle'});
+  await page.getByRole('tab',{name:'Public addresses',exact:true}).click(); await vmCard(direct.id).waitFor();
+  await page.setViewportSize({width:390,height:844}); await noOverflow('390px English dark instance tabs and direct resource have no document overflow');
+  await page.setViewportSize({width:320,height:844}); await noOverflow('320px English dark instance tabs keep horizontal scrolling within their own strip');
+  await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop English dark direct resource has no overflow');
+  check('direct and floating management retain custom controls across mobile/desktop and Chinese/light/English/dark');
 
   assert.deepEqual(report.console_errors, []);
   check('no browser JavaScript errors');

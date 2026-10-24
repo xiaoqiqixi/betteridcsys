@@ -40,6 +40,10 @@ func readPublicIPReleaseProofTx(ctx context.Context, tx *sql.Tx, c Config) (*pub
 		entry.latest = e
 		entry.current = map[string]bool{}
 		entry.unknownCurrent = false
+		for _, f := range e.Snapshot.FloatingIPs {
+			entry.references[f.PublicIPv4] = true
+			entry.current[f.PublicIPv4] = true
+		}
 		for _, p := range e.Snapshot.NATPolicies {
 			address, known := publicEpochAddress(c, e, p)
 			if known {
@@ -208,7 +212,7 @@ func publicIPActiveMapTx(ctx context.Context, tx *sql.Tx) (map[string]string, er
 	if err != nil {
 		return nil, err
 	}
-	rows, err = tx.QueryContext(ctx, "SELECT address,id FROM controller_public_ip_leases WHERE state='reserved' ORDER BY address,id")
+	rows, err = tx.QueryContext(ctx, "SELECT address,id FROM controller_public_ip_leases WHERE state='reserved' UNION ALL SELECT address,id FROM controller_public_ip_resources WHERE state='reserved' ORDER BY address,id")
 	if err != nil {
 		return nil, err
 	}

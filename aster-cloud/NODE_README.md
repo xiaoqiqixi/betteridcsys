@@ -470,3 +470,20 @@ single-host contract stays unchanged when overlay is not configured. See
 [deployment/recovery runbook](deploy/OVERLAY_OPERATIONS.md), and
 [current validation](docs/NETWORK_RECOVERY_VALIDATION.md). Keep this development
 slice off real customer nodes until the deferred KVM/OVS acceptance is complete.
+
+## 托管直绑公网 IPv4（node/3，journal5）
+
+新合同使用精确控制器租约，不再由被控 first-free 挑地址；迁移使用独立
+`aster.node.storage/2`，保持 IP/MAC 与 source fence，显式退役后才允许回迁复用节点。
+部署需要新精确 nwfilter、独立 routed public bridge、完整 Network SHA 和
+`require_public_lease:true`。CLI 仅生成 XML：
+
+```sh
+aster-node --print-public-network-filter aster-public-ipv4 > /root/aster-public-ipv4.xml
+```
+
+须先停止相关 VM、人工审核/定义 filter，再 pin 实际 dumpxml SHA，不在运行中自动
+替换规则或改宿主管理网。HOST_IPS 由节点完整探测并严格读回，变更不静默放开。
+旧无租约公网 create/start/reboot 被禁，关机/清理仍保留；原 VM 仅支持停机同 IP/MAC
+接管，不通过改 seed 冒充热换 IP。完整配置、恢复与升级备份边界见
+[VM 公网管理](docs/VM_PUBLIC_IP_MANAGEMENT.md)。实际 KVM/上联和物理重启验收仍后置。

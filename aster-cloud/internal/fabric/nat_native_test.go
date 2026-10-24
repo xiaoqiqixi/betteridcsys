@@ -232,7 +232,10 @@ func nativeNATClient(ns, url string, network ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, NATIP, "netns", "exec", ns, os.Args[0], "-test.run=^TestNativeNATHelper$", "-test.count=1")
-	cmd.Env = append(os.Environ(), "ASTER_NAT_HELPER=client", "ASTER_NAT_ADDRESS="+url)
+	// These short, fully waited test helpers retain race instrumentation, but
+	// do not each spend one fixed second in the race runtime's exit grace period.
+	// Keep the existing packet/phase deadlines and every negative assertion.
+	cmd.Env = append(os.Environ(), "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0", "ASTER_NAT_HELPER=client", "ASTER_NAT_ADDRESS="+url)
 	if len(network) > 0 {
 		cmd.Env = append(cmd.Env, "ASTER_NAT_NETWORK="+network[0])
 	}
@@ -321,7 +324,7 @@ func TestNativeNATHelper(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err = conn.WriteTo([]byte("NAT_REMOTE="+addr.String()), addr); err != nil {
+				if _, err = conn.WriteTo([]byte("NAT_REMOTE="+addr.String()+"\nNAT_LOCAL="+conn.LocalAddr().String()), addr); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -333,7 +336,9 @@ func TestNativeNATHelper(t *testing.T) {
 		if err = os.WriteFile(os.Getenv("ASTER_NAT_READY"), []byte("ready"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		server := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "NAT_REMOTE="+r.RemoteAddr) }), ReadHeaderTimeout: 2 * time.Second}
+		server := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintln(w, "NAT_REMOTE="+r.RemoteAddr+"\nNAT_LOCAL="+os.Getenv("ASTER_NAT_ADDRESS"))
+		}), ReadHeaderTimeout: 2 * time.Second}
 		_ = server.Serve(listener)
 	case "client":
 		if os.Getenv("ASTER_NAT_NETWORK") == "icmp4" {
