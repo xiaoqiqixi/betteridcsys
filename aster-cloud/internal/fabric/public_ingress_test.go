@@ -166,3 +166,41 @@ func TestFloatingPublicIngressRelatedICMPOnlyForExistingNATFlows(t *testing.T) {
 		}
 	}
 }
+
+func TestFloatingPublicIngressNativeOriginalTupleShapeAndStrictReadback(t *testing.T) {
+	_, _, c, s := floatingNATFixture(t)
+	f := &s.FloatingIPs[0]
+	policy := overlayproto.DefaultPublicIngress(f.InstanceID, f.OwnerRef)
+	f.Ingress = &policy
+	objects, err := compileNAT(c, s, c.NATProfiles[0], false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(nftObject{"nftables": objects})
+	want, _, err := normalizeNFT(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the exact native Ubuntu22/24 readback shape: family is already
+	// constrained by payload ip daddr. The tuple direction is never inferred.
+	needle := `"ct":{"dir":"original","key":"daddr"}`
+	if strings.Count(string(want), needle) != 1 || !strings.Contains(string(want), `"payload":{"field":"daddr","protocol":"ip"}`) {
+		t.Fatal("missing native IPv4 original-tuple guard")
+	}
+	for name, bad := range map[string]string{
+		"reply-direction":   strings.Replace(string(want), `"dir":"original"`, `"dir":"reply"`, 1),
+		"missing-direction": strings.Replace(string(want), `"dir":"original",`, ``, 1),
+		"wrong-tuple-key":   strings.Replace(string(want), needle, `"ct":{"dir":"original","key":"saddr"}`, 1),
+		"wrong-family":      strings.Replace(string(want), needle, `"ct":{"dir":"original","family":"ip6","key":"daddr"}`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if bad == string(want) {
+				t.Fatal("test failed to mutate readback")
+			}
+			got, _, err := normalizeNFT([]byte(`{"nftables":` + bad + `}`))
+			if err == nil && string(got) == string(want) {
+				t.Fatal("tuple change normalized into a successful proof")
+			}
+		})
+	}
+}
