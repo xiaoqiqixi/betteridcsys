@@ -82,7 +82,7 @@ for content in text.splitlines():
 unique = []
 for item in locations or calls:
     if item not in unique: unique.append(item)
-phases = {'PROCESS_START', 'OVERLAY_INITIALIZATION', 'NAT_APPROVAL', 'PARTICIPANT_CAPABILITIES', 'DIRECT_NODE_SETUP', 'DIRECT_POOL_SETUP', 'INITIAL_EPOCH_PLAN', 'INITIAL_EPOCH_RELEASE', 'INITIAL_HISTORY_CAPTURE', 'IDENTITY_SETUP', 'LOOPBACK_LISTENER', 'CREDENTIAL_HANDOFF', 'BROWSER_READY'}
+phases = {'PROCESS_START', 'OVERLAY_INITIALIZATION', 'NAT_APPROVAL', 'PARTICIPANT_CAPABILITIES', 'DIRECT_NODE_SETUP', 'DIRECT_POOL_SETUP', 'INITIAL_EPOCH_PLAN', 'INITIAL_EPOCH_RELEASE', 'INITIAL_HISTORY_CAPTURE', 'IDENTITY_SETUP', 'LOOPBACK_LISTENER', 'CREDENTIAL_HANDOFF', 'BROWSER_READY', 'HEARTBEAT_REGRESSION'}
 phase = phase_path.read_text().strip() if phase_path.exists() else ''
 if phase not in phases: phase = 'UNKNOWN'
 checks = {
@@ -149,6 +149,18 @@ for protocol in http1 http2; do
   grep -q -- "--- PASS: TestOwnedPublicIPResponseFault/$protocol " "$scratch/response-fault.log" || fail 'Both actual TLS response-fault protocols must pass.'
 done
 if grep -qE -- '--- (SKIP|FAIL):' "$scratch/response-fault.log"; then fail 'Response-fault regression must not skip or fail.'; fi
+
+# Exercise the identical-update failure and genuinely fresh observed/received
+# chronology against the same disposable MySQL, never by weakening Heartbeat.
+printf 'HEARTBEAT_REGRESSION' >"$scratch/fixture-phase"
+if ! (cd "$cloud/internal/control" && "$scratch/browser.test" -test.v -test.count=1 -test.timeout=2m -test.run '^TestOwnedPublicIngressHeartbeatChronology$') >"$scratch/fixture.log" 2>&1; then
+  sanitize_fixture_failure fixture_startup_failed
+  fail 'Real MySQL heartbeat chronology regression failed; only fixed diagnostics exported.'
+fi
+grep -q '^--- PASS: TestOwnedPublicIngressHeartbeatChronology ' "$scratch/fixture.log" || fail 'Required real MySQL heartbeat chronology regression did not pass.'
+if grep -qE -- '--- (SKIP|FAIL):' "$scratch/fixture.log"; then fail 'Required heartbeat chronology regression must not skip or fail.'; fi
+printf 'PASS: real MySQL heartbeat chronology regression; production changedRows guard retained.\n'
+printf 'PROCESS_START' >"$scratch/fixture-phase"
 
 (cd "$cloud/internal/control" && exec "$scratch/browser.test" -test.v -test.count=1 -test.timeout=21m -test.run '^TestOwnedNATBrowserFixture$') >"$scratch/fixture.log" 2>&1 &
 fixture_pid=$!

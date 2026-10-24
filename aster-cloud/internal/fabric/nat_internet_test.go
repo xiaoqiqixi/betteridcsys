@@ -114,7 +114,7 @@ func evaluateNATPolicy(t *testing.T, objects []nftObject, chain string, packet n
 					}
 				}
 			case "ct":
-				if v["key"] == "daddr" && v["family"] == "ip" && v["dir"] == "original" {
+				if v["key"] == "daddr" && (v["family"] == nil || v["family"] == "ip") && v["dir"] == "original" {
 					return packet.originalDestination
 				}
 				switch v["key"] {

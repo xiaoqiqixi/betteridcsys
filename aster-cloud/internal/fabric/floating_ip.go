@@ -103,7 +103,11 @@ func compileFloatingNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfil
 		} else {
 			// Bind ingress filtering to this exact public destination, not a
 			// different shared-NAT forwarding to the same private instance.
-			original := nftObject{"ct": nftObject{"key": "daddr", "family": "ip", "dir": "original"}}
+			// Ubuntu22/24 nft infers the tuple's IPv4 family from the preceding
+			// ip daddr match and omits the redundant family in its JSON readback.
+			// Emit that native shape, retaining the original direction and exact
+			// public destination. Never erase a tuple guard in normalization.
+			original := nftObject{"ct": nftObject{"key": "daddr", "dir": "original"}}
 			add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), dest, match(original, f.PublicIPv4), nftObject{"jump": nftObject{"target": "floating_in"}})
 			// Public ingress default deny must not disable legitimate replies to
 			// this instance's independently approved outbound SNAT connections.

@@ -417,6 +417,31 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	}
 	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4+"/32", "dev", p.OutsidePeer, "src", publicRemote)
 	t.Log("PUBLIC_INGRESS_EXACT_SOURCE_PORT_AND_ICMP_CONFIRMED")
+	// The editor's common all-public source must also survive exact native
+	// readback. It does not override the separate protected-source floor.
+	policy.Revision++
+	policy.SHA256 = ""
+	for i := range policy.Rules {
+		policy.Rules[i].SourceCIDR = "0.0.0.0/0"
+	}
+	policy, err = overlayproto.CanonicalPublicIngress(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.FloatingIPs[0].Ingress = &policy
+	apply("allow public CIDR without bypassing protected sources")
+	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4+"/32", "dev", p.OutsidePeer, "src", otherPublicClient)
+	for _, probe := range publicTargets {
+		if out, err := nativeNATClient(outsideNS, probe.address, probe.network); err != nil {
+			t.Fatal("all-public source rule did not allow live service", probe.network, err, string(out))
+		}
+	}
+	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4+"/32", "dev", p.OutsidePeer, "src", "169.254.169.254")
+	if out, err := nativeNATClient(outsideNS, "http://"+p.PublicIPv4+":2444"); err == nil {
+		t.Fatal("all-public source rule overrode metadata protected floor", string(out))
+	}
+	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4+"/32", "dev", p.OutsidePeer, "src", publicRemote)
+	t.Log("PUBLIC_INGRESS_ALL_PUBLIC_CIDR_AND_PROTECTED_FLOOR_CONFIRMED")
 	heldIncoming := startNativeNATHeldClient(t, outsideNS, "http://"+p.PublicIPv4+":2444")
 	policy.Revision++
 	policy.SHA256 = ""
