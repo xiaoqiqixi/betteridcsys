@@ -196,6 +196,9 @@ func (s *SQLStore) planOverlayRecovery(ctx context.Context, c Config, actor, ori
 // The caller owns controller_lock and the final commit. Private resource
 // recovery uses this helper to freeze its edit version and epoch atomically.
 func planOverlayRecoveryTx(ctx context.Context, tx *sql.Tx, c Config, actor, original, newID, digest string, in OverlayRecoveryInput, heads []overlayproto.Head, now time.Time) (OverlayEpoch, bool, error) {
+	if e := publicIngressOperationIDUnusedTx(ctx, tx, newID); e != nil {
+		return OverlayEpoch{}, false, e
+	}
 	existing, e := scanOverlayEpoch(tx.QueryRowContext(ctx, "SELECT "+overlayEpochColumns+" FROM controller_overlay_epochs WHERE id=?", newID))
 	if e == nil {
 		if existing.ActorID != actor || existing.RequestSHA256 != digest || existing.Recovery == nil {
@@ -267,7 +270,7 @@ func planOverlayRecoveryTx(ctx context.Context, tx *sql.Tx, c Config, actor, ori
 	if e != nil {
 		return old, false, e
 	}
-	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot); e != nil {
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot, now); e != nil {
 		return old, false, e
 	}
 	recovery := &overlayproto.Recovery{Epoch: old.Epoch, SnapshotSHA256: old.SnapshotSHA256, Heads: append([]overlayproto.Head{}, heads...)}

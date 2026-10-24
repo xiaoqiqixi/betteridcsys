@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef, nextTick } from "vue";
+import { computed, shallowRef, nextTick, watch } from "vue";
 import { useRoute, RouterLink } from "vue-router";
 import {
   ArrowLeft,
@@ -24,6 +24,7 @@ import InstanceMetricsPanel from "../components/InstanceMetricsPanel.vue";
 import SourceRetirementPanel from "../components/SourceRetirementPanel.vue";
 import MigrationWizard from "../components/MigrationWizard.vue";
 import PublicIPResourcesPanel from "../components/PublicIPResourcesPanel.vue";
+import PublicIngressPanel from "../components/PublicIngressPanel.vue";
 const route = useRoute(),
   {
     prefs: { tr, locale },
@@ -34,10 +35,28 @@ const detail = useQuery(
   validDetail,
 );
 const instance = computed(() => detail.data.value?.instance);
+const publicResourceRevision = shallowRef(0);
 const action = shallowRef<Action | null>(null),
   artifactId = shallowRef(""),
   migrationOpen = shallowRef(false),
-  tab = shallowRef("overview");
+  tab = shallowRef(
+    typeof route.query.tab === "string" &&
+      ["overview", "snapshots", "backups", "public", "tasks"].includes(
+        route.query.tab,
+      )
+      ? route.query.tab
+      : "overview",
+  );
+watch(
+  () => route.query.tab,
+  (value) => {
+    tab.value =
+      typeof value === "string" &&
+      ["overview", "snapshots", "backups", "public", "tasks"].includes(value)
+        ? value
+        : "overview";
+  },
+);
 const tabs = computed(() => [
   { value: "overview", label: tr("概览", "Overview") },
   { value: "snapshots", label: tr("快照", "Snapshots") },
@@ -174,11 +193,33 @@ function tabKey(event: KeyboardEvent) {
           :aria-labelledby="`tab-${tab}`"
           class="tab-content"
         >
-          <PublicIPResourcesPanel
-            v-if="tab === 'public'"
-            :key="instance.id"
-            :instance="instance"
-          />
+          <template v-if="tab === 'public'">
+            <PublicIngressPanel
+              v-if="
+                instance.resources.network_type === 'vpc' &&
+                session.can('nodes.read') &&
+                session.can('instances.read')
+              "
+              :key="`ingress-${instance.id}`"
+              :instance="instance"
+              @changed="publicResourceRevision++"
+            />
+            <p
+              v-else-if="instance.resources.network_type === 'normal'"
+              class="direct-ingress-note"
+            >
+              {{
+                tr(
+                  "普通网络的公网直绑访问需使用实例防火墙控制。平台公网入站规则目前仅适用 VPC 浮动 IP。",
+                  "Use the guest firewall to control direct public access on a normal network. Platform public ingress rules currently apply only to VPC floating IPs.",
+                )
+              }}
+            </p>
+            <PublicIPResourcesPanel
+              :key="`${instance.id}:${publicResourceRevision}`"
+              :instance="instance"
+            />
+          </template>
           <template v-else-if="tab === 'overview'"
             ><InstanceMetricsPanel :instance="instance" />
             <div class="detail-grid">
@@ -394,6 +435,16 @@ function tabKey(event: KeyboardEvent) {
   </section>
 </template>
 <style scoped>
+.direct-ingress-note {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--secondary);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  margin: 0 0 24px;
+}
 .detail-heading {
   margin-top: 20px;
 }

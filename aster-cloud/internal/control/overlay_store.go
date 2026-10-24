@@ -172,6 +172,9 @@ func (s *SQLStore) CreateOverlayVPC(ctx context.Context, c Config, actor, id str
 		return OverlayVPC{}, false, e
 	}
 	defer tx.Rollback()
+	if e = publicIngressOperationIDUnusedTx(ctx, tx, id); e != nil {
+		return OverlayVPC{}, false, e
+	}
 	var oldActor, oldSHA string
 	e = tx.QueryRowContext(ctx, "SELECT actor_id,request_sha256 FROM controller_overlay_vpcs WHERE id=?", id).Scan(&oldActor, &oldSHA)
 	if e == nil {
@@ -296,6 +299,9 @@ func (s *SQLStore) PlanOverlayEpoch(ctx context.Context, c Config, actor, op str
 		return OverlayEpoch{}, false, e
 	}
 	defer tx.Rollback()
+	if e = publicIngressOperationIDUnusedTx(ctx, tx, op); e != nil {
+		return OverlayEpoch{}, false, e
+	}
 	prior, e := scanOverlayEpoch(tx.QueryRowContext(ctx, "SELECT "+overlayEpochColumns+" FROM controller_overlay_epochs WHERE id=?", op))
 	if e == nil {
 		if prior.ActorID != actor || prior.RequestSHA256 != digest {
@@ -317,7 +323,7 @@ func (s *SQLStore) PlanOverlayEpoch(ctx context.Context, c Config, actor, op str
 	if e != nil {
 		return OverlayEpoch{}, false, e
 	}
-	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot); e != nil {
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot, now); e != nil {
 		return OverlayEpoch{}, false, e
 	}
 	raw, _ := json.Marshal(snapshot)

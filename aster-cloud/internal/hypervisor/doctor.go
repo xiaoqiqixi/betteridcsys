@@ -207,6 +207,7 @@ func (m *Manager) Capabilities(ctx context.Context) nodeproto.Capabilities {
 		}
 	}
 	doctor := m.Doctor(ctx)
+	advertisePublicIngressCapability(&c, doctor)
 	if !doctor.Ready {
 		c.Maintenance = true
 		c.Limitations = append(c.Limitations, "Host doctor prerequisites are incomplete; no mutation is advertised.")
@@ -221,6 +222,28 @@ func (m *Manager) Capabilities(ctx context.Context) nodeproto.Capabilities {
 	}
 	return c
 }
+
+// Advertise the new policy only after the real read-only doctor has confirmed
+// the approved OVS profiles and while the node is accepting mutations. Keeping
+// this as a feature in the existing array preserves legacy capability JSON.
+func advertisePublicIngressCapability(c *nodeproto.Capabilities, doctor DoctorReport) {
+	if !doctor.Ready || c.Maintenance || len(c.OVSNetworkProfiles) == 0 {
+		return
+	}
+	for _, feature := range c.NetworkProfiles {
+		if feature == nodeproto.PublicIngressCapability {
+			return
+		}
+	}
+	for _, feature := range c.NetworkProfiles {
+		if feature == nodeproto.OVSNetworkCapability {
+			c.NetworkProfiles = append(c.NetworkProfiles, nodeproto.PublicIngressCapability)
+			c.Limitations = append(c.Limitations, "Public ingress policy is scoped to instance-bound floating IPv4 traffic; it is not a full VPC security group, direct-public policy, IPv6 firewall or guest firewall manager.")
+			return
+		}
+	}
+}
+
 func FormatDoctor(report DoctorReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s node=%s ready=%v os=%s\n", report.Protocol, report.NodeID, report.Ready, report.OS)

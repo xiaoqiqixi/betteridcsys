@@ -1,3 +1,8 @@
+import {
+  ingressRevision,
+  validIngressRules,
+  type PublicIngressPolicy,
+} from "./public-ingress";
 import { validPublicIPLease, type PublicIPLease } from "./public-ip";
 import { record } from "./client";
 import { ipv4, networkID } from "./network";
@@ -151,6 +156,23 @@ export interface OverlayEpochInput extends OverlaySelection {
   cluster_id: string;
   expected_epoch: number;
 }
+export type FloatingIngressPolicy = Pick<
+  PublicIngressPolicy,
+  "schema" | "instance_id" | "owner_ref" | "revision" | "sha256" | "rules"
+>;
+export interface FloatingIP {
+  resource_id: string;
+  node_id: string;
+  vpc_id: string;
+  owner_ref: string;
+  profile_id: string;
+  profile_sha256: string;
+  gateway_instance_id: string;
+  instance_id: string;
+  target_ipv4: string;
+  public_ipv4: string;
+  ingress?: FloatingIngressPolicy;
+}
 export interface OverlaySnapshot {
   protocol: "aster.overlay/1";
   cluster_id: string;
@@ -161,6 +183,7 @@ export interface OverlaySnapshot {
   members: OverlayMember[];
   gateways: OverlayGateway[];
   nat_policies?: NATPolicy[];
+  floating_ips?: FloatingIP[];
 }
 export interface OverlayHead {
   node_id: string;
@@ -280,6 +303,85 @@ const validProfile = (p: unknown): p is OverlaySnapshot["profiles"][number] =>
   clusterID(p.node_id) &&
   clusterID(p.profile_id) &&
   sha256(p.profile_sha256);
+export function validFloatingIP(v: unknown): v is FloatingIP {
+  if (
+    !record(v) ||
+    !Object.keys(v).every((k) =>
+      [
+        "resource_id",
+        "node_id",
+        "vpc_id",
+        "owner_ref",
+        "profile_id",
+        "profile_sha256",
+        "gateway_instance_id",
+        "instance_id",
+        "target_ipv4",
+        "public_ipv4",
+        "ingress",
+      ].includes(k),
+    ) ||
+    ![
+      v.resource_id,
+      v.vpc_id,
+      v.owner_ref,
+      v.gateway_instance_id,
+      v.instance_id,
+    ].every(networkID) ||
+    !clusterID(v.node_id) ||
+    !clusterID(v.profile_id) ||
+    !sha256(v.profile_sha256) ||
+    !ipv4(v.target_ipv4) ||
+    !publicIPv4(v.public_ipv4)
+  )
+    return false;
+  if (Object.hasOwn(v, "ingress")) {
+    const p = v.ingress;
+    if (
+      !record(p) ||
+      Object.keys(p).length !== 6 ||
+      p.schema !== 1 ||
+      p.instance_id !== v.instance_id ||
+      p.owner_ref !== v.owner_ref ||
+      !ingressRevision(p.revision) ||
+      !sha256(p.sha256) ||
+      !validIngressRules(p.rules) ||
+      (p.revision === 0 && p.rules.length !== 0)
+    )
+      return false;
+  }
+  return true;
+}
+function floatingSnapshot(v: OverlaySnapshot): boolean {
+  if (v.floating_ips === undefined) return true;
+  if (
+    !array(v.floating_ips, validFloatingIP, 128) ||
+    !unique(v.floating_ips, (f) => f.resource_id) ||
+    !unique(v.floating_ips, (f) => f.public_ipv4) ||
+    !unique(v.floating_ips, (f) => f.instance_id)
+  )
+    return false;
+  return v.floating_ips.every((f) => {
+    const m = v.members.find((m) => m.instance_id === f.instance_id),
+      g = v.gateways.find((g) => g.instance_id === f.gateway_instance_id),
+      p = v.vpcs.find((p) => p.id === f.vpc_id);
+    return (
+      !!m &&
+      !!g &&
+      !!p &&
+      m.enabled &&
+      !m.reserved &&
+      m.owner_ref === f.owner_ref &&
+      g.owner_ref === f.owner_ref &&
+      p.owner_ref === f.owner_ref &&
+      m.vpc_id === f.vpc_id &&
+      g.vpc_id === f.vpc_id &&
+      g.node_id === f.node_id &&
+      m.ipv4 === f.target_ipv4 &&
+      !v.nat_policies?.some((n) => n.public_ipv4 === f.public_ipv4)
+    );
+  });
+}
 export const validSnapshot = (v: unknown): v is OverlaySnapshot =>
   record(v) &&
   v.protocol === "aster.overlay/1" &&
@@ -305,7 +407,8 @@ export const validSnapshot = (v: unknown): v is OverlaySnapshot =>
   unique(v.members, (p) => p.instance_id) &&
   array(v.gateways, validGateway, 32) &&
   unique(v.gateways, (p) => p.vpc_id) &&
-  (v.nat_policies === undefined || array(v.nat_policies, validNATPolicy, 32));
+  (v.nat_policies === undefined || array(v.nat_policies, validNATPolicy, 32)) &&
+  floatingSnapshot(v as unknown as OverlaySnapshot);
 const phase = (v: unknown): v is OverlayEpoch["phase"] =>
   v === "prepare" || v === "program" || v === "release";
 const validHead = (v: unknown): v is OverlayHead =>

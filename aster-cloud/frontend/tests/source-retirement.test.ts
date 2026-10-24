@@ -58,6 +58,9 @@ describe("explicit source retirement is not automatic activation or deletion", (
     expect(f.calls).toHaveLength(0);
     await body().get('input[type="checkbox"]').setValue(true);
     await body().get("form").trigger("submit");
+    // WebCrypto's native digest runs outside the microtask queue. Await the
+    // single observable POST rather than assuming flushPromises settles it.
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
     await flushPromises();
     expect(f.calls[0]?.body).toEqual({
       action: "migrate_retire_source",

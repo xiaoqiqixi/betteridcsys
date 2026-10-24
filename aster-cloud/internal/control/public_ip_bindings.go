@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 // publicEpochAddress returns a conservative reference. Old default selections
@@ -108,7 +109,7 @@ func PublicIPSafeToReleaseTx(ctx context.Context, tx *sql.Tx, c Config, lease Pu
 // All planning paths and the last dispatch gate run this under controller_lock.
 // Explicit address selection is never authorized by a database row alone: the
 // independent root projection, exact VPC owner and active unique lease all bind.
-func validatePublicIPSnapshotTx(ctx context.Context, tx *sql.Tx, c Config, snapshot overlayproto.Snapshot) error {
+func validatePublicIPSnapshotTx(ctx context.Context, tx *sql.Tx, c Config, snapshot overlayproto.Snapshot, now time.Time) error {
 	proof, err := readPublicIPReleaseProofTx(ctx, tx, c)
 	if err != nil {
 		return err
@@ -167,7 +168,10 @@ func validatePublicIPSnapshotTx(ctx context.Context, tx *sql.Tx, c Config, snaps
 			return err
 		}
 	}
-	return validateFloatingPublicResourcesTx(ctx, tx, c, snapshot, seen)
+	if e := validateFloatingPublicResourcesTx(ctx, tx, c, snapshot, seen); e != nil {
+		return e
+	}
+	return validatePublicIngressSnapshotTx(ctx, tx, c, snapshot, now)
 }
 func decoratePublicIPLeaseTx(ctx context.Context, tx *sql.Tx, c Config, v *PublicIPLease) {
 	if v.State == "released" {

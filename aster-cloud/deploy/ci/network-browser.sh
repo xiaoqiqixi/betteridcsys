@@ -149,8 +149,8 @@ assert value.get('passed') is True
 assert value.get('financial_and_node_snapshots_unchanged') is True
 assert value.get('initial_network_snapshot_and_receipts_unchanged') is True
 assert value.get('lost_ack_reconciled') is True
-assert value.get('node_posts_unique') is True and value.get('node_post_count') == 60
-assert value.get('epochs') == 10
+assert value.get('node_posts_unique') is True and value.get('node_post_count') == 78
+assert value.get('epochs') == 13
 assert value.get('public_egress_enabled') is True
 assert value.get('public_egress_disabled') is True
 assert value.get('pure_internet_reenabled') is True
@@ -163,6 +163,10 @@ assert value.get('total_pool_and_nat_operations') == 8
 assert value.get('vm_public_resource_operations') == 9
 assert value.get('vm_public_resource_history_count') == 3
 assert value.get('direct_node_post_count') == 3
+assert value.get('public_ingress_operations') == 3
+assert value.get('public_ingress_version_history') == 3
+assert value.get('public_ingress_default_deny_move_revoke') is True
+assert value.get('public_ingress_immutable_operations') is True
 for name in ('floating_bound_moved_unbound', 'floating_reclaimed_reallocated',
              'direct_created_dispatched_detached_reclaimed', 'direct_node3_exact_requests_and_results',
              'global_inventory_exclusive', 'first_seven_epochs_retained'):
@@ -184,7 +188,10 @@ for name in ('floating_bound_moved_unbound', 'floating_reclaimed_reallocated',
              'direct_created_dispatched_detached_reclaimed', 'first_seven_epochs_retained'):
     assert report.get(name) is True, 'Required visible direct/floating workflow missing'
 assert len(report.get('public_ip_write_attempts', [])) == 16
-assert len(report.get('screenshots', [])) == 44, 'Required actual direct/floating mobile and desktop screenshots missing'
+assert len(report.get('public_ingress_write_attempts', [])) == 3
+assert report.get('public_ingress_configured_default_deny_moved_revoked') is True
+assert report.get('public_ingress_immutable_operations') is True
+assert len(report.get('screenshots', [])) == 52, 'Required actual direct/floating mobile and desktop screenshots missing'
 assert report.get('public_ip_failed_writes') == [{'method': 'POST', 'path': '/console/v1/public-ips/leases'}], 'Only the single original allocation transport fault is permitted'
 
 for path in output.iterdir():

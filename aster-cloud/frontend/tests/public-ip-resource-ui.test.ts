@@ -13,6 +13,7 @@ import {
 } from "./public-ip-resource-fixtures";
 import { publicPool } from "./public-ip-fixtures";
 import { resources, operation } from "./fixtures";
+import { ingressPolicy } from "./public-ingress-fixtures";
 const cleanup: Array<() => void> = [];
 beforeEach(() => {
   sessionStorage.clear();
@@ -51,7 +52,16 @@ function button(text: string) {
   return el!;
 }
 function dialog(override: Record<string, unknown> = {}) {
-  const f = mockContext(() => ({}));
+  const f = mockContext((_m, path) =>
+    path.endsWith("/public-ingress")
+      ? {
+          policy: {
+            ...structuredClone(ingressPolicy),
+            owner_ref: resource.owner_ref,
+          },
+        }
+      : {},
+  );
   const wrapper = mount(Dialog, {
     attachTo: document.body,
     props: {
@@ -64,7 +74,10 @@ function dialog(override: Record<string, unknown> = {}) {
       error: "",
       ...override,
     },
-    global: { provide: { [consoleKey as symbol]: f.context } },
+    global: {
+      provide: { [consoleKey as symbol]: f.context },
+      stubs: { RouterLink: true },
+    },
   });
   cleanup.push(() => wrapper.unmount());
   return { wrapper, ...f };
@@ -117,7 +130,7 @@ describe("VM public address UI", () => {
     ]);
     expect(body().find("select").exists()).toBe(false);
   });
-  it("binds floating with full public exposure consent, exact target and frozen generation", async () => {
+  it("binds floating only with an exact default-deny target policy and frozen generation", async () => {
     const r = {
       ...resource,
       mode: "floating" as const,
@@ -127,15 +140,20 @@ describe("VM public address UI", () => {
     const f = dialog({ action: "resource.bind", resource: r });
     await flushPromises();
     await select("绑定目标实例", `10.25.0.2 · node-b · ${"2".repeat(32)}`);
+    await flushPromises();
     await body().get(".resource-confirmation input").setValue("2".repeat(32));
-    expect(button("绑定公网地址").attributes("disabled")).toBeDefined();
-    expect(body().text()).toContain("TCP、UDP 全端口和 ICMP");
-    await body().get(".floating-consent input").setValue(true);
+    expect(button("确认绑定公网 IP").attributes("disabled")).toBeUndefined();
+    expect(body().text()).toContain("绑定后默认拒绝公网新入站连接");
+    expect(body().find(".floating-consent").exists()).toBe(false);
     await body().get("form").trigger("submit");
     expect(f.wrapper.emitted("submit")?.[0]).toEqual([
       "resource.bind",
       r.id,
-      { instance_id: "2".repeat(32), expected_generation: 4 },
+      {
+        instance_id: "2".repeat(32),
+        expected_generation: 4,
+        expected_ingress_revision: 0,
+      },
     ]);
   });
   it("does not move direct addresses or silently advance a draft generation", async () => {
@@ -275,7 +293,7 @@ describe("VM public address UI", () => {
     expect(body().text()).toContain("实例尚未开通");
   });
   it.each(["zh-CN", "en"] as const)(
-    "keeps custom controls and explicit consent in %s with a long profile",
+    "keeps custom controls and exact target confirmation in %s with a long profile",
     async (locale) => {
       const f = dialog({
         action: "resource.bind",

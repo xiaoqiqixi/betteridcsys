@@ -14,6 +14,8 @@ import UiOverlay from "./UiOverlay.vue";
 import UiSelect from "./UiSelect.vue";
 import UiButton from "./UiButton.vue";
 import InlineError from "./InlineError.vue";
+import BindingIngressSummary from "./BindingIngressSummary.vue";
+import type { PublicIngressPolicy } from "../api/public-ingress";
 const props = defineProps<{
   action: PublicIPResourceAction;
   cluster: string;
@@ -48,8 +50,8 @@ const form = reactive({
   address: "",
   instance: "",
   confirm: "",
-  publicConfirmed: false,
 });
+const ingress = shallowRef<PublicIngressPolicy | null>(null);
 const original = JSON.stringify(form),
   attempted = shallowRef(false);
 const locked = computed(() => props.busy || props.pending);
@@ -66,8 +68,12 @@ const title = computed(() =>
         : props.action === "resource.unbind"
           ? tr("解绑公网地址", "Unbind public address")
           : props.resource?.binding_state === "bound"
-            ? tr("更换绑定实例", "Move to another instance")
-            : tr("绑定公网地址", "Bind public address"),
+            ? props.resource.mode === "floating"
+              ? tr("确认更换绑定实例", "Confirm instance reassignment")
+              : tr("更换绑定实例", "Move to another instance")
+            : props.resource?.mode === "floating"
+              ? tr("确认绑定公网 IP", "Confirm public IP binding")
+              : tr("绑定公网地址", "Bind public address"),
 );
 const approvedAddresses = (a: { public_ipv4s: string[] }) =>
   props.pool?.addresses.filter((ip) => a.public_ipv4s.includes(ip)) || [];
@@ -152,7 +158,13 @@ const payload = computed<Record<string, unknown>>(() =>
           expected_snapshot_sha256: props.recoverySHA || "",
         }
       : props.action === "resource.bind"
-        ? { instance_id: form.instance, expected_generation: frozenGeneration }
+        ? {
+            instance_id: form.instance,
+            expected_generation: frozenGeneration,
+            ...(props.resource?.mode === "floating"
+              ? { expected_ingress_revision: ingress.value?.revision }
+              : {}),
+          }
         : { expected_generation: frozenGeneration },
 );
 const valid = computed(
@@ -174,7 +186,12 @@ const valid = computed(
           ? true
           : props.action === "resource.bind"
             ? targets.value.some((t) => t.instance_id === form.instance) &&
-              (props.resource.mode !== "floating" || form.publicConfirmed) &&
+              (props.resource.mode !== "floating" ||
+                (!!ingress.value &&
+                  ingress.value.instance_id === form.instance &&
+                  ingress.value.owner_ref === props.resource.owner_ref &&
+                  ingress.value.supported &&
+                  ["default", "active"].includes(ingress.value.state))) &&
               (props.resource.mode === "floating" ||
                 props.resource.binding_state === "unbound")
             : props.action === "resource.release"
@@ -206,12 +223,28 @@ watch(
   () => form.instance,
   () => {
     form.confirm = "";
-    form.publicConfirmed = false;
+    ingress.value = null;
   },
 );
 function chooseOwner(value: string) {
   form.ownerChoice = value;
   form.owner = value;
+}
+function acceptIngress(policy: PublicIngressPolicy | null) {
+  if (
+    policy &&
+    (policy.instance_id !== form.instance ||
+      policy.owner_ref !== props.resource?.owner_ref)
+  )
+    return;
+  if (
+    ingress.value &&
+    (!policy ||
+      ingress.value.revision !== policy.revision ||
+      ingress.value.sha256 !== policy.sha256)
+  )
+    form.confirm = "";
+  ingress.value = policy;
 }
 function submit() {
   attempted.value = true;
@@ -263,8 +296,8 @@ function submit() {
                   "The address is configured on the VM interface. Select it when creating a VM; a stopped VM can only adopt its actual matching IP and MAC, verified by the task without changing the VM address.",
                 )
               : tr(
-                  "每个地址独立映射到一台 VPC 实例，不与共享 NAT 出口混用。可解绑保留地址，或安全切换到同一客户、同一 VPC 的另一台实例。",
-                  "Each address maps independently to one VPC instance, separate from shared NAT egress. Keep it after unbinding, or move it safely to another instance of the same owner and VPC.",
+                  "每个地址独立关联一台 VPC 实例。解绑后可保留地址，或切换到同一客户、同一 VPC 的另一台实例；公网入站访问由目标实例的规则单独控制。",
+                  "Each address is associated with one VPC instance. Keep it after unbinding, or move it to another instance of the same owner and VPC. Public inbound access is controlled separately by the target instance’s rules.",
                 )
           }}
         </p>
@@ -401,34 +434,13 @@ function submit() {
               "
               :disabled="locked"
           /></label>
-          <label
+          <BindingIngressSummary
             v-if="resource?.mode === 'floating' && form.instance"
-            class="floating-consent"
-            ><input
-              v-model="form.publicConfirmed"
-              type="checkbox"
-              :disabled="locked"
-            /><span
-              ><strong>{{
-                tr(
-                  "确认对所选实例开放公网映射",
-                  "Confirm public mapping to this instance",
-                )
-              }}</strong
-              ><span>{{
-                tr(
-                  "此独立浮动 IP 将映射 TCP、UDP 全端口和 ICMP 流量，不受共享 NAT 的端口列表限制。",
-                  "This independent floating IP maps every TCP/UDP port and ICMP traffic, not just the shared NAT port list.",
-                )
-              }}</span
-              ><code
-                >{{ resource.owner_ref }} ·
-                {{
-                  targets.find((t) => t.instance_id === form.instance)?.ipv4
-                }}</code
-              ></span
-            ></label
-          >
+            :key="form.instance"
+            :instance-id="form.instance"
+            :owner-ref="resource.owner_ref"
+            @ready="acceptIngress"
+          />
           <p v-if="!targets.length" class="resource-note">
             {{
               resource?.mode === "direct"

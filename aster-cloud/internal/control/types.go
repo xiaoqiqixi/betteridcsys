@@ -48,6 +48,18 @@ func (c Capability) SupportsNetwork(r controllerapi.Resources, node NodeProfile,
 }
 
 func (c Capability) validNetworkCapabilities() bool {
+	// Feature markers are positive capabilities, not free-form execution hints.
+	// A duplicate marker cannot strengthen a claim or hide an invalid OVS set.
+	markers := map[string]bool{}
+	for _, feature := range c.NetworkProfiles {
+		if markers[feature] {
+			return false
+		}
+		markers[feature] = true
+	}
+	if markers[nodeproto.PublicIngressCapability] && (!markers[nodeproto.OVSNetworkCapability] || len(c.OVSNetworkProfiles) == 0) {
+		return false
+	}
 	if (c.DirectPublicNetwork != nil) != contains(c.NetworkProfiles, nodeproto.DirectPublicCapability) {
 		return false
 	}
@@ -108,7 +120,8 @@ type OverlayAdmission struct {
 	// RootClusters is controller-local admission context, never part of the
 	// financial request, node task, network binding or persisted snapshot.
 	// Public IP isolation must resolve legacy NAT in every approved cluster.
-	RootClusters []OverlayCluster `json:"-"`
+	RootClusters        []OverlayCluster `json:"-"`
+	HeartbeatTTLSeconds int              `json:"-"`
 }
 type Candidate struct {
 	DirectPublicRequired bool

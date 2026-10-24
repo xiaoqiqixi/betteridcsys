@@ -94,6 +94,10 @@ export const permissionNames: Record<string, [string, string]> = {
   "users.manage": ["管理成员与权限", "Manage members and access"],
 };
 export const auditNames: Record<string, [string, string]> = {
+  "public_ingress.updated": [
+    "公网入站规则已保存",
+    "Public ingress rules saved",
+  ],
   "public_ip.pool.create": ["公网地址池已创建", "Public IP pool created"],
   "public_ip.pool.extend": ["公网地址池已补充", "Public IP pool extended"],
   "public_ip.pool.state": [

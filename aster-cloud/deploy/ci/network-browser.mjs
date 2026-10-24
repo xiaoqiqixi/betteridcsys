@@ -25,7 +25,7 @@ const { firefox } = await import(pathToFileURL(path.join(required('PLAYWRIGHT_MO
 const report = {
   schema: 1, status: 'running', passed: false, strict_tls: true, real_mysql: true,
   node_rpc: 'Isolated deterministic test substitute; no real KVM or host networking actions.',
-  checks: [], screenshots: [], console_errors: [], requests: [], public_ip_write_attempts: [], public_ip_failed_writes: [],
+  checks: [], screenshots: [], console_errors: [], requests: [], public_ingress_write_attempts: [], public_ip_write_attempts: [], public_ip_failed_writes: [],
 };
 let phase = 'launch', context, page, signedIn = false;
 const sensitive = new Set([credentials.password]);
@@ -173,7 +173,7 @@ async function languageChangeClearsNotice() {
   check('language switch removes the genuine previous-language notice immediately');
 }
 async function read(suffix) {
-  assert(/^\/(overlays|public-ips|instances|operations)\//.test(suffix) && !suffix.includes('://'));
+  assert(/^\/(overlays|public-ips|public-ingress-operations|instances|operations)\//.test(suffix) && !suffix.includes('://'));
   return page.evaluate(async suffix => {
     const response = await fetch(`/console/v1${suffix}`, { method: 'GET', credentials: 'same-origin' });
     if (!response.ok) throw new Error(`Read-only evidence request failed (${response.status})`);
@@ -278,13 +278,15 @@ try {
   page.on('pageerror', error => report.console_errors.push(safeMessage(error)));
   page.on('response', response => {
     const url = new URL(response.url()), request = response.request();
-    if (url.origin === base.origin && /^\/console\/v1\/(overlays|public-ips|instances|operations)(?:\/|$)/.test(url.pathname)) {
+    if (url.origin === base.origin && /^\/console\/v1\/(overlays|public-ips|public-ingress-operations|instances|operations)(?:\/|$)/.test(url.pathname)) {
       // Deliberately no headers, bodies, query strings or cookie data.
       report.requests.push({ method: request.method(), path: url.pathname, status: response.status() });
     }
   });
 
   page.on('request', request => {
+    const policyURL = new URL(request.url());
+    if (policyURL.origin === base.origin && request.method() === 'POST' && /^\/console\/v1\/instances\/[a-f0-9]{32}\/public-ingress$/.test(policyURL.pathname)) report.public_ingress_write_attempts.push({method:'POST',path:policyURL.pathname});
     const url = new URL(request.url());
     if (url.origin === base.origin && url.pathname.startsWith('/console/v1/public-ips/') && request.method() === 'POST') {
       // Count UI write attempts even when a committed response is intentionally
@@ -955,11 +957,15 @@ try {
   async function bindFloating(target, expectedEpoch, moving = false) {
     await vmCard(floating.id).getByRole('button',{name:moving ? '更换实例' : '绑定实例',exact:true}).click();
     await pick('绑定目标实例',`${target.ipv4} · ${target.node_id} · ${target.instance_id}`);
+    await page.getByRole('dialog').locator('.binding-policy-version').waitFor();
+    const targetPolicy = (await read(`/instances/${target.instance_id}/public-ingress`)).policy;
+    assert.equal(targetPolicy.instance_id,target.instance_id); assert.equal(targetPolicy.owner_ref,credentials.owner_ref);
+    assert.equal(targetPolicy.revision,0); assert.deepEqual(targetPolicy.rules,[]); assert.equal(targetPolicy.supported,true);
+    assert((await page.getByRole('dialog').locator('.binding-ingress').innerText()).includes('默认拒绝公网新入站连接'));
+    assert.equal(await page.getByRole('dialog').locator('.floating-consent').count(),0);
     await page.getByRole('dialog').locator('.resource-confirmation input').fill(target.instance_id);
-    const title = moving ? '更换绑定实例' : '绑定公网地址';
-    assert.equal(await page.getByRole('dialog').getByRole('button',{name:title,exact:true}).isDisabled(),true);
-    assert((await page.getByRole('dialog').innerText()).includes('TCP、UDP 全端口和 ICMP'));
-    await page.getByRole('dialog').locator('.floating-consent input').check();
+    const title = moving ? '确认更换绑定实例' : '确认绑定公网 IP';
+    assert.equal(await page.getByRole('dialog').getByRole('button',{name:title,exact:true}).isDisabled(),false);
     if (!moving) {
       await dialogExcludesNotices('floating bind dialog isolates genuine background notices');
       await noOverflow('desktop floating bind confirmation has no overflow'); await screenshot('desktop-floating-ip-binding',false);
@@ -967,13 +973,22 @@ try {
       await page.setViewportSize({width:320,height:844}); await noOverflow('320px floating bind confirmation has no overflow');
       await page.setViewportSize({width:1440,height:1000});
     }
-    await page.getByRole('dialog').getByRole('button',{name:title,exact:true}).click(); await dialogClosed();
+    const bindResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/console/v1/public-ips/resources/${floating.id}/binding` && r.request().method() === 'POST');
+    await page.getByRole('dialog').getByRole('button',{name:title,exact:true}).click();
+    const bindTransport = await bindResponse; assert.equal(bindTransport.status(),202);
+    assert.deepEqual(bindTransport.request().postDataJSON(),{instance_id:target.instance_id,expected_generation:expectedEpoch-8,expected_ingress_revision:0});
+    await dialogClosed();
     const r = (await read(`/public-ips/resources/${floating.id}`)).resource;
     assert.equal(r.binding_state,'pending'); assert.equal(r.instance_id,target.instance_id); assert.equal(r.binding_generation,expectedEpoch - 7); assert(r.epoch_id);
     const detail = await read(`/overlays/epochs/${r.epoch_id}`);
     assert.equal(detail.epoch.epoch,expectedEpoch); assert.equal(detail.epoch.state,'pending');
     assert.equal(detail.epoch.snapshot.floating_ips.length,1); assert.equal(detail.epoch.snapshot.floating_ips[0].instance_id,target.instance_id);
     assert.equal(detail.epoch.snapshot.floating_ips[0].public_ipv4,'8.8.4.4');
+    assert.deepEqual(detail.epoch.snapshot.floating_ips[0].ingress.rules,[]);
+    assert.equal(detail.epoch.snapshot.floating_ips[0].ingress.instance_id,target.instance_id);
+    assert.equal(detail.epoch.snapshot.floating_ips[0].ingress.owner_ref,credentials.owner_ref);
+    assert.equal(detail.epoch.snapshot.floating_ips[0].ingress.revision,0);
+    assert.match(detail.epoch.snapshot.floating_ips[0].ingress.sha256,/^[a-f0-9]{64}$/);
     assert.equal(await vmCard(floating.id).getByRole('button',{name:'回收',exact:true}).isDisabled(),true);
     await page.locator('.resource-next').getByRole('link',{name:'继续关联任务',exact:true}).click();
     await page.getByRole('heading',{name:/网络变更/}).waitFor();
@@ -983,26 +998,90 @@ try {
     await resourcesView(); await vmCard(floating.id).waitFor(); return completed;
   }
   const floatingBound = await bindFloating(floatTargets[0],8);
-  check('floating allocation binds the exact original VM through six persisted epoch8 tasks with explicit full-protocol public consent');
+  check('floating allocation binds the exact original VM through six persisted epoch8 tasks with an explicit empty default-deny policy, not a full-port checkbox');
   await noticesExpireNaturally('floating binding notice expires naturally before actual resource screenshots');
   await page.setViewportSize({width:390,height:844}); await noOverflow('390px floating bound resource has no overflow'); await screenshot('mobile-floating-ip-bound');
   await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop floating bound resource has no overflow'); await screenshot('desktop-floating-ip-bound');
-  const floatingMoved = await bindFloating(floatTargets[1],9,true);
+  const policyProofs = [];
+  async function ingressView(target) {
+    await page.goto(new URL(`#/instances/${target.instance_id}?tab=public`,base).href,{waitUntil:'networkidle'});
+    await page.locator('.public-ingress-panel .ingress-policy-state').waitFor();
+    const policy = (await read(`/instances/${target.instance_id}/public-ingress`)).policy;
+    assert.equal(policy.instance_id,target.instance_id); assert.equal(policy.owner_ref,credentials.owner_ref); assert.equal(policy.supported,true); return policy;
+  }
+  async function updateIngress(target, expectedRevision, expectedEpoch, rules) {
+    const prior = await ingressView(target); assert.equal(prior.revision,expectedRevision); assert.equal(prior.state,'active');
+    await page.getByRole('button',{name:'编辑入站规则',exact:true}).click();
+    const dialog=page.getByRole('dialog');
+    if (!rules.length) {
+      while(await dialog.locator('.ingress-rules .ingress-rule').count()) await dialog.locator('.ingress-rules .ingress-rule').first().getByRole('button',{name:'移除',exact:true}).click();
+    } else {
+      for(const rule of rules) {
+        await pick('入站协议',rule.protocol==='icmp'?'ICMP 回显':rule.protocol.toUpperCase());
+        await dialog.getByLabel('允许来源 CIDR',{exact:true}).fill(rule.source_cidr);
+        if(rule.protocol!=='icmp') {await dialog.getByLabel('入站起始端口',{exact:true}).fill(String(rule.port_start));await dialog.getByLabel('入站结束端口',{exact:true}).fill(String(rule.port_end));}
+        await dialog.getByRole('button',{name:'添加允许规则',exact:true}).click();
+      }
+    }
+    assert.equal(await dialog.locator('.ingress-rules .ingress-rule').count(),rules.length);
+    assert.equal(await dialog.locator('select,input[type="number"]').count(),0);
+    await dialog.getByLabel('确认入站规则实例 ID',{exact:true}).fill(target.instance_id);
+    if(expectedEpoch===9) {
+      await dialogExcludesNotices('public ingress editor excludes background notices');
+      await dialog.locator('.ingress-explanation').scrollIntoViewIfNeeded();
+      await noOverflow('desktop public ingress custom rule editor has no overflow');await screenshot('desktop-public-ingress-editor',false);
+      await page.setViewportSize({width:390,height:844});await dialog.locator('.ingress-explanation').scrollIntoViewIfNeeded();await noOverflow('390px public ingress custom rule editor has no overflow');await screenshot('mobile-public-ingress-editor',false);
+      await page.setViewportSize({width:320,height:844});await noOverflow('320px public ingress custom rule editor has no overflow');await page.setViewportSize({width:1440,height:1000});
+    }
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname===`/console/v1/instances/${target.instance_id}/public-ingress`&&r.request().method()==='POST');
+    await dialog.getByRole('button',{name:'保存入站规则',exact:true}).click();const transport=await response;assert.equal(transport.status(),202);
+    const request=transport.request().postDataJSON();assert.equal(request.expected_revision,expectedRevision);assert.equal(request.rules.length,rules.length);
+    const result=await transport.json();assert.equal(result.policy.state,'pending');assert.equal(result.policy.revision,expectedRevision+1);assert.equal(result.policy.instance_id,target.instance_id);assert.equal(result.policy.effective_revision,null);
+    assert.equal(result.operation.actor_id,credentials.actor_id);assert.deepEqual(result.operation.request,request);assert.equal(result.operation.target_instance_id,target.instance_id);
+    await dialogClosed();await page.locator('.public-ingress-panel .ingress-policy-state').waitFor();assert((await page.locator('.public-ingress-panel').innerText()).includes('规则变更待执行'));
+    assert.equal(await page.getByRole('button',{name:'编辑入站规则',exact:true}).isDisabled(),true);
+    await page.locator('.public-ingress-panel').getByRole('link',{name:'查看规则网络任务',exact:true}).click();await page.getByRole('heading',{name:/网络变更/}).waitFor();
+    const completed=await advanceUntilStopped(result.policy.epoch_id);assert.equal(completed.epoch.epoch,expectedEpoch);assert.equal(completed.epoch.state,'succeeded');assert.equal(completed.tasks.length,6);
+    const frozen=completed.epoch.snapshot.floating_ips[0].ingress;assert.equal(frozen.instance_id,target.instance_id);assert.equal(frozen.revision,expectedRevision+1);assert.deepEqual(frozen.rules,result.policy.rules);assert.equal(frozen.sha256,result.policy.sha256);
+    const current=await ingressView(target);assert.equal(current.state,'active');assert.equal(current.effective_revision,expectedRevision+1);assert.deepEqual(current.rules,result.policy.rules);
+    const immutable=(await read(`/public-ingress-operations/${result.operation.id}`)).operation;assert.deepEqual(immutable,result.operation);policyProofs.push(immutable);
+    if(expectedEpoch===9||expectedEpoch===12) {
+      await noticesExpireNaturally('policy notices expire naturally before actual effective-rule screenshots');
+      const suffix=expectedEpoch===9?'allowed':'revoked';
+      await page.setViewportSize({width:390,height:844});await noOverflow(`390px ${suffix} ingress panel has no overflow`);await screenshot(`mobile-public-ingress-${suffix}`);
+      await page.setViewportSize({width:320,height:844});await noOverflow(`320px ${suffix} ingress panel has no overflow`);await page.setViewportSize({width:1440,height:1000});await noOverflow(`desktop ${suffix} ingress panel has no overflow`);await screenshot(`desktop-public-ingress-${suffix}`);
+    }
+    await resourcesView();return completed;
+  }
+  const originalTargetAllowed = await updateIngress(floatTargets[0],0,9,[
+    {protocol:'tcp',source_cidr:'203.0.113.10/32',port_start:443,port_end:443},
+    {protocol:'udp',source_cidr:'203.0.113.0/24',port_start:5300,port_end:5310},
+    {protocol:'icmp',source_cidr:'0.0.0.0/0',port_start:0,port_end:0},
+  ]);
+  check('independent VM0 public ingress permits only explicit TCP/UDP ranges and ICMP echo sources after epoch9, without changing binding ownership');
+  const floatingMoved = await bindFloating(floatTargets[1],10,true);
   assert.notEqual(floatingMoved.epoch.snapshot.floating_ips[0].instance_id,floatingBound.epoch.snapshot.floating_ips[0].instance_id);
   assert.equal(floatingMoved.epoch.snapshot.floating_ips[0].resource_id,floating.id);
   assert.equal(floatingMoved.epoch.snapshot.floating_ips[0].public_ipv4,floating.address);
   const preservedBound = await read(`/overlays/epochs/${floatingBound.epoch.id}`);
   assert.deepEqual(preservedBound.epoch.snapshot,floatingBound.epoch.snapshot); assert.deepEqual(receiptProof(preservedBound),receiptProof(floatingBound));
-  check('floating move preserves its address/resource and crosses nodes only after all epoch9 phases, leaving original epoch8 immutable');
+  assert.deepEqual(floatingMoved.epoch.snapshot.floating_ips[0].ingress.rules,[]);
+  assert.equal((await read(`/instances/${floatTargets[0].instance_id}/public-ingress`)).policy.rules.length,3);
+  check('floating move preserves its address/resource in epoch10 but uses the new VM default-deny policy, never moving VM0 rules');
+  const targetAllowed = await updateIngress(floatTargets[1],0,11,[{protocol:'tcp',source_cidr:'198.51.100.25/32',port_start:22,port_end:22}]);
+  const targetRevoked = await updateIngress(floatTargets[1],1,12,[]);
+  for(const original of [floatingBound,originalTargetAllowed,floatingMoved,targetAllowed]) {const saved=await read(`/overlays/epochs/${original.epoch.id}`);assert.deepEqual(saved.epoch.snapshot,original.epoch.snapshot);assert.deepEqual(receiptProof(saved),receiptProof(original));}
+  assert.deepEqual(targetRevoked.epoch.snapshot.floating_ips[0].ingress.rules,[]);
+  check('revoking all VM1 public ingress rules creates epoch12 and preserves earlier accepted policy versions and exact receipts');
   await vmCard(floating.id).getByRole('button',{name:'解绑',exact:true}).click();
   await page.getByRole('dialog').locator('.resource-confirmation input').fill(floating.address);
   await page.getByRole('dialog').getByRole('button',{name:'解绑公网地址',exact:true}).click(); await dialogClosed();
   const pendingFloatDetach = (await read(`/public-ips/resources/${floating.id}`)).resource;
-  assert.equal(pendingFloatDetach.binding_state,'pending'); assert.equal(pendingFloatDetach.releasable,false); assert.equal(pendingFloatDetach.binding_generation,3);
+  assert.equal(pendingFloatDetach.binding_state,'pending'); assert.equal(pendingFloatDetach.releasable,false); assert.equal(pendingFloatDetach.binding_generation,6);
   assert.equal(await vmCard(floating.id).getByRole('button',{name:'回收',exact:true}).isDisabled(),true);
   await page.locator('.resource-next').getByRole('link',{name:'继续关联任务',exact:true}).click(); await page.getByRole('heading',{name:/网络变更/}).waitFor();
   const floatDetached = await advanceUntilStopped(pendingFloatDetach.epoch_id);
-  assert.equal(floatDetached.epoch.epoch,10); assert.equal(floatDetached.epoch.state,'succeeded'); assert.deepEqual(floatDetached.epoch.snapshot.floating_ips || [],[]);
+  assert.equal(floatDetached.epoch.epoch,13); assert.equal(floatDetached.epoch.state,'succeeded'); assert.deepEqual(floatDetached.epoch.snapshot.floating_ips || [],[]);
   await resourcesView(); const detachedFloat = (await read(`/public-ips/resources/${floating.id}`)).resource;
   assert.equal(detachedFloat.binding_state,'unbound'); assert.equal(detachedFloat.releasable,true);
   await vmCard(floating.id).getByRole('button',{name:'回收',exact:true}).click(); await page.getByRole('dialog').locator('.resource-confirmation input').fill(floating.address);
@@ -1010,7 +1089,7 @@ try {
   assert.equal((await read(`/public-ips/resources/${floating.id}`)).resource.state,'released');
   const newFloating = await vmAllocation('floating','8.8.4.4','公网出口池 · 8.8.4.0/24'); assert.notEqual(newFloating.id,floating.id);
   assert.deepEqual((await read(`/public-ips/resource-operations/${floating.id}`)).operation,floatingAllocationOperation);
-  check('floating unbind epoch10 must complete all node releases before reclamation; reallocation retains immutable allocation history');
+  check('floating unbind epoch13 must complete all node releases before reclamation; reallocation retains immutable allocation history');
   for (const before of originalSeven) {const after = await read(`/overlays/epochs/${before.epoch.id}`); assert.equal(after.epoch.snapshot_sha256,before.epoch.snapshot_sha256); assert.deepEqual(after.epoch.snapshot,before.epoch.snapshot); assert.deepEqual(receiptProof(after),receiptProof(before));}
   check('all original seven NAT/network epoch snapshots and exact receipts remain unchanged after floating bind, move, unbind and reallocation');
 
@@ -1090,6 +1169,9 @@ try {
   assert.equal((await read(`/instances/${createdIntent.instance_id}`)).instance.state,'shutoff');
   check('direct address is reclaimed only after visible shutdown, exact node3 detachment dispatch and confirmed server state, never a hot IP replacement');
   assert.equal(writeAttempts(),16);
+  assert.equal(report.public_ingress_write_attempts.length,3);
+  for(const op of policyProofs) assert.deepEqual((await read(`/public-ingress-operations/${op.id}`)).operation,op);
+  report.public_ingress_configured_default_deny_moved_revoked=true;report.public_ingress_immutable_operations=true;
   report.floating_bound_moved_unbound = true; report.floating_reclaimed_reallocated = true;
   report.direct_created_dispatched_detached_reclaimed = true; report.first_seven_epochs_retained = true;
   await resourcesView(); await noticesExpireNaturally('new resource history notice expires naturally before final screenshots');
@@ -1099,6 +1181,10 @@ try {
   await page.getByRole('button',{name:'语言与外观',exact:true}).click(); await pick('界面语言','English'); await pick('Appearance','Dark'); await page.getByRole('button',{name:'Done',exact:true}).click(); await dialogClosed();
   await page.setViewportSize({width:390,height:844}); await noOverflow('390px English dark floating history has no overflow'); await screenshot('mobile-floating-ip-english-dark');
   await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop English dark floating history has no overflow'); await screenshot('desktop-floating-ip-english-dark');
+  await page.goto(new URL(`#/instances/${floatTargets[0].instance_id}?tab=public`,base).href,{waitUntil:'networkidle'});
+  await page.locator('.public-ingress-panel .ingress-policy-state').waitFor();
+  await page.setViewportSize({width:390,height:844});await noOverflow('390px English dark public ingress rules have no overflow');await screenshot('mobile-public-ingress-english-dark');
+  await page.setViewportSize({width:320,height:844});await noOverflow('320px English dark public ingress rules have no overflow');await page.setViewportSize({width:1440,height:1000});await screenshot('desktop-public-ingress-english-dark');
   assert.equal(await page.locator('select').count(),0);
   await page.goto(new URL(`#/instances/${createdIntent.instance_id}`,base).href,{waitUntil:'networkidle'});
   await page.getByRole('tab',{name:'Public addresses',exact:true}).click(); await vmCard(direct.id).waitFor();

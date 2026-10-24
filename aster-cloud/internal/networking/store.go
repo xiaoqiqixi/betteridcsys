@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"strings"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 type Store struct{ DB *sql.DB }
@@ -87,9 +89,30 @@ func networkAudit(ctx context.Context, tx *sql.Tx, actor, action, target string,
 	return nil
 }
 
+func publicIngressNamespaceRow(row scanner) error {
+	var used int
+	if e := row.Scan(&used); e != nil {
+		var mysqlError *mysql.MySQLError
+		if errors.As(e, &mysqlError) && mysqlError.Number == 1146 {
+			return nil
+		}
+		return ErrUnavailable
+	}
+	if used != 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
 // An idempotency key is bound to exactly one network resource kind and actor.
 // No existing object is adopted, rewritten or freed by a replay.
 func replay(ctx context.Context, tx *sql.Tx, kind, id, actor, digest string) (bool, error) {
+	// Standalone schema-5 fixtures genuinely lack the newer namespace. Only a
+	// direct MySQL 1146 proves that absence; invisible metadata, permissions and
+	// failed database access never turn a conflicting key into an unused key.
+	if e := publicIngressNamespaceRow(tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_public_ingress_operations WHERE id=?", id)); e != nil {
+		return false, e
+	}
 	for _, table := range []string{"controller_network_vpcs", "controller_network_pools", "controller_network_leases"} {
 		var oldActor, oldSHA string
 		e := tx.QueryRowContext(ctx, "SELECT actor_id,request_sha256 FROM "+table+" WHERE id=?", id).Scan(&oldActor, &oldSHA)

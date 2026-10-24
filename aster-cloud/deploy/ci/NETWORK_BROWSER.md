@@ -52,7 +52,7 @@ for the test result. Passing additionally requires database assertions that
 plan, VPC creation, lost-ACK reconciliation and recovery actually persisted,
 and that original financial/node request bytes, network snapshot bytes and
 initial node receipts stayed unchanged. UI success alone is not sufficient.
-The fixture additionally requires exactly **ten epochs, two VPCs and sixty
+The fixture additionally requires exactly **thirteen epochs, two VPCs and seventy-eight
 unique overlay node task POSTs**, plus three direct node/3 POSTs; its original first thirty POSTs must remain the
 unchanged five-epoch, no-explicit-public-address prefix. Its first forty-two tasks retain the original seven NAT/network epochs with no floating policy. Epoch 1 is the original prefix-only snapshot. Through
 visible UI controls, epoch 2 enables public IPv4 Internet while retaining its
@@ -112,16 +112,24 @@ After the original five-epoch flow, the visible public-IP UI must:
 The same mandatory job then continues through visible controls, not a separate
 optional test or API-only demonstration:
 
-1. Allocate `8.8.4.4` as an independent floating IP. Explicitly choose the exact
-   owner/VPC/profile/VM, type the VM ID and check full TCP/UDP-port + ICMP public
-   exposure consent. Epoch 8 binds the original VM through all six phase receipts.
-2. Atomically move that same resource/address to the same owner's VM on the other
-   node in epoch 9. Until completion the current projection remains pending and
-   cannot be reclaimed; epoch 8 remains byte-for-byte unchanged.
-3. Unbind in epoch 10, prove every node's prepare/program/release receipt, then
-   reclaim and reallocate the same address into a distinct resource. Original
-   allocation results and all original seven NAT/network snapshots/receipts remain
-   immutable. A pending removal alone must never free inventory.
+1. Allocate `8.8.4.4` as an independent floating IP. Choose the exact
+   owner/VPC/profile/VM, review its independently fetched ingress policy, then
+   type the VM ID. The binding POST freezes `expected_ingress_revision: 0` and
+   the resource generation. Epoch 8 includes an explicit non-null empty policy:
+   new public inbound connections are denied, while legitimate replies to
+   connections initiated by the VM remain permitted. There is no all-port
+   exposure checkbox and no rule is inferred from a UI confirmation.
+2. Open the original VM's independent **公网入站规则** panel and add explicit
+   TCP, UDP-range and ICMP-echo source rules through custom UI controls. Epoch 9
+   applies its first policy revision only after all six exact phase receipts.
+   Move the same address to the other node's VM in epoch 10: the target's own
+   revision-zero empty policy is frozen, not the original VM's three rules.
+3. Configure the new target's restricted SSH source in epoch 11, then remove
+   its rule in epoch 12. Its original policy operation and earlier epoch
+   snapshots/receipts must remain immutable after revocation. Unbind in epoch 13,
+   prove every node's prepare/program/release receipt, then reclaim and reallocate
+   the same address into a distinct resource. Every original seven NAT/network
+   snapshot/receipt remains unchanged. A pending removal never frees inventory.
 4. A separate fixture-approved normal network and `9.9.9.0/24` pool supply
    `9.9.9.2`. Allocate it via the new UI, select its exact resource in the real
    CreateInstanceDialog, and explicitly dispatch the real persisted creation task.
@@ -139,7 +147,15 @@ pool adds one separate inventory operation: eight total legacy pool/NAT operatio
 two pools, three inventory addresses and exactly two exclusive active claims.
 Every active row must resolve to one reserved NAT lease or VM resource. The
 released direct address must have no claim. Creation and shutdown are controller
-operations, not counted among those nine resource operations.
+operations, not counted among those nine resource operations. Three separate
+`public_ingress.update` operations and three immutable policy-version rows are
+required, with exact actor/target/request/result identities. Foreign-actor lookup
+cannot resolve an operation. VM0 keeps its three rules after the IP moves; VM1
+keeps its empty revision two after detachment. The live policy read distinguishes
+saved desired revisions, confirmed effective revisions, unsupported nodes and
+legacy unrestricted bindings. Rules currently restrict VPC floating-IP public
+ingress only, not private traffic, normal direct public interfaces or a complete
+security group. Feature capability is refreshed independently for every participant.
 
 The separate typed UI/API tests cover generation conflicts and durable full-intent
 unknown reconciliation, including recovery-only detachment with the exact original
@@ -173,11 +189,11 @@ The original fourteen screenshots remain, including the two
 `*-public-egress-editor.png` images showing the Internet-only editor. Eighteen
 additional desktop/mobile images show pool creation, extension, inventory,
 allocation, bound NAT selection, bound leases, reclamation, lease history and
-English/dark lease presentation. Twelve further real images show floating binding and bound/history resources, direct creation and the instance public panel: **44 PNGs total**. New dialogs and list pages are measured at
+English/dark lease presentation. Twelve further real images show floating binding and bound/history resources, direct creation and the instance public panel: **44 original PNGs**. Eight additional actual desktop/mobile images cover the custom public-ingress editor, applied allow rules, empty revoked policy and English/dark policy presentation: **52 PNGs total**. New dialogs and list pages are measured at
 1440, 390 and 320 CSS pixels for actual horizontal overflow. Final
 Chinese/light and English/dark overview screenshots are taken after epoch 5 and
 must show its persisted public mode and synthetic egress IPv4. Plan and recovery
-both require the real public-access consent checkbox plus typed confirmation;
+of the original NAT flow still require its real public-access consent checkbox plus typed confirmation; floating-IP binding instead requires the separately loaded target policy revision and typed VM identity;
 the test never bypasses either by manipulating component state or issuing a
 write through `fetch`.
 

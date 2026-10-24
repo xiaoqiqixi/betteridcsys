@@ -192,3 +192,12 @@ func CheckPublicIPResourceMigration(ctx context.Context, db SchemaReader, allowM
 	}
 	return checkTables(ctx, db, allowMissing, tables)
 }
+
+// Public ingress is an independent append-only policy/operation history.
+func CheckPublicIngressMigration(ctx context.Context, db SchemaReader, allowMissing bool) error {
+	tables := []tableSpec{
+		{"controller_public_ingress_versions", []columnSpec{baseID("instance_id"), {"revision", "bigint", "", 0, 0}, baseID("owner_ref"), {"policy", "mediumblob", "", 0, 0}, baseID("operation_id"), baseID("epoch_id"), createdColumn()}, []indexSpec{{"PRIMARY", true, []string{"instance_id", "revision"}}, {"controller_public_ingress_version_operation", true, []string{"operation_id"}}, {"controller_public_ingress_version_epoch", false, []string{"epoch_id", "instance_id"}}}},
+		{"controller_public_ingress_operations", []columnSpec{baseID("id"), baseID("actor_id"), ascii("action", "varchar", 24), baseID("target_instance_id"), hashColumn(), {"request", "mediumblob", "", 0, 0}, {"result", "mediumblob", "", 0, 0}, createdColumn()}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_public_ingress_operation_actor", false, []string{"actor_id", "id"}}, {"controller_public_ingress_operation_instance", false, []string{"target_instance_id", "id"}}}},
+	}
+	return checkTables(ctx, db, allowMissing, tables)
+}

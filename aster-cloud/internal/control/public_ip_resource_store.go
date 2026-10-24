@@ -74,11 +74,8 @@ func resourceOperationResultValid(o PublicIPResourceOperation) bool {
 		}
 		return strictPublicIP(o.Request, &in) && in.ExpectedGeneration == r.BindingGeneration && o.TargetResourceID == r.ID && r.State == "released" && r.BindingState == "released"
 	case "resource.bind":
-		var in struct {
-			InstanceID         string `json:"instance_id"`
-			ExpectedGeneration uint64 `json:"expected_generation"`
-		}
-		return o.TargetResourceID == r.ID && strictPublicIP(o.Request, &in) && nodeproto.ValidID(in.InstanceID) && in.InstanceID == r.InstanceID && in.ExpectedGeneration < 1<<63-1 && r.BindingGeneration == in.ExpectedGeneration+1 && r.State == "reserved" && r.BindingState == "pending" && r.OperationID == o.ID
+		var in publicResourceBindingInput
+		return o.TargetResourceID == r.ID && strictPublicIP(o.Request, &in) && nodeproto.ValidID(in.InstanceID) && in.InstanceID == r.InstanceID && in.ExpectedGeneration != nil && *in.ExpectedGeneration < 1<<63-1 && (in.ExpectedIngressRevision == nil || r.Mode == "floating" && *in.ExpectedIngressRevision <= maxPublicIngressRevision) && r.BindingGeneration == *in.ExpectedGeneration+1 && r.State == "reserved" && r.BindingState == "pending" && r.OperationID == o.ID
 	case "resource.recover":
 		var in struct {
 			ExpectedGeneration     uint64 `json:"expected_generation"`
@@ -105,6 +102,9 @@ func publicResourceReplay(ctx context.Context, tx *sql.Tx, actor, op, action, ta
 		return o, false, e
 	}
 	// A new operation cannot shadow an original NAT or instance/job intent.
+	if e := publicIngressOperationIDUnusedTx(ctx, tx, op); e != nil {
+		return o, false, e
+	}
 	for _, q := range []string{"SELECT COUNT(*) FROM controller_public_ip_operations WHERE id=?", "SELECT COUNT(*) FROM controller_operations WHERE id=?", "SELECT COUNT(*) FROM controller_jobs WHERE operation_id=?", "SELECT COUNT(*) FROM controller_overlay_epochs WHERE id=?"} {
 		var n int
 		if e = tx.QueryRowContext(ctx, q, op).Scan(&n); e != nil {
@@ -284,6 +284,9 @@ func (s *SQLStore) ReleasePublicIPResource(ctx context.Context, c Config, actor,
 }
 
 func publicResourceIDUnusedTx(ctx context.Context, tx *sql.Tx, op string) error {
+	if e := publicIngressOperationIDUnusedTx(ctx, tx, op); e != nil {
+		return e
+	}
 	var n int
 	e := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_public_ip_resource_operations WHERE id=?", op).Scan(&n)
 	if e != nil {

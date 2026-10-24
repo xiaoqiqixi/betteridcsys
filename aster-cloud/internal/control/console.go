@@ -98,6 +98,10 @@ func (c Console) resource(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "AUTH_REQUIRED")
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/console/v1/public-ingress-operations/") || strings.HasPrefix(r.URL.Path, "/console/v1/instances/") && strings.HasSuffix(r.URL.Path, "/public-ingress") {
+		c.publicIngress(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/console/v1/public-ips/") {
 		c.publicIPs(w, r)
 		return
