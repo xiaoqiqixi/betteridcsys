@@ -130,6 +130,12 @@ canonical 表示；**未放宽 normalizeNFT**，移除任一 ct / SNAT / 地址�
 对应 Ubuntu22/24 专用任务都必须实际 PASS，不能容忍任何 MySQL skip。
 修复后的最终提交仍需重新执行全部门禁，不能把原始 JSON fixture 当作包流通过。
 
+随后原生 TCP/UDP 与严格规则读回已通过，ICMP 确实收到 echo 回包，但测试
+helper 的 `IPConn.Read` 把 IPv4 头当作 ICMP 头而失败；改用标准库
+`ReadFromIP` 剥头，并额外严格核对源地址、完整 ICMP checksum/type/code/
+id/sequence/payload。真实捕获报文及错误 / 截断负例纳入纯 Go 回归；没有
+修改生产转发规则，也不把未知 ICMP、网络错误或超时当成成功。
+
 真实 KVM/libvirt、跨物理节点流量、实际公网地址 / 上联连通、宿主故障恢复、
 HA 与生产部署验收仍按要求后置；CI 隔离包流不等于已做这些真机验收。
 
