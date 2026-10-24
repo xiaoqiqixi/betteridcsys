@@ -23,7 +23,7 @@ func vpcTestConfig(p NodeProfile, pool string) Config {
 }
 func vpcTestCapabilities(p NodeProfile, now time.Time) Capability {
 	c := testCapabilities(p, now)
-	c.NetworkProfiles = append(c.NetworkProfiles, nodeproto.OVSNetworkCapability)
+	c.NetworkProfiles = append(c.NetworkProfiles, nodeproto.OVSNetworkCapability, nodeproto.PublicIngressCapability)
 	c.OVSNetworkProfiles = []string{"vpc-a-v1"}
 	return c
 }

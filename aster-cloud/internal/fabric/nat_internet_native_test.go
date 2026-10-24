@@ -40,10 +40,10 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	// reserve stays unconfigured. Selection is controller intent, provisioning
 	// and its bounded approval remain independent root operations.
 	p.PublicIPv4s = []string{"8.8.4.3", "8.8.4.4"}
-	p.AllowedSourceCIDRs = []string{p.UplinkGatewayIPv4 + "/32"}
-	p.AllowedPorts = []NATPortRange{{"tcp", 18080, 18080}, {"udp", 18083, 18083}}
-	c.Gateways[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32"}
-	c.GuestNetworks[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32"}
+	p.AllowedSourceCIDRs = []string{p.UplinkGatewayIPv4 + "/32", "9.9.9.0/24"}
+	p.AllowedPorts = []NATPortRange{{"tcp", 18080, 18080}, {"udp", 18083, 18083}, {"tcp", 2444, 2444}}
+	c.Gateways[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32", "9.9.9.0/24"}
+	c.GuestNetworks[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32", "9.9.9.0/24"}
 	s.Gateways[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32"}
 	s.NATPolicies[0].PublicIPv4 = p.PublicIPv4s[0]
 	s.NATPolicies[0].Forwardings = []overlayproto.NATForwarding{
@@ -341,4 +341,97 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	if err = e.verifyNAT(ctx, c, l, s, true); err != nil {
 		t.Fatal("floating detach final readback", err)
 	}
+	// New bindings carry an instance-owned policy. Empty means deny public
+	// initiations, not legacy full-address acceptance. Outbound replies survive.
+	command(NATIP, "-n", insideNS, "route", "replace", "default", "via", g.IPv4, "dev", inPeer, "src", target.IPv4)
+	policy := overlayproto.DefaultPublicIngress(target.InstanceID, target.OwnerRef)
+	fip.Ingress = &policy
+	s.FloatingIPs = []overlayproto.FloatingIP{fip}
+	apply("bind public IP with default-deny ingress")
+	publicTargets := []struct{ address, network string }{{"http://" + p.PublicIPv4 + ":2444", "tcp4"}, {p.PublicIPv4 + ":2445", "udp4"}, {p.PublicIPv4, "icmp4"}}
+	for _, probe := range publicTargets {
+		if out, err := nativeNATClient(outsideNS, probe.address, probe.network); err == nil {
+			t.Fatal("empty ingress policy accepted public initiation", probe.network, string(out))
+		}
+	}
+	if out, err := nativeNATClient(insideNS, "http://"+publicRemote+":18081"); err != nil || !strings.Contains(string(out), "NAT_REMOTE="+p.PublicIPv4+":") {
+		t.Fatal("default ingress deny disabled outbound replies", err, string(out))
+	}
+	t.Log("PUBLIC_INGRESS_DEFAULT_DENY_AND_OUTBOUND_REPLY_CONFIRMED")
+	policy.Revision = 1
+	policy.SHA256 = ""
+	policy.Rules = []overlayproto.PublicIngressRule{
+		{ID: strings.Repeat("1", 32), Protocol: "tcp", SourceCIDR: publicRemote + "/32", PortStart: 2444, PortEnd: 2445},
+		{ID: strings.Repeat("2", 32), Protocol: "udp", SourceCIDR: publicRemote + "/32", PortStart: 2444, PortEnd: 2445},
+		{ID: strings.Repeat("3", 32), Protocol: "icmp", SourceCIDR: publicRemote + "/32"},
+	}
+	policy, err = overlayproto.CanonicalPublicIngress(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.FloatingIPs[0].Ingress = &policy
+	apply("allow exact public sources and service ports")
+	checkFloating(target.IPv4)
+	// Closed UDP ports generate actual kernel ICMP destination-unreachable
+	// errors. Prove related traffic in both SNAT and DNAT directions, not a
+	// blanket ICMP allow or merely an emulated packet verdict.
+	for _, probe := range []struct{ ns, address string }{{insideNS, publicRemote + ":18084"}, {outsideNS, p.PublicIPv4 + ":2444"}} {
+		if out, err := nativeNATClient(probe.ns, probe.address, "udp-icmp-unreachable"); err != nil || !strings.Contains(string(out), "NAT_RELATED_ICMP_UNREACHABLE_CONFIRMED") {
+			t.Fatal("related ICMP NAT traversal", probe.ns, err, string(out))
+		}
+	}
+	t.Log("PUBLIC_INGRESS_RELATED_ICMP_BOTH_DIRECTIONS_CONFIRMED")
+	startNativeNATServer(t, insideNS, target.IPv4+":2446")
+	startNativeNATServer(t, insideNS, target.IPv4+":2446", "udp4")
+	for _, probe := range []struct{ address, network string }{{"http://" + p.PublicIPv4 + ":2446", "tcp4"}, {p.PublicIPv4 + ":2446", "udp4"}} {
+		if out, err := nativeNATClient(outsideNS, probe.address, probe.network); err == nil {
+			t.Fatal("unapproved live service port accepted", probe.network, string(out))
+		}
+	}
+	otherPublicClient := "9.9.9.10"
+	command(NATIP, "-n", outsideNS, "addr", "add", otherPublicClient+"/32", "dev", "lo")
+	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4+"/32", "dev", p.OutsidePeer, "src", otherPublicClient)
+	for _, probe := range publicTargets {
+		if out, err := nativeNATClient(outsideNS, probe.address, probe.network); err == nil {
+			t.Fatal("unapproved public source accepted", probe.network, string(out))
+		}
+	}
+	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4+"/32", "dev", p.OutsidePeer, "src", publicRemote)
+	t.Log("PUBLIC_INGRESS_EXACT_SOURCE_PORT_AND_ICMP_CONFIRMED")
+	heldIncoming := startNativeNATHeldClient(t, outsideNS, "http://"+p.PublicIPv4+":2444")
+	policy.Revision++
+	policy.SHA256 = ""
+	policy.Rules = []overlayproto.PublicIngressRule{}
+	policy, err = overlayproto.CanonicalPublicIngress(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.FloatingIPs[0].Ingress = &policy
+	apply("revoke public ingress policy and its established connections")
+	assertHeldRevoked(heldIncoming, "revoked ingress retained an established public TCP connection")
+	for _, probe := range publicTargets {
+		if out, err := nativeNATClient(outsideNS, probe.address, probe.network); err == nil {
+			t.Fatal("revoked ingress service remained reachable", probe.network, string(out))
+		}
+	}
+	if out, err := nativeNATClient(insideNS, "http://"+publicRemote+":18081"); err != nil {
+		t.Fatal("ingress revoke disabled authorized outbound replies", err, string(out))
+	}
+	t.Log("PUBLIC_INGRESS_REVOKE_CONNTRACK_AND_FINAL_READBACK_CONFIRMED")
+	if err = e.verifyNAT(ctx, c, l, s, true); err != nil {
+		t.Fatal("public ingress revoke readback", err)
+	}
+	// Independent shared NAT and this EIP can target the same private VM.
+	// A deny on the EIP must not borrow that other address's forwarding rule.
+	s.Gateways[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32", "9.9.9.0/24"}
+	s.NATPolicies = []overlayproto.NATPolicy{{ID: strings.Repeat("d", 32), NodeID: c.Base.NodeID, VPCID: target.VPCID, GatewayInstanceID: p.GatewayInstanceID, ProfileID: p.ID, ProfileSHA256: nsha, PublicIPv4: p.PublicIPv4s[0], Forwardings: []overlayproto.NATForwarding{{ID: strings.Repeat("e", 32), Protocol: "tcp", PublicPort: 2444, TargetInstanceID: target.InstanceID, TargetPort: 2444, SourceCIDR: publicRemote + "/32"}}}}
+	command(NATIP, "-n", outsideNS, "route", "replace", p.PublicIPv4s[0]+"/32", "dev", p.OutsidePeer, "src", publicRemote)
+	apply("preserve independent shared DNAT without bypassing EIP ingress")
+	if out, err := nativeNATClient(outsideNS, "http://"+p.PublicIPv4s[0]+":2444"); err != nil || !strings.Contains(string(out), "NAT_LOCAL="+target.IPv4+":2444") {
+		t.Fatal("independent shared DNAT lost", err, string(out))
+	}
+	if out, err := nativeNATClient(outsideNS, "http://"+p.PublicIPv4+":2444"); err == nil {
+		t.Fatal("denied EIP borrowed shared DNAT allow", string(out))
+	}
+	t.Log("PUBLIC_INGRESS_SHARED_NAT_BOUNDARY_CONFIRMED")
 }

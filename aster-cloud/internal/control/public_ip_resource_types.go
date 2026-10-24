@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 )
@@ -74,4 +75,29 @@ type DirectPublicProfile struct {
 	CIDR          string   `json:"cidr"`
 	GatewayIPv4   string   `json:"gateway_ipv4"`
 	PublicIPv4s   []string `json:"public_ipv4s"`
+}
+
+// Missing ingress revision is retained only for revision-zero legacy bind bodies.
+// Explicit null is not a second spelling of an absent field.
+type publicResourceBindingInput struct {
+	InstanceID              string  `json:"instance_id"`
+	ExpectedGeneration      *uint64 `json:"expected_generation"`
+	ExpectedIngressRevision *uint64 `json:"expected_ingress_revision,omitempty"`
+}
+
+func (in *publicResourceBindingInput) UnmarshalJSON(raw []byte) error {
+	type wire publicResourceBindingInput
+	var v wire
+	if !strictPublicIP(raw, &v) {
+		return ErrInput
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return ErrInput
+	}
+	if r, ok := fields["expected_ingress_revision"]; ok && bytes.Equal(bytes.TrimSpace(r), []byte("null")) {
+		return ErrInput
+	}
+	*in = publicResourceBindingInput(v)
+	return nil
 }

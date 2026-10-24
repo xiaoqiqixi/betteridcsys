@@ -225,10 +225,19 @@ export function validPublicIPResourceRequest(
     );
   if (action === "resource.bind")
     return (
-      Object.keys(v).length === 2 &&
+      (Object.keys(v).length === 2 || Object.keys(v).length === 3) &&
+      Object.keys(v).every((k) =>
+        [
+          "instance_id",
+          "expected_generation",
+          "expected_ingress_revision",
+        ].includes(k),
+      ) &&
       networkID(v.instance_id) &&
       generation(v.expected_generation) &&
-      v.expected_generation < Number.MAX_SAFE_INTEGER
+      v.expected_generation < Number.MAX_SAFE_INTEGER &&
+      (!Object.hasOwn(v, "expected_ingress_revision") ||
+        generation(v.expected_ingress_revision))
     );
   const keys = [
     "pool_id",

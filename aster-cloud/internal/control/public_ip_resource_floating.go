@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func bindFloatingResourceTx(ctx context.Context, tx *sql.Tx, c Config, actor, op string, r *PublicIPResource, v Instance, previous string, unbind bool, now time.Time) error {
+func bindFloatingResourceTx(ctx context.Context, tx *sql.Tx, c Config, actor, op string, r *PublicIPResource, v Instance, previous string, unbind bool, ingressRevision *uint64, now time.Time) error {
 	cluster, ok := c.OverlayCluster(r.ClusterID)
 	if !ok || !c.validOverlayClusters() {
 		return ErrState
@@ -43,7 +43,14 @@ func bindFloatingResourceTx(ctx context.Context, tx *sql.Tx, c Config, actor, op
 		if e != nil {
 			return e
 		}
-		selected = overlayproto.FloatingIP{ResourceID: r.ID, NodeID: r.NodeID, VPCID: r.VPCID, OwnerRef: r.OwnerRef, ProfileID: r.ProfileID, ProfileSHA256: root.ProfileSHA256, GatewayInstanceID: root.GatewayInstanceID, InstanceID: v.ID, TargetIPv4: member.IPv4, PublicIPv4: r.Address}
+		policy, err := desiredPublicIngressTx(ctx, tx, v)
+		if err != nil {
+			return err
+		}
+		if ingressRevision == nil && policy.Policy.Revision != 0 || ingressRevision != nil && *ingressRevision != policy.Policy.Revision {
+			return ErrState
+		}
+		selected = overlayproto.FloatingIP{ResourceID: r.ID, NodeID: r.NodeID, VPCID: r.VPCID, OwnerRef: r.OwnerRef, ProfileID: r.ProfileID, ProfileSHA256: root.ProfileSHA256, GatewayInstanceID: root.GatewayInstanceID, InstanceID: v.ID, TargetIPv4: member.IPv4, PublicIPv4: r.Address, Ingress: &policy.Policy}
 		floats = append(floats, selected)
 	}
 	members := []OverlayMemberInput{}
@@ -55,7 +62,7 @@ func bindFloatingResourceTx(ctx context.Context, tx *sql.Tx, c Config, actor, op
 	if e != nil {
 		return e
 	}
-	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot); e != nil {
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot, now); e != nil {
 		return e
 	}
 	epochID := overlayproto.Digest([]byte("aster.public-ip.binding/1:" + op))[:32]

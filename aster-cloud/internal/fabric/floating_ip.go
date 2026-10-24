@@ -49,24 +49,66 @@ func compileFloatingNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfil
 		if !natPublicIPv4Approved(root, f.PublicIPv4) {
 			return nil, ErrConflict
 		}
+		if f.Ingress != nil {
+			if _, e := overlayproto.CanonicalPublicIngress(*f.Ingress); e != nil || f.Ingress.InstanceID != f.InstanceID || f.Ingress.OwnerRef != f.OwnerRef || !overlayproto.ValidSHA(f.Ingress.SHA256) {
+				return nil, ErrConflict
+			}
+		}
 		source, dest := match(payload("ip", "saddr"), f.TargetIPv4), match(payload("ip", "daddr"), f.TargetIPv4)
 		add("prerouting", match(meta("iifname"), root.OutsideInterface), match(payload("ip", "daddr"), f.PublicIPv4), nftObject{"dnat": nftObject{"addr": f.TargetIPv4, "family": "ip"}})
 		// Every incoming initiation must have matched this exact public destination;
 		// a peer route to the target's private address grants no access.
 		for _, proto := range []int{6, 17} {
-			add("floating_in", dest, match(meta("l4proto"), proto), bitmatch(ct("status"), 32), bitmatch(ct("state"), []int{2, 8}), accept)
+			if f.Ingress == nil { // Original immutable legacy behavior only.
+				add("floating_in", dest, match(meta("l4proto"), proto), bitmatch(ct("status"), 32), bitmatch(ct("state"), []int{2, 8}), accept)
+			}
 			add("floating_in", dest, match(meta("l4proto"), proto), bitmatch(ct("status"), 16), bitmatch(ct("state"), 2), accept)
 			add("floating_out", source, match(meta("l4proto"), proto), bitmatch(ct("state"), []int{2, 8}), accept)
 		}
-		add("floating_in", dest, match(payload("icmp", "type"), 8), bitmatch(ct("status"), 32), bitmatch(ct("state"), []int{2, 8}), accept)
+		if f.Ingress == nil {
+			add("floating_in", dest, match(payload("icmp", "type"), 8), bitmatch(ct("status"), 32), bitmatch(ct("state"), []int{2, 8}), accept)
+		} else {
+			for _, rule := range f.Ingress.Rules {
+				expr := []any{dest, match(payload("ip", "saddr"), prefixExpr(rule.SourceCIDR))}
+				if rule.Protocol == "icmp" {
+					expr = append(expr, match(payload("icmp", "type"), 8))
+				} else {
+					var port any = rule.PortStart
+					if rule.PortEnd != rule.PortStart {
+						port = nftObject{"range": []int{rule.PortStart, rule.PortEnd}}
+					}
+					expr = append(expr, match(payload(rule.Protocol, "dport"), port))
+				}
+				expr = append(expr, bitmatch(ct("status"), 32), bitmatch(ct("state"), []int{2, 8}), accept)
+				add("floating_in", expr...)
+			}
+		}
 		add("floating_in", dest, match(payload("icmp", "type"), 0), bitmatch(ct("status"), 16), bitmatch(ct("state"), 2), accept)
 		add("floating_out", source, match(payload("icmp", "type"), 8), bitmatch(ct("state"), []int{2, 8}), accept)
 		add("floating_out", source, match(payload("icmp", "type"), 0), bitmatch(ct("status"), 32), bitmatch(ct("state"), 2), accept)
 		for _, kind := range []int{3, 11, 12} {
 			add("floating_in", dest, match(payload("icmp", "type"), kind), bitmatch(ct("state"), 4), accept)
+			if f.Ingress != nil {
+				add("floating_out", source, match(payload("icmp", "type"), kind), bitmatch(ct("state"), 4), bitmatch(ct("status"), 32), accept)
+			}
+		}
+		if f.Ingress != nil {
+			// Returning to the shared NAT rules could otherwise accept a denied
+			// packet on a shared DNAT port for the same private target.
+			add("floating_in", dest, drop)
 		}
 		add("forward", match(meta("iifname"), root.InsideInterface), match(meta("oifname"), root.OutsideInterface), source, nftObject{"jump": nftObject{"target": "floating_out"}})
-		add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), dest, nftObject{"jump": nftObject{"target": "floating_in"}})
+		if f.Ingress == nil {
+			add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), dest, nftObject{"jump": nftObject{"target": "floating_in"}})
+		} else {
+			// Bind ingress filtering to this exact public destination, not a
+			// different shared-NAT forwarding to the same private instance.
+			original := nftObject{"ct": nftObject{"key": "daddr", "family": "ip", "dir": "original"}}
+			add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), dest, match(original, f.PublicIPv4), nftObject{"jump": nftObject{"target": "floating_in"}})
+			// Public ingress default deny must not disable legitimate replies to
+			// this instance's independently approved outbound SNAT connections.
+			add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), dest, bitmatch(ct("status"), 16), nftObject{"jump": nftObject{"target": "floating_in"}})
+		}
 		add("postrouting", match(meta("iifname"), root.InsideInterface), match(meta("oifname"), root.OutsideInterface), source, nftObject{"snat": nftObject{"addr": f.PublicIPv4, "family": "ip"}})
 	}
 	return objects, nil

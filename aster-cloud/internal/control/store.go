@@ -99,6 +99,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 				return e
 			}
 		}
+		if migration.Version == 10 {
+			if e = networking.CheckPublicIngressMigration(ctx, conn, true); e != nil {
+				return e
+			}
+		}
 		if migration.Version == 4 {
 			existingIndexes, e = auditIndexMigrationPlan(ctx, conn, migration.SQL)
 			if e != nil {
@@ -142,6 +147,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		}
 		if migration.Version == 9 {
 			if e = networking.CheckPublicIPResourceMigration(ctx, conn, false); e != nil {
+				return e
+			}
+		}
+		if migration.Version == 10 {
+			if e = networking.CheckPublicIngressMigration(ctx, conn, false); e != nil {
 				return e
 			}
 		}
@@ -189,7 +199,10 @@ func (s *SQLStore) Check(ctx context.Context) error {
 	if e := networking.CheckPublicIPMigration(ctx, s.DB, false); e != nil {
 		return e
 	}
-	return networking.CheckPublicIPResourceMigration(ctx, s.DB, false)
+	if e := networking.CheckPublicIPResourceMigration(ctx, s.DB, false); e != nil {
+		return e
+	}
+	return networking.CheckPublicIngressMigration(ctx, s.DB, false)
 }
 func (s *SQLStore) locked(ctx context.Context) (*sql.Tx, error) {
 	// ponytail: one database gate serializes mutations; replace with ordered node/
@@ -233,6 +246,9 @@ func (s *SQLStore) Admit(ctx context.Context, r controllerapi.Request, candidate
 		return Job{}, false, e
 	}
 	defer tx.Rollback()
+	if e = publicIngressOperationIDUnusedTx(ctx, tx, r.OperationID); e != nil {
+		return Job{}, false, e
+	}
 	prior, e := scanJob(tx.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM controller_jobs WHERE operation_id=?", r.OperationID))
 	if e == nil {
 		if prior.ControllerID != r.Product.ControllerID || prior.RequestSHA != digest {

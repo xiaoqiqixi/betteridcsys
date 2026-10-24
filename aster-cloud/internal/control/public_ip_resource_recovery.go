@@ -75,7 +75,7 @@ func (w OverlayWorker) RecoverPublicIPResource(ctx context.Context, actor, op, r
 	if e != nil {
 		return r, prior, false, e
 	}
-	if binding.Generation != expected || binding.EpochID == "" || binding.Action != "floating.bind" && binding.Action != "floating.unbind" {
+	if binding.Generation != expected || binding.EpochID == "" || binding.Action != "floating.bind" && binding.Action != "floating.unbind" && binding.Action != "floating.policy" {
 		return r, prior, false, ErrState
 	}
 	// The resource may already be absent from an unconfirmed unbind snapshot;

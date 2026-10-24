@@ -100,10 +100,7 @@ func (c Console) publicIPResources(w http.ResponseWriter, r *http.Request) {
 		}
 		resource, operation, replay, e = c.Store.AllocatePublicIPResource(r.Context(), c.Config, actor.ID, op, in, now)
 	case len(parts) == 3 && parts[0] == "resources" && nodeproto.ValidID(parts[1]) && parts[2] == "binding":
-		var in struct {
-			InstanceID         string  `json:"instance_id"`
-			ExpectedGeneration *uint64 `json:"expected_generation"`
-		}
+		var in publicResourceBindingInput
 		if !readPublicIPJSON(w, r, &in) {
 			return
 		}
@@ -111,7 +108,7 @@ func (c Console) publicIPResources(w http.ResponseWriter, r *http.Request) {
 			failure(w, 400, "INVALID_REQUEST")
 			return
 		}
-		resource, operation, replay, e = c.Store.BindPublicIPResource(r.Context(), c.Config, actor.ID, op, parts[1], in.InstanceID, false, *in.ExpectedGeneration, now)
+		resource, operation, replay, e = c.Store.BindPublicIPResourceWithIngress(r.Context(), c.Config, actor.ID, op, parts[1], in.InstanceID, false, *in.ExpectedGeneration, in.ExpectedIngressRevision, now)
 	case len(parts) == 3 && parts[0] == "resources" && nodeproto.ValidID(parts[1]) && parts[2] == "recover":
 		var in struct {
 			ExpectedGeneration     *uint64 `json:"expected_generation"`

@@ -21,7 +21,7 @@ func reserveOverlayCreation(ctx context.Context, tx *sql.Tx, candidate Candidate
 		return ErrState
 	}
 	approval := candidate.Overlay
-	c := Config{ControllerID: approval.ControllerID, Nodes: approval.Nodes, OverlayClusters: approval.RootClusters}
+	c := Config{ControllerID: approval.ControllerID, Nodes: approval.Nodes, OverlayClusters: approval.RootClusters, HeartbeatTTLSeconds: approval.HeartbeatTTLSeconds}
 	cluster, ok := c.OverlayCluster(approval.Cluster.ClusterID)
 	if !ok || !c.validOverlayClusters() {
 		return ErrState
@@ -105,7 +105,7 @@ func reserveOverlayCreation(ctx context.Context, tx *sql.Tx, candidate Candidate
 	if e != nil {
 		return ErrConflict
 	}
-	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot); e != nil {
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot, now); e != nil {
 		return e
 	}
 	if e = overlayCompleteInventory(ctx, tx, snapshot); e != nil {

@@ -45,6 +45,7 @@ func internetNATFixture(t *testing.T) (*Executor, *natFake, OverlayConfig, overl
 // does not claim to emulate Linux conntrack; the native gate verifies packets.
 type natPolicyPacket struct {
 	in, out, src, dst                        string
+	originalDestination                      string
 	proto, kind, state, status, sport, dport int
 }
 type natPolicyResult struct{ verdict, translated string }
@@ -73,6 +74,13 @@ func evaluateNATPolicy(t *testing.T, objects []nftObject, chain string, packet n
 		m, ok := expr.(map[string]any)
 		if !ok {
 			return expr
+		}
+		if raw, ok := m["range"]; ok {
+			v, ok := raw.([]any)
+			if !ok || len(v) != 2 {
+				t.Fatal("bad nft range")
+			}
+			return [2]float64{v[0].(float64), v[1].(float64)}
 		}
 		for kind, val := range m {
 			v := val.(map[string]any)
@@ -106,6 +114,9 @@ func evaluateNATPolicy(t *testing.T, objects []nftObject, chain string, packet n
 					}
 				}
 			case "ct":
+				if v["key"] == "daddr" && v["family"] == "ip" && v["dir"] == "original" {
+					return packet.originalDestination
+				}
 				switch v["key"] {
 				case "state":
 					return float64(packet.state)
@@ -132,7 +143,12 @@ func evaluateNATPolicy(t *testing.T, objects []nftObject, chain string, packet n
 					if kind == "match" {
 						m := body.(map[string]any)
 						left, right := value(m["left"]), value(m["right"])
-						if m["op"] == "in" {
+						if bounds, ok := right.([2]float64); ok {
+							v, ok := left.(float64)
+							if !ok || v < bounds[0] || v > bounds[1] {
+								matched = false
+							}
+						} else if m["op"] == "in" {
 							l, lok := left.(float64)
 							r, rok := right.(float64)
 							if bits, ok := right.([]any); ok {

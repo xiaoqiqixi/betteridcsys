@@ -4,6 +4,7 @@ import (
 	"aster/cloud/internal/overlayproto"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -377,7 +378,7 @@ func TestNativeNATHelper(t *testing.T) {
 			fmt.Print("NAT_ICMP_REPLY=" + address)
 			return
 		}
-		if os.Getenv("ASTER_NAT_NETWORK") == "udp4" {
+		if os.Getenv("ASTER_NAT_NETWORK") == "udp4" || os.Getenv("ASTER_NAT_NETWORK") == "udp-icmp-unreachable" {
 			conn, err := net.DialTimeout("udp4", os.Getenv("ASTER_NAT_ADDRESS"), time.Second)
 			if err != nil {
 				t.Fatal(err)
@@ -389,6 +390,13 @@ func TestNativeNATHelper(t *testing.T) {
 			}
 			buf := make([]byte, 512)
 			n, err := conn.Read(buf)
+			if os.Getenv("ASTER_NAT_NETWORK") == "udp-icmp-unreachable" {
+				if !errors.Is(err, syscall.ECONNREFUSED) {
+					t.Fatal("related ICMP unreachable did not traverse NAT", err)
+				}
+				fmt.Print("NAT_RELATED_ICMP_UNREACHABLE_CONFIRMED")
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

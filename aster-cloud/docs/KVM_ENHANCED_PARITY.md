@@ -99,7 +99,7 @@ R1/R4/R5/R6/R7/R10 是功能依据；具体执行器选型须再查 Ubuntu/libvi
 | VPC、子网、路由及客户归属 | `implemented-partial` A11/A12/A14/A16/A17 | 已有原 IPAM 冻结绑定、全局 VPC、root 批准网关目的前缀、跨节点成员、创建屏障及后台完整配置/恢复。planned/reserved 不等于已联网；完整子网生命周期、自助网络、动态路由与真机包流验收仍缺。 |
 | 浮动/弹性公网 IP | `implemented-partial` A18/A19；`realhost-required` | 独立直绑/浮动资源、全局互斥、确认分配/解绑/回收、同 owner/VPC 跨节点成员切换、普通直绑地址保持冷迁移。运行中热换主 IP、多公网 NIC、VPC 磁盘迁移/HA 未实现；物理验收后置。 |
 | NAT 端口转发/共享建站 | `implemented-partial` A17/A18；`realhost-required` | 已有 root 批准的公网 TCP/UDP/ICMP echo 出站、精确 TCP/UDP DNAT、源/端口校验、全节点屏障、规则读回与 conntrack 撤销。A18 接池、分配、实际地址选择和确认回收；IPv6/hairpin/ICMP DNAT、域名共享建站及真实上联/KVM 验收仍缺，不占宿主 SSH/财务端口。 |
-| 租户安全组 | `missing`；A3 固定防欺骗不是安全组 | 入/出方向、协议/CIDR/端口范围、优先级/状态语义明确；默认策略、规则版本、原子替换、绑定读回。IPv4/IPv6/ARP/NDP 及失败时旧策略保留。 |
+| 租户安全组 | 完整安全组仍 `missing`；新增 [浮动 IPv4 公网入站 ACL](PUBLIC_INGRESS.md)，不是完整 VPC/直绑/IPv6 安全组 | 入/出方向、协议/CIDR/端口范围、优先级/状态语义明确；默认策略、规则版本、原子替换、绑定读回。IPv4/IPv6/ARP/NDP 及失败时旧策略保留。 |
 | IP-MAC 绑定与反欺骗 | `implemented-partial` A3/A12；`realhost-required` | 旧 bridge filter 和新 OVS exact IP/MAC/ARP+VPC metadata 与嵌入 gate 分别有测试，不互相替代。必须实测同桥非托管端口、ofport 重用、双标签、宿主服务攻击及断电恢复。 |
 | DHCP | `missing`；A3 当前使用 NoCloud 静态地址 | 地址授权绑定、租约与持久 IPAM 一致；隔离 rogue DHCP，重复 DISCOVER/请求/租约恢复、DHCP 服务故障不能重复发放地址。 |
 | 负载均衡 | `missing` | owner/VPC 资源、监听器、后端、健康检查、证书生命周期；后端/探测不可借机访问管理网。先交付明确协议范围，故障后旧配置继续工作。 |

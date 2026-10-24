@@ -337,7 +337,7 @@ func (c Config) Candidates(r controllerapi.Request) []Candidate {
 			for _, cluster := range c.OverlayClusters {
 				for _, pin := range cluster.Profiles {
 					if pin.NodeID == n.ID && pin.ProfileID == profileID {
-						candidate.Overlay = &OverlayAdmission{ControllerID: c.ControllerID, Cluster: cluster, Nodes: append([]NodeProfile{}, c.Nodes...), RootClusters: append([]OverlayCluster{}, c.OverlayClusters...)}
+						candidate.Overlay = &OverlayAdmission{ControllerID: c.ControllerID, Cluster: cluster, Nodes: append([]NodeProfile{}, c.Nodes...), RootClusters: append([]OverlayCluster{}, c.OverlayClusters...), HeartbeatTTLSeconds: c.HeartbeatTTLSeconds}
 					}
 				}
 			}

@@ -21,7 +21,10 @@ func publicInstanceIdleTx(ctx context.Context, tx *sql.Tx, instance string) erro
 	return overlayLifecycleGate(ctx, tx, instance)
 }
 func (s *SQLStore) BindPublicIPResource(ctx context.Context, c Config, actor, op, resource, instance string, unbind bool, expected uint64, now time.Time) (PublicIPResource, PublicIPResourceOperation, bool, error) {
-	if !publicMutationValid(actor, op, now) || !nodeproto.ValidID(resource) || !unbind && !nodeproto.ValidID(instance) || unbind && instance != "" {
+	return s.BindPublicIPResourceWithIngress(ctx, c, actor, op, resource, instance, unbind, expected, nil, now)
+}
+func (s *SQLStore) BindPublicIPResourceWithIngress(ctx context.Context, c Config, actor, op, resource, instance string, unbind bool, expected uint64, ingressRevision *uint64, now time.Time) (PublicIPResource, PublicIPResourceOperation, bool, error) {
+	if !publicMutationValid(actor, op, now) || !nodeproto.ValidID(resource) || !unbind && !nodeproto.ValidID(instance) || unbind && (instance != "" || ingressRevision != nil) || ingressRevision != nil && *ingressRevision > maxPublicIngressRevision {
 		return PublicIPResource{}, PublicIPResourceOperation{}, false, ErrInput
 	}
 	action := "resource.bind"
@@ -29,10 +32,7 @@ func (s *SQLStore) BindPublicIPResource(ctx context.Context, c Config, actor, op
 		ExpectedGeneration uint64 `json:"expected_generation"`
 	}{expected})
 	if !unbind {
-		raw = marshalPublicBinding(struct {
-			InstanceID         string `json:"instance_id"`
-			ExpectedGeneration uint64 `json:"expected_generation"`
-		}{instance, expected})
+		raw = marshalPublicBinding(publicResourceBindingInput{InstanceID: instance, ExpectedGeneration: &expected, ExpectedIngressRevision: ingressRevision})
 	} else {
 		action = "resource.unbind"
 	}
@@ -51,6 +51,9 @@ func (s *SQLStore) BindPublicIPResource(ctx context.Context, c Config, actor, op
 	r, e := scanPublicResource(tx.QueryRowContext(ctx, "SELECT "+publicResourceColumns+" FROM controller_public_ip_resources WHERE id=?", resource))
 	if e != nil {
 		return r, o, false, e
+	}
+	if ingressRevision != nil && r.Mode != "floating" {
+		return r, o, false, ErrInput
 	}
 	if r.BindingGeneration != expected || expected >= 1<<63-1 {
 		return r, o, false, ErrState
@@ -86,7 +89,7 @@ func (s *SQLStore) BindPublicIPResource(ctx context.Context, c Config, actor, op
 	}
 	now = now.UTC().Truncate(time.Microsecond)
 	if r.Mode == "floating" {
-		e = bindFloatingResourceTx(ctx, tx, c, actor, op, &r, v, previous, unbind, now)
+		e = bindFloatingResourceTx(ctx, tx, c, actor, op, &r, v, previous, unbind, ingressRevision, now)
 	} else {
 		e = s.bindDirectResourceTx(ctx, tx, c, actor, op, &r, v, previous, unbind, now)
 	}
