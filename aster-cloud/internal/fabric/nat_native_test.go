@@ -357,8 +357,16 @@ func TestNativeNATHelper(t *testing.T) {
 				t.Fatal(err)
 			}
 			buf := make([]byte, 256)
-			n, err := conn.Read(buf)
-			if err != nil || n < 8 || buf[0] != 0 || buf[1] != 0 || binary.BigEndian.Uint16(buf[4:6]) != 0x4a53 || binary.BigEndian.Uint16(buf[6:8]) != 1 {
+			n, peer, err := conn.ReadFromIP(buf)
+			if err != nil {
+				t.Fatalf("ICMP echo reply: %v %x", err, buf[:n])
+			}
+			if peer == nil || !peer.IP.Equal(net.ParseIP(address)) {
+				t.Fatal("ICMP reply source differs from probe target", peer)
+			}
+			// ReadFromIP strips the IPv4 header through net.IPConn.readFrom;
+			// embedded conn.Read does not. Validate the complete ICMP payload.
+			if err := nativeNATEchoReply(buf[:n]); err != nil {
 				t.Fatalf("ICMP echo reply: %v %x", err, buf[:n])
 			}
 			fmt.Print("NAT_ICMP_REPLY=" + address)
