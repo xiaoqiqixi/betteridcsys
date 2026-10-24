@@ -106,6 +106,12 @@ func validateTaskNetwork(ctx context.Context, tx *sql.Tx, task nodeproto.NodeTas
 	if v.NodeID != task.NodeID || v.OwnerRef != task.OwnerRef || v.Hostname != task.Hostname || v.Resources != task.Resources {
 		return ErrState
 	}
+	if e = validateDirectTaskTx(ctx, tx, task, v); e != nil {
+		return e
+	}
+	if task.Protocol == nodeproto.DirectPublicProtocol {
+		return nil
+	}
 	n, e := instanceNetworkBinding(ctx, tx, v)
 	if e != nil {
 		return e

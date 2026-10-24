@@ -12,6 +12,7 @@ import UiSelect from "./UiSelect.vue";
 import UiButton from "./UiButton.vue";
 import StateBlock from "./StateBlock.vue";
 import InlineError from "./InlineError.vue";
+import DirectPublicAddressSelect from "./DirectPublicAddressSelect.vue";
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: []; accepted: [] }>();
 const {
@@ -28,11 +29,33 @@ const presets = useQuery(
         record(v) &&
         typeof v.id === "string" &&
         typeof v.node_id === "string" &&
-        validResources(v.resources),
+        validResources(v.resources) &&
+        (v.direct_public_required === undefined ||
+          typeof v.direct_public_required === "boolean"),
     ),
 );
 const mutation = useMutation();
 const form = reactive({ hostname: "", owner_ref: "", preset_id: "" });
+const publicResourceID = computed({
+  get: () => publicSelection.id,
+  set: (v: string) => {
+    publicSelection.id = v;
+  },
+});
+const publicSelection = reactive<{ id: string; generation: number | null }>({
+  id: "",
+  generation: null,
+});
+const selectedPreset = computed(() =>
+  presets.data.value?.items.find((p) => p.id === form.preset_id),
+);
+const requiresPublic = computed(
+  () => selectedPreset.value?.direct_public_required === true,
+);
+watch([() => form.owner_ref, () => form.preset_id], () => {
+  publicSelection.id = "";
+  publicSelection.generation = null;
+});
 let original = "";
 const accepted = reactive({ id: "", instance: "" });
 const options = computed(() =>
@@ -45,15 +68,28 @@ const valid = computed(
   () =>
     /^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,61}[a-zA-Z0-9])?$/.test(form.hostname) &&
     /^[a-f0-9]{32}$/.test(form.owner_ref) &&
-    options.value.some((v) => v.value === form.preset_id),
+    options.value.some((v) => v.value === form.preset_id) &&
+    (!requiresPublic.value ||
+      (/^[a-f0-9]{32}$/.test(publicResourceID.value) &&
+        Number.isSafeInteger(publicSelection.generation) &&
+        publicSelection.generation !== null &&
+        publicSelection.generation >= 0)),
 );
-const dirty = computed(() => original !== JSON.stringify(form));
+const draft = () =>
+  JSON.stringify({
+    ...form,
+    public_ip_resource_id: publicResourceID.value,
+    public_ip_expected_generation: publicSelection.generation,
+  });
+const dirty = computed(() => original !== draft());
 watch(
   () => props.open,
   (open) => {
     if (open) {
       Object.assign(form, { hostname: "", owner_ref: "", preset_id: "" });
-      original = JSON.stringify(form);
+      publicSelection.id = "";
+      publicSelection.generation = null;
+      original = draft();
       accepted.id = "";
       accepted.instance = "";
       mutation.clearMessage();
@@ -66,14 +102,22 @@ async function submit() {
   const result = await mutation.execute(
     "POST",
     "/instances",
-    { ...form },
+    {
+      ...form,
+      ...(requiresPublic.value
+        ? {
+            public_ip_resource_id: publicResourceID.value,
+            public_ip_expected_generation: publicSelection.generation,
+          }
+        : {}),
+    },
     operationResponse,
     { expectedStatus: 202, bindOperation: { action: "create" } },
   );
   if (result) {
     accepted.id = result.operation.id;
     accepted.instance = result.operation.instance_id;
-    original = JSON.stringify(form);
+    original = draft();
     notify(
       tr(
         "创建任务已受理，请前往任务页面核对并派发。",
@@ -128,6 +172,7 @@ async function submit() {
       ><form
         id="create-instance"
         class="creation-form"
+        novalidate
         @submit.prevent="submit"
       >
         <label class="field"
@@ -169,7 +214,21 @@ async function submit() {
               "A 32-character lowercase hexadecimal customer reference.",
             )
           }}</span></label
-        ><InlineError
+        ><DirectPublicAddressSelect
+          v-if="
+            requiresPublic &&
+            /^[a-f0-9]{32}$/.test(form.owner_ref) &&
+            selectedPreset
+          "
+          :key="`${form.owner_ref}:${selectedPreset.node_id}`"
+          v-model="publicResourceID"
+          @select="
+            publicSelection.generation = $event?.binding_generation ?? null
+          "
+          :owner="form.owner_ref"
+          :node="selectedPreset.node_id"
+          :disabled="mutation.busy.value || !!mutation.pendingKey.value"
+        /><InlineError
           :error="mutation.error.value"
           :pending-key="mutation.pendingKey.value"
         /><RouterLink

@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y openvswitch-common
+          sudo apt-get install --no-install-recommends -y openvswitch-common libvirt-clients libxml2-utils
           /usr/bin/ovs-ofctl --version
       - name: Parse production flows and inspect real encoded meters; no skips
         working-directory: aster-cloud
@@ -81,6 +81,14 @@ jobs:
           passed = {e.get('Test') for e in events if e['Action'] == 'pass'}
           assert expected <= passed, 'required native parser tests did not execute'
           PYTEST
+      - name: Validate exact public NIC filter with distribution libvirt schema
+        working-directory: aster-cloud
+        run: |
+          set -euo pipefail
+          go build -mod=readonly -trimpath -buildvcs=false -o "$RUNNER_TEMP/aster-node-schema" ./cmd/aster-node
+          "$RUNNER_TEMP/aster-node-schema" --print-public-network-filter aster-public-ipv4 > "$RUNNER_TEMP/aster-public-ipv4.xml"
+          virt-xml-validate "$RUNNER_TEMP/aster-public-ipv4.xml" nwfilter
+          # XML validation only: do not start libvirt, define filters or touch host networking.
 
   native-nat:
     name: Native NAT packet flow and revocation (${{ matrix.os }})

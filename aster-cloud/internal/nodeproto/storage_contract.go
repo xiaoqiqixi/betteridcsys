@@ -13,19 +13,21 @@ const StorageProtocol = "aster.node.storage/1"
 // Every field is required, including explicitly empty irrelevant fields. There
 // is intentionally no URL, filesystem path, remote command, or source_fenced bool.
 type TypedStorageTask struct {
-	Protocol          string `json:"protocol"`
-	OperationID       string `json:"operation_id"`
-	NodeID            string `json:"node_id"`
-	Action            string `json:"action"`
-	InstanceID        string `json:"instance_id"`
-	OwnerRef          string `json:"owner_ref"`
-	ArtifactID        string `json:"artifact_id"`
-	TargetNodeID      string `json:"target_node_id"`
-	SourceNodeID      string `json:"source_node_id"`
-	SourceOperationID string `json:"source_operation_id"`
-	ManifestSHA256    string `json:"manifest_sha256"`
-	FenceToken        string `json:"fence_token"`
-	ConfirmArtifactID string `json:"confirm_artifact_id"`
+	RetireProof       PublicRetireProof   `json:"retire_proof,omitzero"`
+	DirectPublic      DirectPublicBinding `json:"direct_public,omitzero"`
+	Protocol          string              `json:"protocol"`
+	OperationID       string              `json:"operation_id"`
+	NodeID            string              `json:"node_id"`
+	Action            string              `json:"action"`
+	InstanceID        string              `json:"instance_id"`
+	OwnerRef          string              `json:"owner_ref"`
+	ArtifactID        string              `json:"artifact_id"`
+	TargetNodeID      string              `json:"target_node_id"`
+	SourceNodeID      string              `json:"source_node_id"`
+	SourceOperationID string              `json:"source_operation_id"`
+	ManifestSHA256    string              `json:"manifest_sha256"`
+	FenceToken        string              `json:"fence_token"`
+	ConfirmArtifactID string              `json:"confirm_artifact_id"`
 }
 
 type StorageArtifact struct {
@@ -60,6 +62,7 @@ type StorageResult struct {
 // key for migration. Disk is always a flat qcow2, no external backing/data file.
 // XML is never imported: the target reconstructs it from its own approvals.
 type StorageManifest struct {
+	DirectPublic      DirectPublicBinding     `json:"direct_public,omitzero"`
 	Protocol          string                  `json:"protocol"`
 	ArtifactID        string                  `json:"artifact_id"`
 	Kind              string                  `json:"kind"`
@@ -87,7 +90,13 @@ type SignedStorageManifest struct {
 }
 
 func (t TypedStorageTask) Valid() bool {
-	if t.Protocol != StorageProtocol || !ValidID(t.OperationID) || !ValidNodeID(t.NodeID) || !ValidID(t.InstanceID) || !ValidID(t.OwnerRef) {
+	if (t.Protocol != StorageProtocol && t.Protocol != StorageDirectProtocol) || !ValidID(t.OperationID) || !ValidNodeID(t.NodeID) || !ValidID(t.InstanceID) || !ValidID(t.OwnerRef) {
+		return false
+	}
+	if t.Protocol == StorageProtocol && !t.DirectPublic.IsZero() || t.Protocol == StorageDirectProtocol && (!t.DirectPublic.ValidIdentity() || t.DirectPublic.NodeID != t.NodeID || t.DirectPublic.InstanceID != t.InstanceID || t.DirectPublic.OwnerRef != t.OwnerRef) {
+		return false
+	}
+	if t.Action != "migrate_retire_source" && !t.RetireProof.IsZero() {
 		return false
 	}
 	noMigration := t.TargetNodeID == "" && t.SourceNodeID == "" && t.SourceOperationID == "" && t.ManifestSHA256 == "" && t.FenceToken == ""
@@ -98,6 +107,8 @@ func (t TypedStorageTask) Valid() bool {
 		return noMigration && ValidID(t.ArtifactID) && t.ConfirmArtifactID == ""
 	case "snapshot_restore", "snapshot_delete", "backup_restore", "backup_delete":
 		return noMigration && ValidID(t.ArtifactID) && t.ConfirmArtifactID == t.ArtifactID
+	case "migrate_retire_source":
+		return t.Protocol == StorageDirectProtocol && ValidID(t.ArtifactID) && t.ConfirmArtifactID == t.ArtifactID && t.SourceNodeID == t.NodeID && ValidNodeID(t.TargetNodeID) && t.TargetNodeID != t.NodeID && ValidID(t.SourceOperationID) && digest.MatchString(t.ManifestSHA256) && digest.MatchString(t.FenceToken) && t.RetireProof.ValidFor(t)
 	case "migrate_prepare":
 		return ValidID(t.ArtifactID) && ValidNodeID(t.TargetNodeID) && t.TargetNodeID != t.NodeID && t.SourceNodeID == "" && t.SourceOperationID == "" && t.ManifestSHA256 == "" && t.FenceToken == "" && t.ConfirmArtifactID == ""
 	case "migrate_import", "migrate_activate":
@@ -122,8 +133,23 @@ func (t TypedStorageTask) BytesAndDigest() ([]byte, string, error) {
 	return raw, Digest(raw), nil
 }
 func (r StorageResult) Matches(t TypedStorageTask, sha string) bool {
-	if !t.Valid() || !digest.MatchString(sha) || r.Protocol != StorageProtocol || r.OperationID != t.OperationID || r.RequestSHA256 != sha || r.InstanceID != t.InstanceID || r.ArtifactID != t.ArtifactID {
+	if !t.Valid() || !digest.MatchString(sha) || r.Protocol != t.Protocol || r.OperationID != t.OperationID || r.RequestSHA256 != sha || r.InstanceID != t.InstanceID || r.ArtifactID != t.ArtifactID {
 		return false
+	}
+	if t.Protocol == StorageDirectProtocol {
+		switch t.Action {
+		case "migrate_import", "migrate_activate", "migrate_retire_source":
+			if r.ManifestSHA256 != t.ManifestSHA256 || r.FenceToken != t.FenceToken || r.SourceNodeID != t.SourceNodeID || r.TargetNodeID != t.TargetNodeID || r.Items == nil || len(r.Items) != 0 {
+				return false
+			}
+		case "migrate_prepare":
+			if r.Items == nil {
+				return false
+			}
+			if r.Status == "succeeded" && (!digest.MatchString(r.ManifestSHA256) || !digest.MatchString(r.FenceToken) || r.SourceNodeID != t.NodeID || r.TargetNodeID != t.TargetNodeID) {
+				return false
+			}
+		}
 	}
 	switch r.Status {
 	case "accepted", "succeeded", "rejected", "uncertain":
@@ -140,7 +166,25 @@ func DecodeStorageTask(raw []byte) (TypedStorageTask, error) {
 	if json.Unmarshal(raw, &fields) != nil {
 		return task, ErrInvalid
 	}
+	_ = json.Unmarshal(fields["protocol"], &task.Protocol)
 	keys := []string{"protocol", "operation_id", "node_id", "action", "instance_id", "owner_ref", "artifact_id", "target_node_id", "source_node_id", "source_operation_id", "manifest_sha256", "fence_token", "confirm_artifact_id"}
+	if task.Protocol == StorageDirectProtocol {
+		keys = append(keys, "direct_public")
+		b, e := decodeDirectPublic(fields["direct_public"])
+		if e != nil {
+			return task, ErrInvalid
+		}
+		task.DirectPublic = b
+	}
+	_ = json.Unmarshal(fields["action"], &task.Action)
+	if task.Action == "migrate_retire_source" {
+		keys = append(keys, "retire_proof")
+		p, e := decodeRetireProof(fields["retire_proof"])
+		if e != nil {
+			return task, ErrInvalid
+		}
+		task.RetireProof = p
+	}
 	if len(fields) != len(keys) {
 		return task, ErrInvalid
 	}
@@ -200,15 +244,17 @@ type StorageFileReceipt struct {
 const InstanceProtocol = "aster.node.instance/1"
 
 type InstanceObservation struct {
-	Protocol      string `json:"protocol"`
-	NodeID        string `json:"node_id"`
-	InstanceID    string `json:"instance_id"`
-	OwnerRef      string `json:"owner_ref"`
-	Hostname      string `json:"hostname"`
-	State         string `json:"state"`
-	IPv4          string `json:"ipv4"`
-	MAC           string `json:"mac"`
-	ObservedAt    string `json:"observed_at"`
-	SourceFenced  bool   `json:"source_fenced"`
-	TargetPending bool   `json:"target_pending"`
+	DirectPublic         DirectPublicBinding `json:"direct_public,omitzero"`
+	DirectPublicDetached bool                `json:"direct_public_detached,omitempty"`
+	Protocol             string              `json:"protocol"`
+	NodeID               string              `json:"node_id"`
+	InstanceID           string              `json:"instance_id"`
+	OwnerRef             string              `json:"owner_ref"`
+	Hostname             string              `json:"hostname"`
+	State                string              `json:"state"`
+	IPv4                 string              `json:"ipv4"`
+	MAC                  string              `json:"mac"`
+	ObservedAt           string              `json:"observed_at"`
+	SourceFenced         bool                `json:"source_fenced"`
+	TargetPending        bool                `json:"target_pending"`
 }

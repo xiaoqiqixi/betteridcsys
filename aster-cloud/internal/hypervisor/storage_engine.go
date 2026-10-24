@@ -69,7 +69,13 @@ func (m *Manager) AcceptStorage(task nodeproto.TypedStorageTask, raw []byte) (no
 		return reject("PRIVATE_ARTIFACT_ROOT_REQUIRED")
 	}
 	var instance Instance
-	if task.Action == "migrate_import" {
+	if task.Action == "migrate_retire_source" {
+		var ok bool
+		instance, ok = m.Ledger.Instance(task.InstanceID)
+		if !ok || m.validateRetireSource(task, instance) != nil {
+			return reject("PUBLIC_SOURCE_RETIRE_PROOF_REJECTED")
+		}
+	} else if task.Action == "migrate_import" {
 		manifest, _, err := m.readImport(task, true)
 		if err != nil {
 			return reject("AWAITING_PROTECTED_HANDOFF_OR_INVALID_BINDING")
@@ -83,7 +89,11 @@ func (m *Manager) AcceptStorage(task nodeproto.TypedStorageTask, raw []byte) (no
 		resources.NodeGroupID = m.Config.NodeGroupID
 		resources.SystemStorageID = m.Config.StorageID
 		t := nodeproto.NodeTask{Protocol: nodeproto.Protocol, OperationID: task.OperationID, NodeID: task.NodeID, Action: "create", InstanceID: task.InstanceID, OwnerRef: task.OwnerRef, Hostname: manifest.Hostname, Resources: resources}
-		instance, e = m.prepare(t)
+		if task.Protocol == nodeproto.StorageDirectProtocol {
+			t.Protocol = nodeproto.DirectPublicProtocol
+			t.DirectPublic = task.DirectPublic
+		}
+		instance, e = m.prepareWithRetired(t, true)
 		if e != nil {
 			return reject(safeCode(e))
 		}
@@ -96,6 +106,9 @@ func (m *Manager) AcceptStorage(task nodeproto.TypedStorageTask, raw []byte) (no
 		instance, ok = m.Ledger.Instance(task.InstanceID)
 		if !ok || instance.OwnerRef != task.OwnerRef {
 			return reject("INSTANCE_OWNERSHIP_REJECTED")
+		}
+		if task.DirectPublic != instance.DirectPublic || instance.DirectPublicDetached || (!instance.DirectPublic.IsZero() && m.approvedDirect(instance.DirectPublic) != nil) {
+			return reject("DIRECT_PUBLIC_STORAGE_BINDING_REJECTED")
 		}
 		if !instance.Network.IsZero() {
 			return reject("OVS_STORAGE_CONTRACT_UNSUPPORTED")
@@ -153,7 +166,7 @@ func (m *Manager) AcceptStorage(task nodeproto.TypedStorageTask, raw []byte) (no
 		}
 		a := ArtifactRecord{Artifact: nodeproto.StorageArtifact{ArtifactID: task.ArtifactID, Kind: kind, NodeID: m.Config.NodeID, InstanceID: task.InstanceID, OwnerRef: task.OwnerRef, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), State: "reserved"}, ReservedBytes: reserve}
 		artifact = &a
-	} else if task.Action != "migrate_import" && task.Action != "migrate_activate" {
+	} else if task.Action != "migrate_import" && task.Action != "migrate_activate" && task.Action != "migrate_retire_source" {
 		a, ok := m.Ledger.Artifact(task.ArtifactID)
 		kind := "snapshot"
 		if strings.HasPrefix(task.Action, "backup_") {
@@ -204,6 +217,18 @@ func (m *Manager) executeStorage(ctx context.Context, task nodeproto.TypedStorag
 		finish("uncertain", "CANCELLED_AFTER_CLAIM")
 		return
 	}
+	if task.Action == "migrate_retire_source" {
+		if changed, e := m.retirePublicSource(ctx, task, &instance); e != nil {
+			if !changed {
+				finish("rejected", "PUBLIC_SOURCE_RETIRE_PREFLIGHT_REJECTED")
+				return
+			}
+			finish("uncertain", "PUBLIC_SOURCE_RETIRE_UNCONFIRMED")
+			return
+		}
+		finish("succeeded", "")
+		return
+	}
 	if task.Action == "migrate_import" {
 		manifest, dir, e := m.readImport(task, true)
 		if e == nil {
@@ -241,6 +266,9 @@ func (m *Manager) executeStorage(ctx context.Context, task nodeproto.TypedStorag
 		_ = dir
 		if e == nil {
 			e = m.verifyFlat(ctx, instance.Disk, manifest)
+		}
+		if e == nil && !instance.DirectPublic.IsZero() {
+			e = m.approvedDirect(instance.DirectPublic)
 		}
 		if e == nil && instance.IPv4 != "" {
 			e = m.verifyNetwork(ctx)
@@ -294,6 +322,12 @@ func (m *Manager) executeStorage(ctx context.Context, task nodeproto.TypedStorag
 			// cannot be cleared by a target claim, a failed copy or an HTTP boolean.
 			if _, e = m.Ledger.FinishStorage(task.OperationID, "accepted", "SOURCE_PERMANENTLY_FENCED", result, &instance, artifact, nil); e != nil {
 				return
+			}
+			if !instance.DirectPublic.IsZero() {
+				if e = m.defineDirectNetwork(ctx, instance, task.OperationID); e != nil {
+					finish("uncertain", "DIRECT_SOURCE_LINK_FENCE_UNCONFIRMED")
+					return
+				}
 			}
 		}
 		a, e := m.createArtifact(ctx, task, instance, *artifact)
@@ -372,7 +406,7 @@ func (m *Manager) readArtifact(ctx context.Context, a ArtifactRecord, i Instance
 		return s, "", e
 	}
 	manifest := s.Manifest
-	if hash != a.Artifact.ManifestSHA256 || manifest.ArtifactID != a.Artifact.ArtifactID || manifest.Kind != a.Artifact.Kind || manifest.NodeID != m.Config.NodeID || manifest.InstanceID != i.ID || manifest.OwnerRef != i.OwnerRef || manifest.Hostname != i.Hostname || manifest.Resources != i.Resources || manifest.DiskSHA256 != a.Artifact.DiskSHA256 || manifest.DiskBytes != a.Artifact.DiskBytes || manifest.VirtualBytes != a.Artifact.VirtualBytes {
+	if hash != a.Artifact.ManifestSHA256 || manifest.ArtifactID != a.Artifact.ArtifactID || manifest.Kind != a.Artifact.Kind || manifest.NodeID != m.Config.NodeID || manifest.InstanceID != i.ID || manifest.OwnerRef != i.OwnerRef || manifest.Hostname != i.Hostname || manifest.Resources != i.Resources || manifest.DirectPublic != i.DirectPublic || manifest.DiskSHA256 != a.Artifact.DiskSHA256 || manifest.DiskBytes != a.Artifact.DiskBytes || manifest.VirtualBytes != a.Artifact.VirtualBytes {
 		return s, "", errors.New("artifact metadata binding rejected")
 	}
 	return s, hash, m.verifyFlat(ctx, filepath.Join(dir, "disk.qcow2"), manifest)
@@ -422,7 +456,7 @@ func (m *Manager) createArtifact(ctx context.Context, task nodeproto.TypedStorag
 	if e != nil {
 		return a, e
 	}
-	manifest := nodeproto.StorageManifest{Protocol: nodeproto.StorageProtocol, ArtifactID: task.ArtifactID, Kind: a.Artifact.Kind, NodeID: m.Config.NodeID, InstanceID: i.ID, OwnerRef: i.OwnerRef, Hostname: i.Hostname, Resources: i.Resources, SourceDomain: i.Domain, ImageID: i.Resources.ImageID, ImageSHA256: image.SHA256, DiskSHA256: sha, DiskBytes: size, VirtualBytes: info.VirtualSize, CreatedAt: a.Artifact.CreatedAt}
+	manifest := nodeproto.StorageManifest{DirectPublic: i.DirectPublic, Protocol: task.Protocol, ArtifactID: task.ArtifactID, Kind: a.Artifact.Kind, NodeID: m.Config.NodeID, InstanceID: i.ID, OwnerRef: i.OwnerRef, Hostname: i.Hostname, Resources: i.Resources, SourceDomain: i.Domain, ImageID: i.Resources.ImageID, ImageSHA256: image.SHA256, DiskSHA256: sha, DiskBytes: size, VirtualBytes: info.VirtualSize, CreatedAt: a.Artifact.CreatedAt}
 	if i.SourceFence != nil && task.Action == "migrate_prepare" {
 		manifest.ExportOperationID = task.OperationID
 		manifest.TargetNodeID = task.TargetNodeID

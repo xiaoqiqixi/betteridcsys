@@ -30,20 +30,23 @@ type TargetBinding struct {
 	Activated         bool   `json:"activated"`
 }
 type Instance struct {
-	Network       nodeproto.NetworkBinding `json:"network,omitzero"`
-	SourceFence   *SourceFence             `json:"source_fence,omitempty"`
-	TargetBinding *TargetBinding           `json:"target_binding,omitempty"`
-	ID            string                   `json:"id"`
-	OwnerRef      string                   `json:"owner_ref"`
-	Hostname      string                   `json:"hostname"`
-	Domain        string                   `json:"domain"`
-	Directory     string                   `json:"directory"`
-	Disk          string                   `json:"disk"`
-	Seed          string                   `json:"seed"`
-	IPv4          string                   `json:"ipv4"`
-	MAC           string                   `json:"mac"`
-	State         string                   `json:"state"`
-	Resources     controllerapi.Resources  `json:"resources"`
+	PublicRetired        bool                          `json:"public_retired,omitempty"`
+	DirectPublic         nodeproto.DirectPublicBinding `json:"direct_public,omitzero"`
+	DirectPublicDetached bool                          `json:"direct_public_detached,omitempty"`
+	Network              nodeproto.NetworkBinding      `json:"network,omitzero"`
+	SourceFence          *SourceFence                  `json:"source_fence,omitempty"`
+	TargetBinding        *TargetBinding                `json:"target_binding,omitempty"`
+	ID                   string                        `json:"id"`
+	OwnerRef             string                        `json:"owner_ref"`
+	Hostname             string                        `json:"hostname"`
+	Domain               string                        `json:"domain"`
+	Directory            string                        `json:"directory"`
+	Disk                 string                        `json:"disk"`
+	Seed                 string                        `json:"seed"`
+	IPv4                 string                        `json:"ipv4"`
+	MAC                  string                        `json:"mac"`
+	State                string                        `json:"state"`
+	Resources            controllerapi.Resources       `json:"resources"`
 }
 type Operation struct {
 	Task      nodeproto.NodeTask   `json:"task"`
@@ -56,6 +59,7 @@ type Operation struct {
 const maxJournalBytes = 64 << 20
 
 type journal struct {
+	PublicRetirements map[string]PublicRetirement      `json:"public_retirements,omitempty"`
 	NetworkRecoveries map[string]networkRecoveryRecord `json:"network_recoveries,omitempty"`
 	InboxTransfers    map[string]InboxTransfer         `json:"inbox_transfers,omitempty"`
 	StorageOperations map[string]StorageOperation      `json:"storage_operations,omitempty"`
@@ -112,11 +116,11 @@ func OpenLedger(directory, nodeID string) (*Ledger, error) {
 			l.Close()
 			return nil, e
 		}
-		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2 && l.state.Schema != 3 && l.state.Schema != 4) || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
+		if len(raw) > maxJournalBytes || json.Unmarshal(raw, &l.state) != nil || (l.state.Schema != 1 && l.state.Schema != 2 && l.state.Schema != 3 && l.state.Schema != 4 && l.state.Schema != 5) || l.state.NodeID != nodeID || l.state.Operations == nil || l.state.Instances == nil {
 			l.Close()
 			return nil, errors.New("invalid journal")
 		}
-		if l.state.Schema == 4 {
+		if l.state.Schema >= 4 {
 			canonical, e := json.Marshal(l.state)
 			if e != nil || !bytes.Equal(bytes.TrimSpace(raw), canonical) {
 				l.Close()
@@ -150,7 +154,7 @@ func OpenLedger(directory, nodeID string) (*Ledger, error) {
 		return nil, err
 	}
 	for id, op := range l.state.StorageOperations {
-		if !op.Result.Matches(op.Task, op.Result.RequestSHA256) || op.Task.NodeID != nodeID || id != op.Task.OperationID {
+		if !op.Result.Matches(op.Task, op.Result.RequestSHA256) || op.Task.NodeID != nodeID || id != op.Task.OperationID || !op.Task.DirectPublic.IsZero() && l.state.Schema < 5 {
 			l.Close()
 			return nil, errors.New("invalid storage journal")
 		}
@@ -249,6 +253,9 @@ func (l *Ledger) Claim(task nodeproto.NodeTask, sha string) (nodeproto.NodeResul
 		return op.Result, false, nil
 	}
 	result := nodeproto.NodeResult{Protocol: task.Protocol, OperationID: task.OperationID, RequestSHA256: sha, InstanceID: task.InstanceID, Status: "accepted"}
+	if task.Protocol == nodeproto.DirectPublicProtocol && l.state.Schema < 5 {
+		l.state.Schema = 5
+	}
 	if task.Protocol == nodeproto.NetworkProtocol && l.state.Schema < 3 {
 		l.state.Schema = 3
 	}
@@ -259,7 +266,7 @@ func (l *Ledger) Claim(task nodeproto.NodeTask, sha string) (nodeproto.NodeResul
 func (l *Ledger) Reserve(instance Instance) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, ok := l.state.Instances[instance.ID]; ok {
+	if old, ok := l.state.Instances[instance.ID]; ok && (!old.PublicRetired || old.State != "retired" || instance.TargetBinding == nil || instance.DirectPublic.IsZero() || instance.DirectPublic.Generation <= old.DirectPublic.Generation) {
 		return ErrConflict
 	}
 	if !instance.Network.IsZero() {
@@ -270,8 +277,14 @@ func (l *Ledger) Reserve(instance Instance) error {
 			l.state.Schema = 3
 		}
 	}
+	if !instance.DirectPublic.IsZero() && (!instance.DirectPublic.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: instance.ID, OwnerRef: instance.OwnerRef, Resources: instance.Resources}) || !instance.Network.IsZero() || instance.IPv4 != instance.DirectPublic.IPv4 || instance.MAC != instance.DirectPublic.MAC) {
+		return ErrOwnership
+	}
+	if !instance.DirectPublic.IsZero() && l.state.Schema < 5 {
+		l.state.Schema = 5
+	}
 	for _, existing := range l.state.Instances {
-		if existing.State != "deleted" && (instance.IPv4 != "" && existing.IPv4 == instance.IPv4 || !instance.Network.IsZero() && instance.Network.LeaseID == existing.Network.LeaseID) {
+		if existing.State != "deleted" && !existing.DirectPublicDetached && (instance.IPv4 != "" && existing.IPv4 == instance.IPv4 || instance.MAC != "" && existing.MAC == instance.MAC || !instance.DirectPublic.IsZero() && instance.DirectPublic.LeaseID == existing.DirectPublic.LeaseID || !instance.Network.IsZero() && instance.Network.LeaseID == existing.Network.LeaseID) {
 			return ErrConflict
 		}
 	}
@@ -342,6 +355,9 @@ func (l *Ledger) validateLoaded() error {
 		if id != op.Task.OperationID || !op.Result.Matches(op.Task, op.Result.RequestSHA256) || op.Task.NodeID != l.state.NodeID {
 			return errors.New("invalid journal operation identity")
 		}
+		if !op.Task.DirectPublic.IsZero() && l.state.Schema < 5 {
+			return errors.New("direct public task needs schema 5")
+		}
 		if !op.Task.Network.IsZero() && l.state.Schema < 3 {
 			return errors.New("OVS task needs schema 3")
 		}
@@ -352,6 +368,19 @@ func (l *Ledger) validateLoaded() error {
 	for id, i := range l.state.Instances {
 		if !nodeproto.ValidID(id) || i.ID != id || !nodeproto.ValidID(i.OwnerRef) || i.Domain != "aster-"+id || filepath.Base(i.Directory) != i.Domain || !filepath.IsAbs(i.Directory) || i.Disk != filepath.Join(i.Directory, "system.qcow2") || (i.Seed != "" && i.Seed != filepath.Join(i.Directory, "seed.iso")) {
 			return errors.New("invalid journal instance identity")
+		}
+		if !i.DirectPublic.IsZero() {
+			if l.state.Schema < 5 || !i.Network.IsZero() || !i.DirectPublic.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: i.ID, OwnerRef: i.OwnerRef, Resources: i.Resources}) || i.IPv4 != i.DirectPublic.IPv4 || i.MAC != i.DirectPublic.MAC {
+				return errors.New("invalid immutable direct public binding")
+			}
+			if i.State != "deleted" && !i.DirectPublicDetached {
+				if leases[i.DirectPublic.LeaseID] {
+					return errors.New("duplicate direct public lease")
+				}
+				leases[i.DirectPublic.LeaseID] = true
+			}
+		} else if i.DirectPublicDetached {
+			return errors.New("detached public binding missing")
 		}
 		if !i.Network.IsZero() {
 			if l.state.Schema < 3 || !i.Network.ValidFor(nodeproto.NodeTask{NodeID: l.state.NodeID, InstanceID: i.ID, OwnerRef: i.OwnerRef, Resources: i.Resources}) || i.IPv4 != i.Network.IPv4 || i.MAC != i.Network.MAC {
@@ -368,18 +397,18 @@ func (l *Ledger) validateLoaded() error {
 			return errors.New("VPC binding missing")
 		}
 		switch i.State {
-		case "reserved", "uncertain", "running", "shut off", "deleted", "imported":
+		case "reserved", "uncertain", "running", "shut off", "deleted", "imported", "retired":
 		default:
 			return errors.New("invalid journal instance state")
 		}
-		if i.State != "deleted" && i.IPv4 != "" {
+		if i.State != "deleted" && !i.DirectPublicDetached && i.IPv4 != "" {
 			if ips[i.IPv4] {
 				return errors.New("duplicate journal IP reservation")
 			}
 			ips[i.IPv4] = true
 		}
 	}
-	return nil
+	return l.validatePublicRetirements()
 }
 
 func cloneInstance(i Instance) Instance {

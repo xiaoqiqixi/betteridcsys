@@ -44,6 +44,7 @@ func reserveOverlayCreation(ctx context.Context, tx *sql.Tx, candidate Candidate
 	}
 	snapshot := overlayproto.Snapshot{Protocol: overlayproto.Protocol, ClusterID: cluster.ClusterID, Epoch: previous.Epoch + 1, PreviousSHA256: previous.SnapshotSHA256, Profiles: append([]overlayproto.ProfilePin{}, cluster.Profiles...), VPCs: []overlayproto.VPC{}, Members: []overlayproto.Member{}, Gateways: append([]overlayproto.Gateway{}, previous.Snapshot.Gateways...)}
 	snapshot.NATPolicies = previous.Snapshot.NATPolicies
+	snapshot.FloatingIPs = previous.Snapshot.FloatingIPs
 	if !overlayPoliciesApproved(cluster, snapshot) {
 		return ErrState
 	}

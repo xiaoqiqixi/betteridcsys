@@ -26,6 +26,9 @@ func internetBlockedCIDRs(c OverlayConfig, s overlayproto.Snapshot) []string {
 			blocked = append(blocked, policy.PublicIPv4+"/32")
 		}
 	}
+	for _, f := range s.FloatingIPs {
+		blocked = append(blocked, f.PublicIPv4+"/32")
+	}
 	for _, p := range c.NATProfiles {
 		blocked = append(blocked, p.UplinkGatewayIPv4+"/32")
 		for _, ip := range natProfilePublicIPv4s(p) {
@@ -43,6 +46,11 @@ func internetBlockedCIDRs(c OverlayConfig, s overlayproto.Snapshot) []string {
 }
 
 func internetGatewayEnabled(s overlayproto.Snapshot, g overlayproto.Gateway) bool {
+	for _, f := range s.FloatingIPs {
+		if f.GatewayInstanceID == g.InstanceID && f.NodeID == g.NodeID && f.VPCID == g.VPCID {
+			return true
+		}
+	}
 	for _, p := range s.NATPolicies {
 		if p.GatewayInstanceID == g.InstanceID && p.NodeID == g.NodeID && p.VPCID == g.VPCID && p.InternetEgressEnabled && p.SNATEnabled {
 			return true

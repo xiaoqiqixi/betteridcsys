@@ -13,6 +13,10 @@ func rejectsNullNAT(raw []byte) bool {
 		return true
 	}
 	v, exists := fields["nat_policies"]
+	if exists && bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+		return true
+	}
+	v, exists = fields["floating_ips"]
 	return exists && bytes.Equal(bytes.TrimSpace(v), []byte("null"))
 }
 func (in *OverlayEpochInput) UnmarshalJSON(raw []byte) error {

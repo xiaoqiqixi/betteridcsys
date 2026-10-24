@@ -69,6 +69,8 @@ func (c *claimConn) QueryContext(_ context.Context, q string, args []driver.Name
 		v := c.s.instance
 		raw, _ := json.Marshal(v.Resources)
 		return &claimRows{columns: []string{"id", "owner_ref", "node_id", "hostname", "state", "resources", "created_at", "updated_at"}, values: []driver.Value{v.ID, v.OwnerRef, v.NodeID, v.Hostname, v.State, raw, v.CreatedAt, v.UpdatedAt}}, nil
+	case strings.Contains(q, "FROM controller_public_ip_resources WHERE owner_ref=?"):
+		return &claimRows{columns: strings.Split(publicResourceColumns, ","), empty: true}, nil
 	case strings.Contains(q, "FROM controller_instance_networks WHERE instance_id=?"):
 		return &claimRows{columns: []string{"operation_id", "node_id", "request_sha256", "network_sha256", "binding"}, empty: true}, nil
 	}

@@ -67,3 +67,15 @@ func TestNetworkRecoveryModesRejectAmbiguityBeforeIO(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicFilterPrintIsStandaloneAndNeverFallsBackToServe(t *testing.T) {
+	for _, args := range [][]string{{"--print-public-network-filter="}, {"--print-public-network-filter", "../../../filter"}, {"--print-public-network-filter", "filter"}, {"--print-public-network-filter", "aster-public", "--doctor=false"}, {"--print-public-network-filter", "aster-public", "--config", "/etc/node.json"}, {"--print-public-network-filter", "aster-public", "serve"}} {
+		if _, e := parseArgs(args); e == nil {
+			t.Fatal("unsafe print mode reached config or serve", args)
+		}
+	}
+	o, e := parseArgs([]string{"--print-public-network-filter", "aster-public-ipv4"})
+	if e != nil || !o.printPublicFilterProvided || o.printPublicFilter != "aster-public-ipv4" {
+		t.Fatal(o, e)
+	}
+}

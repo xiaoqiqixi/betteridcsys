@@ -211,7 +211,7 @@ func DecodeOverlayConfig(raw []byte) (OverlayConfig, error) {
 			natKeys := []string{"id", "namespace", "namespace_device", "namespace_inode", "dedicated_ack", "vpc_id", "vpc_cidr", "gateway_instance_id", "inside_interface", "outside_interface", "outside_peer", "public_ipv4", "uplink_gateway_ipv4", "allow_snat", "allowed_source_cidrs", "allowed_ports"}
 			var natFields map[string]json.RawMessage
 			_ = json.Unmarshal(r, &natFields)
-			for _, key := range []string{"previous_profile_sha256", "retired_previous_namespace_ack", "allow_internet_egress", "public_ipv4s"} {
+			for _, key := range []string{"previous_profile_sha256", "retired_previous_namespace_ack", "allow_internet_egress", "public_ipv4s", "allow_floating_ip"} {
 				if _, ok := natFields[key]; ok {
 					natKeys = append(natKeys, key)
 				}

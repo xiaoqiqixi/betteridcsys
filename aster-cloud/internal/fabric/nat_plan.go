@@ -60,7 +60,17 @@ func compileNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfile, isola
 			policy = p
 		}
 	}
+	// Independent floating mappings execute even without a shared NAT policy.
+	floating, err := compileFloatingNAT(c, s, root)
+	if err != nil {
+		return nil, err
+	}
+	objects = append(objects, floating...)
 	if policy == nil {
+		raw, _ := json.Marshal(objects)
+		if len(raw) > 512<<10 {
+			return nil, ErrInvalid
+		}
 		return objects, nil
 	}
 	members := map[string]overlayproto.Member{}

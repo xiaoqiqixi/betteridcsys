@@ -147,3 +147,14 @@ TimeoutStopSec=45
 previous pin显式恢复迁移，再使用[公网IP后台](../docs/PUBLIC_IP_MANAGEMENT.md)。
 不能删库存/lease/operation表降级或仅换旧binary回滚；须兼容程序或已验证的
 完整一致性备份恢复。旧未知节点任务必须保留，真实宿主验收仍后置。
+
+## 虚拟机公网资源升级（schema9）
+
+009 在 schema8 库存之上新增直绑/浮动资源、单调编辑版本与不可变绑定意图；
+原 NAT lease 和历史操作结果不变。节点直绑需要 journal5、精确新 filter/root pin
+和 `require_public_lease:true`，浮动 IP 需要独立 `allow_floating_ip:true`。
+先停写备份主控独立库、节点 journals/fences/磁盘制品，再按
+[VM 公网管理](../docs/VM_PUBLIC_IP_MANAGEMENT.md) 审批配置和升级，不能由 HTTP 扩权。
+冷迁移源退役是单独确认动作，不自动删源盘；源未知/目标部分完成时不回收地址。
+旧 binary 不认识 schema9/journal5；禁止删新表/绑定/墓碑或清空 active 回滚。
+真实公网、KVM 和整机恢复验收仍须专用宿主完成，不动现有财务服务器网络。

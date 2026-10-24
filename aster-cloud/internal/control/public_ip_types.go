@@ -70,13 +70,16 @@ type PublicIPApproval struct {
 	ProfileSHA256       string   `json:"profile_sha256"`
 	PublicIPv4s         []string `json:"public_ipv4s"`
 	AllowInternetEgress bool     `json:"allow_internet_egress"`
+	AllowFloatingIP     bool     `json:"allow_floating_ip"`
 }
 type PublicIPClusterOption struct {
 	ID string `json:"id"`
 }
 type PublicIPOptions struct {
-	Clusters  []PublicIPClusterOption `json:"clusters"`
-	Approvals []PublicIPApproval      `json:"approvals"`
-	VPCs      []OverlayVPC            `json:"vpcs"`
-	Complete  bool                    `json:"complete"`
+	ResourceTargets []PublicIPResourceTarget `json:"resource_targets"`
+	DirectApprovals []DirectPublicProfile    `json:"direct_approvals"`
+	Clusters        []PublicIPClusterOption  `json:"clusters"`
+	Approvals       []PublicIPApproval       `json:"approvals"`
+	VPCs            []OverlayVPC             `json:"vpcs"`
+	Complete        bool                     `json:"complete"`
 }

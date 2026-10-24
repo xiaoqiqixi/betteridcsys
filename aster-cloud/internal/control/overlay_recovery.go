@@ -5,6 +5,7 @@ import (
 	"aster/cloud/internal/overlayproto"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"math"
@@ -23,9 +24,10 @@ type OverlayRecoveryInput struct {
 // Replacement is a full new desired membership/routes selection, not a patch.
 // The expected original digest, cluster, root pins and observed heads stay fixed.
 type OverlayReplacementInput struct {
-	Members     []OverlayMemberInput      `json:"members"`
-	Gateways    []overlayproto.Gateway    `json:"gateways"`
-	NATPolicies *[]overlayproto.NATPolicy `json:"nat_policies,omitempty"`
+	Members     []OverlayMemberInput       `json:"members"`
+	Gateways    []overlayproto.Gateway     `json:"gateways"`
+	NATPolicies *[]overlayproto.NATPolicy  `json:"nat_policies,omitempty"`
+	FloatingIPs *[]overlayproto.FloatingIP `json:"floating_ips,omitempty"`
 }
 
 func (in *OverlayRecoveryInput) UnmarshalJSON(raw []byte) error {
@@ -49,11 +51,14 @@ func canonicalOverlayRecoveryInput(in OverlayRecoveryInput) (OverlayRecoveryInpu
 		return in, ErrInput
 	}
 	if in.Replacement != nil {
-		selection, _, err := canonicalOverlayInput(OverlayEpochInput{ClusterID: "recovery", Members: in.Replacement.Members, Gateways: in.Replacement.Gateways, NATPolicies: in.Replacement.NATPolicies})
+		if in.Replacement.FloatingIPs != nil {
+			return in, ErrInput
+		}
+		selection, _, err := canonicalOverlayInput(OverlayEpochInput{ClusterID: "recovery", Members: in.Replacement.Members, Gateways: in.Replacement.Gateways, NATPolicies: in.Replacement.NATPolicies, FloatingIPs: in.Replacement.FloatingIPs})
 		if err != nil {
 			return in, err
 		}
-		in.Replacement = &OverlayReplacementInput{Members: selection.Members, Gateways: selection.Gateways, NATPolicies: selection.NATPolicies}
+		in.Replacement = &OverlayReplacementInput{Members: selection.Members, Gateways: selection.Gateways, NATPolicies: selection.NATPolicies, FloatingIPs: selection.FloatingIPs}
 	}
 	return in, nil
 }
@@ -114,6 +119,15 @@ func (w OverlayWorker) Recover(ctx context.Context, actor, original, newID strin
 	if old.SnapshotSHA256 != in.ExpectedSnapshotSHA256 || old.State == "superseded" || old.Epoch == math.MaxInt64 || !w.Config.validOverlayClusters() || !overlayRecoveryPinsApproved(w.Config, old) {
 		return old, false, ErrState
 	}
+	heads, e := w.readOverlayRecoveryHeads(ctx, old)
+	if e != nil {
+		return old, false, e
+	}
+	return w.Store.planOverlayRecovery(ctx, w.Config, actor, original, newID, digest, in, heads, w.now())
+}
+
+// All recovery entry points use the same bounded, pinned, read-only node probes.
+func (w OverlayWorker) readOverlayRecoveryHeads(ctx context.Context, old OverlayEpoch) ([]overlayproto.Head, error) {
 	heads := make([]overlayproto.Head, len(old.Snapshot.Profiles))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -155,17 +169,33 @@ func (w OverlayWorker) Recover(ctx context.Context, actor, original, newID strin
 	}
 	wg.Wait()
 	if headErr != nil {
-		return old, false, headErr
+		return nil, headErr
 	}
 	sort.Slice(heads, func(i, j int) bool { return heads[i].NodeID < heads[j].NodeID })
-	return w.Store.planOverlayRecovery(ctx, w.Config, actor, original, newID, digest, in, heads, w.now())
+	return heads, nil
 }
+
 func (s *SQLStore) planOverlayRecovery(ctx context.Context, c Config, actor, original, newID, digest string, in OverlayRecoveryInput, heads []overlayproto.Head, now time.Time) (OverlayEpoch, bool, error) {
+	var e error
+	in, e = canonicalOverlayRecoveryInput(in)
+	if e != nil {
+		return OverlayEpoch{}, false, e
+	}
 	tx, e := s.locked(ctx)
 	if e != nil {
 		return OverlayEpoch{}, false, e
 	}
 	defer tx.Rollback()
+	epoch, replay, e := planOverlayRecoveryTx(ctx, tx, c, actor, original, newID, digest, in, heads, now)
+	if e != nil {
+		return epoch, replay, e
+	}
+	return epoch, replay, tx.Commit()
+}
+
+// The caller owns controller_lock and the final commit. Private resource
+// recovery uses this helper to freeze its edit version and epoch atomically.
+func planOverlayRecoveryTx(ctx context.Context, tx *sql.Tx, c Config, actor, original, newID, digest string, in OverlayRecoveryInput, heads []overlayproto.Head, now time.Time) (OverlayEpoch, bool, error) {
 	existing, e := scanOverlayEpoch(tx.QueryRowContext(ctx, "SELECT "+overlayEpochColumns+" FROM controller_overlay_epochs WHERE id=?", newID))
 	if e == nil {
 		if existing.ActorID != actor || existing.RequestSHA256 != digest || existing.Recovery == nil {
@@ -186,12 +216,27 @@ func (s *SQLStore) planOverlayRecovery(ctx context.Context, c Config, actor, ori
 	}
 	if in.Replacement == nil {
 		cluster, _ := c.OverlayCluster(old.ClusterID)
-		if !overlayPoliciesApproved(cluster, old.Snapshot) {
+		retained := old.Snapshot
+		retained.FloatingIPs = recoveryFloatingPins(cluster, retained.FloatingIPs)
+		if !overlayPoliciesApproved(cluster, retained) {
 			return old, false, ErrState
 		}
 		if e = validateOverlayBindings(ctx, tx, old); e != nil {
 			return old, false, e
 		}
+	}
+	if len(heads) != len(old.Snapshot.Profiles) {
+		return old, false, ErrState
+	}
+	expectedHeads := map[string]bool{}
+	for _, p := range old.Snapshot.Profiles {
+		expectedHeads[p.NodeID] = true
+	}
+	for _, h := range heads {
+		if !expectedHeads[h.NodeID] {
+			return old, false, ErrState
+		}
+		delete(expectedHeads, h.NodeID)
 	}
 	// Freeze observed heads only if their receipts belong to historical snapshots
 	// in this cluster. A fabricated/ahead/foreign hash cannot authorize adoption.
@@ -211,9 +256,10 @@ func (s *SQLStore) planOverlayRecovery(ctx context.Context, c Config, actor, ori
 	snapshot.PreviousSHA256 = old.SnapshotSHA256
 	cluster, _ := c.OverlayCluster(old.ClusterID)
 	snapshot.Profiles = append([]overlayproto.ProfilePin{}, cluster.Profiles...)
+	snapshot.FloatingIPs = recoveryFloatingPins(cluster, snapshot.FloatingIPs)
 	var sha string
 	if in.Replacement != nil {
-		selection := OverlayEpochInput{ClusterID: old.ClusterID, ExpectedEpoch: old.Epoch, Members: in.Replacement.Members, Gateways: in.Replacement.Gateways, NATPolicies: in.Replacement.NATPolicies}
+		selection := OverlayEpochInput{ClusterID: old.ClusterID, ExpectedEpoch: old.Epoch, Members: in.Replacement.Members, Gateways: in.Replacement.Gateways, NATPolicies: in.Replacement.NATPolicies, FloatingIPs: in.Replacement.FloatingIPs}
 		snapshot, sha, e = buildOverlaySnapshot(ctx, tx, c, cluster, old, selection, now, true)
 	} else {
 		snapshot, sha, e = overlayproto.CanonicalSnapshot(snapshot)
@@ -257,5 +303,5 @@ func (s *SQLStore) planOverlayRecovery(ctx context.Context, c Config, actor, ori
 			return old, false, e
 		}
 	}
-	return epoch, false, tx.Commit()
+	return epoch, false, nil
 }

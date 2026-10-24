@@ -94,6 +94,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 				return e
 			}
 		}
+		if migration.Version == 9 {
+			if e = networking.CheckPublicIPResourceMigration(ctx, conn, true); e != nil {
+				return e
+			}
+		}
 		if migration.Version == 4 {
 			existingIndexes, e = auditIndexMigrationPlan(ctx, conn, migration.SQL)
 			if e != nil {
@@ -132,6 +137,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		}
 		if migration.Version == 8 {
 			if e = networking.CheckPublicIPMigration(ctx, conn, false); e != nil {
+				return e
+			}
+		}
+		if migration.Version == 9 {
+			if e = networking.CheckPublicIPResourceMigration(ctx, conn, false); e != nil {
 				return e
 			}
 		}
@@ -176,7 +186,10 @@ func (s *SQLStore) Check(ctx context.Context) error {
 	if e := networking.CheckOverlayMigration(ctx, s.DB, false); e != nil {
 		return e
 	}
-	return networking.CheckPublicIPMigration(ctx, s.DB, false)
+	if e := networking.CheckPublicIPMigration(ctx, s.DB, false); e != nil {
+		return e
+	}
+	return networking.CheckPublicIPResourceMigration(ctx, s.DB, false)
 }
 func (s *SQLStore) locked(ctx context.Context) (*sql.Tx, error) {
 	// ponytail: one database gate serializes mutations; replace with ordered node/
@@ -249,6 +262,9 @@ func (s *SQLStore) Admit(ctx context.Context, r controllerapi.Request, candidate
 	supported := false
 	fresh := false
 	for _, candidate := range candidates {
+		if candidate.DirectPublicRequired {
+			continue
+		}
 		n := candidate.Node
 		var profile string
 		var maintenance bool

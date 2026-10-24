@@ -67,6 +67,7 @@ type Snapshot struct {
 	Members        []Member     `json:"members"`
 	Gateways       []Gateway    `json:"gateways"`
 	NATPolicies    []NATPolicy  `json:"nat_policies,omitempty"`
+	FloatingIPs    []FloatingIP `json:"floating_ips,omitempty"`
 }
 
 // Head is an observed node journal position, not proof of connectivity.
@@ -212,6 +213,9 @@ func CanonicalSnapshot(s Snapshot) (Snapshot, string, error) {
 			}
 		}
 		s.Gateways[i] = g
+	}
+	if err := canonicalFloatingIPs(&s); err != nil {
+		return Snapshot{}, "", err
 	}
 	if err := canonicalNAT(&s); err != nil {
 		return Snapshot{}, "", err

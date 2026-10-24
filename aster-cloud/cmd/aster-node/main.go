@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -31,17 +32,19 @@ func main() {
 }
 
 type options struct {
-	networkStatus          string
-	recoverNetwork         string
-	networkStatusProvided  bool
-	recoverNetworkProvided bool
-	config                 string
-	doctor                 bool
-	reconcile              string
-	reconcileProvided      bool
-	approveImport          string
-	reviewedFence          string
-	approveProvided        bool
+	printPublicFilter         string
+	printPublicFilterProvided bool
+	networkStatus             string
+	recoverNetwork            string
+	networkStatusProvided     bool
+	recoverNetworkProvided    bool
+	config                    string
+	doctor                    bool
+	reconcile                 string
+	reconcileProvided         bool
+	approveImport             string
+	reviewedFence             string
+	approveProvided           bool
 }
 
 // parseArgs is side-effect free. An explicitly empty/invalid reconcile flag may
@@ -50,6 +53,7 @@ func parseArgs(args []string) (options, error) {
 	var o options
 	flags := flag.NewFlagSet("aster-node", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	flags.StringVar(&o.printPublicFilter, "print-public-network-filter", "", "print a self-contained direct-public nwfilter without reading config or accessing libvirt")
 	flags.StringVar(&o.networkStatus, "network-recovery-status", "", "root-only read-only fabric recovery expectation for a profile")
 	flags.StringVar(&o.recoverNetwork, "recover-network", "", "root-owned canonical recovery approval JSON; service must be stopped")
 	flags.StringVar(&o.config, "config", "/etc/aster-node/node.json", "root-owned 0600 configuration")
@@ -62,7 +66,12 @@ func parseArgs(args []string) (options, error) {
 	}
 	doctorProvided := false
 	reviewedProvided := false
+	visited := 0
 	flags.Visit(func(f *flag.Flag) {
+		visited++
+		if f.Name == "print-public-network-filter" {
+			o.printPublicFilterProvided = true
+		}
 		if f.Name == "network-recovery-status" {
 			o.networkStatusProvided = true
 		}
@@ -82,6 +91,12 @@ func parseArgs(args []string) (options, error) {
 			doctorProvided = true
 		}
 	})
+	if o.printPublicFilterProvided {
+		if visited != 1 || flags.NArg() != 0 || !strings.HasPrefix(o.printPublicFilter, "aster-") || !nodeproto.ValidNodeID(o.printPublicFilter) {
+			return o, fmt.Errorf("standalone public filter requires safe aster-prefixed filter name")
+		}
+		return o, nil
+	}
 	if o.networkStatusProvided || o.recoverNetworkProvided {
 		if o.networkStatusProvided && o.recoverNetworkProvided || doctorProvided || o.reconcileProvided || o.approveProvided || reviewedProvided {
 			return o, fmt.Errorf("network recovery modes are exclusive")
@@ -122,6 +137,10 @@ func parseArgs(args []string) (options, error) {
 func run() error {
 	o, err := parseArgs(os.Args[1:])
 	if err != nil {
+		return err
+	}
+	if o.printPublicFilterProvided {
+		_, err = os.Stdout.Write(hypervisor.DirectApprovedFilterXML(o.printPublicFilter))
 		return err
 	}
 	cfg, err := hypervisor.LoadConfig(o.config)

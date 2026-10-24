@@ -64,6 +64,7 @@ type Manager struct {
 	loadOverlayConfig   func(string) (fabric.OverlayConfig, error)
 	overlayFactory      func(fabric.Config) (overlayGate, error)
 
+	hostIPv4s       func() ([]string, error) // production nil: complete native interface address inventory
 	Config          Config
 	Ledger          *Ledger
 	Runner          Runner
@@ -117,6 +118,9 @@ func (m *Manager) Accept(task nodeproto.NodeTask, raw []byte) (nodeproto.NodeRes
 	if m.active {
 		return reject("NODE_BUSY")
 	}
+	if m.Config.Network.RequirePublicLease && task.DirectPublic.IsZero() && task.Resources.NetworkType == "normal" && task.Resources.IPv4Count == 1 && (task.Action == "create" || task.Action == "start" || task.Action == "reboot") {
+		return reject("DIRECT_PUBLIC_LEASE_REQUIRED")
+	}
 	if !task.Network.IsZero() && m.Ledger.HasPendingNetworkProfile(task.Network.ProfileID, task.OperationID) {
 		return reject("UNRESOLVED_NETWORK_PROFILE_OPERATION")
 	}
@@ -138,8 +142,21 @@ func (m *Manager) Accept(task nodeproto.NodeTask, raw []byte) (nodeproto.NodeRes
 		if !ok {
 			return reject("INSTANCE_NOT_FOUND")
 		}
-		if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.Network != task.Network || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
+		if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.Network != task.Network || !directTaskMatches(instance, task) || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.PublicRetired || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
 			return reject("OWNERSHIP_OR_STATE_REJECTED")
+		}
+		if !task.DirectPublic.IsZero() && (task.Action == "start" || task.Action == "reboot" || task.Action == "public_adopt") && m.approvedDirect(task.DirectPublic) != nil {
+			return reject("DIRECT_PUBLIC_APPROVAL_REJECTED")
+		}
+		if task.Action == "public_adopt" {
+			for _, other := range m.Ledger.Instances() {
+				if other.ID != instance.ID && other.State != "deleted" && !other.DirectPublicDetached && (other.IPv4 == instance.IPv4 || !other.DirectPublic.IsZero() && other.DirectPublic.LeaseID == task.DirectPublic.LeaseID) {
+					return reject("DIRECT_PUBLIC_ADDRESS_CONFLICT")
+				}
+			}
+		}
+		if instance.DirectPublicDetached && task.Action != "public_adopt" && task.Action != "public_detach" && task.Action != "delete" {
+			return reject("DIRECT_PUBLIC_DETACHED")
 		}
 		if task.Action == "delete" && (!m.Config.AllowDelete || task.ConfirmInstanceID != instance.ID) {
 			return reject("DELETE_DISABLED_OR_UNCONFIRMED")
@@ -268,8 +285,28 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 		return finish("uncertain", "RESERVATION_MISSING", nil)
 	}
 	instance := *prepared
-	if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.Network != task.Network || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
+	if instance.OwnerRef != task.OwnerRef || instance.Hostname != task.Hostname || instance.Resources != task.Resources || instance.Network != task.Network || !directTaskMatches(instance, task) || instance.State == "reserved" || instance.State == "uncertain" || instance.State == "deleted" || instance.PublicRetired || instance.SourceFence != nil || (instance.TargetBinding != nil && !instance.TargetBinding.Activated) {
 		return finish("rejected", "OWNERSHIP_OR_STATE_REJECTED", nil)
+	}
+	if !task.DirectPublic.IsZero() && (task.Action == "start" || task.Action == "reboot" || task.Action == "public_adopt") && m.approvedDirect(task.DirectPublic) != nil {
+		return finish("rejected", "DIRECT_PUBLIC_APPROVAL_REJECTED", nil)
+	}
+	if instance.DirectPublicDetached && task.Action != "public_adopt" && task.Action != "public_detach" && task.Action != "delete" {
+		return finish("rejected", "DIRECT_PUBLIC_DETACHED", nil)
+	}
+	if task.Action == "public_adopt" || task.Action == "public_detach" {
+		if e := m.assertOwned(ctx, instance); e != nil {
+			return finish("rejected", "LIVE_OWNERSHIP_UNCONFIRMED", &instance)
+		}
+		if state, e := m.state(ctx, instance.Domain); e != nil || state != "shut off" {
+			return finish("rejected", "DIRECT_PUBLIC_REQUIRES_SHUT_OFF", &instance)
+		}
+		next, err := m.mutateDirect(ctx, instance, task)
+		if err != nil {
+			next.State = "uncertain"
+			return finish("uncertain", "DIRECT_PUBLIC_CHANGE_UNCONFIRMED", &next)
+		}
+		return finish("succeeded", "", &next)
 	}
 	if task.Action == "delete" && (!m.Config.AllowDelete || task.ConfirmInstanceID != instance.ID) {
 		return finish("rejected", "DELETE_DISABLED_OR_UNCONFIRMED", nil)
@@ -310,6 +347,11 @@ func (m *Manager) execute(ctx context.Context, task nodeproto.NodeTask, result n
 			return finish("uncertain", "OVS_LIFECYCLE_UNCONFIRMED", &instance)
 		}
 		return finish("succeeded", "", &instance)
+	}
+	if !instance.DirectPublic.IsZero() && (task.Action == "start" || task.Action == "reboot") {
+		if e := m.verifyNetwork(ctx); e != nil {
+			return finish("rejected", "DIRECT_PUBLIC_LIVE_NETWORK_UNCONFIRMED", &instance)
+		}
 	}
 	var command string
 	switch task.Action {
@@ -435,9 +477,15 @@ func safeCode(err error) string {
 	}
 }
 func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
+	return m.prepareWithRetired(t, false)
+}
+func (m *Manager) prepareWithRetired(t nodeproto.NodeTask, allowRetired bool) (Instance, error) {
 	r := t.Resources
 	c := m.Config
-	if _, ok := m.Ledger.Instance(t.InstanceID); ok {
+	if c.Network.RequirePublicLease && t.DirectPublic.IsZero() && r.NetworkType == "normal" && r.IPv4Count == 1 {
+		return Instance{}, ErrUnsupported
+	}
+	if old, ok := m.Ledger.Instance(t.InstanceID); ok && (!allowRetired || !old.PublicRetired || old.State != "retired" || t.DirectPublic.IsZero() || t.DirectPublic.Generation <= old.DirectPublic.Generation) {
 		return Instance{}, ErrConflict
 	}
 	if r.ComputeNodeID != "" && r.ComputeNodeID != c.NodeID || r.DatacenterID != "" && r.DatacenterID != c.DatacenterID || r.NodeGroupID != "" && r.NodeGroupID != c.NodeGroupID {
@@ -451,6 +499,11 @@ func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
 	}
 	if r.SystemStorageID != c.StorageID || r.DataDiskGiB != 0 || r.DataStorageID != "" || r.TransferGiB != 0 || r.IPv6Count != 0 || r.TrafficDirection != "all" {
 		return Instance{}, ErrUnsupported
+	}
+	if !t.DirectPublic.IsZero() {
+		if !t.DirectPublic.ValidFor(t) || m.approvedDirect(t.DirectPublic) != nil {
+			return Instance{}, ErrUnsupported
+		}
 	}
 	if !t.Network.IsZero() {
 		if t.Protocol != nodeproto.NetworkProtocol || !t.Network.ValidFor(t) {
@@ -467,13 +520,15 @@ func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
 	cpu, memory, disk := 0, 0, 0
 	used := map[string]bool{}
 	for _, i := range m.Ledger.Instances() {
-		if i.State == "deleted" {
+		if i.State == "deleted" || i.PublicRetired {
 			continue
 		}
 		cpu += i.Resources.CPUCores
 		memory += i.Resources.MemoryMiB
 		disk += i.Resources.SystemDiskGiB
-		used[i.IPv4] = true
+		if !i.DirectPublicDetached {
+			used[i.IPv4] = true
+		}
 		if !t.Network.IsZero() && !i.Network.IsZero() && (i.Network.LeaseID == t.Network.LeaseID || fabric.TAPName(i.ID) == fabric.TAPName(t.InstanceID)) {
 			return Instance{}, ErrConflict
 		}
@@ -498,6 +553,14 @@ func (m *Manager) prepare(t nodeproto.NodeTask) (Instance, error) {
 		instance.Network = t.Network
 		instance.IPv4 = t.Network.IPv4
 		instance.MAC = t.Network.MAC
+		instance.Seed = filepath.Join(instance.Directory, "seed.iso")
+	} else if !t.DirectPublic.IsZero() {
+		if used[t.DirectPublic.IPv4] {
+			return Instance{}, ErrConflict
+		}
+		instance.DirectPublic = t.DirectPublic
+		instance.IPv4 = t.DirectPublic.IPv4
+		instance.MAC = t.DirectPublic.MAC
 		instance.Seed = filepath.Join(instance.Directory, "seed.iso")
 	} else if r.IPv4Count == 1 {
 		for _, ip := range c.Network.Addresses {
@@ -664,7 +727,12 @@ func (m *Manager) verifyNetwork(ctx context.Context) error {
 	if err != nil || nodeproto.Digest(raw) != n.FilterSHA256 {
 		return errors.New("preapproved nwfilter missing or changed")
 	}
-	if err = validateFilter(raw, n.Filter); err != nil {
+	if n.RequirePublicLease {
+		err = validateDirectFilter(raw, n.Filter)
+	} else {
+		err = validateFilter(raw, n.Filter)
+	}
+	if err != nil {
 		return err
 	}
 	if m.bridgeReady != nil {
@@ -715,11 +783,12 @@ func (m *Manager) state(ctx context.Context, domain string) (string, error) {
 }
 
 type ownershipXML struct {
-	NetworkSHA256 string   `xml:"network_sha256,attr,omitempty"`
-	XMLName       xml.Name `xml:"urn:aster:node:1 instance"`
-	InstanceID    string   `xml:"instance_id,attr"`
-	OwnerRef      string   `xml:"owner_ref,attr"`
-	NodeID        string   `xml:"node_id,attr"`
+	DirectPublicSHA256 string   `xml:"direct_public_sha256,attr,omitempty"`
+	NetworkSHA256      string   `xml:"network_sha256,attr,omitempty"`
+	XMLName            xml.Name `xml:"urn:aster:node:1 instance"`
+	InstanceID         string   `xml:"instance_id,attr"`
+	OwnerRef           string   `xml:"owner_ref,attr"`
+	NodeID             string   `xml:"node_id,attr"`
 }
 type diskXML struct {
 	Device string `xml:"device,attr"`
@@ -820,6 +889,9 @@ func (m *Manager) domainXML(i Instance) ([]byte, error) {
 	d.Memory.Value = i.Resources.MemoryMiB
 	d.VCPU = i.Resources.CPUCores
 	d.Metadata.Instance = ownershipXML{InstanceID: i.ID, OwnerRef: i.OwnerRef, NodeID: m.Config.NodeID}
+	if !i.DirectPublic.IsZero() {
+		d.Metadata.Instance.DirectPublicSHA256 = i.DirectPublic.Digest()
+	}
 	d.OS.Type.Arch = "x86_64"
 	d.OS.Type.Value = "hvm"
 	d.OnPoweroff = "destroy"
@@ -854,8 +926,24 @@ func (m *Manager) domainXML(i Instance) ([]byte, error) {
 		nic.Source.Bridge = m.Config.Network.Bridge
 		nic.Model.Type = "virtio"
 		if i.Network.IsZero() {
+			if !i.DirectPublic.IsZero() {
+				nic.Link = &nicLinkXML{State: "up"}
+				if i.DirectPublicDetached || i.SourceFence != nil {
+					nic.Link.State = "down"
+				}
+			}
 			nic.Port = &nicPortXML{Isolated: "yes"}
 			nic.Filter = &nicFilterXML{Filter: m.Config.Network.Filter, Parameters: []parameterXML{{"IP", i.IPv4}, {"MAC", i.MAC}, {"CTRL_IP_LEARNING", "none"}}}
+			if !i.DirectPublic.IsZero() {
+				ips, e := m.directHostIPv4s()
+				if e != nil {
+					return nil, e
+				}
+				nic.Filter.Parameters = append(nic.Filter.Parameters, parameterXML{"GATEWAY", i.DirectPublic.Gateway})
+				for _, ip := range ips {
+					nic.Filter.Parameters = append(nic.Filter.Parameters, parameterXML{"HOST_IPS", ip})
+				}
+			}
 		} else {
 			c, _, e := m.approvedOVS(i.Network)
 			if e != nil {
@@ -957,14 +1045,45 @@ func (m *Manager) assertOwned(ctx context.Context, i Instance) error {
 		if nic.Type != "bridge" || nic.MAC.Address != i.MAC || nic.Source.Bridge != m.Config.Network.Bridge || nic.Port == nil || nic.Filter == nil || nic.VirtualPort != nil || nic.Port.Isolated != "yes" || nic.Model.Type != "virtio" || nic.Filter.Filter != m.Config.Network.Filter {
 			return ErrOwnership
 		}
+		if !i.DirectPublic.IsZero() {
+			if domain.Metadata.Instance.DirectPublicSHA256 != i.DirectPublic.Digest() || nic.Link == nil || nic.Link.State != "up" && !i.DirectPublicDetached && i.SourceFence == nil || (i.DirectPublicDetached || i.SourceFence != nil) && nic.Link.State != "down" {
+				return ErrOwnership
+			}
+		} else if domain.Metadata.Instance.DirectPublicSHA256 != "" {
+			return ErrOwnership
+		}
 		params := map[string]string{}
+		hostIPs := map[string]bool{}
 		for _, p := range nic.Filter.Parameters {
+			if !i.DirectPublic.IsZero() && p.Name == "HOST_IPS" {
+				if hostIPs[p.Value] {
+					return ErrOwnership
+				}
+				hostIPs[p.Value] = true
+				continue
+			}
 			if _, ok := params[p.Name]; ok {
 				return ErrOwnership
 			}
 			params[p.Name] = p.Value
 		}
-		if len(params) != 3 || params["IP"] != i.IPv4 || params["MAC"] != i.MAC || params["CTRL_IP_LEARNING"] != "none" {
+		expectedParams := 3
+		if !i.DirectPublic.IsZero() {
+			expectedParams = 4
+			if params["GATEWAY"] != i.DirectPublic.Gateway {
+				return ErrOwnership
+			}
+			ips, e := m.directHostIPv4s()
+			if e != nil || len(ips) != len(hostIPs) {
+				return ErrOwnership
+			}
+			for _, ip := range ips {
+				if !hostIPs[ip] {
+					return ErrOwnership
+				}
+			}
+		}
+		if len(params) != expectedParams || params["IP"] != i.IPv4 || params["MAC"] != i.MAC || params["CTRL_IP_LEARNING"] != "none" {
 			return ErrOwnership
 		}
 	}

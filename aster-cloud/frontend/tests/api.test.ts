@@ -174,6 +174,41 @@ describe("same-origin production transport", () => {
       expect(fetcher).toHaveBeenCalledTimes(1);
     },
   );
+  it.each([200, 202])(
+    "accepts only declared first/replay statuses for asynchronous resources (%i)",
+    async (status) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({}, status));
+      const api = createApiClient(fetcher);
+      api.setCSRF("csrf");
+      await expect(
+        api.write(
+          "POST",
+          "/public-ips/resources/" + operation.id + "/binding",
+          {},
+          operation.id,
+          emptyResponse,
+          [202, 200],
+        ),
+      ).resolves.toEqual({});
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("rejects an undeclared resource status without retry", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({}, 201));
+    const api = createApiClient(fetcher);
+    api.setCSRF("csrf");
+    await expect(
+      api.write(
+        "POST",
+        "/public-ips/resources/" + operation.id + "/binding",
+        {},
+        operation.id,
+        emptyResponse,
+        [202, 200],
+      ),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it.each(["network", "html", "shape", "500"])(
     "write %s is unknown and never automatically retried",
     async (mode) => {

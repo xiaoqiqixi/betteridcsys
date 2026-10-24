@@ -19,6 +19,7 @@ type OverlayNATProfile struct {
 	PublicIPv4          string                `json:"public_ipv4"`
 	PublicIPv4s         []string              `json:"public_ipv4s,omitempty"`
 	AllowSNAT           bool                  `json:"allow_snat"`
+	AllowFloatingIP     bool                  `json:"allow_floating_ip,omitempty"`
 	AllowInternetEgress bool                  `json:"allow_internet_egress,omitempty"`
 	AllowedSourceCIDRs  []string              `json:"allowed_source_cidrs"`
 	AllowedPorts        []OverlayNATPortRange `json:"allowed_ports"`
@@ -75,6 +76,9 @@ func validOverlayPolicyApproval(cluster OverlayCluster, nodes map[string]bool) b
 		if !validPublicIPApprovalAddresses(p) {
 			return false
 		}
+		if p.AllowFloatingIP && !p.AllowInternetEgress {
+			return false
+		}
 		if p.AllowInternetEgress && (!p.AllowSNAT || !overlayproto.PublicInternetIPv4(p.PublicIPv4)) {
 			return false
 		}
@@ -102,6 +106,18 @@ func validOverlayPolicyApproval(cluster OverlayCluster, nodes map[string]bool) b
 }
 
 func overlayPoliciesApproved(cluster OverlayCluster, snapshot overlayproto.Snapshot) bool {
+	for _, f := range snapshot.FloatingIPs {
+		approved := false
+		for _, p := range cluster.NATProfiles {
+			if p.NodeID == f.NodeID && p.ProfileID == f.ProfileID && p.ProfileSHA256 == f.ProfileSHA256 && p.VPCID == f.VPCID && p.GatewayInstanceID == f.GatewayInstanceID && p.AllowFloatingIP && p.AllowInternetEgress && approvedPublicIPAddress(p, f.PublicIPv4) {
+				approved = true
+			}
+		}
+		if !approved {
+			return false
+		}
+	}
+
 	for _, selected := range snapshot.Gateways {
 		approved := false
 		for _, root := range cluster.Gateways {

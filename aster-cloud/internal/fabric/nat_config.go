@@ -31,6 +31,7 @@ type NATProfile struct {
 	UplinkGatewayIPv4           string         `json:"uplink_gateway_ipv4"`
 	AllowSNAT                   bool           `json:"allow_snat"`
 	AllowInternetEgress         bool           `json:"allow_internet_egress,omitempty"`
+	AllowFloatingIP             bool           `json:"allow_floating_ip,omitempty"`
 	AllowedSourceCIDRs          []string       `json:"allowed_source_cidrs"`
 	AllowedPorts                []NATPortRange `json:"allowed_ports"`
 }
@@ -41,6 +42,9 @@ type NATPortRange struct {
 }
 
 func canonicalNATProfile(p NATProfile) (NATProfile, error) {
+	if p.AllowFloatingIP && !p.AllowInternetEgress {
+		return p, ErrInvalid
+	}
 	if p.AllowInternetEgress && (!p.AllowSNAT || !overlayproto.PublicInternetIPv4(p.PublicIPv4)) {
 		return p, ErrInvalid
 	}
@@ -279,6 +283,17 @@ func validateNATApproval(c OverlayConfig, s overlayproto.Snapshot) error {
 				return ErrConflict
 			}
 		}
+	}
+	for _, f := range s.FloatingIPs {
+		if f.NodeID != c.Base.NodeID {
+			continue
+		}
+		root, ok := natGatewayProfile(c, f.GatewayInstanceID)
+		sha, err := NATProfileSHA256(root)
+		if !ok || err != nil || !root.AllowFloatingIP || !root.AllowInternetEgress || root.ID != f.ProfileID || root.VPCID != f.VPCID || sha != f.ProfileSHA256 || !natPublicIPv4Approved(root, f.PublicIPv4) || usedPublic[f.PublicIPv4] {
+			return ErrConflict
+		}
+		usedPublic[f.PublicIPv4] = true
 	}
 	for _, p := range c.NATProfiles {
 		for _, v := range s.VPCs {

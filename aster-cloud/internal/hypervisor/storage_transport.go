@@ -62,6 +62,9 @@ func (l *Ledger) SaveInbox(t InboxTransfer) error {
 	if old, ok := l.state.InboxTransfers[t.ArtifactID]; ok && (old.TransferID != t.TransferID || old.ManifestSHA256 != t.ManifestSHA256) {
 		return ErrConflict
 	}
+	if !t.Manifest.DirectPublic.IsZero() && l.state.Schema < 5 {
+		l.state.Schema = 5
+	}
 	if l.state.Schema < 2 {
 		l.state.Schema = 2
 	}
@@ -257,6 +260,10 @@ func (m *Manager) validateIncomingManifest(raw []byte, id string) (nodeproto.Sto
 		return a, "", errors.New("source signature not approved")
 	}
 	task := nodeproto.TypedStorageTask{Protocol: nodeproto.StorageProtocol, OperationID: "11111111111111111111111111111111", NodeID: m.Config.NodeID, Action: "migrate_import", InstanceID: a.InstanceID, OwnerRef: a.OwnerRef, ArtifactID: id, TargetNodeID: a.TargetNodeID, SourceNodeID: a.NodeID, SourceOperationID: a.ExportOperationID, ManifestSHA256: hash, FenceToken: a.FenceToken}
+	bindDirectImportTask(&task, a)
+	if !task.DirectPublic.IsZero() && m.approvedDirect(task.DirectPublic) != nil {
+		return a, "", errors.New("target public network not approved")
+	}
 	if !task.Valid() || a.ArtifactID != id || a.Kind != "migration" {
 		return a, "", errors.New("target-bound migration manifest required")
 	}
@@ -475,6 +482,7 @@ func (m *Manager) approveControllerInbox(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	storage := nodeproto.TypedStorageTask{Protocol: nodeproto.StorageProtocol, OperationID: task.TransferID, NodeID: task.NodeID, Action: "migrate_import", InstanceID: task.InstanceID, OwnerRef: task.OwnerRef, ArtifactID: id, TargetNodeID: task.TargetNodeID, SourceNodeID: task.SourceNodeID, SourceOperationID: task.SourceOperationID, ManifestSHA256: task.ManifestSHA256, FenceToken: task.FenceToken}
+	bindDirectImportTask(&storage, record.Manifest)
 	if _, _, e = m.readImport(storage, false); e != nil {
 		respond(w, 409, errorBody("SOURCE_FENCE_BINDING_REJECTED"))
 		return
@@ -551,6 +559,7 @@ func (m *Manager) getInboxApproval(w http.ResponseWriter, r *http.Request, id st
 	}
 	a := record.Manifest
 	t := nodeproto.TypedStorageTask{Protocol: nodeproto.StorageProtocol, OperationID: record.TransferID, NodeID: m.Config.NodeID, Action: "migrate_import", InstanceID: a.InstanceID, OwnerRef: a.OwnerRef, ArtifactID: id, TargetNodeID: a.TargetNodeID, SourceNodeID: a.NodeID, SourceOperationID: a.ExportOperationID, ManifestSHA256: record.ManifestSHA256, FenceToken: a.FenceToken}
+	bindDirectImportTask(&t, a)
 	receipt, _ := m.inboxReceipt(r.Context(), record, "disk")
 	receipt.File = "approval"
 	receipt.Status = "uncertain"

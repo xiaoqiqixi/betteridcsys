@@ -21,7 +21,9 @@ import StatusBadge from "../components/StatusBadge.vue";
 import ActionDialog from "../components/ActionDialog.vue";
 import InstanceObservationPanel from "../components/InstanceObservationPanel.vue";
 import InstanceMetricsPanel from "../components/InstanceMetricsPanel.vue";
+import SourceRetirementPanel from "../components/SourceRetirementPanel.vue";
 import MigrationWizard from "../components/MigrationWizard.vue";
+import PublicIPResourcesPanel from "../components/PublicIPResourcesPanel.vue";
 const route = useRoute(),
   {
     prefs: { tr, locale },
@@ -40,6 +42,7 @@ const tabs = computed(() => [
   { value: "overview", label: tr("概览", "Overview") },
   { value: "snapshots", label: tr("快照", "Snapshots") },
   { value: "backups", label: tr("备份", "Backups") },
+  { value: "public", label: tr("公网地址", "Public addresses") },
   { value: "tasks", label: tr("任务", "Tasks") },
 ]);
 const artifacts = computed(
@@ -171,7 +174,12 @@ function tabKey(event: KeyboardEvent) {
           :aria-labelledby="`tab-${tab}`"
           class="tab-content"
         >
-          <template v-if="tab === 'overview'"
+          <PublicIPResourcesPanel
+            v-if="tab === 'public'"
+            :key="instance.id"
+            :instance="instance"
+          />
+          <template v-else-if="tab === 'overview'"
             ><InstanceMetricsPanel :instance="instance" />
             <div class="detail-grid">
               <article class="content-section">
@@ -217,6 +225,14 @@ function tabKey(event: KeyboardEvent) {
                 </dl>
               </article>
             </div>
+            <SourceRetirementPanel
+              v-for="migration in (detail.data.value?.migrations || []).filter(
+                (m) => m.phase === 'active' && m.source_retirement_state,
+              )"
+              :key="migration.id"
+              :instance="instance"
+              :migration="migration"
+            />
             <section class="danger-zone">
               <div>
                 <h2>{{ tr("删除实例", "Delete instance") }}</h2>
@@ -410,8 +426,13 @@ function tabKey(event: KeyboardEvent) {
   gap: 24px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 28px;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 .detail-tabs button {
+  flex-shrink: 0;
+  white-space: nowrap;
   min-height: 48px;
   padding: 0 0 12px;
   background: none;

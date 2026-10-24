@@ -181,3 +181,14 @@ func CheckPublicIPMigration(ctx context.Context, db SchemaReader, allowMissing b
 	}
 	return checkTables(ctx, db, allowMissing, tables)
 }
+
+// Public VM resources add independent intent history; previous NAT rows remain immutable.
+func CheckPublicIPResourceMigration(ctx context.Context, db SchemaReader, allowMissing bool) error {
+	updated := columnSpec{"updated_at", "datetime", "", 0, 6}
+	tables := []tableSpec{
+		{"controller_public_ip_resources", []columnSpec{baseID("id"), ascii("cluster_id", "varchar", 64), baseID("pool_id"), baseID("owner_ref"), ascii("mode", "varchar", 16), ascii("node_id", "varchar", 64), ascii("profile_id", "varchar", 64), baseID("vpc_id"), ascii("address", "varchar", 15), ascii("state", "varchar", 16), {"binding_generation", "bigint", "", 0, 0}, createdColumn(), updated}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_public_resource_cluster", false, []string{"cluster_id", "id"}}, {"controller_public_resource_pool", false, []string{"pool_id", "id"}}, {"controller_public_resource_address", false, []string{"address", "id"}}}},
+		{"controller_public_ip_resource_operations", []columnSpec{baseID("id"), baseID("actor_id"), ascii("action", "varchar", 24), baseID("target_resource_id"), baseID("resource_id"), hashColumn(), {"request", "mediumblob", "", 0, 0}, {"result", "mediumblob", "", 0, 0}, createdColumn()}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_public_resource_operation_actor", false, []string{"actor_id", "id"}}}},
+		{"controller_public_ip_bindings", []columnSpec{baseID("id"), baseID("resource_id"), {"revision", "bigint", "", 0, 0}, {"binding_generation", "bigint", "", 0, 0}, ascii("action", "varchar", 24), baseID("instance_id"), baseID("previous_instance_id"), baseID("epoch_id"), hashColumn(), {"binding", "mediumblob", "", 0, 0}, createdColumn()}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_public_binding_revision", true, []string{"resource_id", "revision"}}, {"controller_public_binding_instance", false, []string{"instance_id", "id"}}, {"controller_public_binding_previous", false, []string{"previous_instance_id", "id"}}, {"controller_public_binding_epoch", false, []string{"epoch_id", "id"}}}},
+	}
+	return checkTables(ctx, db, allowMissing, tables)
+}

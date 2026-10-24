@@ -289,7 +289,10 @@ func (l *Ledger) FinishNetworkRecovery(recoveryID string, ops []Operation, insta
 		nextRecoveries[id] = record
 	}
 	nextRecoveries[recoveryID] = networkRecoveryRecord{Commit: commit, OriginalOperationsSHA256: nodeproto.Digest(originalRaw), Outcomes: outcomes}
-	l.state.NetworkRecoveries, l.state.Schema = nextRecoveries, 4
+	l.state.NetworkRecoveries = nextRecoveries
+	if l.state.Schema < 4 {
+		l.state.Schema = 4
+	}
 	l.state.Operations, l.state.Instances = nextOps, nextInstances
 	if err := l.save(); err != nil {
 		l.state.Operations, l.state.Instances = oldOps, oldInstances

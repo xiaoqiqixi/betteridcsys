@@ -97,7 +97,7 @@ for protocol in http1 http2; do
 done
 if grep -qE -- '--- (SKIP|FAIL):' "$scratch/response-fault.log"; then fail 'Response-fault regression must not skip or fail.'; fi
 
-(cd "$cloud/internal/control" && exec "$scratch/browser.test" -test.v -test.count=1 -test.timeout=15m -test.run '^TestOwnedNATBrowserFixture$') >"$scratch/fixture.log" 2>&1 &
+(cd "$cloud/internal/control" && exec "$scratch/browser.test" -test.v -test.count=1 -test.timeout=21m -test.run '^TestOwnedNATBrowserFixture$') >"$scratch/fixture.log" 2>&1 &
 fixture_pid=$!
 ready=false
 for ((attempt = 0; attempt < 900; attempt++)); do
@@ -149,15 +149,24 @@ assert value.get('passed') is True
 assert value.get('financial_and_node_snapshots_unchanged') is True
 assert value.get('initial_network_snapshot_and_receipts_unchanged') is True
 assert value.get('lost_ack_reconciled') is True
-assert value.get('node_posts_unique') is True and value.get('node_post_count') == 42
-assert value.get('epochs') == 7
+assert value.get('node_posts_unique') is True and value.get('node_post_count') == 60
+assert value.get('epochs') == 10
 assert value.get('public_egress_enabled') is True
 assert value.get('public_egress_disabled') is True
 assert value.get('pure_internet_reenabled') is True
 
 assert value.get('original_node_post_prefix_count') == 30
+assert value.get('original_nat_node_post_prefix_count') == 42
 assert value.get('public_ip_operations') == 7
 assert value.get('public_ip_lease_count') == 2
+assert value.get('total_pool_and_nat_operations') == 8
+assert value.get('vm_public_resource_operations') == 9
+assert value.get('vm_public_resource_history_count') == 3
+assert value.get('direct_node_post_count') == 3
+for name in ('floating_bound_moved_unbound', 'floating_reclaimed_reallocated',
+             'direct_created_dispatched_detached_reclaimed', 'direct_node3_exact_requests_and_results',
+             'global_inventory_exclusive', 'first_seven_epochs_retained'):
+    assert value.get(name) is True, 'Required direct/floating durable proof missing'
 for name in ('public_pool_created', 'public_pool_extended', 'public_pool_state_managed',
              'public_ip_bound', 'public_ip_unbound_after_all_release_receipts',
              'public_ip_reclaimed_and_reallocated', 'public_ip_lease_history_retained',
@@ -171,7 +180,11 @@ for name in ('public_ip_pool_managed', 'public_ip_pool_extended',
              'public_ip_post_commit_ack_reconciled', 'public_ip_bound_and_detached',
              'public_ip_reclaimed_and_reallocated', 'original_five_epochs_preserved'):
     assert report.get(name) is True, 'Required visible public IP workflow missing'
-assert len(report.get('public_ip_write_attempts', [])) == 7
+for name in ('floating_bound_moved_unbound', 'floating_reclaimed_reallocated',
+             'direct_created_dispatched_detached_reclaimed', 'first_seven_epochs_retained'):
+    assert report.get(name) is True, 'Required visible direct/floating workflow missing'
+assert len(report.get('public_ip_write_attempts', [])) == 16
+assert len(report.get('screenshots', [])) == 44, 'Required actual direct/floating mobile and desktop screenshots missing'
 assert report.get('public_ip_failed_writes') == [{'method': 'POST', 'path': '/console/v1/public-ips/leases'}], 'Only the single original allocation transport fault is permitted'
 
 for path in output.iterdir():

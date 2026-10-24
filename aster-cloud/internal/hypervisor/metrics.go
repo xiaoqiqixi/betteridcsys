@@ -28,7 +28,7 @@ func (m *Manager) ObserveMetrics(ctx context.Context, id string) (nodeproto.Inst
 		return nodeproto.InstanceMetrics{}, ErrConflict
 	}
 	i, ok := m.Ledger.Instance(id)
-	if !ok || i.State == "deleted" {
+	if !ok || i.State == "deleted" || i.PublicRetired {
 		return nodeproto.InstanceMetrics{}, ErrNotFound
 	}
 	if i.State == "uncertain" || i.State == "reserved" || m.Ledger.HasPendingInstance(id, "") {

@@ -195,3 +195,12 @@ Staff 手工创建资源只建立主控 resource intent，**不伪造财务 orde
 - 常见 code：`AUTH_REQUIRED`、`LOGIN_FAILED`、`RATE_LIMITED`、`TLS_REQUIRED`、`ORIGIN_INVALID`、`CSRF_INVALID`、`FORBIDDEN`、`INVALID_INPUT`、`INVALID_REQUEST`、`INVALID_QUERY`、`JSON_REQUIRED`、`CONFLICT`（账户冲突）、`IDEMPOTENCY_KEY_REQUIRED`、`IDEMPOTENCY_CONFLICT`、`STATE_CONFLICT`、`NODE_NOT_READY`、`TRANSFER_WORKER_UNAVAILABLE`、`DEPENDENCY_UNAVAILABLE`、`IDENTITY_UNAVAILABLE`。同一 HTTP status 不等于同一业务状态。
 - 权限控制由服务端执行；前端仍须禁用/隐藏不可操作动作、精确输入危险确认、清晰展示 pending/unknown、保留键盘焦点和可取消的 drawer/dialog。不能通过前端缓存或假成功 toast 修补后端未知结果。
 - 没有 MFA、密码重置、租户自助、完整用户/子资源分页、完整 VPC 产品能力、热迁移或真实宿主验收的承诺。真实 MySQL、HTTP/mTLS fake 和浏览器回归不等于实际 KVM/guest network/跨主机/安装升级全部验收；最终证据以独立 VALIDATION 记录为准。
+
+## VM 公网资源增量
+
+Schema9 的直绑/浮动资源、binding_generation CAS、精确解绑回收和恢复解绑接口见
+[VM 公网管理](VM_PUBLIC_IP_MANAGEMENT.md)。不扩展旧 NAT lease 结果，也不改财务
+开通合同。实例创建可显式传 `public_ip_resource_id` 与选择时的 `public_ip_expected_generation`，
+两者成对出现；全部省略时原创建请求字节不变；
+托管节点拒绝无租约公网创建。实例新增 read-only `migration-targets` 兼容目标投影；
+迁移源退役为独立 `migrate_retire_source` 确认操作，不能由前端传入自制激活证明。

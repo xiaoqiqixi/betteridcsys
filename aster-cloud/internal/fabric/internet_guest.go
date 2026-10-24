@@ -7,7 +7,11 @@ import "aster/cloud/internal/overlayproto"
 // node's data plane. Explicit global VPC identity prevents overlapping tenant
 // CIDRs/gateway IPs from borrowing another network's permission.
 func internetGuestApproval(c OverlayConfig, s overlayproto.Snapshot) bool {
-	for _, policy := range s.NATPolicies {
+	policies := append([]overlayproto.NATPolicy{}, s.NATPolicies...)
+	for _, f := range s.FloatingIPs {
+		policies = append(policies, overlayproto.NATPolicy{NodeID: f.NodeID, VPCID: f.VPCID, GatewayInstanceID: f.GatewayInstanceID, InternetEgressEnabled: true})
+	}
+	for _, policy := range policies {
 		if !policy.InternetEgressEnabled {
 			continue
 		}

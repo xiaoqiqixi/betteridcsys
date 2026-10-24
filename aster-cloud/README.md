@@ -6,7 +6,7 @@
 
 ## 当前工作边界
 
-- 财务与主控使用公开的 `aster.controller/1` 合同，旧普通网络任务使用 `aster.node/1`，显式 OVS VPC 任务使用 `aster.node/2` 及完整不可变网络绑定；协议兼容测试不等于虚拟机已创建。
+- 财务与主控使用公开的 `aster.controller/1` 合同，旧普通网络任务使用 `aster.node/1`，显式 OVS VPC 任务使用 `aster.node/2`，托管直绑公网任务使用 `aster.node/3` 及完整不可变网络绑定；协议兼容测试不等于虚拟机已创建。
 - 财务、主控使用独立数据库和权限。主控没有支付、改价、改账单状态的接口，也不能读取财务数据库。
 - 主控持久接纳、资源预留和节点派发分离。超时、进程崩溃和丢失响应保留结果不明状态，不通过重发开通制造第二台虚拟机。
 - 节点不运行外部传入 shell；仅允许预定义动作、审批镜像、存储和网络。客户端提供路径、XML、SSH 命令或下载 URL 均不是合法资源参数。
@@ -19,15 +19,15 @@
 - [主控运维](deploy/controller-OPERATIONS.md) · [KVM 被控运维](NODE_README.md)
 - [术语](GLOSSARY.md)
 - [KVM 加强版逐项差距](docs/KVM_ENHANCED_PARITY.md) · [网络/IPAM API](docs/NETWORK_API.md) · [OVS 核心与嵌入门禁](internal/fabric/README.md) · [本轮 OVS 集成验收记录](docs/OVS_VM_GATE_VALIDATION.md)
-- [公网 NAT 出口](docs/PUBLIC_NAT_EGRESS.md) · [后台网络管理合同](docs/NETWORK_MANAGEMENT.md) · [NAT 执行与审批边界](internal/fabric/NAT.md) · [NAT 与网络管理验收记录](docs/NAT_NETWORK_VALIDATION.md)
+- [虚拟机公网直绑与浮动 IP](docs/VM_PUBLIC_IP_MANAGEMENT.md) · [公网 NAT 出口](docs/PUBLIC_NAT_EGRESS.md) · [后台网络管理合同](docs/NETWORK_MANAGEMENT.md) · [NAT 执行与审批边界](internal/fabric/NAT.md) · [NAT 与网络管理验收记录](docs/NAT_NETWORK_VALIDATION.md)
 - [既有财务资源适配 CLI](plugins/billingconnector/README.md) · [财务系统插件管理器 resource transport](../vps-billing/docs/RESOURCE_PLUGINS.md)
 - 财务产品配置合同：[PRODUCT_CONFIGURATION.md](../vps-billing/docs/PRODUCT_CONFIGURATION.md)
 
 ### 升级与生产阻塞项
 
-- 新增 **schema 8** 公网池、追加库存、唯一分配、确认回收和实际 NAT 地址选择；见 [公网 IP 管理](docs/PUBLIC_IP_MANAGEMENT.md)。旧财务、实例创建绑定、网络快照与回执不重写。物理地址和上联仍须独立 root 配置，不能把数据库分配当作外网已通。
+- 新增 **schema 9** 虚拟机公网资源、绑定意图与固定操作结果，接续 schema 8 公网池/库存；支持新实例真实直绑、停止态同 IP 接管、浮动 IP 绑定/跨节点成员切换/解绑，以及地址保持的普通网络冷迁移和显式源退役。见 [VM 公网管理](docs/VM_PUBLIC_IP_MANAGEMENT.md)。此前 schema 8 的公网池、追加库存、唯一分配、确认回收和实际 NAT 地址选择保留；见 [公网 IP 管理](docs/PUBLIC_IP_MANAGEMENT.md)。旧财务、实例创建绑定、网络快照与回执不重写。物理地址和上联仍须独立 root 配置，不能把数据库分配当作外网已通。
 
-- 主控 MySQL 当前为 schema **8**（006 实例网络绑定、007 全局 VPC/epoch）；节点首次持久接纳 `node/2` 任务后 journal 为 schema **3**，显式网络恢复 completion 升为 **4**；fabric 首次生命周期门禁使用 schema **2**，归档/overlay 使用 **3**，NAT 另保存 owner 与 `nat_profile_ids` 墓碑。新实现保留旧合同读取，不表示旧二进制能读取这些新状态；不能只换旧 binary 回滚，也不能删表、丢绑定或删除 journal 清空不确定状态。
+- 主控 MySQL 当前为 schema **9**（006 实例网络绑定、007 全局 VPC/epoch）；节点首次持久接纳 `node/2` 任务后 journal 为 schema **3**，显式网络恢复 completion 升为 **4**，托管公网绑定/永久退役墓碑升为 **5**；fabric 首次生命周期门禁使用 schema **2**，归档/overlay 使用 **3**，NAT 另保存 owner 与 `nat_profile_ids` 墓碑。新实现保留旧合同读取，不表示旧二进制能读取这些新状态；不能只换旧 binary 回滚，也不能删表、丢绑定或删除 journal 清空不确定状态。
 - fabric 已移除 **64 次历史变更上限**：32 条活动页加不可变 SHA 链归档，保留精确历史重放与未知结果围栏。已有单宿主和跨节点显式恢复入口；不自动重试未知操作。完整历史校验仍有容量/性能成本，需规划磁盘与备份；真实 OVS/KVM 恢复验收仍待进行。
 - 本轮代码与测试仍不等于真 KVM/OVS 验收。真实虚拟机、隔离/限速、重启恢复和生产部署验收继续延期；原 OVS 集成证据见 [OVS 集成验收记录](docs/OVS_VM_GATE_VALIDATION.md)，本轮精确实测与跳过项见 [NAT 与网络管理验收记录](docs/NAT_NETWORK_VALIDATION.md)。
 

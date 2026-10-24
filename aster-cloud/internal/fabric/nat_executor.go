@@ -151,6 +151,11 @@ func (e *Executor) verifyNATRules(ctx context.Context, c OverlayConfig, s overla
 	return nil
 }
 func natPolicyActive(c OverlayConfig, s overlayproto.Snapshot, p NATProfile) bool {
+	for _, f := range s.FloatingIPs {
+		if f.NodeID == c.Base.NodeID && f.ProfileID == p.ID {
+			return true
+		}
+	}
 	for _, n := range s.NATPolicies {
 		if n.NodeID == c.Base.NodeID && n.ProfileID == p.ID && (n.SNATEnabled || len(n.Forwardings) > 0) {
 			return true
