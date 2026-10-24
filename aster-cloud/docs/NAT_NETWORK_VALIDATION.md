@@ -32,7 +32,7 @@ IPv6 / hairpin / ICMP DNAT、自动公网地址与上联配置、NAT HA、共享
 | Ubuntu22 / 独立 MySQL 8.4.13 | 最终 control 测试 binary：87 个顶级测试、含子项 423 个 PASS，0 SKIP / FAIL。仅使用专属 Unix socket 和测试库，没有接入现有财务库。该 native binary 未开启 race；race + 实库另由 CI 门禁执行。 |
 | Ubuntu22 / nftables 1.0.2 | `TestNativeNATPacketFlowAndRevocation` 6.41 秒 PASS；实际三个临时 namespace 与 veth 验证 TCP SNAT、TCP / UDP DNAT、未批准端口拒绝、program 阶段隔离、撤销后现存 TCP 连接失效，以及宿主 nftables 未变化；0 SKIP / FAIL。不是 OVS / VM 端到端测试。 |
 | OVS 早期失败回归 | 全部 `^TestOVS` race 通过，5.861 秒；使用可核对的 runner 状态与原操作重放 / 核对测试，不是真实 libvirt guest。 |
-| Vue 管理台 | format、typecheck、build 通过，17 个文件 / 616 个测试通过；单测不代替下面的实际浏览器记录。 |
+| Vue 管理台 | 初次 format、typecheck、build 与 616 项测试通过；实拍后修复通知遮挡并加入生命周期 / 稳定 ID 双向排序回归，最终数量单列下节。单测不代替实际浏览器记录。 |
 | 依赖与构建 | govulncheck 1.9.0 / Go 1.27.3 未发现漏洞；npm audit 0 漏洞；Linux 静态构建及 actionlint 1.7.7 通过。依赖及锁文件未更改，扫描结论仅对本次执行时间有效。 |
 
 原生测试 binary SHA-256：
@@ -64,6 +64,25 @@ Ubuntu24 GitHub runner 执行，见 [浏览器门禁](../deploy/ci/NETWORK_BROWS
 和初始网络快照 / 回执未变。脚本存在或 syntax 通过不是浏览器已通过，最终状态
 以同提交 GitHub job 和 `network-management-browser` 截图 / JSON 为准。
 这不是实际节点命令或 VM 执行验收。
+
+### 实拍后追加修正
+
+提交 `4fefb05e720465c319a3a59eb07fab5cf7513f49` 的
+[cloud CI](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39985497046)
+九项和 [财务 CI](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/39985497178)
+均真实成功。浏览器报告确认 3 个 epoch、2 个 VPC、18 个唯一节点 POST、原始
+财务 / node / 网络快照与回执不变；严格 TLS 没有绕过。下载的十二张实拍却显示
+手机恢复弹窗被四条永久通知遮挡，切换英文后也保留旧中文通知。此例说明
+测试通过不等于视觉设计完成，不能以该轮截图充当最终界面验收。
+
+后续修正保持业务协议不变：信息通知只保留最新一条，五秒自动关闭，鼠标停留 /
+键盘阅读时暂停；错误不自动关闭且去重、有界。弹窗让后台通知隐藏、不可交互，
+通知层级也低于遮罩；语言或身份切换清除旧通知，卸载清理全部计时器。
+新增十项真实 App 层测试，其中首批八项先在旧实现全部失败，再对修复通过；另发现旧 NAT 测试
+错误假设随机 ID 排序后仍按创建顺序排列，已固定生成 ID 分别在旧 ID 前后，
+按稳定身份完整比对新增规则及旧规则不变，不放宽生产排序或端口合同。
+最终完整前端检查为 18 个文件 / 627 项测试；对应新提交的浏览器门禁还必须
+实际通过通知层级、命中测试、键盘排除、旧语言清理和自然消失后的手机截图。
 
 ## CI 与未验证项
 

@@ -6,6 +6,7 @@ import { webcrypto } from "node:crypto";
 import { deferred } from "./helpers";
 import {
   overlayEpoch,
+  overlayNAT,
   overlayOption,
   overlayTasks,
   overlayVPC,
@@ -559,22 +560,39 @@ describe("network lifetime and accessibility edge cases", () => {
     );
     expect(body().find("[role=alert]").exists()).toBe(true);
   });
-  it("makes all source and destination controls explicit and adds unique stable forwarding identities", async () => {
-    const f = await setup("plan", (m, _p, b, k) =>
-      m === "POST" ? { epoch: planned(k, b) } : undefined,
-    );
-    await button("添加端口映射").trigger("click");
-    await confirmChange();
-    expect(f.calls).toHaveLength(1);
-    const policies = (f.calls[0]!.body as OverlaySelection).nat_policies!;
-    expect(policies[0]!.forwardings).toHaveLength(2);
-    expect(policies[0]!.forwardings[1]!.id).toMatch(/^[a-f0-9]{32}$/);
-    expect(policies[0]!.forwardings[1]!.id).not.toBe(
-      policies[0]!.forwardings[0]!.id,
-    );
-    expect(policies[0]!.forwardings[1]!.public_port).toBe(8000);
-    expect(body().findAll("select")).toHaveLength(0);
-  });
+  it.each([0x11, 0xee])(
+    "adds stable forwarding identities when the new random ID sorts on either side of the old ID (%i)",
+    async (byte) => {
+      const f = await setup("plan", (m, _p, b, k) =>
+        m === "POST" ? { epoch: planned(k, b) } : undefined,
+      );
+      vi.stubGlobal("crypto", {
+        getRandomValues: (buffer: Uint8Array) => buffer.fill(byte),
+      });
+      await button("添加端口映射").trigger("click");
+      vi.stubGlobal("crypto", webcrypto);
+      await confirmChange();
+      expect(f.calls).toHaveLength(1);
+      const policies = (f.calls[0]!.body as OverlaySelection).nat_policies!;
+      expect(policies[0]!.forwardings).toHaveLength(2);
+      const oldID = overlayNAT.forwardings[0]!.id;
+      expect(
+        policies[0]!.forwardings.find((rule) => rule.id === oldID),
+      ).toEqual(overlayNAT.forwardings[0]);
+      const added = policies[0]!.forwardings.find((rule) => rule.id !== oldID);
+      // The canonical payload sorts by stable ID, not creation order. Assert the
+      // new rule's whole contract by identity for both lexical positions.
+      expect(added).toEqual({
+        id: byte.toString(16).repeat(16),
+        protocol: "tcp",
+        public_port: 8000,
+        target_instance_id: overlayNAT.forwardings[0]!.target_instance_id,
+        target_port: 8000,
+        source_cidr: "198.18.0.0/16",
+      });
+      expect(body().findAll("select")).toHaveLength(0);
+    },
+  );
   it("keeps a trailing newline editable in the route field while submitting canonical prefixes", async () => {
     const f = await setup("plan", (m, _p, b, k) =>
       m === "POST" ? { epoch: planned(k, b) } : undefined,

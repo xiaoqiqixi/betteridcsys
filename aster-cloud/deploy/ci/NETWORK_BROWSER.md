@@ -65,3 +65,11 @@ keyboard focus, Escape, Back/Forward, custom selects, route/NAT editing, VPC
 creation, explicit continuation and read-only receipt reconciliation. Each
 continuation uses at most one POST followed by bounded GET observation; no write
 retry loop hides uncertainty.
+
+The notification regression gate also checks that consecutive information notices
+do not accumulate, that a modal excludes background notices from paint/hit/focus,
+and that changing locale removes the previous-language notice. Final screenshots
+wait for the real five-second information notice expiry, with the pointer moved
+away; they never hide DOM, click dismiss, mock clocks or edit application state.
+The first measured package provisioning took 21m48s, so the job permits 40 minutes;
+the 12-minute fixture lifetime and page-operation deadlines remain unchanged.
