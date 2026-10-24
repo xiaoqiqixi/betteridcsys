@@ -94,7 +94,9 @@ After the original five-epoch flow, the visible public-IP UI must:
 4. Disable/re-enable the pool from the UI. Admission stops, while the bound
    lease, epoch 6 snapshot and receipts stay unchanged; no live connection is
    claimed by this simulated node fixture.
-5. Remove the NAT policy in epoch 7. A merely pending removal must still block
+5. Remove the NAT policy in epoch 7. Its pending overview must hide new-plan
+   controls and expose the exact original recovery link; read-only pool/lease
+   navigation remains available. A merely pending removal must still block
    reclamation. Only completion of every prepare/program/release receipt makes
    the typed-IP-confirmed **回收公网 IP** action available.
 6. Reallocate the same address into a distinct reserved lease. The released

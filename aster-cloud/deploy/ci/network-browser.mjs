@@ -189,10 +189,14 @@ async function pick(label, option) {
   await page.getByRole('combobox', { name: label, exact: true }).click();
   await page.getByRole('option', { name: option, exact: true }).click();
 }
-async function networkOverview() {
+async function networkOverview({ requireCanPlan = true } = {}) {
   await page.getByRole('link', { name: '返回网络管理', exact: true }).click();
   await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
-  await page.getByRole('button', { name: '配置网络', exact: true }).waitFor();
+  await page.locator('.network-tabs').waitFor();
+  // Reading pool/lease safety state must work during a pending epoch, when the
+  // production UI correctly forbids creating another network configuration.
+  // Existing planning callers keep their stricter readiness gate by default.
+  if (requireCanPlan) await page.getByRole('button', { name: '配置网络', exact: true }).waitFor();
 }
 async function submitNetworkPlan(expectedEpoch) {
   const before = posts('/overlays/epochs');
@@ -622,14 +626,14 @@ try {
   const poolCard = () => page.locator('.ip-record').filter({ has: page.getByRole('heading', { name: '公网出口池', exact: true }) });
   const leaseCard = id => page.locator('.ip-record').filter({ hasText: id });
   async function poolView() {
-    if (await page.locator('.network-tabs').count() === 0) await networkOverview();
+    if (await page.locator('.network-tabs').count() === 0) await networkOverview({ requireCanPlan: false });
     await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
     await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
     await page.getByRole('button', { name: '地址池', exact: true }).click();
     await poolCard().waitFor();
   }
   async function leasesView() {
-    if (await page.locator('.network-tabs').count() === 0) await networkOverview();
+    if (await page.locator('.network-tabs').count() === 0) await networkOverview({ requireCanPlan: false });
     await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
     await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
     await page.getByRole('button', { name: '分配记录', exact: true }).click();
@@ -814,7 +818,15 @@ try {
   assert.equal(await page.getByRole('combobox', { name: '公网地址绑定', exact: true }).count(), 0);
   const unboundPlan = await submitNetworkPlan(7);
   assert.deepEqual(unboundPlan.detail.epoch.snapshot.nat_policies || [], []);
-  // An unstarted removal is not proof of isolation or a safe release.
+  // An unstarted removal is not proof of isolation or a safe release. Its
+  // overview must expose recovery, not allow a conflicting new plan. Pool and
+  // lease navigation remains read-only and must not require that forbidden UI.
+  assert.equal(unboundPlan.detail.epoch.state, 'pending');
+  await networkOverview({ requireCanPlan: false });
+  const pendingRecovery = page.getByRole('link', { name: '查看变更与恢复', exact: true });
+  await pendingRecovery.waitFor();
+  assert((await pendingRecovery.getAttribute('href')).endsWith(`#/networks/epochs/${unboundPlan.id}`));
+  assert.equal(await page.getByRole('button', { name: '配置网络', exact: true }).count(), 0);
   await leasesView();
   await leaseCard(firstLeaseID).waitFor();
   assert.equal(await leaseCard(firstLeaseID).getByRole('button', { name: '回收地址', exact: true }).isDisabled(), true);
