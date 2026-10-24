@@ -679,7 +679,9 @@ func publicVMBrowserProof(t *testing.T, ctx context.Context, f overlayFixture, r
 			if r.Address != "8.8.4.4" || r.OwnerRef != f.vpc.OwnerRef {
 				return fail()
 			}
-			if r.State == "released" && r.BindingState == "released" && r.BindingGeneration == 3 {
+			// Exact generation: 2 bindings + 3 independently verified policy
+			// updates + 1 unbind. Extra writes must never satisfy a range check.
+			if r.State == "released" && r.BindingState == "released" && r.BindingGeneration == 6 {
 				floatingReleased++
 			} else if r.State == "reserved" && r.BindingState == "unbound" && r.BindingGeneration == 0 {
 				floatingReserved++
