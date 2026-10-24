@@ -60,6 +60,52 @@ async function noOverflow(name) {
   assert(size.dialog_regions.every(region => region.scroll <= region.width + 1), `${name}: dialog content must not scroll horizontally: ${JSON.stringify(size)}`);
   check(name, size);
 }
+async function recoveryValueOneLine(name) {
+  const value = page.getByRole('dialog').locator('.recovery-policy dd');
+  assert.equal(await value.count(), 1);
+  await value.scrollIntoViewIfNeeded();
+  const evidence = await value.evaluate(dd => {
+    const row = dd.closest('.recovery-policy');
+    const dialog = dd.closest('[role="dialog"]');
+    const title = row?.querySelector('dt');
+    const box = dd.getBoundingClientRect();
+    const rowBox = row?.getBoundingClientRect();
+    const dialogBox = dialog?.getBoundingClientRect();
+    const style = getComputedStyle(dd);
+    const walker = document.createTreeWalker(dd, NodeFilter.SHOW_TEXT);
+    const lines = new Set();
+    let hasText = false, textWithinValue = true;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      hasText = true;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        lines.add(Number(rect.y.toFixed(2)));
+        textWithinValue &&= rect.left >= box.left - 1 && rect.right <= box.right + 1;
+      }
+    }
+    return {
+      width: innerWidth, has_text: hasText, text_lines: lines.size,
+      long_profile_present: !!title?.textContent?.includes('w'.repeat(64)),
+      public_value_present: dd.textContent?.trim() === '公网 IPv4',
+      text_within_value: textWithinValue,
+      value_within_row_and_dialog: !!rowBox && !!dialogBox && box.left >= rowBox.left - 1 && box.right <= rowBox.right + 1 && box.left >= dialogBox.left - 1 && box.right <= dialogBox.right + 1,
+      value_rendered: style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && box.width > 0 && box.height > 0,
+      vertically_stacked: !!title && box.top >= title.getBoundingClientRect().bottom - 1,
+    };
+  });
+  assert.equal(evidence.long_profile_present, true);
+  assert.equal(evidence.public_value_present, true);
+  assert.equal(evidence.has_text, true);
+  assert.equal(evidence.text_lines, 1, 'The actual public egress text must stay on one rendered line, not a narrow vertical column');
+  assert.equal(evidence.text_within_value, true, 'The public egress text must not be clipped or overflow its value box');
+  assert.equal(evidence.value_within_row_and_dialog, true);
+  assert.equal(evidence.value_rendered, true);
+  assert.equal(evidence.vertically_stacked, true, 'The long-profile mobile recovery row must stack its label and value');
+  check(name, evidence);
+}
 async function singleInfoNotice(name) {
   // Ignore the outgoing 150 ms transition, but never wait long enough for the
   // five-second expiry to disguise a stack of newly emitted success notices.
@@ -387,9 +433,14 @@ try {
   await screenshot('desktop-recovery-dialog', false);
   await page.setViewportSize({ width: 390, height: 844 });
   await dialogExcludesNotices('mobile recovery dialog is not covered by action notices');
+  await recoveryValueOneLine('390px recovery public egress value is visible on one text line with a long profile');
+  await noOverflow('mobile recovery dialog has no horizontal overflow');
+  await page.setViewportSize({ width: 320, height: 844 });
+  await recoveryValueOneLine('320px recovery public egress value is visible on one text line with a long profile');
+  await noOverflow('320px long-profile recovery dialog has no horizontal overflow');
+  await page.setViewportSize({ width: 390, height: 844 });
   await noticesExpireNaturally('background notice expires before the mobile recovery dialog screenshot');
   await screenshot('mobile-recovery-dialog', false);
-  await noOverflow('mobile recovery dialog has no horizontal overflow');
   await page.getByRole('button', { name: '提交恢复', exact: true }).click();
   await dialogClosed();
   await page.waitForURL(u => /#\/networks\/epochs\/[a-f0-9]{32}$/.test(u.href) && !u.href.endsWith(epochID));

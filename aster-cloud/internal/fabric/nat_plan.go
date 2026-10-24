@@ -24,6 +24,12 @@ func match(left, right any) nftObject {
 }
 func prefixExpr(raw string) any {
 	p, _ := netip.ParsePrefix(raw)
+	// nft's canonical JSON represents a /32 as its exact address. Generate the
+	// same expression, rather than erasing or rewriting live address matches in
+	// normalizeNFT (which must remain a strict security readback comparison).
+	if p.Bits() == 32 {
+		return p.Addr().String()
+	}
 	return nftObject{"prefix": nftObject{"addr": p.Addr().String(), "len": p.Bits()}}
 }
 func compileNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfile, isolated bool) ([]nftObject, error) {

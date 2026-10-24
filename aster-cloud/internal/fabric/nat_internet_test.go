@@ -135,6 +135,17 @@ func evaluateNATPolicy(t *testing.T, objects []nftObject, chain string, packet n
 						if m["op"] == "in" {
 							l, lok := left.(float64)
 							r, rok := right.(float64)
+							if bits, ok := right.([]any); ok {
+								r, rok = 0, true
+								for _, bit := range bits {
+									v, ok := bit.(float64)
+									if !ok {
+										rok = false
+										break
+									}
+									r = float64(int(r) | int(v))
+								}
+							}
 							matched = lok && rok && int(l)&int(r) != 0
 						} else if p, ok := right.(string); ok && strings.Contains(p, "/") {
 							prefix, err := netip.ParsePrefix(p)

@@ -756,13 +756,16 @@ describe("public NAT egress management", () => {
     options.nat_profiles[0]!.profile_id = profile;
     options.latest_epoch = record;
     const f = await setup("recover", undefined, { options, recover: record });
-    expect(body().get(".recovery-summary").text()).toContain(profile);
+    const policy = body().get(".recovery-policy");
+    expect(policy.get("dt").text()).toContain(profile);
+    expect(policy.get("dd").text()).toBe("公网 IPv4");
+    expect(
+      body().findAll(".recovery-summary > div:not(.recovery-policy)"),
+    ).toHaveLength(3);
     f.context.prefs.locale.value = "en";
     await flushPromises();
-    expect(body().get(".recovery-summary").text()).toContain(profile);
-    expect(body().get(".recovery-summary").text()).toContain(
-      "Public IPv4 Internet",
-    );
+    expect(policy.get("dt").text()).toContain(profile);
+    expect(policy.get("dd").text()).toBe("Public IPv4 Internet");
     expect(f.calls).toHaveLength(0);
   });
 });
