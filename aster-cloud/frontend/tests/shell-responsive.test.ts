@@ -163,6 +163,57 @@ async function shellFixture(compact = true) {
   };
 }
 
+// Synthetic rectangles/insets exercise only focus-reveal arithmetic and
+// lifecycle cancellation. They are not evidence of real CSS visibility or scroll.
+function clippedNavigation(
+  f: Awaited<ReturnType<typeof shellFixture>>,
+  rowTop: number,
+  scrollTop: number,
+  focusVisible = true,
+) {
+  const navigation = f.wrapper.get<HTMLElement>(
+    "nav.sidebar-navigation",
+  ).element;
+  const link = f.wrapper.get<HTMLAnchorElement>(
+    '.sidebar-navigation a[href="#/operations"]',
+  ).element;
+  // Explicitly control keyboard-focus intent as well as rects. This is not
+  // a claim that jsdom reproduces the browser's :focus-visible heuristics.
+  const nativeMatches = link.matches.bind(link);
+  const matches = vi
+    .spyOn(link, "matches")
+    .mockImplementation((selector) =>
+      selector === ":focus-visible" ? focusVisible : nativeMatches(selector),
+    );
+  navigation.style.paddingTop = "8px";
+  navigation.style.paddingBottom = "8px";
+  navigation.scrollTop = scrollTop;
+  const region = vi
+    .spyOn(navigation, "getBoundingClientRect")
+    .mockReturnValue(new DOMRect(18, 100, 196, 161));
+  const row = vi
+    .spyOn(link, "getBoundingClientRect")
+    .mockReturnValue(new DOMRect(18, rowTop, 196, 46));
+  const oldBodyScroll = document.body.scrollTop;
+  const oldRootScroll = document.documentElement.scrollTop;
+  document.body.scrollTop = 210;
+  document.documentElement.scrollTop = 210;
+  cleanups.push(() => {
+    document.body.scrollTop = oldBodyScroll;
+    document.documentElement.scrollTop = oldRootScroll;
+  });
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  const scrollBy = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
+  function onlyNavigationScrolled() {
+    expect(document.body.scrollTop).toBe(210);
+    expect(document.documentElement.scrollTop).toBe(210);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(scrollBy).not.toHaveBeenCalled();
+    expect(f.writes).toEqual([]);
+  }
+  return { navigation, link, region, row, matches, onlyNavigationScrolled };
+}
+
 async function actualBack() {
   await new Promise<void>((resolve, reject) => {
     const pop = () => {
@@ -237,6 +288,69 @@ describe("real app responsive navigation lifecycle", () => {
     expect(f.writes).toEqual([]);
     // Native Firefox Tab order is checked strictly by the browser harness;
     // jsdom only proves that the actual App attributes reach the intended nav.
+  });
+
+  it.each([
+    { direction: "down", rowTop: 230.4, initial: 35, delta: 24 },
+    { direction: "up", rowTop: 83.7, initial: 70, delta: -25 },
+  ])(
+    "reveals a $direction-clipped focused link using integer padding-aware navigation-only scroll",
+    async ({ rowTop, initial, delta }) => {
+      const f = await shellFixture(false);
+      const proof = clippedNavigation(f, rowTop, initial);
+      proof.link.focus();
+      expect(document.activeElement).toBe(proof.link);
+      await flushPromises();
+      // Down: ceil(276.4 - (261 - 8)) = 24.
+      // Up: floor(83.7 - (100 + 8)) = -25.
+      expect(proof.navigation.scrollTop).toBe(initial + delta);
+      expect(proof.row).toHaveBeenCalledTimes(1);
+      expect(proof.region).toHaveBeenCalledTimes(1);
+      proof.onlyNavigationScrolled();
+    },
+  );
+
+  it("does not scroll a focused link when modeled pointer-focus intent is not focus-visible", async () => {
+    const f = await shellFixture(false);
+    const proof = clippedNavigation(f, 230.4, 35, false);
+    proof.link.focus();
+    await flushPromises();
+    expect(document.activeElement).toBe(proof.link);
+    expect(proof.matches).toHaveBeenCalledWith(":focus-visible");
+    expect(proof.navigation.scrollTop).toBe(35);
+    expect(proof.row).not.toHaveBeenCalled();
+    expect(proof.region).not.toHaveBeenCalled();
+    proof.onlyNavigationScrolled();
+  });
+
+  it("cancels a queued link reveal when focus moves to the main input before the next tick", async () => {
+    const f = await shellFixture(false);
+    const proof = clippedNavigation(f, 230.4, 35);
+    proof.link.focus();
+    f.wrapper
+      .get<HTMLInputElement>(
+        'main input[aria-label="Synthetic read-only filter"]',
+      )
+      .element.focus();
+    await flushPromises();
+    expect(document.activeElement).not.toBe(proof.link);
+    expect(proof.navigation.scrollTop).toBe(35);
+    expect(proof.row).not.toHaveBeenCalled();
+    expect(proof.region).not.toHaveBeenCalled();
+    proof.onlyNavigationScrolled();
+  });
+
+  it("does not reveal a detached old link after the app unmounts before the next tick", async () => {
+    const f = await shellFixture(false);
+    const proof = clippedNavigation(f, 230.4, 35);
+    proof.link.focus();
+    f.unmount();
+    expect(proof.link.isConnected).toBe(false);
+    await flushPromises();
+    expect(proof.navigation.scrollTop).toBe(35);
+    expect(proof.row).not.toHaveBeenCalled();
+    expect(proof.region).not.toHaveBeenCalled();
+    proof.onlyNavigationScrolled();
   });
 
   it("closes at the desktop boundary, restores main focus and never resurrects the drawer when compact returns", async () => {

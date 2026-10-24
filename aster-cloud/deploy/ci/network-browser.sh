@@ -276,6 +276,14 @@ for mode, count in (('chinese-light', 36), ('english-dark', 15)):
                  '1025px 360px short-screen independent scroll and keyboard access',
                  'visible skip-link click focuses main without changing the hash route or making a write'):
         assert any(c.get('name') == name for c in entries), 'A required sidebar geometry/lifecycle proof is missing'
+    for width in (1440, 1025):
+        proof = next(c for c in entries if c.get('name') == str(width) + 'px 360px short-screen independent scroll and keyboard access')
+        targets = proof.get('keyboard_targets', [])
+        assert len(targets) == 7, 'Every actual sidebar link and sign-out must retain exact keyboard geometry proof'
+        assert [t.get('link_index') for t in targets[:6]] == list(range(6)) and targets[-1].get('logout') is True
+        for target in targets:
+            assert all(target.get('checks', {}).get(k) is True for k in ('focused', 'visible', 'in_viewport', 'in_clip', 'hit'))
+            assert abs(target['document_scroll_y'] - proof['keyboard_document_scroll_y']) <= 1, 'Keyboard sidebar navigation must not move the document'
 assert report.get('public_ip_failed_writes') == [{'method': 'POST', 'path': '/console/v1/public-ips/leases'}], 'Only the single original allocation transport fault is permitted'
 
 for path in output.iterdir():

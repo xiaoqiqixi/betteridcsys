@@ -89,12 +89,37 @@ function focus() {
 function skipToContent() {
   mainContent.value?.focus();
 }
+function revealNavigationLink(target: HTMLElement) {
+  if (!target.matches(".sidebar-navigation a[href]")) return;
+  void nextTick(() => {
+    if (
+      !target.isConnected ||
+      document.activeElement !== target ||
+      !target.matches(":focus-visible")
+    )
+      return;
+    const navigation = target.closest<HTMLElement>(".sidebar-navigation");
+    if (!navigation || !sidebar.value?.contains(navigation)) return;
+    const row = target.getBoundingClientRect();
+    const region = navigation.getBoundingClientRect();
+    if (!row.height || !region.height) return;
+    const style = getComputedStyle(navigation);
+    const top = region.top + (parseFloat(style.paddingTop) || 0);
+    const bottom = region.bottom - (parseFloat(style.paddingBottom) || 0);
+    // Some browsers reveal only a link's text on focus. Reveal its entire hit
+    // area and focus gutter, scrolling this navigation only, never the page.
+    if (row.top < top) navigation.scrollTop += Math.floor(row.top - top);
+    else if (row.bottom > bottom)
+      navigation.scrollTop += Math.ceil(row.bottom - bottom);
+  });
+}
 function rememberNavigationFocus(event: FocusEvent) {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  if (sidebar.value?.contains(target) || target === navigationTrigger.value)
+  if (sidebar.value?.contains(target) || target === navigationTrigger.value) {
     lastNavigationFocus = target;
-  else if (target !== document.body && target !== document.documentElement)
+    revealNavigationLink(target);
+  } else if (target !== document.body && target !== document.documentElement)
     lastNavigationFocus = null;
 }
 function clearNavigationPointerFocus(event: PointerEvent) {
@@ -378,6 +403,8 @@ onBeforeUnmount(() => {
 .sidebar-navigation {
   flex: 1;
   min-height: 0;
+  padding: 8px;
+  margin-inline: -8px;
   overflow-y: auto;
   overscroll-behavior-y: contain;
   scrollbar-width: thin;

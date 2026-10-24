@@ -205,6 +205,8 @@ unchanged. Shell geometry and interaction evidence is stored independently in
   overflow. Wheel input scrolls `.sidebar-navigation`, not the page or panel;
   brand and account remain visible. Tab through every link and sign-out without
   activating sign-out, checking actual focus, clipping and pointer hit targets.
+  Each target's fixed geometry is retained in `keyboard_targets`; every keyboard
+  step must keep the business document's scroll position unchanged.
 - **720x450 and 512x384 CSS viewports** test the reflow equivalents of 200% zoom
   at 1440x900 and 1024x768. They are explicitly *equivalent CSS viewport* tests,
   not a claim to have changed browser zoom or tested a physical phone. Changing

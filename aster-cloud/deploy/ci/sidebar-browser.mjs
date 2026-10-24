@@ -185,7 +185,10 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     assert(Math.abs(after.brand.top - before.brand.top) <= 1 && Math.abs(after.account.bottom - before.account.bottom) <= 1);
     await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel', evidence => { report.sidebar_control_failure = evidence; });
     await image(name);
+    const keyboardDocumentY = await page.evaluate(() => scrollY), keyboardTargets = [];
     await page.locator('.sidebar .brand').focus();
+    await settle(page);
+    assert(Math.abs(await page.evaluate(() => scrollY) - keyboardDocumentY) <= 1, 'Focusing the sidebar brand must not move the business document');
     const links = page.locator('.sidebar-navigation a');
     const count = await links.count();
     assert(count >= 6, 'Use the signed-in administrator navigation, not a reduced test menu');
@@ -205,12 +208,19 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
         report.sidebar_focus_failure = { width, expected_link_index: i, ...identity };
         assert.fail(`Tab must follow every real sidebar link: expected=${i}, actual=${JSON.stringify(identity)}`);
       }
-      await hitAndFocus(page, link, '.sidebar-navigation', evidence => { report.sidebar_control_failure = evidence; });
+      const target = await hitAndFocus(page, link, '.sidebar-navigation', evidence => { report.sidebar_control_failure = evidence; });
+      const documentY = await page.evaluate(() => scrollY);
+      assert(Math.abs(documentY - keyboardDocumentY) <= 1, 'Tabbing each sidebar link must not move the business document');
+      keyboardTargets.push({ ...target, document_scroll_y: documentY });
     }
     await page.keyboard.press('Tab');
     assert.equal(await page.locator('.sidebar-logout').evaluate(el => document.activeElement === el),true, 'The real tab sequence must reach sign-out without activating it');
-    await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel', evidence => { report.sidebar_control_failure = evidence; });
-    passed(`${width}px 360px short-screen independent scroll and keyboard access`, { links: count, before, after });
+    const accountTarget = await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel', evidence => { report.sidebar_control_failure = evidence; });
+    const accountDocumentY = await page.evaluate(() => scrollY);
+    assert(Math.abs(accountDocumentY - keyboardDocumentY) <= 1, 'Tabbing to sign-out must not move the business document');
+    keyboardTargets.push({ ...accountTarget, document_scroll_y: accountDocumentY });
+    passed(`${width}px 360px short-screen independent scroll and keyboard access`, { links: count, before, after,
+      keyboard_document_scroll_y: keyboardDocumentY, keyboard_targets: keyboardTargets });
   }
 
   try {

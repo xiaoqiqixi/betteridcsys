@@ -279,7 +279,15 @@ describe("VM public address UI", () => {
     expect(button("创建任务").attributes("disabled")).toBeDefined();
     await select("选择直绑公网地址", resource.address);
     await body().get("form").trigger("submit");
-    await flushPromises();
+    // Fingerprinting awaits native WebCrypto work; one flushPromises turn is
+    // not its completion signal. Observe the exact accepted UI, never resubmit.
+    await vi.waitFor(() =>
+      expect(body().get('.callout[role="status"]').text()).toContain(
+        "实例尚未开通",
+      ),
+    );
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]).toMatchObject({ method: "POST", path: "/instances" });
     expect(f.calls[0]?.body).toEqual({
       hostname: "public-vm",
       owner_ref: resource.owner_ref,
