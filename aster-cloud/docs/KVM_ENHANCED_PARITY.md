@@ -1,6 +1,6 @@
 # KVM 加强版功能对照与开发验收规格
 
-2026-10-24。本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。
+2026-10-25。本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。当前主控数据库为 schema **10**；历史增量段落中的版本号仅表示各次模型引入版本。
 
 ## 1. 对标范围与不变边界
 
@@ -69,7 +69,7 @@
 新增 A18：`migrations/008_public_ips.sql`、`internal/control/public_ip_*`、
 `frontend/src/pages/PublicIPsPage.vue`。已实现公网 IPv4 NAT 专用池、追加库存、
 全局唯一租约、实际出口选择、完整解绑确认回收、权限与审计，见
-[公网 IP 管理](PUBLIC_IP_MANAGEMENT.md)。主控 schema 现为 8；既有迁移不改。
+[公网 IP 管理](PUBLIC_IP_MANAGEMENT.md)。该增量引入 schema 8；既有迁移不改。
 该段为 schema8 NAT 增量，后续 schema9 能力见下段；IPv6、热迁移或物理路由自动发布仍未实现。下面原 A11 的
 网关/DNS/分组差距仍在；不能用新 NAT 出口租约冒充原创建地址可任意释放。
 
@@ -83,6 +83,15 @@
 SNAT/整地址 DNAT，可移动到同 VPC 的跨节点成员。普通直绑冷迁移保持 IP/MAC，
 支持单独确认源退役后的回迁；不冒充 VPC guest 磁盘迁移或热迁移。
 见 [完整合同与限制](VM_PUBLIC_IP_MANAGEMENT.md)。真实 KVM/上联仍 `realhost-required`。
+
+## 2026-10-24 浮动 IPv4 公网入站规则增量
+
+新增 A20：`migrations/010_public_ingress.sql`、`internal/control/public_ingress*`、
+`internal/overlayproto/public_ingress.go`、`internal/fabric/floating_ip.go` 及管理台实例入站规则组件。schema10 将策略与地址
+绑定分离：新绑定默认拒绝未经允许的新入站，显式允许 IPv4 来源、协议和端口；策略
+跟随实例，不随浮动 IP 移动。完整策略版本、root 批准、新鲜能力与全节点 epoch
+共同约束生效状态，历史 legacy 快照不重写。它不覆盖东西向、IPv6 或普通直绑，
+不是完整安全组。见 [公网入站合同](PUBLIC_INGRESS.md)。真实宿主与公网上联仍待验。
 
 ## 4. 加强版核心网络差距（最高优先级）
 
@@ -99,7 +108,7 @@ R1/R4/R5/R6/R7/R10 是功能依据；具体执行器选型须再查 Ubuntu/libvi
 | VPC、子网、路由及客户归属 | `implemented-partial` A11/A12/A14/A16/A17 | 已有原 IPAM 冻结绑定、全局 VPC、root 批准网关目的前缀、跨节点成员、创建屏障及后台完整配置/恢复。planned/reserved 不等于已联网；完整子网生命周期、自助网络、动态路由与真机包流验收仍缺。 |
 | 浮动/弹性公网 IP | `implemented-partial` A18/A19；`realhost-required` | 独立直绑/浮动资源、全局互斥、确认分配/解绑/回收、同 owner/VPC 跨节点成员切换、普通直绑地址保持冷迁移。运行中热换主 IP、多公网 NIC、VPC 磁盘迁移/HA 未实现；物理验收后置。 |
 | NAT 端口转发/共享建站 | `implemented-partial` A17/A18；`realhost-required` | 已有 root 批准的公网 TCP/UDP/ICMP echo 出站、精确 TCP/UDP DNAT、源/端口校验、全节点屏障、规则读回与 conntrack 撤销。A18 接池、分配、实际地址选择和确认回收；IPv6/hairpin/ICMP DNAT、域名共享建站及真实上联/KVM 验收仍缺，不占宿主 SSH/财务端口。 |
-| 租户安全组 | 完整安全组仍 `missing`；新增 [浮动 IPv4 公网入站 ACL](PUBLIC_INGRESS.md)，不是完整 VPC/直绑/IPv6 安全组 | 入/出方向、协议/CIDR/端口范围、优先级/状态语义明确；默认策略、规则版本、原子替换、绑定读回。IPv4/IPv6/ARP/NDP 及失败时旧策略保留。 |
+| 租户安全组 | 完整安全组仍 `missing`；A20 已实现[浮动 IPv4 公网入站规则](PUBLIC_INGRESS.md)，不是完整 VPC/直绑/IPv6 安全组 | 已有受限来源/协议/端口、版本/默认拒绝和全节点确认。完整入/出方向、东西向、优先级、IPv6/ARP/NDP 及真实故障验收仍缺。 |
 | IP-MAC 绑定与反欺骗 | `implemented-partial` A3/A12；`realhost-required` | 旧 bridge filter 和新 OVS exact IP/MAC/ARP+VPC metadata 与嵌入 gate 分别有测试，不互相替代。必须实测同桥非托管端口、ofport 重用、双标签、宿主服务攻击及断电恢复。 |
 | DHCP | `missing`；A3 当前使用 NoCloud 静态地址 | 地址授权绑定、租约与持久 IPAM 一致；隔离 rogue DHCP，重复 DISCOVER/请求/租约恢复、DHCP 服务故障不能重复发放地址。 |
 | 负载均衡 | `missing` | owner/VPC 资源、监听器、后端、健康检查、证书生命周期；后端/探测不可借机访问管理网。先交付明确协议范围，故障后旧配置继续工作。 |
@@ -144,7 +153,8 @@ R1/R4/R5/R6/R7/R10 是功能依据；具体执行器选型须再查 Ubuntu/libvi
        └─ P2 DB事务绑定→node/2→专用OVS VM启停gate（本轮代码接通）
             ├─ P3 单 IP 双向 meter（已接显式VPC任务）→ 组限速/多 IP/IPv6/采样
             └─ P4 全局VPC/固定peer跨节点/批准路由（已接代码；子网/DHCP待补）
-                 └─ P5 受限namespace NAT/后台配置（已接代码）→ 浮动IP/LB/客户自助网络
+                 └─ P5 namespace NAT/公网出口/后台配置（已接代码）
+                      └─ P6 公网库存/直绑/浮动IP/受限入站（已接代码）→ LB/客户自助网络
 
 P1 资源模型 + 现有持久任务
   └─ S1 独立磁盘/扩容/IO → S2 调度备份/恢复 → S3 Ceph
@@ -167,7 +177,7 @@ Migration 005 新增 `controller_network_vpcs`、`controller_network_pools`、`c
 
 管理对象状态仍为 `planned` / `reserved`，没有 delete/free/自动到期回收，不改历史资源或财务快照。Migration 006 的 `controller_instance_networks` 和 `ReserveTaskTx` 将显式 VPC create 的 IP 预留、不可变网络绑定、精确任务 SHA 与审计纳入同一个事务；提交后才派发 node/2。旧管理 API/实库证据不能替代新 gate 或包转发验收；本轮实测与跳过项见 [OVS_VM_GATE_VALIDATION.md](OVS_VM_GATE_VALIDATION.md)。完整 API 见 [NETWORK_API.md](NETWORK_API.md)。
 
-**升级/回滚：001–006 保持不变，007 增加全局 VPC/epoch，主控数据库当前为 schema 8；旧二进制不认识它，不能只换旧 binary 回滚。** 必须停写、备份，采用兼容应用或已演练的数据库完整恢复路径。没有自动删除网络表/租约的降级迁移；任何恢复都必须保留已占地址和未知任务，不能当作清理重试。详见 [主控运维](../deploy/controller-OPERATIONS.md)。
+**升级/回滚：当前主控数据库为 schema 10；001–009 历史 SQL 不改，旧二进制不能只换程序回滚。** 007 引入全局 VPC/epoch，008/009/010 分别引入公网库存、VM 公网资源和实例入站策略。必须停写、备份，采用兼容应用或已演练的完整一致恢复路径。没有自动删除网络表/租约/策略版本的降级迁移；任何恢复都必须保留已占地址和未知任务，不能当作清理重试。详见 [主控运维](../deploy/controller-OPERATIONS.md)。
 
 ### 7.2 从独立 OVS 核心到显式 VM 门禁，仍不是完整路由 VPC
 
@@ -187,7 +197,7 @@ Status 和同 revision replay 是历史回执；VerifyLive 只读最后 applied 
 2. **已接通的启动/停机边界**：node/2 完整标量 NetworkBinding；root profile 选择保护好的本地 fabric config，wire 不携带 root 路径。Activate/Deactivate/Check 处理真实生命周期门禁，不使用历史 receipt 授权；OVS reboot 需显式 shutdown/start。
 3. **仍需真机验收**：专用单节点双租户的抓包、反欺骗、速率、端口重用、重启与故障，之后才可声称实际客户网络可用。用户延期真 KVM，不表示已通过。
 4. **仍缺安全释放/轮转**：旧数据面解绑且无迁移/恢复依赖后，才能另行确认审计释放。删实例、禁用节点、客户取消或查不到回执都不是释放租约证据。
-5. **已接跨节点、受控路由/NAT 与后台**：固定 VXLAN peer/VNI、全节点 epoch、批准网关前缀、namespace SNAT/DNAT、只读回执核对和新 epoch 恢复已实现；[OVERLAY_DESIGN.md](OVERLAY_DESIGN.md) 描述当前合同，不再仅为设计。DHCP/DNS、系统自动配置认证 underlay、浮动 IP/LB、无限制 Internet 出口及真实跨宿主验收仍缺。完整边界见 [NETWORK_MANAGEMENT.md](NETWORK_MANAGEMENT.md)，实测/跳过项见 [NAT_NETWORK_VALIDATION.md](NAT_NETWORK_VALIDATION.md)。
+5. **已接跨节点、路由/NAT 与公网资源**：固定 VXLAN peer/VNI、全节点 epoch、批准路由、namespace SNAT/DNAT、显式公网 IPv4 出口、地址库存/直绑/浮动 IP 与受限入站规则已有实现；[OVERLAY_DESIGN.md](OVERLAY_DESIGN.md) 是当前合同，不再仅为设计。DHCP/DNS 服务、自动配置 underlay、负载均衡及真实跨宿主/公网上联验收仍缺。公网始终受管理网/特殊地址隔离与独立 root 批准约束，不提供任意协议或无限制出口。当前边界见 [NETWORK_MANAGEMENT.md](NETWORK_MANAGEMENT.md)、[VM 公网资源](VM_PUBLIC_IP_MANAGEMENT.md)及 [PUBLIC_INGRESS.md](PUBLIC_INGRESS.md)；逐轮证据见[验证入口](VALIDATION.md)。
 
 ### 7.4 已移除累计 64 次变更上限，保留历史围栏
 

@@ -19,9 +19,10 @@
 | 虚拟机直绑 `direct` | 指定公网地址真正进入新虚拟机 cloud-init 静态网络、Linux Bridge NIC 和精确 IP/MAC nwfilter | 独立 root 批准的普通网络，单个公网 IPv4；不是改页面上的 IP 字符串 |
 | 浮动 IP `floating` | 独立 namespace 的目标专属出站 SNAT、整地址入站 DNAT，经已有 OVS/VXLAN VPC 转发 | 同一客户、同一 VPC 的已启用实例之间切换；不改 guest 私网地址，不等于 guest 直绑 |
 
-浮动 IP 开放该地址的 TCP/UDP 端口和 ICMP echo，以及受限的相关 ICMP 错误；
-并非只开放原 NAT profile 的少数转发端口，也不是任意 IP 协议透传。
-绑定前管理台必须显示暴露范围并明确确认。当前没有租户安全组，必须另行规划业务防火墙。
+原 schema9 legacy 浮动映射开放该地址的 TCP/UDP 端口和 ICMP echo，以及受限的相关
+ICMP 错误；不是任意 IP 协议透传。当前 schema10 新绑定必须固定实例入站策略，
+无规则时拒绝未经允许的新入站，放行范围由显式来源/协议/端口规则决定。管理台显示
+目标策略版本并要求确认；该受限入口过滤仍不是完整租户安全组，也不取代 guest 防火墙。
 私网、元数据、管理网、underlay、保留地址及批准池自身不能借公网 fallback 访问。
 已有独立 root 批准的精确网关目的前缀保留原优先级，不因浮动 IP 获得额外目的授权。
 

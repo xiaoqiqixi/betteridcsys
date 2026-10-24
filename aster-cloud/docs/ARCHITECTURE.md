@@ -1,6 +1,6 @@
 # 主控 / KVM 被控的功能与验收边界
 
-2026-10-23，开发中。以下把完整产品目标与实际交付分开，不用接口存在、页面效果或 fake runner 测试声称生产功能已经完成。
+2026-10-25，开发中。本文整理当前支持范围；逐轮执行结果以[验证记录](VALIDATION.md)中对应的精确提交为准。接口、页面或 fake runner 测试不代表生产功能已经验收。
 
 用户指定以 KVM 加强版能力为对标范围；逐项差距、当前代码锚点、网络/IPAM 数据约束及交付依赖见 [KVM_ENHANCED_PARITY.md](KVM_ENHANCED_PARITY.md)。该规格不表示加强版已完成，也不改变下面已有实现和实机验收边界。
 
@@ -13,7 +13,8 @@
   │                     │已付且明确发起、不可变产品快照
   │                     ▼ aster.controller/1
   └─ 主控：接纳/审计 → 资源预留 → 调度/任务 → 实际资源状态
-                                      │ 普通网络 node/1；显式 OVS VPC node/2，固定节点、mTLS
+                                      │ 普通网络 node/1；OVS VPC node/2；托管直绑 node/3
+                                      │ 固定节点、mTLS
                                       ▼
       计算节点（被控）：宿主机 libvirt → QEMU/KVM → 客户虚拟机
 ```
@@ -23,6 +24,7 @@
 ## 本轮已实现的代码路径
 
 - 独立 Vue 3 / TypeScript 管理台：登录、实例列表/创建/详情、真实状态读取、节点维护、按编号直达的资源操作任务详情、精确条件审计查询、用户与角色。支持中文/英文、浅色/深色、桌面/手机，加载/空/错误/忙碌态；没有演示数据回退。
+- 响应式导航：不宽于 1024 CSS px 时使用抽屉，宽屏使用弹性侧栏；文档高度轨道与视口高度固定面板分离，长页不遮挡主内容，短屏菜单独立滚动。键盘目标、焦点回归、背景 inert、滚动锁和跨断点历史清理分别验证；不是物理手机或实际浏览器缩放验收。
 - 管理会话：Secure / HttpOnly / SameSite Cookie、固定 HTTPS Origin、CSRF、登录限流、数据库实时权限、会话撤销、最后管理员保护。admin 包含全部明确权限；operator / viewer / custom 在后端逐动作校验，不能靠隐藏按钮授权。
 - 实例管理：审批 preset 创建、开关机、重启/强制关机、删除与持久化幂等任务。管理员创建是资源动作，不造财务订单。确认删除才回收相应节点的资源预留，迁移源遗留盘继续保守占位。
 - 快照/备份：仅旧普通网络合同下已停止的自有实例，创建、校验、恢复、删除；扁平 qcow2、尺寸/哈希与签名 manifest 校验、原盘恢复保留、限额与故障留痕。不是运行中一致性快照、定时异地备份或跨存储通用实现。OVS 实例拒绝旧 `aster.node.storage/1`，不能恢复时丢掉网络绑定。
@@ -33,15 +35,17 @@
 - 集中网络与任务绑定：migration 005 提供 VPC/IPv4 池/租约管理；migration 006 新增 `controller_instance_networks`。显式 VPC 创建在同一个 `controller_lock` 事务内预留 IP、冻结 node/owner/instance/lease/VPC/profile SHA、写任务与审计；旧 normal 路径不变。普通管理 API 的 planned/reserved 仍不是已联网，地址不自动释放，也不改历史产品快照。详见 [NETWORK_API.md](NETWORK_API.md)。
 - OVS 核心与节点生命周期门禁：保留此前 root CLI；本轮 `aster.node/2` 的精确网络绑定只映射到本地 root 批准 profile。节点固定 domain UUID/TAP/interface UUID，持久 XML link-down，禁止 autostart/managed-save 绕过；fabric 的 EX flock 跨整桥 drop→paused bootstrap→实际 TAP/ofport 核对→flow/meter 读回→link-up/resume。`Deactivate` 在停机前隔离并移除旧端口授权；已运行 start 走只读 `Check`，不重复 apply。失败保持 uncertain，不自动回退 Linux Bridge 或重试启动。旧仅观察 VM 电源的 reconcile 明确拒绝 OVS。详见 [fabric README](../internal/fabric/README.md) 与 [OVS 集成验收记录](OVS_VM_GATE_VALIDATION.md)。跨节点、批准网关与恢复已通过下述独立 overlay 合同接入，不能由旧单宿主门禁自动推断。
 - 跨节点网络与后台管理：schema **7** 的全局 VPC、成员 epoch、固定 VXLAN peer、受控目的路由与全节点 prepare/program/release 屏障已接入原 VM 门禁；新实例先完成 reserved epoch 再派发原创建。后台提供 VPC 创建、完整成员/路由/NAT 配置、逐节点任务、只读核对和显式恢复，未知结果不重 POST。见 [网络控制合同](OVERLAY_CONTROL.md) 与 [后台网络管理合同](NETWORK_MANAGEMENT.md)。
-- NAT 执行：root 预先批准的独立 namespace 支持 IPv4 SNAT 与 TCP/UDP 单端口 DNAT，可指向同 VPC 的跨节点 enabled 成员；精确 nft 读回、namespace conntrack 撤销、批准 pin 迁移和 owner 墓碑均纳入恢复边界。它只提供批准前缀出口，不提供默认全网 Internet、IPv6/hairpin NAT、公共 IP 分配或自动上联。见 [NAT 合同](../internal/fabric/NAT.md) 与 [本轮验收记录](NAT_NETWORK_VALIDATION.md)。
+- NAT 执行：root 预先批准的独立 namespace 支持 IPv4 SNAT 与 TCP/UDP 单端口 DNAT，可指向同 VPC 的跨节点 enabled 成员；另有显式批准的公网 IPv4 出站模式，无须逐个配置公网目的前缀，但继续隔离管理网、underlay、元数据与保留地址。精确 nft 读回、conntrack 撤销、批准 pin 迁移和 owner 墓碑均纳入恢复边界。没有 IPv6/hairpin NAT 或自动物理上联。见 [NAT 合同](../internal/fabric/NAT.md)、[公网出口](PUBLIC_NAT_EGRESS.md) 与 [历史集成验证](NAT_NETWORK_VALIDATION.md)。
+- 公网资源：schema 8 提供公网池、追加库存、唯一分配、实际 NAT 地址选择与确认回收；schema 9 增加普通网络新实例的 `node/3` 真直绑、停止态同 IP/MAC 接管、同 owner/VPC 浮动 IP 绑定/跨节点成员切换/解绑，以及直绑地址保持冷迁移和显式源退役。数据库分配不证明物理地址所有权或上游连通，不能热换运行实例主 IP。见 [公网库存](PUBLIC_IP_MANAGEMENT.md) 与 [VM 公网资源](VM_PUBLIC_IP_MANAGEMENT.md)。
+- 浮动 IPv4 公网入站规则：schema 10 将实例策略与地址绑定分离，新绑定默认拒绝未经允许的新入站；修改策略、切换目标和撤销均冻结完整版本并经过全节点屏障。它只覆盖 VPC 浮动 IPv4 入口，不是完整安全组；旧 legacy 无策略映射不重写且必须明确提示。当前就绪还检查新鲜节点能力和当前 root 批准，不能把历史 ACK 当实时保护。见 [公网入站规则](PUBLIC_INGRESS.md)。
 - 财务资源 transport：新增由财务插件管理器管理的 `resource.aster-cloud` worker，显式选择后接入原持久开通任务，不新增支付渠道，不把 worker ACK 当服务已开通；没有 HTTP fallback。安装/启用/凭据边界见 [RESOURCE_PLUGINS.md](../../vps-billing/docs/RESOURCE_PLUGINS.md)。另保留独立财务资源适配 CLI：`aster-billing-plugin` 复用原公开商品/请求/六字段结果协议与固定 HTTPS 安全 transport，显式 send、只读 lookup；不是支付渠道、不由 runtime-plugin manager 加载、不自动证明付款或更新服务，也不替代财务原生持久开通链。详见 [适配器 README](../plugins/billingconnector/README.md)。
 
 机器 API、管理会话、节点 mTLS 是独立安全边界。旧合同冷迁移不是热迁移，源 fence 不经 API 自动解除；任一侧未知时保持占位，不能双启动。
 
 | 状态域 | 当前版本与兼容边界 |
 | --- | --- |
-| 主控 MySQL | migration 001–006 保持不可变，007 增加全局 VPC/epoch，当前 schema **7**；绑定、租约、epoch 和任务必须一起备份。旧 binary 拒绝新数据库，不能只换程序回滚。 |
-| 节点 journal | 兼容既有 schema 1/2；首次持久接纳 `aster.node/2` 后升 schema **3**，网络绑定属于所有权条件。旧节点不能忽略绑定继续执行。显式网络恢复 completion 升 schema **4**；OVS 存储/迁移及旧 reconcile 明确拒绝。 |
+| 主控 MySQL | 当前 schema **10**：007 全局 VPC/epoch，008 公网库存/租约，009 VM 公网资源，010 实例入站策略；001–009 历史迁移保持不可变。绑定、地址占用、策略版本、epoch、操作和审计须一致备份。旧 binary 拒绝新数据库，不能只换程序回滚。 |
+| 节点 journal | 兼容既有 schema 1/2；node/2 绑定使用 **3**，显式网络恢复 completion 使用 **4**，托管公网绑定与永久退役墓碑使用 **5**。旧节点不能忽略新绑定继续执行；OVS 存储/迁移及旧 reconcile 明确拒绝。 |
 | fabric journal | 兼容此前 schema-1 CLI；首次启停门禁写 schema **2**，增加持久 preparing/completed/uncertain 围栏。归档/overlay 使用 schema **3**，NAT owner 与 `nat_profile_ids` 保留所有权墓碑；旧 binary 不得忽略新字段降级。pending/unknown 不允许借历史 applied 回执放行。 |
 
 升级须停写、完整备份，按兼容版本或已演练的数据库/journal 恢复流程处理；不自动删表、删除 journal、释放未知租约或重新生成任务 ID。
@@ -91,7 +95,9 @@
 
 ## 仍未交付的完整产品范围
 
-客户主控 SSO/MFA、受控 VNC、热迁移/HA、定时备份计划与异地对象存储、独立数据盘/扩容、重装救援、完整子网/路由生命周期与 IPv6/安全组、浮动 IP/LB、无限制 Internet 出口、IPv6/hairpin NAT、历史带宽计量、排空自动调度、告警/日志外送与保留轮转、无 root 的 API 权限分离，以及生产安装/升级/灾难恢复演练仍未完成。应用运行事件已统一JSON白名单、审计支持精确只读筛选；journald独立限额仅提供可选模板，尚未完成生产留存/外送验收。区域/节点/preset 的信任根仍由 root 私有配置管理，网页只允许查看及维护切换，不开放任意 endpoint/证书上传。普通 VPC 管理对象仍表示计划，只有显式批准的 VPC 创建任务会使用新门禁；现已有批准网关路由、固定 peer 跨节点 VPC 和受限 NAT 的实现；DHCP/DNS、802.1Q uplink、共享 IP 组限速、流量配额及上述网络的真实 KVM/跨宿主验收仍不包含在已完成范围。OVS 专用桥仍须独立 root 准备，安装器不改宿主网卡。不能将此轮更新宣传为上述全部能力已经生产可用。
+客户主控 SSO/MFA、受控 VNC、热迁移/HA、定时备份与异地对象存储、独立数据盘/扩容、重装救援、完整子网/路由生命周期、IPv6/完整安全组、负载均衡、IPv6/hairpin NAT、历史带宽计量、排空自动调度、告警/日志外送与保留轮转、无 root 的 API 权限分离，以及生产安装/升级/灾难恢复演练仍未完成。
+
+应用事件已有 JSON 白名单和只读审计筛选；journald 限额仍是可选模板，生产留存/外送待验。区域/节点/preset 信任根仍由 root 私有配置管理，网页不能任意改 endpoint 或上传证书。普通 VPC 管理对象仍是计划/预留，只有显式批准的创建任务走门禁。固定 peer、批准路由、公网 IPv4 出口、浮动 IP 与受限入站规则已有实现，但真实 KVM/跨宿主/公网上联待验；DHCP/DNS 服务、802.1Q uplink、共享 IP 组限速和流量配额仍缺。guest 可使用 root 批准的静态 DNS，不等于交付 DNS 服务。OVS 专用桥及物理上联须独立准备，安装器不改宿主网卡。
 
 
 ## fabric 历史容量与恢复边界

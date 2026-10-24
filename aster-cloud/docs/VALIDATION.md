@@ -1,4 +1,35 @@
-# 管理台 / 权限 / 实例 / 存储 / 冷迁移开发验证
+# 开发验证入口与历史记录
+
+验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列最新已核对基线；后续日期段落保留原轮次的数量、工具链和限制，不是当前完整测试数量。独立主控没有正式 Release，财务 v0.5.9 发行包不因这些开发记录而改变。
+
+## 2026-10-25 · 已核对源码 `66e2d49`
+
+精确提交：[`66e2d49a2f08e119f144c311756342be2a1aaa27`](https://github.com/xiaoqiqixi/betteridcsys/commit/66e2d49a2f08e119f144c311756342be2a1aaa27)。相对 `f58c4bd`，本轮只改管理台、测试、浏览器门禁和设计文档：修复响应式侧栏、短屏菜单独立滚动及完整焦点目标，并改为等待原生 WebCrypto 完成的测试断言。没有修改财务/主控后端、数据库迁移、依赖或工作流，也没有创建标签或 Release。
+
+| 验证层 | 实际结果 | 不能由此推出的结论 |
+| --- | --- | --- |
+| 管理台检查 | 本地及官方 CI 的格式、类型、32 文件 / 845 tests、生产构建通过 | 不是生产部署验收 |
+| 隔离真实 MySQL | 483 顶层 / 2006 子测试，0 FAIL、0 SKIP；race、静态构建与 Go 漏洞门禁通过 | 不是 VM 开通、物理网络或整机恢复验收 |
+| Firefox / 严格 TLS / MySQL | 原 162 项业务检查 + 51 项导航检查，共 213；52 张业务 PNG + 12 张导航 PNG，共 64 | 节点 RPC 是确定性测试替身，不是真 KVM；CSS 小视口不等于物理手机或实际 200% 浏览器缩放 |
+| 短屏与人工查看 | 四组短屏键盘证明各有 7 个完整、可见、可点击且已聚焦的目标，页面滚动位置不变；人工查看 6 张代表性正式截图 | 没有声称逐张人工检查全部 64 张截图，也没有宣称所有浏览器/设备组合通过 |
+| 同 SHA CI | 两条工作流共 12 项必需任务最终全部成功 | 首次 MySQL runner 超时取消不算通过；后续文档/代码提交须另行核验 |
+
+对应 [Read-only CI](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40118438913) 与 [Controller and KVM node development checks](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40118438918)。浏览器拒绝未受信任 CA 后，仅在独立私有 Firefox profile 中信任测试 CA，`ignoreHTTPSErrors=false`；未修改用户/主机信任库。产物 ZIP SHA-256 与 GitHub 元数据相符。
+
+导航覆盖 320、390、768、1024、1025、1440 CSS px，真实长业务页的顶部/中部/底部，两种语言/主题的短桌面视口、抽屉焦点循环与 Escape/Back/遮罩关闭、跨 1024/1025 断点清理、skip link 不破坏 hash 路由。小 CSS 视口只证明等效 reflow。复现与断言边界见[浏览器门禁](../deploy/ci/NETWORK_BROWSER.md)。
+
+脱敏回执、失败轮次和截图留在被 Git 忽略的私有证据目录 `aster-cloud/artifacts/sidebar-responsive-20261025/`，不把私钥、口令、Cookie、DSN 或原始业务数据放进公开仓库。当前功能范围另见[架构矩阵](ARCHITECTURE.md)与[更新记录](../CHANGELOG.md)。真实 KVM/OVS 隔离/限速、跨物理节点、公网上联、宿主重启恢复和生产安装仍后置。
+
+## 按专题查阅
+
+| 文档 | 用途 |
+| --- | --- |
+| [公网入站规则](PUBLIC_INGRESS.md) | schema10 的当前合同、默认拒绝、历史兼容与未验范围 |
+| [VM 公网资源](VM_PUBLIC_IP_MANAGEMENT.md) · [公网库存](PUBLIC_IP_MANAGEMENT.md) · [公网 NAT 出口](PUBLIC_NAT_EGRESS.md) | schema8/9 引入的合同及各轮验证边界，不替代上方最新源码结果 |
+| [NAT / 网络集成](NAT_NETWORK_VALIDATION.md) · [OVS 集成](OVS_VM_GATE_VALIDATION.md) · [网络增量](NETWORK_VALIDATION.md) | 2026-10-23 起的分阶段实现、失败修正、实测和跳过项 |
+| [运维增量](OPERATIONS_VALIDATION.md) · [早期浏览器补验](BROWSER_VALIDATION.md) | 任务/审计/日志及 2026-10-22/23 的历史基线 |
+
+## 2026-10-22 原始验证记录
 
 2026-10-22。本轮仅更新 main，不创建或覆盖标签，不发布独立主控正式 Release。财务 v0.5.9 安装产物不变，Ubuntu22 上既有财务 v0.5.8 服务不升级。真实 KVM 宿主验收按用户要求后置。
 

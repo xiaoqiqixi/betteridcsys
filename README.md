@@ -1,6 +1,13 @@
 # betteridcsys · 星屿云 Aster Cloud
 
-星屿云是一套 Go、Vue 3 / TypeScript 与 MySQL 构建的云业务财务控制台，提供客户和管理员入口、独立币种报价、订单、账单、站点设置与审计。全新安装默认使用人民币 CNY；运营者可以配置币种名称、金额前后缀、0–6 位小数及独立价格。语言与币种分别选择，不自动换汇，也不改写历史金额。升级会保留已有 USD 报价和业务记录。
+星屿云使用 Go、Vue 3 / TypeScript 与 MySQL，仓库包含两个独立系统：已发布的业务财务 Core，以及仍在开发的云主控与 KVM 被控。财务负责销售和账务，主控负责资源任务，被控安装在计算宿主机；付款成功不等于虚拟机已开通。
+
+| 系统 | 状态与职责 | 文档入口 |
+| --- | --- | --- |
+| [`vps-billing/`](vps-billing/README.md) | 财务 Core `0.5.9`：客户/管理员、报价、订单、账单、站点设置与审计 | [安装](vps-billing/docs/INSTALL.md) · [更新记录](vps-billing/docs/CHANGELOG.md) · [验证](vps-billing/docs/VALIDATION.md) |
+| [`aster-cloud/`](aster-cloud/README.md) | 独立主控、管理台与宿主机被控；开发中，尚未完成真实 KVM/物理网络与生产部署验收 | [功能边界](aster-cloud/docs/ARCHITECTURE.md) · [更新记录](aster-cloud/CHANGELOG.md) · [验证](aster-cloud/docs/VALIDATION.md) |
+
+财务全新安装默认使用人民币 CNY；运营者可以配置币种名称、金额前后缀、0–6 位小数及独立价格。语言与币种分别选择，不自动换汇，也不改写历史金额。升级会保留已有 USD 报价和业务记录。
 
 支付渠道由运营者与开发者按[支付插件接入指南](vps-billing/docs/PAYMENT_PLUGINS.md)接入第三方服务，完成适配、构建和验收。官方发行默认关闭支付；创建订单会生成待付款账单，创建订单或打开结账页面本身不会将账单记为已付。独立主控/被控仍在开发，财务默认没有自动开通 worker。
 
@@ -14,7 +21,7 @@
 
 主控与宿主机被控源码位于 [`aster-cloud/`](aster-cloud/README.md)，与财务使用独立进程、数据库和权限。被控通过本机 libvirt/QEMU/KVM 管理实际虚拟机，不是装在客户虚拟机里的普通 Agent；目标为 Ubuntu22.04 及以上的 amd64 宿主机。只借鉴行业成品的分层思路，不对接 IDCsmart API。
 
-当前包含独立 Vue 管理台、staff RBAC、实例动作、停止态快照/备份和四阶段冷迁移的开发实现；不是已完成全部生产验收的云平台，也不包含在财务 v0.5.9 六资产中。真实宿主、网络及恢复验收由用户明确延后，不能从模拟执行器、XML校验或程序可编译推断已开通。当前功能、限制和后续门槛见[开发矩阵](aster-cloud/docs/ARCHITECTURE.md)与[独立验证记录](aster-cloud/docs/VALIDATION.md)。
+当前已有独立 Vue 管理台、staff RBAC、实例动作、旧普通网络实例的停止态快照/备份与四阶段冷迁移，以及显式 OVS VPC、NAT、公网地址和浮动 IPv4 入站规则的受限实现。管理台适配桌面侧栏与手机/平板抽屉，开发验证使用真实 HTTPS、MySQL 和明确标识的模拟节点 RPC。它不是已完成生产验收的云平台，也不包含在财务 v0.5.9 六资产中；真实宿主、物理网络和恢复验收仍后置。具体支持范围见[功能矩阵](aster-cloud/docs/ARCHITECTURE.md)，最新源码验证见[验证入口](aster-cloud/docs/VALIDATION.md)。
 
 ## 安装与目录
 

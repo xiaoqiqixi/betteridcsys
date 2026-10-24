@@ -128,8 +128,10 @@ GET 原操作并核对 actor/action/target/request/result，不能关弹窗、�
 - 本地Darwin无MySQL/原生Linux条件的skip明确不算验收；最终同提交CI记录另存
   `artifacts/public-ip-pool-20261024/`，不能套用旧6498480绿色CI。
 - 不宣称整个KVM加强版功能已全部完成；其余差距仍见
-  [功能矩阵](KVM_ENHANCED_PARITY.md)。本次是公网IPv4 NAT出口管理，不是IPv6、
-  任意VM多公网网卡/EIP、热迁移、动态上游BGP/ARP发布或NAT HA实现。
+  [功能矩阵](KVM_ENHANCED_PARITY.md)。本文 schema8 增量仅为公网 IPv4 NAT 出口管理，
+  不包含 VM 直绑/浮动 IP；后续 schema9 已另行实现受限的[VM 公网资源](VM_PUBLIC_IP_MANAGEMENT.md)，
+  不能由本页旧轮次的七 epoch 测试推定通过。IPv6、任意多公网网卡、热迁移、
+  动态上游 BGP/ARP 发布或 NAT HA 仍未实现。
 - 真KVM、跨物理节点、真实公网/上联、物理重启和生产部署验收按要求后置。
   财务服务器本轮不作为网络实验机，也不进行真实付款。
 

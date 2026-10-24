@@ -1,6 +1,34 @@
 # 变更记录
 
-## 主干维护 · 支付故障隔离、布局边界与概览查询（待发行）
+本文件仅记录财务 Core 与独立运行时插件。独立主控 / KVM 被控的 main 开发增量见
+[主控变更记录](../../aster-cloud/CHANGELOG.md)，不属于财务正式发行资产。
+下文旧版本按当时范围保留；历史的“尚未实现”和阶段性测试措辞不表示当前 main 的完整状态。
+
+## 当前版本与近期更新导航
+
+当前正式财务版本为 **Core v0.5.9**，于 **2026-10-22** 发布，固定源码 `4252fed`、六项资产；
+SMTP 保持独立 **v1.1.0**、五项资产，不随主控 main 开发重新发行。正式发行只表示版本交付，
+不代表真实支付渠道、主控/KVM 或目标运营环境已经验收。
+
+| 版本 | 变化摘要与边界 | 详细说明与发行入口 |
+| --- | --- | --- |
+| Core 0.5.9（当前正式） | 独立产品配置、新订单私密配置快照、已付款订单的唯一手动任务；schema 13 / 23 表。默认无 worker，不附带完整主控或真实 VM 开通。 | [发行说明](RELEASE-v0.5.9.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.9) |
+| Core 0.5.8（历史） | 类型 → 地区 → 节点 → 套餐购买与后台分类管理，默认选中当前节点首个公开套餐；schema 12 / 20 表。节点只是商品分类，不是实际计算资源。 | [发行说明](RELEASE-v0.5.8.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.8) |
+| Core 0.5.7（历史） | 正式接入客户/管理员控制台，整理语言、币种与账户偏好入口，统一主题语义；继续 schema 10，不增加支付渠道或资源开通。 | [发行说明](RELEASE-v0.5.7.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.7) |
+| Core 0.5.6（历史） | 客户与角色管理、停用/密码重置/会话撤销、单笔订单详情、商品草稿/复制/编辑/独立定价，以及脱敏日志与分页审计；009/010 将财务库提升至 schema 10。 | [历史发布资料](RELEASE.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.6) |
+| SMTP 1.1.0（独立） | `aster.smtp/1`，兼容 Core `>=0.4.0,<0.6.0`；仍须独立安装和批准，默认关闭，仅提供管理员固定测试邮件。 | [插件说明](PLUGINS.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/smtp-v1.1.0) |
+
+各版精确源码、实际构建/发布与未验范围见[验证记录](VALIDATION.md)和对应 Release 的
+`BUILD.json` / `PROVENANCE.json`；标签存在或历史文档中的准备命令不等于发行成功。
+金额、币种、支付幂等与历史快照继续按各版明确合同处理，不从新商品配置补造旧记录。
+
+## Core 0.5.4 · 支付故障隔离、布局边界与概览查询（历史）
+
+本节原以“待发行”记录，相关提交 `c6f45d0`、`58961d4`、`1c3419a` 均已进入
+`v0.5.4`（`6a21841`）；下列文字保留当时实现与阶段性验证范围，不表示仍待发行。
+该版后续还包含登录错误随当前语言更新及订单列表内复用已校验币种快照，详见
+[验证记录](VALIDATION.md#core-054登录语言修复与维护补丁)与
+[v0.5.4 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.4)。
 
 - 修复主动取消请求误触发支付插件熔断，以及旧批准项的在途结果污染新批准项熔断状态的问题；保留真实 RPC、握手超时和并发限制。
 - 支付入口请求超时或结果不确定时，明确提示核对原渠道、刷新账单并避免重复支付，不再使用通用的稍后重试提示。
