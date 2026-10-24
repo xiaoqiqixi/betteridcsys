@@ -64,7 +64,7 @@ type Migration struct {
 
 func OperationPermission(action string) string {
 	switch action {
-	case "create", "start", "shutdown":
+	case "create", "start", "shutdown", "public_adopt", "public_detach":
 		return "instances.manage"
 	case "reboot", "force_off", "delete":
 		return "instances.dangerous"
@@ -77,6 +77,13 @@ func OperationPermission(action string) string {
 	}
 	return ""
 }
+
+// Binding tasks are planned only by the resource API's locked version/CAS
+// transaction. Their execution still uses the ordinary explicit task endpoints.
+func publicIPBindingAction(action string) bool {
+	return action == "public_adopt" || action == "public_detach"
+}
+
 func dangerous(action string) bool {
 	switch action {
 	case "reboot", "force_off", "delete", "snapshot_restore", "snapshot_delete", "backup_restore", "backup_delete", "migrate_prepare", "migrate_transfer", "migrate_activate", "migrate_retire_source":
@@ -85,7 +92,7 @@ func dangerous(action string) bool {
 	return false
 }
 func (in OperationInput) valid(instance string) bool {
-	if OperationPermission(in.Action) == "" || (in.Confirmation != "" && in.Confirmation != instance) || dangerous(in.Action) && in.Confirmation != instance {
+	if publicIPBindingAction(in.Action) || OperationPermission(in.Action) == "" || (in.Confirmation != "" && in.Confirmation != instance) || dangerous(in.Action) && in.Confirmation != instance {
 		return false
 	}
 	switch in.Action {
