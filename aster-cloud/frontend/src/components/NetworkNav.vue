@@ -8,6 +8,7 @@ const route = useRoute(),
   } = useConsole();
 const items = computed(() => [
   { path: "/networks/overlays", label: tr("VPC 与路由", "VPC & routing") },
+  { path: "/networks/public-ips", label: tr("公网 IP", "Public IPs") },
   { path: "/networks/vpcs", label: tr("节点网络", "Node networks") },
   { path: "/networks/pools", label: tr("IP 地址池", "IP pools") },
   { path: "/networks/leases", label: tr("地址分配", "IP allocations") },

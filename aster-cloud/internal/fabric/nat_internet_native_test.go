@@ -35,6 +35,20 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	})
 	e, _, c, s := internetNATFixture(t)
 	p := c.NATProfiles[0]
+	// Two real source addresses on the same dedicated veth; a third approved
+	// reserve stays unconfigured. Selection is controller intent, provisioning
+	// and its bounded approval remain independent root operations.
+	p.PublicIPv4s = []string{"8.8.4.3", "8.8.4.4"}
+	p.AllowedSourceCIDRs = []string{p.UplinkGatewayIPv4 + "/32"}
+	p.AllowedPorts = []NATPortRange{{"tcp", 18080, 18080}, {"udp", 18083, 18083}}
+	c.Gateways[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32"}
+	c.GuestNetworks[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32"}
+	s.Gateways[0].AllowedPrefixes = []string{p.UplinkGatewayIPv4 + "/32"}
+	s.NATPolicies[0].PublicIPv4 = p.PublicIPv4s[0]
+	s.NATPolicies[0].Forwardings = []overlayproto.NATForwarding{
+		{ID: strings.Repeat("a", 32), Protocol: "tcp", PublicPort: 18080, TargetInstanceID: s.Members[0].InstanceID, TargetPort: 80, SourceCIDR: p.UplinkGatewayIPv4 + "/32"},
+		{ID: strings.Repeat("b", 32), Protocol: "udp", PublicPort: 18083, TargetInstanceID: s.Members[0].InstanceID, TargetPort: 53, SourceCIDR: p.UplinkGatewayIPv4 + "/32"},
+	}
 	suffix := fmt.Sprintf("%d", os.Getpid())
 	p.Namespace = "aster-pub-" + suffix
 	insideNS, outsideNS := "aster-pubin-"+suffix, "aster-pubout-"+suffix
@@ -66,6 +80,7 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	}
 	command(NATIP, "-n", p.Namespace, "addr", "add", g.IPv4+"/24", "dev", p.InsideInterface)
 	command(NATIP, "-n", p.Namespace, "addr", "add", p.PublicIPv4+"/24", "dev", p.OutsideInterface)
+	command(NATIP, "-n", p.Namespace, "addr", "add", p.PublicIPv4s[0]+"/32", "dev", p.OutsideInterface)
 	command(NATIP, "-n", p.Namespace, "route", "add", "default", "via", p.UplinkGatewayIPv4, "dev", p.OutsideInterface)
 	command(NATIP, "-n", insideNS, "addr", "add", s.Members[0].IPv4+"/24", "dev", inPeer)
 	command(NATIP, "-n", insideNS, "route", "add", "default", "via", g.IPv4, "dev", inPeer)
@@ -106,8 +121,15 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	startNativeNATServer(t, outsideNS, publicRemote+":18081")
 	startNativeNATServer(t, outsideNS, publicRemote+":18082", "udp4")
 	startNativeNATServer(t, insideNS, s.Members[0].IPv4+":80")
+	startNativeNATServer(t, insideNS, s.Members[0].IPv4+":53", "udp4")
 	for _, addr := range blocked {
 		startNativeNATServer(t, outsideNS, addr+":18081")
+	}
+	missing := s
+	missing.NATPolicies = append([]overlayproto.NATPolicy{}, s.NATPolicies...)
+	missing.NATPolicies[0].PublicIPv4 = p.PublicIPv4s[1]
+	if err := e.probeNAT(ctx, c, missing, p); err == nil {
+		t.Fatal("approved but unconfigured public address passed native probe")
 	}
 	if err = e.prepareNAT(ctx, c, l, s); err != nil {
 		t.Fatal("public prepare", err)
@@ -129,7 +151,7 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 			url = publicRemote + ":18082"
 		}
 		out, err := nativeNATClient(insideNS, url, network)
-		if err != nil || !strings.Contains(string(out), "NAT_REMOTE="+p.PublicIPv4+":") {
+		if err != nil || !strings.Contains(string(out), "NAT_REMOTE="+p.PublicIPv4s[0]+":") {
 			dumpNativeNAT(t, p)
 			t.Fatalf("public %s source/reply: %v %s", network, err, out)
 		}
@@ -137,6 +159,15 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 	if out, err := nativeNATClient(insideNS, publicRemote, "icmp4"); err != nil || !strings.Contains(string(out), "NAT_ICMP_REPLY="+publicRemote) {
 		dumpNativeNAT(t, p)
 		t.Fatal("public ICMP echo/reply", err, string(out))
+	}
+	for _, network := range []string{"tcp4", "udp4"} {
+		url := "http://" + p.PublicIPv4s[0] + ":18080"
+		if network == "udp4" {
+			url = p.PublicIPv4s[0] + ":18083"
+		}
+		if out, err := nativeNATClient(outsideNS, url, network); err != nil || !strings.Contains(string(out), "NAT_REMOTE="+p.UplinkGatewayIPv4+":") {
+			t.Fatal("selected-IP DNAT source/target", network, err, string(out))
+		}
 	}
 	// The peer can route directly to the guest; only the actual namespace rules
 	// prevent a new inbound connection. A missing port mapping must not become a
@@ -149,26 +180,63 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 			t.Fatal("protected/metadata/underlay destination reached", addr, string(out))
 		}
 	}
-	held := startNativeNATHeldClient(t, insideNS, "http://"+publicRemote+":18081")
-	s.NATPolicies[0].InternetEgressEnabled = false
-	for _, phase := range []struct {
-		name string
-		run  func(context.Context, OverlayConfig, *ledger, overlayproto.Snapshot) error
-	}{{"prepare", func(ctx context.Context, c OverlayConfig, l *ledger, s overlayproto.Snapshot) error {
-		return e.prepareNAT(ctx, c, l, s)
-	}}, {"program", e.programNAT}, {"release", e.releaseNAT}} {
-		if err := phase.run(ctx, c, l, s); err != nil {
-			t.Fatal("disable public "+phase.name, err)
+	apply := func(label string) {
+		t.Helper()
+		for _, phase := range []struct {
+			name string
+			run  func(context.Context, OverlayConfig, *ledger, overlayproto.Snapshot) error
+		}{{"prepare", func(ctx context.Context, c OverlayConfig, l *ledger, s overlayproto.Snapshot) error {
+			return e.prepareNAT(ctx, c, l, s)
+		}}, {"program", e.programNAT}, {"release", e.releaseNAT}} {
+			if err := phase.run(ctx, c, l, s); err != nil {
+				t.Fatal(label+" "+phase.name, err)
+			}
 		}
 	}
-	if err := os.WriteFile(held+".continue", []byte("continue"), 0600); err != nil {
-		t.Fatal(err)
+	assertHeldRevoked := func(held, label string) {
+		t.Helper()
+		if err := os.WriteFile(held+".continue", []byte("continue"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		waitNativeNATFile(t, held+".result")
+		result, err := os.ReadFile(held + ".result")
+		if err != nil || string(result) != "blocked" {
+			t.Fatal(label, err, string(result))
+		}
 	}
-	waitNativeNATFile(t, held+".result")
-	result, err := os.ReadFile(held + ".result")
-	if err != nil || string(result) != "blocked" {
-		t.Fatal("existing public TCP survived disable", err, string(result))
+	// Switching a live allocation must revoke old conntrack, not merely update
+	// rules while an established flow retains the previous source identity.
+	held := startNativeNATHeldClient(t, insideNS, "http://"+publicRemote+":18081")
+	s.NATPolicies[0].PublicIPv4 = p.PublicIPv4
+	apply("switch selected public IP")
+	assertHeldRevoked(held, "existing TCP survived public-IP switch")
+	for _, network := range []string{"tcp4", "udp4"} {
+		url := "http://" + publicRemote + ":18081"
+		if network == "udp4" {
+			url = publicRemote + ":18082"
+		}
+		if out, err := nativeNATClient(insideNS, url, network); err != nil || !strings.Contains(string(out), "NAT_REMOTE="+p.PublicIPv4+":") {
+			t.Fatal("switched public source/reply", network, err, string(out))
+		}
+		url = "http://" + p.PublicIPv4 + ":18080"
+		if network == "udp4" {
+			url = p.PublicIPv4 + ":18083"
+		}
+		if out, err := nativeNATClient(outsideNS, url, network); err != nil || !strings.Contains(string(out), "NAT_REMOTE="+p.UplinkGatewayIPv4+":") {
+			t.Fatal("switched public DNAT", network, err, string(out))
+		}
+		old := "http://" + p.PublicIPv4s[0] + ":18080"
+		if network == "udp4" {
+			old = p.PublicIPv4s[0] + ":18083"
+		}
+		if out, err := nativeNATClient(outsideNS, old, network); err == nil {
+			t.Fatal("old public IP retained DNAT binding", network, string(out))
+		}
 	}
+	held = startNativeNATHeldClient(t, insideNS, "http://"+publicRemote+":18081")
+	s.NATPolicies[0].InternetEgressEnabled = false
+	apply("disable public egress")
+	assertHeldRevoked(held, "existing public TCP survived disable")
 	for _, network := range []string{"tcp4", "udp4"} {
 		url := "http://" + publicRemote + ":18081"
 		if network == "udp4" {
@@ -176,6 +244,13 @@ func TestNativeNATInternetEgressAndRevocation(t *testing.T) {
 		}
 		if out, err := nativeNATClient(insideNS, url, network); err == nil {
 			t.Fatal("disabled public egress survived", network, string(out))
+		}
+	}
+	s.NATPolicies = nil
+	apply("remove public IP binding")
+	for _, address := range []string{p.PublicIPv4, p.PublicIPv4s[0]} {
+		if out, err := nativeNATClient(outsideNS, "http://"+address+":18080"); err == nil {
+			t.Fatal("released binding retained DNAT", address, string(out))
 		}
 	}
 	if err = e.verifyNAT(ctx, c, l, s, true); err != nil {

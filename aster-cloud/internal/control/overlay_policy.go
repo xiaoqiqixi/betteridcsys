@@ -17,6 +17,7 @@ type OverlayNATProfile struct {
 	ProfileID           string                `json:"profile_id"`
 	ProfileSHA256       string                `json:"profile_sha256"`
 	PublicIPv4          string                `json:"public_ipv4"`
+	PublicIPv4s         []string              `json:"public_ipv4s,omitempty"`
 	AllowSNAT           bool                  `json:"allow_snat"`
 	AllowInternetEgress bool                  `json:"allow_internet_egress,omitempty"`
 	AllowedSourceCIDRs  []string              `json:"allowed_source_cidrs"`
@@ -69,6 +70,9 @@ func validOverlayPolicyApproval(cluster OverlayCluster, nodes map[string]bool) b
 		ip, err := netip.ParseAddr(p.PublicIPv4)
 		key := p.NodeID + ":" + p.ProfileID
 		if !nodes[p.NodeID] || !nodeproto.ValidID(p.VPCID) || !nodeproto.ValidNodeID(p.ProfileID) || !overlayproto.ValidSHA(p.ProfileSHA256) || g.NodeID != p.NodeID || g.InstanceID != p.GatewayInstanceID || profiles[key] || public[p.NodeID+":"+p.PublicIPv4] || natVPCs[p.VPCID] || natGateways[p.GatewayInstanceID] || err != nil || !ip.Is4() || !ip.IsGlobalUnicast() || ip.String() != p.PublicIPv4 || p.AllowedSourceCIDRs == nil || len(p.AllowedSourceCIDRs) > 32 || p.AllowedPorts == nil || len(p.AllowedPorts) > 64 {
+			return false
+		}
+		if !validPublicIPApprovalAddresses(p) {
 			return false
 		}
 		if p.AllowInternetEgress && (!p.AllowSNAT || !overlayproto.PublicInternetIPv4(p.PublicIPv4)) {
@@ -129,9 +133,9 @@ func overlayPoliciesApproved(cluster OverlayCluster, snapshot overlayproto.Snaps
 			if root.NodeID != selected.NodeID || root.VPCID != selected.VPCID || root.GatewayInstanceID != selected.GatewayInstanceID || root.ProfileID != selected.ProfileID || root.ProfileSHA256 != selected.ProfileSHA256 {
 				continue
 			}
-			approved = gatewaySelected && (!selected.SNATEnabled || root.AllowSNAT)
+			approved = gatewaySelected && (!selected.SNATEnabled || root.AllowSNAT) && (selected.PublicIPv4 == "" || approvedPublicIPAddress(root, selected.PublicIPv4))
 			if selected.InternetEgressEnabled {
-				approved = approved && selected.SNATEnabled && root.AllowSNAT && root.AllowInternetEgress && overlayproto.PublicInternetIPv4(root.PublicIPv4)
+				approved = approved && selected.SNATEnabled && root.AllowSNAT && root.AllowInternetEgress && overlayproto.PublicInternetIPv4(effectivePublicIPAddress(root, selected.PublicIPv4))
 			}
 			for _, forwarding := range selected.Forwardings {
 				portOK := false

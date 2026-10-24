@@ -34,6 +34,10 @@ export const actionNames: Record<string, [string, string]> = {
   migrate_activate: ["激活目标实例", "Activate target"],
 };
 export const failureNames: Record<string, [string, string]> = {
+  public_ip_exhausted: [
+    "此出口暂无可分配地址，请更换地址池或补充可用地址。",
+    "No address is available for this egress. Choose another pool or add available addresses.",
+  ],
   network: [
     "连接失败，请检查网络后重新加载。",
     "Connection failed. Check your connection and reload.",
@@ -75,7 +79,7 @@ export const permissionNames: Record<string, [string, string]> = {
   ],
   "instances.read": ["查看实例与任务", "View instances and tasks"],
   "migration.manage": ["管理实例迁移", "Manage migrations"],
-  "nodes.manage": ["管理节点维护", "Manage node maintenance"],
+  "nodes.manage": ["管理节点与网络", "Manage nodes and networks"],
   "nodes.read": ["查看节点", "View nodes"],
   "settings.manage": ["管理系统设置", "Manage system settings"],
   "storage.manage": [
@@ -87,6 +91,14 @@ export const permissionNames: Record<string, [string, string]> = {
   "users.manage": ["管理成员与权限", "Manage members and access"],
 };
 export const auditNames: Record<string, [string, string]> = {
+  "public_ip.pool.create": ["公网地址池已创建", "Public IP pool created"],
+  "public_ip.pool.extend": ["公网地址池已补充", "Public IP pool extended"],
+  "public_ip.pool.state": [
+    "公网地址池状态已修改",
+    "Public IP pool state changed",
+  ],
+  "public_ip.lease.allocate": ["公网 IP 已分配", "Public IP allocated"],
+  "public_ip.lease.release": ["公网 IP 已回收", "Public IP reclaimed"],
   "overlay.vpc.created": ["VPC 已创建", "VPC created"],
   "overlay.epoch.planned": ["网络变更已规划", "Network change planned"],
   "overlay.member.reserved": ["网络成员已预留", "Network member reserved"],

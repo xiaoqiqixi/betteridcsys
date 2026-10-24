@@ -1,3 +1,4 @@
+import { validPublicIPLease, type PublicIPLease } from "./public-ip";
 import { record } from "./client";
 import { ipv4, networkID } from "./network";
 export const clusterID = (v: unknown): v is string =>
@@ -125,6 +126,7 @@ export interface NATPolicy {
   profile_sha256: string;
   snat_enabled: boolean;
   internet_egress_enabled?: boolean;
+  public_ipv4?: string;
   forwardings: NATForwarding[];
 }
 export interface NATProfile {
@@ -134,6 +136,7 @@ export interface NATProfile {
   profile_id: string;
   profile_sha256: string;
   public_ipv4: string;
+  public_ipv4s?: string[];
   allow_snat: boolean;
   allow_internet_egress?: boolean;
   allowed_source_cidrs: string[];
@@ -223,6 +226,7 @@ export interface OverlayOptions {
   instances: OverlayInstanceOption[];
   gateways: OverlayGateway[];
   nat_profiles: NATProfile[];
+  public_ip_leases?: PublicIPLease[];
   latest_epoch: OverlayEpoch | null;
 }
 const unique = <T>(v: T[], key: (x: T) => string) =>
@@ -447,6 +451,12 @@ export const overlayOptions = (v: unknown): v is OverlayOptions =>
   unique(v.instances, (x) => x.instance_id) &&
   array(v.gateways, validGateway, 32) &&
   array(v.nat_profiles, validNATProfile, 32) &&
+  (v.public_ip_leases === undefined ||
+    (array(v.public_ip_leases, validPublicIPLease, 4096) &&
+      v.public_ip_leases.every(
+        (l) => l.state === "reserved" && l.cluster_id === v.cluster_id,
+      ) &&
+      unique(v.public_ip_leases, (l) => l.address))) &&
   (v.latest_epoch === null || validEpoch(v.latest_epoch));
 export function canonicalSelection(v: OverlaySelection): OverlaySelection {
   return {
@@ -468,6 +478,7 @@ export function canonicalSelection(v: OverlaySelection): OverlaySelection {
           profile_id: p.profile_id,
           profile_sha256: p.profile_sha256,
           snat_enabled: p.snat_enabled,
+          ...(p.public_ipv4 ? { public_ipv4: p.public_ipv4 } : {}),
           ...(p.internet_egress_enabled === true
             ? { internet_egress_enabled: true }
             : {}),
@@ -552,6 +563,7 @@ export const validNATPolicy = (v: unknown): v is NATPolicy =>
   clusterID(v.profile_id) &&
   sha256(v.profile_sha256) &&
   typeof v.snat_enabled === "boolean" &&
+  (v.public_ipv4 === undefined || publicIPv4(v.public_ipv4)) &&
   (v.internet_egress_enabled === undefined ||
     typeof v.internet_egress_enabled === "boolean") &&
   (v.internet_egress_enabled !== true || v.snat_enabled === true) &&
@@ -565,6 +577,10 @@ export const validNATProfile = (v: unknown): v is NATProfile =>
   clusterID(v.profile_id) &&
   sha256(v.profile_sha256) &&
   ipv4(v.public_ipv4) &&
+  (v.public_ipv4s === undefined ||
+    (array(v.public_ipv4s, publicIPv4, 64) &&
+      unique(v.public_ipv4s, (x) => x) &&
+      !v.public_ipv4s.includes(v.public_ipv4))) &&
   typeof v.allow_snat === "boolean" &&
   (v.allow_internet_egress === undefined ||
     typeof v.allow_internet_egress === "boolean") &&
@@ -672,6 +688,24 @@ export function validSelection(
     if (
       !approved ||
       (p.snat_enabled && !approved.allow_snat) ||
+      (p.public_ipv4 !== undefined &&
+        ((!approved.public_ipv4s?.includes(p.public_ipv4) &&
+          approved.public_ipv4 !== p.public_ipv4) ||
+          !options.public_ip_leases?.some(
+            (l) =>
+              l.state === "reserved" &&
+              options.gateways.some(
+                (g) =>
+                  g.node_id === p.node_id &&
+                  g.vpc_id === p.vpc_id &&
+                  g.owner_ref === l.owner_ref,
+              ) &&
+              l.address === p.public_ipv4 &&
+              l.node_id === p.node_id &&
+              l.vpc_id === p.vpc_id &&
+              l.profile_id === p.profile_id &&
+              l.cluster_id === options.cluster_id,
+          ))) ||
       (p.internet_egress_enabled === true &&
         (approved.allow_internet_egress !== true ||
           !publicIPv4(approved.public_ipv4))) ||

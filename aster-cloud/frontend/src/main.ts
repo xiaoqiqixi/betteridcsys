@@ -7,6 +7,7 @@ import NodesPage from "./pages/NodesPage.vue";
 import OverlayNetworksPage from "./pages/OverlayNetworksPage.vue";
 import OverlayEpochPage from "./pages/OverlayEpochPage.vue";
 import NetworksPage from "./pages/NetworksPage.vue";
+import PublicIPsPage from "./pages/PublicIPsPage.vue";
 import OperationsPage from "./pages/OperationsPage.vue";
 import OperationDetailPage from "./pages/OperationDetailPage.vue";
 import AuditPage from "./pages/AuditPage.vue";
@@ -32,6 +33,11 @@ const router = createRouter({
       meta: { permission: "nodes.read" },
     },
     { path: "/networks", redirect: "/networks/overlays" },
+    {
+      path: "/networks/public-ips",
+      component: PublicIPsPage,
+      meta: { permission: "nodes.read" },
+    },
     {
       path: "/networks/overlays",
       component: OverlayNetworksPage,

@@ -16,6 +16,7 @@ type NATPolicy struct {
 	ProfileSHA256         string          `json:"profile_sha256"`
 	SNATEnabled           bool            `json:"snat_enabled"`
 	InternetEgressEnabled bool            `json:"internet_egress_enabled,omitempty"`
+	PublicIPv4            string          `json:"public_ipv4,omitempty"`
 	Forwardings           []NATForwarding `json:"forwardings"`
 }
 type NATForwarding struct {
@@ -43,7 +44,7 @@ func canonicalNAT(s *Snapshot) error {
 		members[m.InstanceID] = m
 	}
 	for i, p := range s.NATPolicies {
-		if !nodeproto.ValidID(p.ID) || !nodeproto.ValidNodeID(p.NodeID) || !nodeproto.ValidID(p.VPCID) || !nodeproto.ValidID(p.GatewayInstanceID) || !nodeproto.ValidNodeID(p.ProfileID) || !ValidSHA(p.ProfileSHA256) || ids[p.ID] || vpcs[p.VPCID] || profiles[p.NodeID+":"+p.ProfileID] || p.Forwardings == nil || len(p.Forwardings) > 128 || p.InternetEgressEnabled && !p.SNATEnabled {
+		if !nodeproto.ValidID(p.ID) || !nodeproto.ValidNodeID(p.NodeID) || !nodeproto.ValidID(p.VPCID) || !nodeproto.ValidID(p.GatewayInstanceID) || !nodeproto.ValidNodeID(p.ProfileID) || !ValidSHA(p.ProfileSHA256) || ids[p.ID] || vpcs[p.VPCID] || profiles[p.NodeID+":"+p.ProfileID] || p.Forwardings == nil || len(p.Forwardings) > 128 || p.InternetEgressEnabled && !p.SNATEnabled || p.PublicIPv4 != "" && !PublicInternetIPv4(p.PublicIPv4) {
 			return ErrInput
 		}
 		ids[p.ID] = true

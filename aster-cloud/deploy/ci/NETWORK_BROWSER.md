@@ -8,8 +8,11 @@ There is **no live KVM node**: the existing deterministic node RPC test double
 records receipts and loses exactly one `program` acknowledgement. Actual Linux
 NAT packet flow is checked separately in the Ubuntu 22.04/24.04 `native-nat`
 matrix; browser acceptance does not establish physical cross-node reachability.
-The public address `8.8.4.2` in this fixture is **synthetic approval metadata**:
-it is not assigned, contacted, claimed as owned, or configured as a runner route.
+The public addresses `8.8.4.2`, `8.8.4.3` and `8.8.4.4` in this fixture are
+**synthetic controller approval metadata**: they are not assigned, contacted,
+claimed as owned, or configured as runner routes. This is not a private root
+NAT profile or provider-ownership proof; the real native namespace gate checks
+the node data plane separately.
 
 ## Reproduce in a disposable Ubuntu 24.04 runner
 
@@ -49,14 +52,50 @@ for the test result. Passing additionally requires database assertions that
 plan, VPC creation, lost-ACK reconciliation and recovery actually persisted,
 and that original financial/node request bytes, network snapshot bytes and
 initial node receipts stayed unchanged. UI success alone is not sufficient.
-The fixture additionally requires exactly **five epochs, two VPCs and thirty
-unique node task POSTs**. Epoch 1 is the original prefix-only snapshot. Through
+The fixture additionally requires exactly **seven epochs, two VPCs and forty-two
+unique node task POSTs**; its original first thirty POSTs must remain the
+unchanged five-epoch, no-explicit-public-address prefix. Epoch 1 is the original prefix-only snapshot. Through
 visible UI controls, epoch 2 enables public IPv4 Internet while retaining its
 explicit route and DNAT mapping, epoch 3 recovers that selection after the lost
 ACK, epoch 4 disables SNAT/Internet and removes routes/mappings, and epoch 5
 re-enables Internet with **empty explicit route and DNAT lists**. The fourth
 snapshot must stay disabled and unchanged after the fifth is complete. A
 passing report never substitutes a receipt for a different Internet-mode hash.
+
+After the original five-epoch flow, the visible public-IP UI must:
+
+1. Create one `8.8.4.0/24` pool containing only `8.8.4.3`, then append `8.8.4.4`
+   through **补充地址**. The original creation operation must still contain only
+   its original address; extension is one separate immutable operation.
+2. Allocate `8.8.4.3` to the exact fixture VPC/customer/node/profile. The fixture
+   deliberately loses this first allocation's response **after the unchanged
+   real Console handler commits**. It buffers that one response then raises
+   `http.ErrAbortHandler` to close/reset it. It changes no UI request/body,
+   invents no success and performs no extra POST. The browser must keep the
+   result unknown, then click **核对原操作** and clear it only after exactly one
+   GET of that original operation matches its exact submitted intent. Both
+   browser attempts and server allocation POST counts prohibit silent replay.
+3. Select the allocated address through **公网地址绑定** and complete epoch 6,
+   including all six exact node phase receipts. The bound lease must display a
+   disabled reclamation button and the read-only API must confirm `bound`.
+4. Disable/re-enable the pool from the UI. Admission stops, while the bound
+   lease, epoch 6 snapshot and receipts stay unchanged; no live connection is
+   claimed by this simulated node fixture.
+5. Remove the NAT policy in epoch 7. A merely pending removal must still block
+   reclamation. Only completion of every prepare/program/release receipt makes
+   the typed-IP-confirmed **回收公网 IP** action available.
+6. Reallocate the same address into a distinct reserved lease. The released
+   original lease and all original five network snapshots/receipts remain
+   intact. The database must end with one pool, two immutable inventory
+   addresses, two lease-history rows, one exclusive active reservation and
+   exactly seven public-IP operations (create, extend, two pool-state changes,
+   two allocations and one reclamation). Old allocation-operation results stay
+   `reserved`, not rewritten to mirror their later mutable lease state.
+
+All writes use visible Vue controls. The script's `fetch` evidence is GET-only;
+no component-state mutation, response-body replacement, TLS bypass, write retry
+loop or direct test SQL mutation substitutes for this workflow. The separate
+SQL/RBAC suite tests forbidden ownership and pool-disabled server mutations.
 The fixture database, credentials, cookies, NSS profile, remaining TLS key,
 private logs and package scratch are removed by the owned cleanup routines.
 
@@ -75,8 +114,12 @@ keyboard focus, Escape, Back/Forward, custom selects, route/NAT editing, VPC
 creation, explicit continuation and read-only receipt reconciliation. Each
 continuation uses at most one POST followed by bounded GET observation; no write
 retry loop hides uncertainty.
-The original coverage and twelve screenshot names remain. Two additional
-`*-public-egress-editor.png` screenshots show the Internet-only editor. Final
+The original fourteen screenshots remain, including the two
+`*-public-egress-editor.png` images showing the Internet-only editor. Eighteen
+additional desktop/mobile images show pool creation, extension, inventory,
+allocation, bound NAT selection, bound leases, reclamation, lease history and
+English/dark lease presentation. New dialogs and list pages are measured at
+1440, 390 and 320 CSS pixels for actual horizontal overflow. Final
 Chinese/light and English/dark overview screenshots are taken after epoch 5 and
 must show its persisted public mode and synthetic egress IPv4. Plan and recovery
 both require the real public-access consent checkbox plus typed confirmation;

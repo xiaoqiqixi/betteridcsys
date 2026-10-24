@@ -25,7 +25,9 @@
 
 ### 升级与生产阻塞项
 
-- 主控 MySQL 当前为 schema **7**（006 实例网络绑定、007 全局 VPC/epoch）；节点首次持久接纳 `node/2` 任务后 journal 为 schema **3**，显式网络恢复 completion 升为 **4**；fabric 首次生命周期门禁使用 schema **2**，归档/overlay 使用 **3**，NAT 另保存 owner 与 `nat_profile_ids` 墓碑。新实现保留旧合同读取，不表示旧二进制能读取这些新状态；不能只换旧 binary 回滚，也不能删表、丢绑定或删除 journal 清空不确定状态。
+- 新增 **schema 8** 公网池、追加库存、唯一分配、确认回收和实际 NAT 地址选择；见 [公网 IP 管理](docs/PUBLIC_IP_MANAGEMENT.md)。旧财务、实例创建绑定、网络快照与回执不重写。物理地址和上联仍须独立 root 配置，不能把数据库分配当作外网已通。
+
+- 主控 MySQL 当前为 schema **8**（006 实例网络绑定、007 全局 VPC/epoch）；节点首次持久接纳 `node/2` 任务后 journal 为 schema **3**，显式网络恢复 completion 升为 **4**；fabric 首次生命周期门禁使用 schema **2**，归档/overlay 使用 **3**，NAT 另保存 owner 与 `nat_profile_ids` 墓碑。新实现保留旧合同读取，不表示旧二进制能读取这些新状态；不能只换旧 binary 回滚，也不能删表、丢绑定或删除 journal 清空不确定状态。
 - fabric 已移除 **64 次历史变更上限**：32 条活动页加不可变 SHA 链归档，保留精确历史重放与未知结果围栏。已有单宿主和跨节点显式恢复入口；不自动重试未知操作。完整历史校验仍有容量/性能成本，需规划磁盘与备份；真实 OVS/KVM 恢复验收仍待进行。
 - 本轮代码与测试仍不等于真 KVM/OVS 验收。真实虚拟机、隔离/限速、重启恢复和生产部署验收继续延期；原 OVS 集成证据见 [OVS 集成验收记录](docs/OVS_VM_GATE_VALIDATION.md)，本轮精确实测与跳过项见 [NAT 与网络管理验收记录](docs/NAT_NETWORK_VALIDATION.md)。
 

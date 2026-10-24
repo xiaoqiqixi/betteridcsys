@@ -19,8 +19,18 @@ func internetBlockedCIDRs(c OverlayConfig, s overlayproto.Snapshot) []string {
 	for _, v := range s.VPCs {
 		blocked = append(blocked, v.CIDR)
 	}
+	// Explicit selected addresses are visible even on non-gateway participants;
+	// they must not become public fallback destinations/sources on other nodes.
+	for _, policy := range s.NATPolicies {
+		if policy.PublicIPv4 != "" {
+			blocked = append(blocked, policy.PublicIPv4+"/32")
+		}
+	}
 	for _, p := range c.NATProfiles {
-		blocked = append(blocked, p.PublicIPv4+"/32", p.UplinkGatewayIPv4+"/32")
+		blocked = append(blocked, p.UplinkGatewayIPv4+"/32")
+		for _, ip := range natProfilePublicIPv4s(p) {
+			blocked = append(blocked, ip+"/32")
+		}
 	}
 	sort.Strings(blocked)
 	out := make([]string, 0, len(blocked))
@@ -77,7 +87,7 @@ func compileInternetNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfil
 		for _, kind := range []int{3, 11, 12} {
 			add("internet_in", dest, match(payload("icmp", "type"), kind), bitmatch(ct("state"), 4), accept)
 		}
-		add("internet_snat", source, nftObject{"snat": nftObject{"addr": root.PublicIPv4, "family": "ip"}})
+		add("internet_snat", source, nftObject{"snat": nftObject{"addr": natPolicyPublicIPv4(root, policy), "family": "ip"}})
 	}
 	for _, v := range []struct{ chain, in, out, target string }{{"forward", root.InsideInterface, root.OutsideInterface, "internet_out"}, {"forward", root.OutsideInterface, root.InsideInterface, "internet_in"}, {"postrouting", root.InsideInterface, root.OutsideInterface, "internet_snat"}} {
 		add(v.chain, match(meta("iifname"), v.in), match(meta("oifname"), v.out), nftObject{"jump": nftObject{"target": v.target}})

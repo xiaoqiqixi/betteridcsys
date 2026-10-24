@@ -304,6 +304,9 @@ func (s *SQLStore) PlanOverlayEpoch(ctx context.Context, c Config, actor, op str
 	if e != nil {
 		return OverlayEpoch{}, false, e
 	}
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot); e != nil {
+		return OverlayEpoch{}, false, e
+	}
 	raw, _ := json.Marshal(snapshot)
 	now = now.UTC().Truncate(time.Microsecond)
 	epoch := OverlayEpoch{ID: op, ClusterID: in.ClusterID, Epoch: snapshot.Epoch, SnapshotSHA256: sha, Snapshot: snapshot, Phase: "prepare", State: "pending", CreatedAt: now, UpdatedAt: now, ActorID: actor, RequestSHA256: digest}

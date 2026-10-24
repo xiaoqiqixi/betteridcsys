@@ -25,7 +25,7 @@ const { firefox } = await import(pathToFileURL(path.join(required('PLAYWRIGHT_MO
 const report = {
   schema: 1, status: 'running', passed: false, strict_tls: true, real_mysql: true,
   node_rpc: 'Isolated deterministic test substitute; no real KVM or host networking actions.',
-  checks: [], screenshots: [], console_errors: [], requests: [],
+  checks: [], screenshots: [], console_errors: [], requests: [], public_ip_write_attempts: [],
 };
 let phase = 'launch', context, page, signedIn = false;
 const sensitive = new Set([credentials.password]);
@@ -173,7 +173,7 @@ async function languageChangeClearsNotice() {
   check('language switch removes the genuine previous-language notice immediately');
 }
 async function read(suffix) {
-  assert(suffix.startsWith('/overlays/') && !suffix.includes('://'));
+  assert(/^\/(overlays|public-ips)\//.test(suffix) && !suffix.includes('://'));
   return page.evaluate(async suffix => {
     const response = await fetch(`/console/v1${suffix}`, { method: 'GET', credentials: 'same-origin' });
     if (!response.ok) throw new Error(`Read-only evidence request failed (${response.status})`);
@@ -274,9 +274,18 @@ try {
   page.on('pageerror', error => report.console_errors.push(safeMessage(error)));
   page.on('response', response => {
     const url = new URL(response.url()), request = response.request();
-    if (url.origin === base.origin && url.pathname.startsWith('/console/v1/overlays/')) {
+    if (url.origin === base.origin && /^\/console\/v1\/(overlays|public-ips)\//.test(url.pathname)) {
       // Deliberately no headers, bodies, query strings or cookie data.
       report.requests.push({ method: request.method(), path: url.pathname, status: response.status() });
+    }
+  });
+
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (url.origin === base.origin && url.pathname.startsWith('/console/v1/public-ips/') && request.method() === 'POST') {
+      // Count UI write attempts even when a committed response is intentionally
+      // lost. No request headers, idempotency key or body enters the artifact.
+      report.public_ip_write_attempts.push({ method: request.method(), path: url.pathname });
     }
   });
 
@@ -582,6 +591,291 @@ try {
   // Read only rendered text to catch accidental raw ISO rendering; never serialize DOM.
   assert(!/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z/.test(await page.locator('main').innerText()));
   check('visible dates are localized, not raw microsecond ISO values');
+
+  phase = 'public-ip-pool-ui';
+  const originalFive = await Promise.all([initialID, epochID, recoveryID, disabledPlan.id, publicPlan.id].map(id => read(`/overlays/epochs/${id}`)));
+  await page.getByRole('button', { name: 'Language & appearance', exact: true }).click();
+  await pick('Language', '简体中文');
+  await pick('外观', '浅色');
+  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await dialogClosed();
+  await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
+  await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
+  const publicOptions = await read('/public-ips/options');
+  assert.equal(publicOptions.complete, true);
+  const publicApproval = publicOptions.approvals.find(a => a.vpc_id === credentials.vpc_id);
+  assert(publicApproval);
+  assert.deepEqual(publicApproval.public_ipv4s, ['8.8.4.2', '8.8.4.3', '8.8.4.4']);
+  const publicVPC = publicOptions.vpcs.find(v => v.id === credentials.vpc_id);
+  assert(publicVPC && publicVPC.owner_ref === credentials.owner_ref);
+  const writeAttempts = suffix => report.public_ip_write_attempts.filter(r => !suffix || r.path.endsWith(suffix)).length;
+  const poolCard = () => page.locator('.ip-record').filter({ has: page.getByRole('heading', { name: '公网出口池', exact: true }) });
+  const leaseCard = id => page.locator('.ip-record').filter({ hasText: id });
+  async function poolView() {
+    if (await page.locator('.network-tabs').count() === 0) await networkOverview();
+    await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
+    await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
+    await page.getByRole('button', { name: '地址池', exact: true }).click();
+    await poolCard().waitFor();
+  }
+  async function leasesView() {
+    if (await page.locator('.network-tabs').count() === 0) await networkOverview();
+    await page.locator('.network-tabs').getByRole('link', { name: '公网 IP', exact: true }).click();
+    await page.getByRole('heading', { name: '公网 IP', exact: true }).waitFor();
+    await page.getByRole('button', { name: '分配记录', exact: true }).click();
+    await page.locator('.ip-record').first().waitFor();
+  }
+  async function fillAllocation() {
+    await poolCard().getByRole('button', { name: '分配地址', exact: true }).click();
+    await pick('所属 VPC', `${publicVPC.name} · ${publicVPC.cidr}`);
+    await pick('NAT 出口', `${publicApproval.node_id} · ${publicApproval.profile_id}`);
+    await pick('公网 IP', '8.8.4.3');
+  }
+  async function setPoolState(enabled) {
+    const label = enabled ? '启用分配' : '停用分配';
+    await poolCard().getByRole('button', { name: label, exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: enabled ? '启用地址分配' : '停用地址分配', exact: true }).click();
+    await dialogClosed();
+    await poolCard().getByRole('button', { name: enabled ? '停用分配' : '启用分配', exact: true }).waitFor();
+  }
+  await page.getByRole('button', { name: '新建地址池', exact: true }).click();
+  await page.getByLabel('地址池名称', { exact: true }).fill('公网出口池');
+  await page.getByLabel('所属网段', { exact: true }).fill('8.8.4.0/24');
+  await page.getByLabel('起始 IP', { exact: true }).fill('8.8.4.3');
+  await page.getByLabel('结束 IP', { exact: true }).fill('8.8.4.3');
+  await dialogExcludesNotices('public pool editor isolates background notices');
+  await noOverflow('desktop public pool editor has no horizontal overflow');
+  await screenshot('desktop-public-ip-pool-create', false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px public pool editor has no horizontal overflow');
+  await screenshot('mobile-public-ip-pool-create', false);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await noOverflow('320px public pool editor has no horizontal overflow');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('dialog').getByRole('button', { name: '新建公网 IP 池', exact: true }).click();
+  await dialogClosed();
+  await poolCard().waitFor();
+  const publicPools = await read('/public-ips/pools?cluster_id=cluster-fixture');
+  assert.equal(publicPools.items.length, 1);
+  const pool = publicPools.items[0];
+  assert.deepEqual(pool.addresses, ['8.8.4.3']);
+  assert.equal(pool.enabled, true);
+  assert.equal(writeAttempts('/pools'), 1);
+  check('one visible range-entry pool creation persists exact approved inventory in real MySQL');
+
+  const originalPoolOperation = (await read(`/public-ips/operations/${pool.id}`)).operation;
+  assert.deepEqual(originalPoolOperation.result.pool.addresses, ['8.8.4.3']);
+  await poolCard().getByRole('button', { name: '补充地址', exact: true }).click();
+  await page.getByLabel('起始 IP', { exact: true }).fill('8.8.4.4');
+  await page.getByLabel('结束 IP', { exact: true }).fill('8.8.4.4');
+  await noOverflow('desktop public pool extension editor has no horizontal overflow');
+  await screenshot('desktop-public-ip-pool-extend', false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px public pool extension editor has no horizontal overflow');
+  await screenshot('mobile-public-ip-pool-extend', false);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await noOverflow('320px public pool extension editor has no horizontal overflow');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('dialog').getByRole('button', { name: '补充公网地址', exact: true }).click();
+  await dialogClosed();
+  await poolCard().getByText('8.8.4.4', { exact: true }).waitFor();
+  const extendedPool = (await read(`/public-ips/pools/${pool.id}`)).pool;
+  assert.deepEqual(extendedPool.addresses, ['8.8.4.3', '8.8.4.4']);
+  assert.deepEqual((await read(`/public-ips/operations/${pool.id}`)).operation, originalPoolOperation);
+  assert.equal(writeAttempts(`/pools/${pool.id}/addresses`), 1);
+  check('one append-only UI inventory extension adds a second address without changing the immutable original pool creation operation');
+
+  await noticesExpireNaturally('public pool overview notice expires before screenshots');
+  await screenshot('desktop-public-ip-pools');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px public pool overview has no horizontal overflow');
+  await screenshot('mobile-public-ip-pools');
+
+  phase = 'public-ip-allocation-lost-ack';
+  await fillAllocation();
+  await noOverflow('390px public allocation editor has no horizontal overflow with maximum profile ID');
+  await screenshot('mobile-public-ip-allocation', false);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await noOverflow('320px public allocation editor has no horizontal overflow with maximum profile ID');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await screenshot('desktop-public-ip-allocation', false);
+  const allocationBefore = writeAttempts('/leases');
+  await page.getByRole('dialog').getByRole('button', { name: '分配公网 IP', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '核对原操作', exact: true }).waitFor();
+  const pendingOperationID = (await page.locator('.ip-pending code').innerText()).trim();
+  assert(/^[a-f0-9]{32}$/.test(pendingOperationID));
+  assert.equal(writeAttempts('/leases') - allocationBefore, 1);
+  const pendingOperation = (await read(`/public-ips/operations/${pendingOperationID}`)).operation;
+  assert.equal(pendingOperation.id, pendingOperationID);
+  assert.equal(pendingOperation.action, 'lease.allocate');
+  assert.equal(pendingOperation.request.address, '8.8.4.3');
+  assert.equal(pendingOperation.request.vpc_id, credentials.vpc_id);
+  const firstLeaseID = pendingOperation.result.lease.id;
+  assert.equal(firstLeaseID, pendingOperationID);
+  const reconciliationReads = () => report.requests.filter(r => r.method === 'GET' && r.path === `/console/v1/public-ips/operations/${pendingOperationID}`).length;
+  const readsBefore = reconciliationReads();
+  await page.getByRole('dialog').getByRole('button', { name: '核对原操作', exact: true }).click();
+  await dialogClosed();
+  assert.equal(reconciliationReads() - readsBefore, 1);
+  assert.equal(writeAttempts('/leases') - allocationBefore, 1);
+  assert.equal(await page.locator('.ip-pending').count(), 0);
+  const firstLease = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;
+  assert.equal(firstLease.state, 'reserved');
+  assert.equal(firstLease.binding_state, 'reserved');
+  assert.equal(firstLease.address, '8.8.4.3');
+  assert.equal(firstLease.owner_ref, credentials.owner_ref);
+  assert.equal(firstLease.vpc_id, credentials.vpc_id);
+  assert.equal(firstLease.node_id, publicApproval.node_id);
+  assert.equal(firstLease.profile_id, publicApproval.profile_id);
+  check('post-commit allocation response loss stays unknown until one original-operation GET confirms the unique lease without resending POST');
+
+  phase = 'public-ip-bind-real-epoch';
+  await page.locator('.network-tabs').getByRole('link', { name: 'VPC 与路由', exact: true }).click();
+  await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
+  await page.getByRole('button', { name: '配置网络', exact: true }).click();
+  await pick('公网地址绑定', '8.8.4.3');
+  assert((await page.getByRole('combobox', { name: '公网地址绑定', exact: true }).innerText()).includes('8.8.4.3'));
+  await page.getByRole('dialog').locator('.public-address-field').scrollIntoViewIfNeeded();
+  await screenshot('desktop-public-ip-nat-binding', false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px NAT pool binding editor has no horizontal overflow');
+  await screenshot('mobile-public-ip-nat-binding', false);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await noOverflow('320px NAT pool binding editor has no horizontal overflow');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('dialog').locator('.public-consent input[type="checkbox"]').check();
+  const boundPlan = await submitNetworkPlan(6);
+  assert.equal(boundPlan.detail.epoch.snapshot.nat_policies[0].public_ipv4, '8.8.4.3');
+  const boundDetail = await advanceUntilStopped(boundPlan.id);
+  assert.equal(boundDetail.epoch.state, 'succeeded');
+  assert.equal(boundDetail.tasks.length, 6);
+  await leasesView();
+  await leaseCard(firstLeaseID).waitFor();
+  assert.equal(await leaseCard(firstLeaseID).getByRole('button', { name: '回收地址', exact: true }).isDisabled(), true);
+  assert((await leaseCard(firstLeaseID).innerText()).includes('已绑定出口'));
+  const boundLease = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;
+  assert.equal(boundLease.binding_state, 'bound');
+  assert.equal(boundLease.releasable, false);
+  await noticesExpireNaturally('bound allocation page notice expires before screenshots');
+  await screenshot('desktop-public-ip-bound-lease');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px bound allocation page has no horizontal overflow');
+  await screenshot('mobile-public-ip-bound-lease');
+  check('allocated public IP binds through one complete six-task real controller epoch and cannot be reclaimed while bound', { epoch: 6 });
+
+  phase = 'public-ip-pool-disable';
+  await poolView();
+  const poolStateBefore = writeAttempts(`/pools/${pool.id}/state`);
+  await setPoolState(false);
+  assert.equal(await poolCard().getByRole('button', { name: '分配地址', exact: true }).isDisabled(), true);
+  const disabledPool = (await read(`/public-ips/pools/${pool.id}`)).pool;
+  assert.equal(disabledPool.enabled, false);
+  const heldLease = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;
+  assert.equal(heldLease.binding_state, 'bound');
+  assert.equal(heldLease.state, 'reserved');
+  const unchangedBound = await read(`/overlays/epochs/${boundPlan.id}`);
+  assert.deepEqual(unchangedBound.epoch.snapshot, boundDetail.epoch.snapshot);
+  assert.deepEqual(receiptProof(unchangedBound), receiptProof(boundDetail));
+  await setPoolState(true);
+  assert.equal(writeAttempts(`/pools/${pool.id}/state`) - poolStateBefore, 2);
+  check('pool disabling blocks new UI allocations without altering its existing bound lease, network intent or receipts');
+
+  phase = 'public-ip-detach-and-reclaim';
+  await page.locator('.network-tabs').getByRole('link', { name: 'VPC 与路由', exact: true }).click();
+  await page.getByRole('button', { name: '配置网络', exact: true }).click();
+  await page.getByRole('button', { name: '移除 NAT', exact: true }).click();
+  assert.equal(await page.getByRole('combobox', { name: '公网地址绑定', exact: true }).count(), 0);
+  const unboundPlan = await submitNetworkPlan(7);
+  assert.deepEqual(unboundPlan.detail.epoch.snapshot.nat_policies || [], []);
+  // An unstarted removal is not proof of isolation or a safe release.
+  await leasesView();
+  await leaseCard(firstLeaseID).waitFor();
+  assert.equal(await leaseCard(firstLeaseID).getByRole('button', { name: '回收地址', exact: true }).isDisabled(), true);
+  const pendingDetach = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;
+  assert.equal(pendingDetach.releasable, false);
+  check('a pending NAT removal cannot prematurely free an allocated public IP');
+  await page.goto(new URL(`#/networks/epochs/${unboundPlan.id}`, base).href, { waitUntil: 'networkidle' });
+  await page.getByRole('heading', { name: /网络变更/ }).waitFor();
+  const unboundDetail = await advanceUntilStopped(unboundPlan.id);
+  assert.equal(unboundDetail.epoch.state, 'succeeded');
+  assert.equal(unboundDetail.tasks.length, 6);
+  await leasesView();
+  await leaseCard(firstLeaseID).waitFor();
+  assert.equal(await leaseCard(firstLeaseID).getByRole('button', { name: '回收地址', exact: true }).isEnabled(), true);
+  const detachedLease = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;
+  assert.equal(detachedLease.releasable, true);
+  await leaseCard(firstLeaseID).getByRole('button', { name: '回收地址', exact: true }).click();
+  await page.getByLabel('输入公网 IP 以确认回收', { exact: true }).fill('8.8.4.3');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px public IP reclamation dialog has no horizontal overflow');
+  await screenshot('mobile-public-ip-reclaim', false);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await screenshot('desktop-public-ip-reclaim', false);
+  await page.getByRole('dialog').getByRole('button', { name: '回收公网 IP', exact: true }).click();
+  await dialogClosed();
+  await leaseCard(firstLeaseID).waitFor();
+  assert((await leaseCard(firstLeaseID).innerText()).includes('已回收'));
+  assert.equal(await leaseCard(firstLeaseID).getByRole('button', { name: '回收地址', exact: true }).count(), 0);
+  const reclaimedLease = (await read(`/public-ips/leases/${firstLeaseID}`)).lease;
+  assert.equal(reclaimedLease.state, 'released');
+  assert.equal(reclaimedLease.binding_state, 'released');
+  assert.equal(writeAttempts(`/leases/${firstLeaseID}/release`), 1);
+  assert.deepEqual((await read(`/public-ips/operations/${pendingOperationID}`)).operation, pendingOperation);
+  check('public IP can be reclaimed only after every unbinding phase and its original allocation operation is immutable', { epoch: 7 });
+
+  phase = 'public-ip-reallocate-and-history';
+  await poolView();
+  await fillAllocation();
+  await page.getByRole('dialog').getByRole('button', { name: '分配公网 IP', exact: true }).click();
+  await dialogClosed();
+  assert.equal(writeAttempts('/leases'), 2);
+  await leasesView();
+  const finalLeases = (await read('/public-ips/leases?cluster_id=cluster-fixture')).items;
+  assert.equal(finalLeases.length, 2);
+  const reallocatedLease = finalLeases.find(l => l.id !== firstLeaseID);
+  assert(reallocatedLease);
+  assert.equal(reallocatedLease.address, '8.8.4.3');
+  assert.equal(reallocatedLease.state, 'reserved');
+  assert.equal(reallocatedLease.binding_state, 'reserved');
+  assert.equal(finalLeases.find(l => l.id === firstLeaseID).state, 'released');
+  assert.notEqual(reallocatedLease.id, firstLeaseID);
+  assert.equal(writeAttempts(), 7);
+  for (const before of originalFive) {
+    const after = await read(`/overlays/epochs/${before.epoch.id}`);
+    assert.equal(after.epoch.snapshot_sha256, before.epoch.snapshot_sha256);
+    assert.deepEqual(after.epoch.snapshot, before.epoch.snapshot);
+    assert.deepEqual(receiptProof(after), receiptProof(before));
+  }
+  check('reallocation creates a new exclusive lease while retaining the reclaimed record and all original five epoch snapshots and receipts');
+  await noticesExpireNaturally('lease history notice expires before final actual screenshots');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px public lease history has no horizontal overflow');
+  await screenshot('mobile-public-ip-lease-history');
+  await page.setViewportSize({ width: 320, height: 844 });
+  await noOverflow('320px public lease history has no horizontal overflow');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await screenshot('desktop-public-ip-lease-history');
+  await noOverflow('desktop public lease history has no horizontal overflow');
+  await page.getByRole('button', { name: '语言与外观', exact: true }).click();
+  await pick('界面语言', 'English');
+  await pick('Appearance', 'Dark');
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await dialogClosed();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('390px English dark public lease history has no horizontal overflow');
+  await screenshot('mobile-public-ip-english-dark');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await noOverflow('desktop English dark public lease history has no horizontal overflow');
+  await screenshot('desktop-public-ip-english-dark');
+  assert.equal(await page.locator('select').count(), 0);
+  check('public pool, allocation, binding and reclamation use custom controls across mobile/desktop and Chinese/light/English/dark');
+  report.public_ip_pool_managed = true;
+  report.public_ip_pool_extended = true;
+  report.public_ip_post_commit_ack_reconciled = true;
+  report.public_ip_bound_and_detached = true;
+  report.public_ip_reclaimed_and_reallocated = true;
+  report.original_five_epochs_preserved = true;
+
   assert.deepEqual(report.console_errors, []);
   check('no browser JavaScript errors');
   report.public_egress_enabled = true;
