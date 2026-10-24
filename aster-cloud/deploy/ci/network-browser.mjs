@@ -955,6 +955,7 @@ try {
   const floatTargets = credentials.members.map(m => resourceOptions.resource_targets.find(t => t.instance_id === m.instance_id && t.mode === 'floating'));
   assert(floatTargets.every(Boolean)); assert.notEqual(floatTargets[0].node_id,floatTargets[1].node_id);
   async function bindFloating(target, expectedEpoch, moving = false) {
+    phase = moving ? 'floating-public-move' : 'floating-public-bind';
     await vmCard(floating.id).getByRole('button',{name:moving ? '更换实例' : '绑定实例',exact:true}).click();
     await pick('绑定目标实例',`${target.ipv4} · ${target.node_id} · ${target.instance_id}`);
     await page.getByRole('dialog').locator('.binding-policy-version').waitFor();
@@ -1003,7 +1004,8 @@ try {
   await page.setViewportSize({width:390,height:844}); await noOverflow('390px floating bound resource has no overflow'); await screenshot('mobile-floating-ip-bound');
   await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop floating bound resource has no overflow'); await screenshot('desktop-floating-ip-bound');
   const policyProofs = [];
-  async function ingressView(target) {
+  async function ingressView(target, diagnosticPhase = 'public-ingress-read-policy') {
+    phase = diagnosticPhase;
     await page.goto(new URL(`#/instances/${target.instance_id}?tab=public`,base).href,{waitUntil:'networkidle'});
     await page.locator('.public-ingress-panel .ingress-policy-state').waitFor();
     const policy = (await read(`/instances/${target.instance_id}/public-ingress`)).policy;
@@ -1011,11 +1013,18 @@ try {
   }
   async function updateIngress(target, expectedRevision, expectedEpoch, rules) {
     const prior = await ingressView(target); assert.equal(prior.revision,expectedRevision); assert.equal(prior.state,'active');
+    phase = 'public-ingress-open-editor';
     await page.getByRole('button',{name:'编辑入站规则',exact:true}).click();
     const dialog=page.getByRole('dialog');
     if (!rules.length) {
-      while(await dialog.locator('.ingress-rules .ingress-rule').count()) await dialog.locator('.ingress-rules .ingress-rule').first().getByRole('button',{name:'移除',exact:true}).click();
+      phase = 'public-ingress-remove-rules';
+      while(await dialog.locator('.ingress-rules .ingress-rule').count()) {
+        const remove = dialog.locator('.ingress-rules .ingress-rule').first().getByRole('button',{name:/^移除允许规则 /});
+        assert.equal(await remove.count(),1,'Each original rule row must expose exactly one accessible remove control');
+        await remove.click();
+      }
     } else {
+      phase = 'public-ingress-add-rules';
       for(const rule of rules) {
         await pick('入站协议',rule.protocol==='icmp'?'ICMP 回显':rule.protocol.toUpperCase());
         await dialog.getByLabel('允许来源 CIDR',{exact:true}).fill(rule.source_cidr);
@@ -1025,32 +1034,39 @@ try {
     }
     assert.equal(await dialog.locator('.ingress-rules .ingress-rule').count(),rules.length);
     assert.equal(await dialog.locator('select,input[type="number"]').count(),0);
+    phase = 'public-ingress-confirm';
     await dialog.getByLabel('确认入站规则实例 ID',{exact:true}).fill(target.instance_id);
     if(expectedEpoch===9) {
+      phase = 'public-ingress-editor-layout';
       await dialogExcludesNotices('public ingress editor excludes background notices');
       await dialog.locator('.ingress-explanation').scrollIntoViewIfNeeded();
       await noOverflow('desktop public ingress custom rule editor has no overflow');await screenshot('desktop-public-ingress-editor',false);
       await page.setViewportSize({width:390,height:844});await dialog.locator('.ingress-explanation').scrollIntoViewIfNeeded();await noOverflow('390px public ingress custom rule editor has no overflow');await screenshot('mobile-public-ingress-editor',false);
       await page.setViewportSize({width:320,height:844});await noOverflow('320px public ingress custom rule editor has no overflow');await page.setViewportSize({width:1440,height:1000});
     }
+    phase = 'public-ingress-submit';
     const response=page.waitForResponse(r=>new URL(r.url()).pathname===`/console/v1/instances/${target.instance_id}/public-ingress`&&r.request().method()==='POST');
     await dialog.getByRole('button',{name:'保存入站规则',exact:true}).click();const transport=await response;assert.equal(transport.status(),202);
     const request=transport.request().postDataJSON();assert.equal(request.expected_revision,expectedRevision);assert.equal(request.rules.length,rules.length);
+    phase = 'public-ingress-admission-check';
     const result=await transport.json();assert.equal(result.policy.state,'pending');assert.equal(result.policy.revision,expectedRevision+1);assert.equal(result.policy.instance_id,target.instance_id);assert.equal(result.policy.effective_revision,null);
     assert.equal(result.operation.actor_id,credentials.actor_id);assert.deepEqual(result.operation.request,request);assert.equal(result.operation.target_instance_id,target.instance_id);
     await dialogClosed();await page.locator('.public-ingress-panel .ingress-policy-state').waitFor();assert((await page.locator('.public-ingress-panel').innerText()).includes('规则变更待执行'));
     assert.equal(await page.getByRole('button',{name:'编辑入站规则',exact:true}).isDisabled(),true);
+    phase = 'public-ingress-release';
     await page.locator('.public-ingress-panel').getByRole('link',{name:'查看规则网络任务',exact:true}).click();await page.getByRole('heading',{name:/网络变更/}).waitFor();
     const completed=await advanceUntilStopped(result.policy.epoch_id);assert.equal(completed.epoch.epoch,expectedEpoch);assert.equal(completed.epoch.state,'succeeded');assert.equal(completed.tasks.length,6);
     const frozen=completed.epoch.snapshot.floating_ips[0].ingress;assert.equal(frozen.instance_id,target.instance_id);assert.equal(frozen.revision,expectedRevision+1);assert.deepEqual(frozen.rules,result.policy.rules);assert.equal(frozen.sha256,result.policy.sha256);
-    const current=await ingressView(target);assert.equal(current.state,'active');assert.equal(current.effective_revision,expectedRevision+1);assert.deepEqual(current.rules,result.policy.rules);
+    const current=await ingressView(target,'public-ingress-effective-check');assert.equal(current.state,'active');assert.equal(current.effective_revision,expectedRevision+1);assert.deepEqual(current.rules,result.policy.rules);
     const immutable=(await read(`/public-ingress-operations/${result.operation.id}`)).operation;assert.deepEqual(immutable,result.operation);policyProofs.push(immutable);
     if(expectedEpoch===9||expectedEpoch===12) {
+      phase = 'public-ingress-effective-layout';
       await noticesExpireNaturally('policy notices expire naturally before actual effective-rule screenshots');
       const suffix=expectedEpoch===9?'allowed':'revoked';
       await page.setViewportSize({width:390,height:844});await noOverflow(`390px ${suffix} ingress panel has no overflow`);await screenshot(`mobile-public-ingress-${suffix}`);
       await page.setViewportSize({width:320,height:844});await noOverflow(`320px ${suffix} ingress panel has no overflow`);await page.setViewportSize({width:1440,height:1000});await noOverflow(`desktop ${suffix} ingress panel has no overflow`);await screenshot(`desktop-public-ingress-${suffix}`);
     }
+    phase = 'public-ingress-return-resources';
     await resourcesView();return completed;
   }
   const originalTargetAllowed = await updateIngress(floatTargets[0],0,9,[
