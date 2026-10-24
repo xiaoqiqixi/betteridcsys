@@ -195,10 +195,15 @@ const ports = (r: PublicIngressPolicy["rules"][number]) =>
         </p>
         <p v-if="!policy.supported" class="ingress-warning">
           {{
-            tr(
-              "当前节点尚未支持或准备好公网入站规则。请先升级节点并核对网络状态；不会静默退回全端口放行。",
-              "The nodes do not yet support or are not ready for public ingress rules. Upgrade them and review network state first; the system will not silently fall back to unrestricted ingress.",
-            )
+            policy.unsupported_reason === "UPGRADE_REQUIRED"
+              ? tr(
+                  "当前节点版本不支持公网入站规则，请先升级相关节点。",
+                  "The current node versions do not support public ingress rules. Upgrade the participating nodes first.",
+                )
+              : tr(
+                  "当前网络尚未就绪。请核对相关节点的在线和心跳状态，以及当前网络配置与批准设置。",
+                  "Public ingress is not ready. Check participating nodes’ online status and heartbeats, and the current network configuration and approvals.",
+                )
           }}
         </p>
         <p

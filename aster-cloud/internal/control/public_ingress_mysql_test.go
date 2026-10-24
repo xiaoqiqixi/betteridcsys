@@ -250,7 +250,7 @@ func TestMySQLPublicIngressAuditFailureRollsBackVersionEpochAndResourceCAS(t *te
 	}
 }
 func TestMySQLPublicIngressAllParticipantCapabilityAndDispatchWithdrawal(t *testing.T) {
-	for _, kind := range []string{"old_remote", "maintenance_remote", "stale_remote", "dispatch_withdrawal", "bound_withdrawal"} {
+	for _, kind := range []string{"old_remote", "maintenance_remote", "stale_remote", "dispatch_withdrawal", "bound_withdrawal", "bound_root_pin_drift", "bound_root_grant_withdrawal"} {
 		t.Run(kind, func(t *testing.T) {
 			f := mysqlIngressFixture(t)
 			ctx := context.Background()
@@ -259,11 +259,67 @@ func TestMySQLPublicIngressAllParticipantCapabilityAndDispatchWithdrawal(t *test
 			now := f.now
 			caps := vpcTestCapabilities(remote, f.now)
 			caps.OVSNetworkProfiles = []string{f.config.OverlayClusters[0].Profiles[1].ProfileID}
-			if kind == "dispatch_withdrawal" || kind == "bound_withdrawal" {
-				f.resource = f.bind(t, vm, 0, 0)
-				if kind == "bound_withdrawal" {
+			rootDrift := kind == "bound_root_pin_drift" || kind == "bound_root_grant_withdrawal"
+			var policyACK PublicIngressOperation
+			if rootDrift {
+				_, op, _, e := f.store.SetPublicIngress(ctx, f.config, f.actor, vm, id(), PublicIngressInput{ExpectedRevision: ingressRevision(0), Rules: []overlayproto.PublicIngressRule{ingressRule(443)}}, f.now)
+				if e != nil {
+					t.Fatal(e)
+				}
+				policyACK = op
+			}
+			if kind == "dispatch_withdrawal" || kind == "bound_withdrawal" || rootDrift {
+				revision := uint64(0)
+				if rootDrift {
+					revision = 1
+				}
+				f.resource = f.bind(t, vm, 0, revision)
+				if kind != "dispatch_withdrawal" {
 					advanceOverlayFixture(t, f.worker, f.resource.EpochID)
 				}
+			}
+			if rootDrift {
+				before := f.view(t, vm)
+				if !before.Supported || before.State != "active" || before.EffectiveRevision == nil || *before.EffectiveRevision != 1 {
+					t.Fatal("pre-drift release not active", before)
+				}
+				bindingACK, e := f.store.PublicIPResourceOperation(ctx, f.actor, f.resource.OperationID)
+				if e != nil {
+					t.Fatal(e)
+				}
+				digests := map[string]string{}
+				for _, node := range f.config.Nodes {
+					digests[node.ID] = node.Digest()
+				}
+				f.config.OverlayClusters = append([]OverlayCluster{}, f.config.OverlayClusters...)
+				if kind == "bound_root_pin_drift" {
+					f.config.OverlayClusters[0].Profiles = append([]overlayproto.ProfilePin{}, f.config.OverlayClusters[0].Profiles...)
+					f.config.OverlayClusters[0].Profiles[1].ProfileSHA256 = strings.Repeat("c", 64)
+				} else {
+					f.config.OverlayClusters[0].NATProfiles = append([]OverlayNATProfile{}, f.config.OverlayClusters[0].NATProfiles...)
+					f.config.OverlayClusters[0].NATProfiles[0].AllowFloatingIP = false
+				}
+				if !f.config.Valid() {
+					t.Fatal("root drift must remain a valid current configuration")
+				}
+				for _, node := range f.config.Nodes {
+					if node.Digest() != digests[node.ID] {
+						t.Fatal("test accidentally changed node transport digest")
+					}
+				}
+				view := f.view(t, vm)
+				if view.Supported || view.UnsupportedReason != "NODE_NOT_READY" || view.State != "blocked" || view.EffectiveRevision != nil || view.BoundResourceID != f.resource.ID || !reflect.DeepEqual(publicIngressWire(view), publicIngressWire(before)) || view.LegacyUnrestricted != before.LegacyUnrestricted {
+					t.Fatal("historical receipt pretended current root approval", kind, view)
+				}
+				fixed, e := f.store.PublicIngressOperation(ctx, f.actor, policyACK.ID)
+				if e != nil || !reflect.DeepEqual(fixed, policyACK) {
+					t.Fatal("root drift rewrote immutable policy ACK", e)
+				}
+				bindingFixed, e := f.store.PublicIPResourceOperation(ctx, f.actor, bindingACK.ID)
+				if e != nil || !reflect.DeepEqual(bindingFixed, bindingACK) {
+					t.Fatal("root drift rewrote immutable binding ACK", e)
+				}
+				return
 			}
 			switch kind {
 			case "old_remote", "dispatch_withdrawal", "bound_withdrawal":

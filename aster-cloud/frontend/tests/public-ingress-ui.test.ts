@@ -211,6 +211,70 @@ describe("instance public ingress UI", () => {
       expect(w.emitted("ready")!.every((v) => v[0] === null)).toBe(true);
     },
   );
+  it.each(["UPGRADE_REQUIRED", "NODE_NOT_READY"] as const)(
+    "explains unsupported %s consistently without prescribing the wrong recovery",
+    async (reason) => {
+      const p = {
+        ...ingressPolicy,
+        supported: false,
+        unsupported_reason: reason,
+        state: "blocked" as const,
+        effective_revision: null,
+        bound_resource_id: "f".repeat(32),
+      };
+      const f = mockContext(() => ({ policy: p }));
+      const r = await router();
+      const global = {
+        plugins: [r],
+        provide: { [consoleKey as symbol]: f.context },
+      };
+      const binding = mount(Binding, {
+        props: { instanceId: p.instance_id, ownerRef: p.owner_ref },
+        global,
+      });
+      const panel = mount(Panel, {
+        props: {
+          instance: { ...instance, id: p.instance_id, owner_ref: p.owner_ref },
+        },
+        global,
+      });
+      cleanup.push(
+        () => binding.unmount(),
+        () => panel.unmount(),
+      );
+      for (const locale of ["zh-CN", "en"] as const) {
+        f.context.prefs.locale.value = locale;
+        await flushPromises();
+        for (const w of [binding, panel]) {
+          const text = w.get(".ingress-warning").text();
+          if (reason === "UPGRADE_REQUIRED")
+            expect(text).toContain(
+              locale === "en"
+                ? "Upgrade the participating nodes"
+                : "请先升级相关节点",
+            );
+          else {
+            expect(text).not.toMatch(/升级|upgrade/i);
+            expect(text).toContain(
+              locale === "en"
+                ? "online status and heartbeats"
+                : "在线和心跳状态",
+            );
+            expect(text).toContain(
+              locale === "en"
+                ? "current network configuration and approvals"
+                : "当前网络配置与批准设置",
+            );
+          }
+        }
+        expect(
+          panel.get(".ingress-actions button").attributes("disabled"),
+        ).toBeDefined();
+      }
+      expect(binding.emitted("ready")!.every((v) => v[0] === null)).toBe(true);
+      expect(f.calls).toHaveLength(0);
+    },
+  );
   it("waits for the exact policy GET before emitting a frozen ready summary", async () => {
     const d = deferred<unknown>();
     const f = mockContext(() => d.promise);

@@ -220,6 +220,13 @@ func publicIngressViewTx(ctx context.Context, tx *sql.Tx, c Config, v Instance, 
 	if e != nil {
 		return out, e
 	}
+	// Historical release receipts prove what was installed, not whether the
+	// current root still approves that exact profile and public mapping. The
+	// desired policy and immutable ACK stay intact when current approval drifts.
+	if !overlayPinsMatch(c, latest) || !overlayPoliciesApproved(cluster, latest.Snapshot) {
+		out.Supported = false
+		out.UnsupportedReason = "NODE_NOT_READY"
+	}
 	out.EpochID = latest.ID
 	if publicReleaseCompleteTx(ctx, tx, latest) != nil {
 		out.State = "blocked"
