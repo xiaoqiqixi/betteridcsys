@@ -21,9 +21,9 @@ func reserveOverlayCreation(ctx context.Context, tx *sql.Tx, candidate Candidate
 		return ErrState
 	}
 	approval := candidate.Overlay
-	cluster := approval.Cluster
-	c := Config{ControllerID: approval.ControllerID, Nodes: approval.Nodes, OverlayClusters: []OverlayCluster{cluster}}
-	if !c.validOverlayClusters() {
+	c := Config{ControllerID: approval.ControllerID, Nodes: approval.Nodes, OverlayClusters: approval.RootClusters}
+	cluster, ok := c.OverlayCluster(approval.Cluster.ClusterID)
+	if !ok || !c.validOverlayClusters() {
 		return ErrState
 	}
 	globalID := ""

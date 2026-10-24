@@ -88,6 +88,15 @@ cloud, scratch = map(pathlib.Path, sys.argv[1:])
 }}))
 PY
 (cd "$cloud" && go test -mod=readonly -race -overlay "$scratch/go-overlay.json" -c -o "$scratch/browser.test" ./internal/control)
+# First verify the response-fault mechanism over both real TLS protocols. It
+# must expose genuine successful headers, then an incomplete JSON body, with
+# exactly one server POST; no before-commit race or transport replay is accepted.
+"$scratch/browser.test" -test.run '^TestOwnedPublicIPResponseFault$' -test.count=1 -test.v >"$scratch/response-fault.log" 2>&1 || fail 'Public allocation response-fault regression failed; private diagnostics withheld.'
+for protocol in http1 http2; do
+  grep -q -- "--- PASS: TestOwnedPublicIPResponseFault/$protocol " "$scratch/response-fault.log" || fail 'Both actual TLS response-fault protocols must pass.'
+done
+if grep -qE -- '--- (SKIP|FAIL):' "$scratch/response-fault.log"; then fail 'Response-fault regression must not skip or fail.'; fi
+
 (cd "$cloud/internal/control" && exec "$scratch/browser.test" -test.v -test.count=1 -test.timeout=15m -test.run '^TestOwnedNATBrowserFixture$') >"$scratch/fixture.log" 2>&1 &
 fixture_pid=$!
 ready=false

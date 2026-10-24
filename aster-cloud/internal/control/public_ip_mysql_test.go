@@ -246,9 +246,27 @@ func TestMySQLPublicIPLegacyPrimaryOccupancyAndUnknownRecovery(t *testing.T) {
 		}
 		rpc := &overlayFakeRPC{lose: "prepare"}
 		w := f.worker(rpc)
-		if _, e = w.Advance(ctx, epoch.ID); e != nil {
-			t.Fatal(e)
+		unknown, callErr := w.Advance(ctx, epoch.ID)
+		if !errors.Is(callErr, ErrUnavailable) || unknown.State != "uncertain" || len(rpc.posts) != 1 {
+			t.Fatal("lost ACK did not preserve unknown state", unknown.State, len(rpc.posts), callErr)
 		}
+		pendingTasks, taskErr := f.store.OverlayTasks(ctx, epoch.ID)
+		if taskErr != nil {
+			t.Fatal(taskErr)
+		}
+		uncertain := 0
+		for _, task := range pendingTasks {
+			if task.State == "uncertain" {
+				uncertain++
+				if len(task.Receipt) != 0 {
+					t.Fatal("lost ACK fabricated a receipt")
+				}
+			}
+		}
+		if uncertain != 1 {
+			t.Fatal("unknown operation was not durably fenced", uncertain)
+		}
+
 		if _, _, _, e = f.store.ReleasePublicIP(ctx, f.config, f.actor, id(), lease.ID, f.now); !errors.Is(e, ErrState) {
 			t.Fatal("unknown freed", e)
 		}

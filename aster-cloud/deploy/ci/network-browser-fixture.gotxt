@@ -8,12 +8,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -98,28 +100,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	var publicAllocationACKLost atomic.Bool
 	var publicAllocationPosts atomic.Int32
 	consoleHandler := console.Handler()
-	mux.Handle("/console/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/console/v1/public-ips/leases" {
-			publicAllocationPosts.Add(1)
-		}
-		if r.Method != http.MethodPost || r.URL.Path != "/console/v1/public-ips/leases" || publicAllocationACKLost.Load() {
-			consoleHandler.ServeHTTP(w, r)
-			return
-		}
-		// Inject a lost response only after the genuine Console handler has
-		// committed the allocation. No request/header/body change, extra POST,
-		// forged success, TLS bypass or product handler mutation is involved.
-		capture := httptest.NewRecorder()
-		consoleHandler.ServeHTTP(capture, r)
-		if capture.Code == http.StatusCreated && publicAllocationACKLost.CompareAndSwap(false, true) {
-			panic(http.ErrAbortHandler) // HTTP/1 closes or HTTP/2 resets this response.
-		}
-		for key, values := range capture.Header() {
-			w.Header()[key] = append([]string{}, values...)
-		}
-		w.WriteHeader(capture.Code)
-		_, _ = w.Write(capture.Body.Bytes())
-	}))
+	mux.Handle("/console/v1/", publicBrowserACKFault(consoleHandler, &publicAllocationACKLost, &publicAllocationPosts))
 	files := http.FileServer(http.Dir(dist))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -317,4 +298,93 @@ func publicBrowserReleaseProof(t *testing.T, ctx context.Context, f overlayFixtu
 	}
 	defer tx.Rollback()
 	return publicReleaseCompleteTx(ctx, tx, epoch)
+}
+
+// A response fault, not an extra client request: commit through the unchanged
+// real handler first, then flush its actual 201 headers and truncate its JSON.
+// Flushing matters: a close before response headers can be transparently replayed
+// by the browser transport as an apparently unprocessed request. Once headers
+// are received, incomplete JSON remains unknown without an implicit redial.
+func publicBrowserACKFault(next http.Handler, lost *atomic.Bool, posts *atomic.Int32) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		allocation := r.Method == http.MethodPost && r.URL.Path == "/console/v1/public-ips/leases"
+		if allocation {
+			posts.Add(1)
+		}
+		if !allocation || lost.Load() {
+			next.ServeHTTP(w, r)
+			return
+		}
+		capture := httptest.NewRecorder()
+		next.ServeHTTP(capture, r)
+		for key, values := range capture.Header() {
+			w.Header()[key] = append([]string{}, values...)
+		}
+		if capture.Code == http.StatusCreated && capture.Body.Len() > 0 && lost.CompareAndSwap(false, true) {
+			w.Header().Set("Content-Length", strconv.Itoa(capture.Body.Len()))
+			w.WriteHeader(capture.Code)
+			_ = http.NewResponseController(w).Flush()
+			panic(http.ErrAbortHandler) // HTTP/1 closes or HTTP/2 resets only this body.
+		}
+		w.WriteHeader(capture.Code)
+		_, _ = w.Write(capture.Body.Bytes())
+	})
+}
+
+// This test proves the injection itself over actual HTTP/1.1 and HTTP/2 TLS,
+// independent of MySQL. The main browser fixture still proves the real commit,
+// RBAC/CSRF, exact operation GET and unique allocation against MySQL.
+func TestOwnedPublicIPResponseFault(t *testing.T) {
+	for _, h2 := range []bool{false, true} {
+		name, protocol := "http1", 1
+		if h2 {
+			name, protocol = "http2", 2
+		}
+		t.Run(name, func(t *testing.T) {
+			var lost, committed atomic.Bool
+			var posts atomic.Int32
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					committed.Store(true)
+					output(w, http.StatusCreated, map[string]bool{"committed": true})
+					return
+				}
+				if !committed.Load() {
+					failure(w, 404, "NOT_COMMITTED")
+					return
+				}
+				output(w, 200, map[string]bool{"committed": true})
+			})
+			server := httptest.NewUnstartedServer(publicBrowserACKFault(handler, &lost, &posts))
+			server.EnableHTTP2 = h2
+			server.StartTLS()
+			t.Cleanup(server.Close)
+			client := server.Client() // Only this server's explicit CA is trusted.
+			client.Timeout = 3 * time.Second
+			request, err := http.NewRequest(http.MethodPost, server.URL+"/console/v1/public-ips/leases", strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Idempotency-Key", strings.Repeat("a", 32))
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal("original successful headers were not observed", err)
+			}
+			body, readErr := io.ReadAll(response.Body)
+			response.Body.Close()
+			if response.ProtoMajor != protocol || response.StatusCode != http.StatusCreated || readErr == nil || len(body) != 0 || !lost.Load() || !committed.Load() || posts.Load() != 1 {
+				t.Fatal("fault must occur after commit and real headers, before complete JSON, without replay", response.ProtoMajor, response.StatusCode, readErr, len(body), posts.Load())
+			}
+			proof, err := client.Get(server.URL + "/console/v1/public-ips/operations/original")
+			if err != nil {
+				t.Fatal("read-only original operation after the completed fault", err)
+			}
+			var result map[string]bool
+			err = json.NewDecoder(proof.Body).Decode(&result)
+			proof.Body.Close()
+			if err != nil || proof.StatusCode != 200 || !result["committed"] || posts.Load() != 1 {
+				t.Fatal("original operation was not available after the response fault", err)
+			}
+		})
+	}
 }
