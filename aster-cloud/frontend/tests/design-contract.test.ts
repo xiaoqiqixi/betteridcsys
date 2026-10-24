@@ -47,6 +47,21 @@ describe("design contracts (static tokens, not browser computed)", () => {
     expect(result.code).toMatch(/#app\[inert\]\s+\.toast-item/);
     expect(result.code).not.toMatch(/#app\[inert\]\s*\{/);
   });
+  it("reserves one-line NAT status badges while long network identities may wrap", () => {
+    const source = readFileSync(
+      resolve(root, "components/OverlaySnapshotPanel.vue"),
+      "utf8",
+    );
+    const badge = source.match(
+      /\.nat-summary header > \.status-badge\s*\{([^}]+)\}/,
+    )?.[1];
+    expect(badge).toContain("flex-shrink: 0");
+    expect(badge).toContain("align-self: flex-start");
+    expect(badge).toContain("white-space: nowrap");
+    expect(
+      source.match(/\.nat-summary header > div\s*\{([^}]+)\}/)?.[1],
+    ).toContain("min-width: 0");
+  });
   it("keeps mobile navigation on the overlay surface and names the compact preferences control", () => {
     const nav = readFileSync(resolve(root, "components/NavLinks.vue"), "utf8");
     const app = readFileSync(resolve(root, "App.vue"), "utf8");

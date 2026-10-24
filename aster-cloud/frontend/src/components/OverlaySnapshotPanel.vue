@@ -200,6 +200,11 @@ const name = (id: string) =>
   justify-content: space-between;
   gap: 12px;
 }
+.nat-summary header > .status-badge {
+  flex-shrink: 0;
+  align-self: flex-start;
+  white-space: nowrap;
+}
 .forward-summary {
   display: grid;
   gap: 8px;

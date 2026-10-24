@@ -388,8 +388,28 @@ try {
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   await dialogClosed();
   await noticesExpireNaturally('dark overview has no stale notices before actual screenshots');
-  await screenshot('mobile-network-english-dark');
+  // Measure the rendered text itself: an inline-flex badge box can stay one
+  // rectangle while its anonymous text item wraps "Enabled" into two lines.
+  const natBadgeLines = await page.evaluate(() => [...document.querySelectorAll('.nat-summary header > .status-badge')].map(badge => {
+    const walker = document.createTreeWalker(badge, NodeFilter.SHOW_TEXT);
+    const lines = new Set();
+    let hasText = false;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      hasText = true;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width > 0 && rect.height > 0) lines.add(Number(rect.y.toFixed(2)));
+      }
+    }
+    return { has_text: hasText, text_lines: lines.size };
+  }));
+  assert(natBadgeLines.length > 0, 'The real NAT fixture must render at least one status badge');
+  assert(natBadgeLines.every(badge => badge.has_text && badge.text_lines === 1), 'Mobile English NAT badge text must remain on one rendered line');
+  check('mobile English NAT status text does not wrap', { badges: natBadgeLines });
   await noOverflow('mobile English dark page has no horizontal overflow');
+  await screenshot('mobile-network-english-dark');
   await page.setViewportSize({ width: 1440, height: 1000 });
   await screenshot('desktop-network-english-dark');
   await noOverflow('desktop English dark page has no horizontal overflow');
