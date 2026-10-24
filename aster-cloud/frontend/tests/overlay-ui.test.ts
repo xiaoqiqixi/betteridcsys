@@ -888,7 +888,9 @@ describe("network lifetime and accessibility edge cases", () => {
   });
   it("supports the keyboard in custom egress and protocol controls", async () => {
     await setup("plan");
-    const combobox = body().findAll("button[role=combobox]")[0]!;
+    const combobox = body().find(
+      'button[role=combobox][aria-label="出站地址转换"]',
+    );
     await combobox.trigger("keydown", { key: "Enter" });
     expect(body().find("[role=listbox]").exists()).toBe(true);
     await combobox.trigger("keydown", { key: "Home" });

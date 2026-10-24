@@ -15,6 +15,7 @@ import type {
 import { useConsole } from "../context";
 import UiButton from "./UiButton.vue";
 import UiSelect from "./UiSelect.vue";
+import type { PublicIPLease } from "../api/public-ip";
 const props = defineProps<{
   modelValue: NATPolicy[];
   profiles: NATProfile[];
@@ -22,6 +23,7 @@ const props = defineProps<{
   instances: OverlayInstanceOption[];
   gateways: OverlayGateway[];
   vpcs: OverlayVPC[];
+  leases?: PublicIPLease[];
   disabled?: boolean;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: NATPolicy[]] }>();
@@ -54,6 +56,62 @@ const targets = (p: NATProfile) =>
           ?.hostname || m.instance_id,
     }));
 const name = (id: string) => props.vpcs.find((v) => v.id === id)?.name || id;
+const leasesFor = (p: NATProfile) =>
+  (props.leases || []).filter(
+    (l) =>
+      l.state === "reserved" &&
+      props.gateways.some(
+        (g) =>
+          g.vpc_id === p.vpc_id &&
+          g.node_id === p.node_id &&
+          g.owner_ref === l.owner_ref,
+      ) &&
+      l.vpc_id === p.vpc_id &&
+      l.node_id === p.node_id &&
+      l.profile_id === p.profile_id &&
+      (l.address === p.public_ipv4 || p.public_ipv4s?.includes(l.address)),
+  );
+const primaryLeased = (p: NATProfile) =>
+  (props.leases || []).some(
+    (l) => l.state === "reserved" && l.address === p.public_ipv4,
+  );
+const publicAddressOptions = (p: NATProfile) => {
+  const old = policyFor(p)?.public_ipv4;
+  const leases = leasesFor(p);
+  return [
+    {
+      value: "",
+      label: tr(
+        `原出口 · ${p.public_ipv4}`,
+        `Original egress · ${p.public_ipv4}`,
+      ),
+      disabled: primaryLeased(p),
+    },
+    ...leases.map((l) => ({ value: l.address, label: l.address })),
+    ...(old && !leases.some((l) => l.address === old)
+      ? [
+          {
+            value: old,
+            label: tr(`${old} · 分配待核对`, `${old} · verify allocation`),
+            disabled: true,
+          },
+        ]
+      : []),
+  ];
+};
+function selectPublicAddress(p: NATProfile, value: string) {
+  const old = policyFor(p);
+  if (
+    !old ||
+    props.disabled ||
+    (value ? !leasesFor(p).some((l) => l.address === value) : primaryLeased(p))
+  )
+    return;
+  const next = { ...old };
+  if (value) next.public_ipv4 = value;
+  else delete next.public_ipv4;
+  publish(next, old);
+}
 function publish(p: NATPolicy | null, old?: NATPolicy) {
   if (props.disabled) return;
   const next = props.modelValue.filter(
@@ -228,7 +286,10 @@ const missing = computed(() =>
           <h4>{{ name(profile.vpc_id) }}</h4>
           <p>
             {{ tr("出口 IPv4", "Egress IPv4") }}
-            <code>{{ profile.public_ipv4 }}</code> · {{ profile.node_id }}
+            <code>{{
+              policyFor(profile)?.public_ipv4 || profile.public_ipv4
+            }}</code>
+            · {{ profile.node_id }}
           </p>
         </div>
         <UiButton
@@ -253,6 +314,21 @@ const missing = computed(() =>
         }}
       </p>
       <template v-if="policyFor(profile)">
+        <label class="field public-address-field"
+          >{{ tr("公网地址绑定", "Public address binding")
+          }}<UiSelect
+            :model-value="policyFor(profile)?.public_ipv4 || ''"
+            :options="publicAddressOptions(profile)"
+            :label="tr('公网地址绑定', 'Public address binding')"
+            :disabled="disabled"
+            @update:model-value="selectPublicAddress(profile, $event)"
+          /><span class="field-note">{{
+            tr(
+              "地址池中分配给此 VPC 出口的地址可在这里绑定。更换或移除出口会中断已有连接。",
+              "Bind an address allocated to this VPC egress. Replacing or removing the egress interrupts existing connections.",
+            )
+          }}</span></label
+        >
         <div class="egress-fields">
           <label class="field"
             >{{ tr("出站地址转换（SNAT）", "Outbound translation (SNAT)")
@@ -454,6 +530,9 @@ const missing = computed(() =>
   </section>
 </template>
 <style scoped>
+.public-address-field {
+  margin: 20px 0;
+}
 .nat-editor > header {
   margin-bottom: 18px;
 }

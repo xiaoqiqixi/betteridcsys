@@ -146,3 +146,9 @@ GOTOOLCHAIN=go1.27.3 GOCACHE=/tmp/aster-cloud-go-cache go test -race -count=1 ./
 真实 MySQL 使用 `ASTER_NETWORK_TEST_DSN` 或 `ASTER_CLOUD_TEST_DSN`（必须含 `_test`）；CI fallback `ASTER_MYSQL_TEST_DSN` 仅接受 `aster_ci_test`。只接受 private Unix socket 或 literal loopback TCP，不接受跳过 TLS 验证/多语句/危险文件选项。测试使用借用的服务器权限创建并清理自己随机独立的 `aster_cloud_test_network_*` 数据库，不 truncate 原测试库或财务库；不回显凭据。新 controller 任务绑定测试使用 `ASTER_CLOUD_TEST_DSN` / 同一 CI fallback，并始终借服务器权限创建/清理自己的随机独立数据库；不会在传入库中 DROP 绑定表或注入 trigger。仅设置 `ASTER_NETWORK_TEST_DSN` 不会自动覆盖 controller 测试。没有 DSN 则明确 SKIP，不能算实库通过。
 
 覆盖输入/4096 上限、canonical replay、越权、池禁用、地址耗尽、并发唯一、重启查询、固定/字节预算分页、GET 不改状态、schema 冲突/部分 DDL 及真实 HTTPS Cookie/CSRF/RBAC。另覆盖新旧能力区分、root profile 精确 SHA/owner 选择、正双向限速、同事务实例/容量/租约/任务/audit rollback、并发池耗尽、不可变 power binding、禁用池/绑定篡改拒绝派发、新协议丢响应只 GET 及 schema 006 重入/冲突。所有数据均为合成记录；这些主控测试不运行 KVM、OVS、公网路由或实际地址绑定。
+
+## 独立公网 NAT 地址管理
+
+原005/006网络预留合同不变，不用于自动回收已绑定的实例创建地址。新schema8
+公网池、分配回收与真实NAT出口选择使用独立API及完整release证明，见
+[PUBLIC_IP_MANAGEMENT.md](PUBLIC_IP_MANAGEMENT.md)。

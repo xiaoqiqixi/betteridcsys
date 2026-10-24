@@ -21,6 +21,7 @@ const name = (id: string) =>
   props.snapshot.vpcs.find((v) => v.id === id)?.cidr ||
   id;
 const egressIPv4 = (policy: NATPolicy) =>
+  policy.public_ipv4 ||
   props.natProfiles?.find(
     (profile) =>
       profile.node_id === policy.node_id &&

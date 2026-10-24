@@ -54,3 +54,12 @@
 - 概览、历史版本详情与原配置恢复均展示出口范围。出口地址只有在完整节点/VPC/网关/配置 ID/SHA-256 对应时才引用当前安全投影；无法核实时不猜测旧版本地址。
 - `internet_egress_enabled` 仅在 true 时进入规范化意图，旧省略/false 等价；公网与非公网意图绝不等价。未知 POST 的只读核对仍匹配完整模式，不以丢失新字段的 GET 解除锁定。
 - 本轮实际读取 ui-skills-root、interface-design、vue-best-practices 及四项核心参考。UI Skills CLI 离线缓存仍不可用（ENOTCACHED），本轮没有新安装或声称调用 Gemini。
+
+## 公网 IP 库存与分配
+
+- `/networks/public-ips` 是网络第二级导航，集群、池/分配记录及游标保存在URL；不新增装饰统计卡。数量只表示库存，不从租约差集推断空闲。
+- `PublicIPsPage` 拥有列表与确认后刷新；`PublicIPDialog` 拥有范围/列表输入、精确VPC/出口选择及typed IP回收确认；`usePublicIPMutation` 独立持久保管完整actor/action/target/request；严格DTO和原操作GET核对在 `api/public-ip.ts`。
+- 创建、补充、启停、分配、回收以服务端固定结果为准。丢ACK跨关闭/刷新仍阻断新地址POST，GET须匹配原账号/ID/动作/目标/完整请求及相符结果。保留released历史，显示服务端绑定/待确认/不可回收状态，不把预留叫网络已接通。
+- NAT选址仅列精确VPC/owner/node/profile的reserved租约；`public_ipv4`进入新冻结意图及完整比较，缺省不改旧字节。历史显式IP从冻结版本读取，不从当前默认地址猜旧绑定。
+- 复用UiSelect/UiOverlay/UiButton、可见错误、44px交互及焦点/dirty关闭契约；新表单novalidate配合自定义错误，不弹系统校验气泡。桌面紧凑分组，≤600px单列，中英浅深主题及实际320/390/1440浏览器另验。
+- 实际读取ui-skills-root、interface-design、vue-best-practices与4个核心参考。ui-skills CLI尝试失败（registry ENOTFOUND），采用本地技能，没有宣称新安装或调用Gemini。

@@ -17,14 +17,62 @@ management, underlay, loopback, multicast or metadata ranges. A selected route
 can narrow a root prefix or be removed. DNAT source prefixes must be contained
 both in the root NAT source approval and selected gateway prefixes; enabling
 Internet egress never grants unrestricted inbound DNAT. No IPv6 NAT, hairpin
-NAT, ICMP DNAT, public address allocation or automatic physical-uplink
-configuration is claimed.
+NAT or ICMP DNAT is claimed. The node never configures public interface
+addresses or physical uplinks automatically; controller IP-pool allocation is a
+separate management ledger, not authority to change host network ownership.
 
 The administrator uses the controller network UI to select approved gateways,
 prefixes and NAT profiles, submit an epoch, inspect node phases and explicitly
 recover an uncertain epoch. Root provisioning remains a separate host operation:
 HTTP administrators cannot name a host interface, namespace path, arbitrary
 command or unapproved public IP.
+
+## Selected public IPs and controller allocation
+
+`NATPolicy.public_ipv4` is an optional canonical public-unicast IPv4 selection.
+Omission retains the profile's original `public_ipv4` default and **all original
+snapshot/task bytes and hashes**. An explicit selection changes immutable new
+intent; every approved-prefix SNAT, Internet SNAT and DNAT rule binds that exact
+address. One local snapshot cannot bind the same effective address to two
+policies, including a default/explicit collision, even if their root grants share
+reserve addresses. VPC, node, gateway, profile ID and full profile SHA approvals
+remain mandatory; another tenant's profile cannot be borrowed.
+
+Root can additionally approve `NATProfile.public_ipv4s`, at most 64 entries.
+The canonical grant is sorted/deduplicated, omits an empty list, rejects the
+primary address and every NAT uplink address, and accepts only canonical public
+IPv4 addresses outside protected management/underlay/VPC ranges. The unchanged
+primary field retains compatibility with historical explicit-prefix profiles.
+Changing this root list changes the NAT and overlay pins and requires the same
+explicit previous-pin, exact-head recovery and ownership migration as other
+root capability changes. Ordinary controller prepare cannot adopt it.
+
+Before prepare, program, release and readiness checks, the node independently
+proves namespace identity, veth ownership, MTU, addresses, routes and policy
+rules. The outside IPv4 inventory must be a duplicate-free subset of the root
+grant; **both primary and selected addresses must actually be configured**.
+An approved reserve may stay unconfigured but cannot then be selected. The only
+nonlocal routes are the exact VPC route, connected prefixes matching configured
+outside addresses, and one default via the exact on-link approved uplink. Only
+the three kernel policy-routing defaults are accepted. There is no command to
+silently add/remove an address, alter a physical interface, change host routes,
+or accept a missing/unreachable source as a successful allocation. Providers
+must separately route those operator-owned addresses to the dedicated uplink.
+
+All locally approved pool addresses, including unconfigured reserves, and all
+explicit selected addresses in the snapshot join the Internet exclusion lists in
+nftables and OVS. Existing separately root-approved
+explicit prefixes/DNAT retain their narrower semantics and priority. A public-IP
+switch or policy removal uses the full isolate/program/readback/release barriers
+and flushes conntrack only in the dedicated namespace, revoking old mappings.
+Old operation, snapshot and receipt files are not rewritten or recycled.
+
+The existing mandatory Ubuntu22/24 Internet native gate now provisions a second
+address inside isolated veth namespaces and checks exact TCP/UDP source identity,
+selected TCP/UDP DNAT, address switching, old held-TCP revocation, old DNAT denial,
+final unbinding, strict readback and an approved-but-unconfigured source reject.
+It still does not contact the public Internet, use KVM/physical OVS, or establish
+provider routing. Actual host/physical-public acceptance remains a separate gate.
 
 ## Public Internet egress
 
@@ -50,7 +98,8 @@ After this root provisioning/migration, the management UI can enable or disable
 `internet_egress_enabled` on a selected SNAT policy, inspect its approval and
 submit/recover the same three-phase epoch as other network changes. Internet
 egress requires SNAT; disabling SNAT disables that policy's Internet permission.
-The actual public source remains the approved profile address, not UI input.
+The actual public source must belong to that exact root-approved profile; a
+controller allocation or UI field alone cannot grant an address.
 
 The new public path accepts member-initiated TCP, UDP and ICMP echo to public
 IPv4 destinations outside all explicit gateway prefixes. It denies the shared

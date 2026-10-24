@@ -104,6 +104,9 @@ func reserveOverlayCreation(ctx context.Context, tx *sql.Tx, candidate Candidate
 	if e != nil {
 		return ErrConflict
 	}
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot); e != nil {
+		return e
+	}
 	if e = overlayCompleteInventory(ctx, tx, snapshot); e != nil {
 		return e
 	}

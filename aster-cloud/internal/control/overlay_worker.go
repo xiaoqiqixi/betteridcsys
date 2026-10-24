@@ -147,6 +147,9 @@ func (s *SQLStore) claimOverlayTask(ctx context.Context, c Config, id, taskID st
 	if !overlayPoliciesApproved(cluster, epoch.Snapshot) {
 		return epoch, task, ErrState
 	}
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, epoch.Snapshot); e != nil {
+		return epoch, task, e
+	}
 	if e = validateOverlayBindings(ctx, tx, epoch); e != nil {
 		return epoch, task, e
 	}

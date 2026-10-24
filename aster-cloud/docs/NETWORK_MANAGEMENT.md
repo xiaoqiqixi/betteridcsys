@@ -83,13 +83,17 @@ Origin 校验。网络读取需要 `nodes.read`；创建 VPC 还需 `nodes.manag
   不根据“未出现在列表中”猜测实例已删除。候选清单最多 128 个未删除实例
   加 128 个当前快照保留的已删除身份，单个新快照仍最多 128 个成员。
 
+公网 IP 池、追加库存、分配回收及实际 NAT 地址选择使用独立后台与 API，见
+[公网 IP 管理](PUBLIC_IP_MANAGEMENT.md)。新显式地址必须有精确 reserved
+租约，完整解绑回执确认后才回收，不与原实例创建租约混用。
+
 ## NAT 的兼容语义
 
 `POST epochs` 和恢复的 `replacement` 可带 `nat_policies`：
 
 ```text
 policy = {id, node_id, vpc_id, gateway_instance_id, profile_id,
-          profile_sha256, snat_enabled, internet_egress_enabled?, forwardings:[
+          profile_sha256, snat_enabled, internet_egress_enabled?, public_ipv4?, forwardings:[
             {id, protocol, public_port, target_instance_id, target_port, source_cidr}
           ]}
 ```

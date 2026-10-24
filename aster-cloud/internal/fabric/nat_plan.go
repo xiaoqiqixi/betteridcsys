@@ -89,14 +89,14 @@ func compileNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfile, isola
 			for _, dest := range gateway.AllowedPrefixes {
 				base := directions(root.InsideInterface, root.OutsideInterface, m.IPv4, dest)
 				add("forward", append(append([]any{}, base...), accept)...)
-				add("postrouting", append(append([]any{}, base...), nftObject{"snat": nftObject{"addr": root.PublicIPv4, "family": "ip"}})...)
+				add("postrouting", append(append([]any{}, base...), nftObject{"snat": nftObject{"addr": natPolicyPublicIPv4(root, *policy), "family": "ip"}})...)
 				add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), match(payload("ip", "saddr"), prefixExpr(dest)), match(payload("ip", "daddr"), m.IPv4), established, accept)
 			}
 		}
 	}
 	for _, f := range policy.Forwardings {
 		m := members[f.TargetInstanceID]
-		add("prerouting", match(meta("iifname"), root.OutsideInterface), match(payload("ip", "daddr"), root.PublicIPv4), match(payload("ip", "saddr"), prefixExpr(f.SourceCIDR)), match(payload(f.Protocol, "dport"), f.PublicPort), nftObject{"dnat": nftObject{"addr": m.IPv4, "port": f.TargetPort, "family": "ip"}})
+		add("prerouting", match(meta("iifname"), root.OutsideInterface), match(payload("ip", "daddr"), natPolicyPublicIPv4(root, *policy)), match(payload("ip", "saddr"), prefixExpr(f.SourceCIDR)), match(payload(f.Protocol, "dport"), f.PublicPort), nftObject{"dnat": nftObject{"addr": m.IPv4, "port": f.TargetPort, "family": "ip"}})
 		add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), match(payload("ip", "saddr"), prefixExpr(f.SourceCIDR)), match(payload("ip", "daddr"), m.IPv4), match(payload(f.Protocol, "dport"), f.TargetPort), bitmatch(ct("status"), 32), accept)
 		add("forward", match(meta("iifname"), root.InsideInterface), match(meta("oifname"), root.OutsideInterface), match(payload("ip", "saddr"), m.IPv4), match(payload("ip", "daddr"), prefixExpr(f.SourceCIDR)), match(payload(f.Protocol, "sport"), f.TargetPort), bitmatch(ct("status"), 32), established, accept)
 	}

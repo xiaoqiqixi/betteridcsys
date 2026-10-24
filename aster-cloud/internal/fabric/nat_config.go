@@ -27,6 +27,7 @@ type NATProfile struct {
 	OutsideInterface            string         `json:"outside_interface"`
 	OutsidePeer                 string         `json:"outside_peer"`
 	PublicIPv4                  string         `json:"public_ipv4"`
+	PublicIPv4s                 []string       `json:"public_ipv4s,omitempty"`
 	UplinkGatewayIPv4           string         `json:"uplink_gateway_ipv4"`
 	AllowSNAT                   bool           `json:"allow_snat"`
 	AllowInternetEgress         bool           `json:"allow_internet_egress,omitempty"`
@@ -52,6 +53,26 @@ func canonicalNATProfile(p NATProfile) (NATProfile, error) {
 	if !vpok || !vp.Addr().IsPrivate() || vp.Bits() < 8 || vp.Bits() > 30 || !nodeRE.MatchString(p.ID) || !strings.HasPrefix(p.Namespace, "aster-") || !nodeRE.MatchString(p.Namespace) || p.NamespaceDevice == 0 || p.NamespaceInode == 0 || !p.DedicatedAck || !idRE.MatchString(p.VPCID) || !idRE.MatchString(p.GatewayInstanceID) || !nameRE.MatchString(p.InsideInterface) || !nameRE.MatchString(p.OutsideInterface) || !nameRE.MatchString(p.OutsidePeer) || p.InsideInterface == p.OutsideInterface || p.OutsidePeer == TAPName(p.GatewayInstanceID) || ae != nil || ge != nil || !a.Is4() || !g.Is4() || !a.IsGlobalUnicast() || !g.IsGlobalUnicast() || a == g || vp.Contains(a) || vp.Contains(g) || a.String() != p.PublicIPv4 || g.String() != p.UplinkGatewayIPv4 || p.AllowedSourceCIDRs == nil || len(p.AllowedSourceCIDRs) > 32 || p.AllowedPorts == nil || len(p.AllowedPorts) > 64 {
 		return p, ErrInvalid
 	}
+	if len(p.PublicIPv4s) > 64 {
+		return p, ErrInvalid
+	}
+	// Extra pool addresses are an independent, bounded root grant. An empty
+	// grant is omitted, preserving every historical profile and owner digest.
+	if len(p.PublicIPv4s) > 0 {
+		addresses := append([]string{}, p.PublicIPv4s...)
+		sort.Strings(addresses)
+		p.PublicIPv4s = nil
+		for _, ip := range addresses {
+			if !overlayproto.PublicInternetIPv4(ip) || ip == p.PublicIPv4 || ip == p.UplinkGatewayIPv4 {
+				return p, ErrInvalid
+			}
+			if len(p.PublicIPv4s) == 0 || p.PublicIPv4s[len(p.PublicIPv4s)-1] != ip {
+				p.PublicIPv4s = append(p.PublicIPv4s, ip)
+			}
+		}
+	} else {
+		p.PublicIPv4s = nil
+	}
 	p.AllowedSourceCIDRs = append([]string{}, p.AllowedSourceCIDRs...)
 	sort.Strings(p.AllowedSourceCIDRs)
 	for i, r := range p.AllowedSourceCIDRs {
@@ -74,6 +95,28 @@ func canonicalNATProfile(p NATProfile) (NATProfile, error) {
 	}
 	return p, nil
 }
+
+// natProfilePublicIPv4s returns a fresh list including the legacy default.
+func natProfilePublicIPv4s(p NATProfile) []string {
+	return append([]string{p.PublicIPv4}, p.PublicIPv4s...)
+}
+
+func natPolicyPublicIPv4(root NATProfile, policy overlayproto.NATPolicy) string {
+	if policy.PublicIPv4 != "" {
+		return policy.PublicIPv4
+	}
+	return root.PublicIPv4
+}
+
+func natPublicIPv4Approved(root NATProfile, ip string) bool {
+	for _, allowed := range natProfilePublicIPv4s(root) {
+		if ip == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 func NATProfileSHA256(p NATProfile) (string, error) {
 	p, e := canonicalNATProfile(p)
 	if e != nil {
@@ -136,6 +179,13 @@ func canonicalNATConfig(c *OverlayConfig) error {
 		if e != nil {
 			return e
 		}
+		for _, public := range p.PublicIPv4s {
+			for _, other := range c.NATProfiles {
+				if public == other.UplinkGatewayIPv4 {
+					return ErrInvalid
+				}
+			}
+		}
 		for _, key := range []string{"id:" + p.ID, "ns:" + p.Namespace, fmt.Sprintf("inode:%d:%d", p.NamespaceDevice, p.NamespaceInode), "vpc:" + p.VPCID, "gw:" + p.GatewayInstanceID, "ip:" + p.PublicIPv4, "peer:" + p.OutsidePeer} {
 			if used[key] {
 				return ErrInvalid
@@ -175,7 +225,7 @@ func canonicalNATConfig(c *OverlayConfig) error {
 				}
 			}
 		}
-		for _, public := range []string{p.PublicIPv4, p.UplinkGatewayIPv4} {
+		for _, public := range append(natProfilePublicIPv4s(p), p.UplinkGatewayIPv4) {
 			a, _ := netip.ParseAddr(public)
 			for _, b := range protected {
 				r, _ := overlayproto.Prefix(b)
@@ -194,6 +244,7 @@ func canonicalNATConfig(c *OverlayConfig) error {
 	return nil
 }
 func validateNATApproval(c OverlayConfig, s overlayproto.Snapshot) error {
+	usedPublic := map[string]bool{}
 	for _, p := range s.NATPolicies {
 		if p.NodeID != c.Base.NodeID {
 			continue
@@ -203,6 +254,11 @@ func validateNATApproval(c OverlayConfig, s overlayproto.Snapshot) error {
 		if !ok || e != nil || root.ID != p.ProfileID || root.VPCID != p.VPCID || sha != p.ProfileSHA256 || p.SNATEnabled && !root.AllowSNAT || p.InternetEgressEnabled && !root.AllowInternetEgress {
 			return ErrConflict
 		}
+		public := natPolicyPublicIPv4(root, p)
+		if !natPublicIPv4Approved(root, public) || usedPublic[public] {
+			return ErrConflict
+		}
+		usedPublic[public] = true
 		for _, f := range p.Forwardings {
 			var gateway overlayproto.Gateway
 			for _, g := range s.Gateways {
@@ -230,7 +286,7 @@ func validateNATApproval(c OverlayConfig, s overlayproto.Snapshot) error {
 			if v.ID == p.VPCID && v.CIDR != p.VPCCIDR {
 				return ErrConflict
 			}
-			for _, ip := range []string{p.PublicIPv4, p.UplinkGatewayIPv4} {
+			for _, ip := range append(natProfilePublicIPv4s(p), p.UplinkGatewayIPv4) {
 				a, _ := netip.ParseAddr(ip)
 				if q.Contains(a) {
 					return ErrConflict

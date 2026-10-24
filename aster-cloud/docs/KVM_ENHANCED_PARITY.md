@@ -64,6 +64,15 @@
 | A16 | `internal/overlayproto/`、`internal/control/overlay_*`、`internal/fabric/overlay_*`、`internal/hypervisor/overlay*` | schema-7 全局 VPC/epoch、固定 VXLAN peer、受控路由、reserved 成员创建屏障、显式恢复；不是实际跨宿主连通性验收。 |
 | A17 | `internal/fabric/nat_*`、`internal/overlayproto/nat.go`、`frontend/src/pages/OverlayNetworksPage.vue`、`OverlayEpochPage.vue` | root 批准 namespace SNAT/TCP/UDP DNAT、后台完整成员/路由/NAT 及恢复；限制与权限见 [NETWORK_MANAGEMENT.md](NETWORK_MANAGEMENT.md) 和 [NAT.md](../internal/fabric/NAT.md)。 |
 
+## 2026-10-24 公网 IP 增量
+
+新增 A18：`migrations/008_public_ips.sql`、`internal/control/public_ip_*`、
+`frontend/src/pages/PublicIPsPage.vue`。已实现公网 IPv4 NAT 专用池、追加库存、
+全局唯一租约、实际出口选择、完整解绑确认回收、权限与审计，见
+[公网 IP 管理](PUBLIC_IP_MANAGEMENT.md)。主控 schema 现为 8；既有迁移不改。
+不是任意 VM 弹性 IP、IPv6、热迁移或物理路由自动发布。下面原 A11 的
+网关/DNS/分组差距仍在；不能用新 NAT 出口租约冒充原创建地址可任意释放。
+
 ## 4. 加强版核心网络差距（最高优先级）
 
 R1/R4/R5/R6/R7/R10 是功能依据；具体执行器选型须再查 Ubuntu/libvirt/OVS 上游资料并在专用宿主验证。
@@ -77,8 +86,8 @@ R1/R4/R5/R6/R7/R10 是功能依据；具体执行器选型须再查 Ubuntu/libvi
 | VLAN 隔离 | `implemented-partial` A11 的 node/VLAN 唯一预留 + A12 的 VPC metadata 微分段 | 当前用 VLAN 编号作 bridge 内 OpenFlow metadata 标签，并非已提供 802.1Q trunk/access；来宾 tagged frame 默认 drop。物理 802.1Q 上联/跨节点 VLAN trunk 仍 `missing`；A16 的 VXLAN 不能冒充它，不能把 OVSDB tag 当显式 flow 隔离。 |
 | 节点内/跨节点私网 | `implemented-partial` A12/A16；`realhost-required` | 已实现固定 VXLAN peer/VNI、MTU 约束、精确 ARP/IPv4 身份与全节点 epoch 屏障，无 flooding/LOCAL/NORMAL。运营者须提供受信 underlay；双宿主 VM 包流、欺骗/速率与连续故障恢复仍待真机验收。 |
 | VPC、子网、路由及客户归属 | `implemented-partial` A11/A12/A14/A16/A17 | 已有原 IPAM 冻结绑定、全局 VPC、root 批准网关目的前缀、跨节点成员、创建屏障及后台完整配置/恢复。planned/reserved 不等于已联网；完整子网生命周期、自助网络、动态路由与真机包流验收仍缺。 |
-| 浮动/弹性公网 IP | `missing` | 独立 owner 资源、可用区域/节点、唯一绑定及 bind/unbind 操作。未知状态不转绑；读回数据面；迁移不能静默换 IP/释放旧 IP。 |
-| NAT 端口转发/共享建站 | `implemented-partial` A17；`realhost-required` | 已有批准 namespace 的 IPv4 SNAT、TCP/UDP 单端口 DNAT、来源/端口范围校验、跨节点同 VPC enabled 目标、原子 nft 读回与 conntrack 撤销及后台配置。不是默认全网 Internet；IPv6/hairpin/ICMP NAT、公共 IP 分配、域名共享建站及真实上联/KVM 验收仍缺，不占宿主 SSH/财务端口。 |
+| 浮动/弹性公网 IP | `implemented-partial` A18，仅 NAT 出口；任意 VM EIP 仍 `missing` | NAT 出口已有独立 owner 租约、唯一绑定及确认解绑回收；不是任意 VM 公网网卡。未知状态不转绑，迁移不能静默换 IP/释放旧 IP，物理验收仍后置。 |
+| NAT 端口转发/共享建站 | `implemented-partial` A17/A18；`realhost-required` | 已有 root 批准的公网 TCP/UDP/ICMP echo 出站、精确 TCP/UDP DNAT、源/端口校验、全节点屏障、规则读回与 conntrack 撤销。A18 接池、分配、实际地址选择和确认回收；IPv6/hairpin/ICMP DNAT、域名共享建站及真实上联/KVM 验收仍缺，不占宿主 SSH/财务端口。 |
 | 租户安全组 | `missing`；A3 固定防欺骗不是安全组 | 入/出方向、协议/CIDR/端口范围、优先级/状态语义明确；默认策略、规则版本、原子替换、绑定读回。IPv4/IPv6/ARP/NDP 及失败时旧策略保留。 |
 | IP-MAC 绑定与反欺骗 | `implemented-partial` A3/A12；`realhost-required` | 旧 bridge filter 和新 OVS exact IP/MAC/ARP+VPC metadata 与嵌入 gate 分别有测试，不互相替代。必须实测同桥非托管端口、ofport 重用、双标签、宿主服务攻击及断电恢复。 |
 | DHCP | `missing`；A3 当前使用 NoCloud 静态地址 | 地址授权绑定、租约与持久 IPAM 一致；隔离 rogue DHCP，重复 DISCOVER/请求/租约恢复、DHCP 服务故障不能重复发放地址。 |
@@ -147,7 +156,7 @@ Migration 005 新增 `controller_network_vpcs`、`controller_network_pools`、`c
 
 管理对象状态仍为 `planned` / `reserved`，没有 delete/free/自动到期回收，不改历史资源或财务快照。Migration 006 的 `controller_instance_networks` 和 `ReserveTaskTx` 将显式 VPC create 的 IP 预留、不可变网络绑定、精确任务 SHA 与审计纳入同一个事务；提交后才派发 node/2。旧管理 API/实库证据不能替代新 gate 或包转发验收；本轮实测与跳过项见 [OVS_VM_GATE_VALIDATION.md](OVS_VM_GATE_VALIDATION.md)。完整 API 见 [NETWORK_API.md](NETWORK_API.md)。
 
-**升级/回滚：001–006 保持不变，007 增加全局 VPC/epoch，主控数据库当前为 schema 7；旧二进制不认识它，不能只换旧 binary 回滚。** 必须停写、备份，采用兼容应用或已演练的数据库完整恢复路径。没有自动删除网络表/租约的降级迁移；任何恢复都必须保留已占地址和未知任务，不能当作清理重试。详见 [主控运维](../deploy/controller-OPERATIONS.md)。
+**升级/回滚：001–006 保持不变，007 增加全局 VPC/epoch，主控数据库当前为 schema 8；旧二进制不认识它，不能只换旧 binary 回滚。** 必须停写、备份，采用兼容应用或已演练的数据库完整恢复路径。没有自动删除网络表/租约的降级迁移；任何恢复都必须保留已占地址和未知任务，不能当作清理重试。详见 [主控运维](../deploy/controller-OPERATIONS.md)。
 
 ### 7.2 从独立 OVS 核心到显式 VM 门禁，仍不是完整路由 VPC
 

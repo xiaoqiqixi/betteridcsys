@@ -168,3 +168,16 @@ func CheckOverlayMigration(ctx context.Context, db SchemaReader, allowMissing bo
 	}
 	return checkTables(ctx, db, allowMissing, tables)
 }
+
+// CheckPublicIPMigration is independent of the original private IPAM schema.
+func CheckPublicIPMigration(ctx context.Context, db SchemaReader, allowMissing bool) error {
+	updated := columnSpec{"updated_at", "datetime", "", 0, 6}
+	tables := []tableSpec{
+		{"controller_public_ip_pools", []columnSpec{baseID("id"), ascii("cluster_id", "varchar", 64), {"name", "varchar", "utf8mb4_bin", 80, 0}, ascii("cidr", "varchar", 18), {"addresses", "mediumblob", "", 0, 0}, {"enabled", "tinyint", "", 0, 0}, createdColumn(), updated}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_public_pool_cluster", false, []string{"cluster_id", "id"}}}},
+		{"controller_public_ip_inventory", []columnSpec{ascii("address", "varchar", 15), baseID("pool_id"), baseID("legacy_epoch_id")}, []indexSpec{{"PRIMARY", true, []string{"address"}}, {"controller_public_inventory_pool", false, []string{"pool_id", "address"}}}},
+		{"controller_public_ip_leases", []columnSpec{baseID("id"), ascii("cluster_id", "varchar", 64), baseID("pool_id"), baseID("owner_ref"), baseID("vpc_id"), ascii("node_id", "varchar", 64), ascii("profile_id", "varchar", 64), ascii("address", "varchar", 15), ascii("state", "varchar", 16), createdColumn(), updated}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_public_lease_cluster", false, []string{"cluster_id", "id"}}, {"controller_public_lease_pool", false, []string{"pool_id", "id"}}, {"controller_public_lease_address", false, []string{"address", "id"}}}},
+		{"controller_public_ip_active", []columnSpec{ascii("address", "varchar", 15), baseID("lease_id")}, []indexSpec{{"PRIMARY", true, []string{"address"}}, {"controller_public_active_lease", true, []string{"lease_id"}}}},
+		{"controller_public_ip_operations", []columnSpec{baseID("id"), baseID("actor_id"), ascii("action", "varchar", 24), baseID("target_resource_id"), baseID("resource_id"), hashColumn(), {"request", "mediumblob", "", 0, 0}, {"result", "mediumblob", "", 0, 0}, createdColumn()}, []indexSpec{{"PRIMARY", true, []string{"id"}}, {"controller_public_operation_actor", false, []string{"actor_id", "id"}}}},
+	}
+	return checkTables(ctx, db, allowMissing, tables)
+}

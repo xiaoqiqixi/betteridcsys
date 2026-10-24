@@ -140,13 +140,30 @@ assert value.get('passed') is True
 assert value.get('financial_and_node_snapshots_unchanged') is True
 assert value.get('initial_network_snapshot_and_receipts_unchanged') is True
 assert value.get('lost_ack_reconciled') is True
-assert value.get('node_posts_unique') is True and value.get('node_post_count') == 30
-assert value.get('epochs') == 5
+assert value.get('node_posts_unique') is True and value.get('node_post_count') == 42
+assert value.get('epochs') == 7
 assert value.get('public_egress_enabled') is True
 assert value.get('public_egress_disabled') is True
 assert value.get('pure_internet_reenabled') is True
+
+assert value.get('original_node_post_prefix_count') == 30
+assert value.get('public_ip_operations') == 7
+assert value.get('public_ip_lease_count') == 2
+for name in ('public_pool_created', 'public_pool_extended', 'public_pool_state_managed',
+             'public_ip_bound', 'public_ip_unbound_after_all_release_receipts',
+             'public_ip_reclaimed_and_reallocated', 'public_ip_lease_history_retained',
+             'public_ip_post_commit_ack_lost'):
+    assert value.get(name) is True, 'Required public IP fixture evidence missing'
+
 report = json.loads((output / 'report.json').read_text())
 assert report.get('passed') is True, 'UI report must confirm completion'
+
+for name in ('public_ip_pool_managed', 'public_ip_pool_extended',
+             'public_ip_post_commit_ack_reconciled', 'public_ip_bound_and_detached',
+             'public_ip_reclaimed_and_reallocated', 'original_five_epochs_preserved'):
+    assert report.get(name) is True, 'Required visible public IP workflow missing'
+assert len(report.get('public_ip_write_attempts', [])) == 7
+
 for path in output.iterdir():
     assert path.is_file() and not path.is_symlink()
     assert path.suffix == '.png' or path.name in {'report.json', 'tls.json'}, 'Artifact is not allowlisted'

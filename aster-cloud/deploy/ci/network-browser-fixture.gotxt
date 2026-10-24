@@ -5,14 +5,17 @@ import (
 	"aster/cloud/internal/overlayproto"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -45,6 +48,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	// any explicit destination prefixes in epoch 5.
 	f.config.OverlayClusters[0].NATProfiles[0].AllowInternetEgress = true
 	f.config.OverlayClusters[0].NATProfiles[0].PublicIPv4 = "8.8.4.2"
+	f.config.OverlayClusters[0].NATProfiles[0].PublicIPv4s = []string{"8.8.4.3", "8.8.4.4"}
 	// Legal maximum-length unbroken ID exercises real mobile wrapping, not
 	// just a short display fixture or a component-only layout assertion.
 	f.config.OverlayClusters[0].NATProfiles[0].ProfileID = strings.Repeat("w", 64)
@@ -91,7 +95,31 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	defer runner.Close()
 	mux := http.NewServeMux()
 	console := Console{Store: f.store, Config: f.config, Identity: auth, OverlayWorker: &worker, OverlayRunner: runner}
-	mux.Handle("/console/v1/", console.Handler())
+	var publicAllocationACKLost atomic.Bool
+	var publicAllocationPosts atomic.Int32
+	consoleHandler := console.Handler()
+	mux.Handle("/console/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/console/v1/public-ips/leases" {
+			publicAllocationPosts.Add(1)
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/console/v1/public-ips/leases" || publicAllocationACKLost.Load() {
+			consoleHandler.ServeHTTP(w, r)
+			return
+		}
+		// Inject a lost response only after the genuine Console handler has
+		// committed the allocation. No request/header/body change, extra POST,
+		// forged success, TLS bypass or product handler mutation is involved.
+		capture := httptest.NewRecorder()
+		consoleHandler.ServeHTTP(capture, r)
+		if capture.Code == http.StatusCreated && publicAllocationACKLost.CompareAndSwap(false, true) {
+			panic(http.ErrAbortHandler) // HTTP/1 closes or HTTP/2 resets this response.
+		}
+		for key, values := range capture.Header() {
+			w.Header()[key] = append([]string{}, values...)
+		}
+		w.WriteHeader(capture.Code)
+		_, _ = w.Write(capture.Body.Bytes())
+	}))
 	files := http.FileServer(http.Dir(dist))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -168,37 +196,109 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 			rpc.mu.Lock()
 			gets, posts, lostACKConsumed := rpc.gets, len(rpc.posts), rpc.lose == ""
 			uniquePosts := make(map[string]bool, posts)
-			for _, task := range rpc.posts {
+			originalPrefixPreserved := true
+			for index, task := range rpc.posts {
 				uniquePosts[task.OperationID] = true
+				if index < 30 && (task.Snapshot.Epoch > 5 || len(task.Snapshot.NATPolicies) != 1 || task.Snapshot.NATPolicies[0].PublicIPv4 != "") {
+					originalPrefixPreserved = false
+				}
 			}
 			rpc.mu.Unlock()
-			// Five epochs each send exactly six unique tasks. Lost ACK
+			// Seven epochs each send exactly six unique tasks. Lost ACK
 			// reconciliation must never resend the original POST.
-			if epochs != 5 || vpcs != 2 || audit <= initialAudit || completed != 4 || gets < 1 || len(initialTasks) != 6 || posts != 5*len(initialTasks) || len(uniquePosts) != posts || !lostACKConsumed {
+			if !originalPrefixPreserved || epochs != 7 || vpcs != 2 || audit <= initialAudit || completed != 6 || gets < 1 || len(initialTasks) != 6 || posts != 7*len(initialTasks) || len(uniquePosts) != posts || !lostACKConsumed {
 				t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
 			}
-			for version := int64(1); version <= 5; version++ {
+			for version := int64(1); version <= 7; version++ {
 				var operationID string
 				if err := f.store.DB.QueryRow("SELECT id FROM controller_overlay_epochs WHERE cluster_id=? AND epoch=?", f.vpc.ClusterID, version).Scan(&operationID); err != nil {
 					t.Fatal("durable browser evidence unavailable")
 				}
 				saved, err := f.store.OverlayEpoch(ctx, operationID)
-				if err != nil || len(saved.Snapshot.NATPolicies) != 1 || len(saved.Snapshot.Gateways) != 1 {
+				if err != nil || len(saved.Snapshot.Gateways) != 1 {
 					t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
 				}
+				if version == 7 {
+					if saved.State != "succeeded" || len(saved.Snapshot.NATPolicies) != 0 || len(saved.Snapshot.Gateways[0].AllowedPrefixes) != 0 {
+						t.Fatal("UI unbinding did not persist a full released epoch without NAT")
+					}
+					if err := publicBrowserReleaseProof(t, ctx, f, saved); err != nil {
+						t.Fatal("every unbinding phase receipt must match the exact immutable intent", err)
+					}
+					continue
+				}
+				if len(saved.Snapshot.NATPolicies) != 1 {
+					t.Fatal("UI epoch lost its required NAT selection")
+				}
 				policy, routes := saved.Snapshot.NATPolicies[0], saved.Snapshot.Gateways[0].AllowedPrefixes
-				wantInternet := version == 2 || version == 3 || version == 5
+				if version == 6 && (policy.PublicIPv4 != "8.8.4.3" || !policy.InternetEgressEnabled || !policy.SNATEnabled || len(routes) != 0 || len(policy.Forwardings) != 0 || saved.State != "succeeded") {
+					t.Fatal("UI allocated public-IP selection was not applied by every node")
+				}
+				if version <= 5 && policy.PublicIPv4 != "" {
+					t.Fatal("new allocation rewrote legacy public-IP selections")
+				}
+				wantInternet := version == 2 || version == 3 || version == 5 || version == 6
 				wantSNAT := version != 4
 				if policy.InternetEgressEnabled != wantInternet || policy.SNATEnabled != wantSNAT || routes == nil || version >= 4 && (len(routes) != 0 || len(policy.Forwardings) != 0) || version < 4 && (len(routes) != 1 || len(policy.Forwardings) != 1) || version != 2 && saved.State != "succeeded" || version == 2 && saved.State != "superseded" {
 					t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
 				}
 			}
 			options, err := f.store.OverlayOptions(ctx, f.config, f.vpc.ClusterID)
-			if err != nil || options.LatestEpoch == nil || options.LatestEpoch.Epoch != 5 || !options.LatestEpoch.Snapshot.NATPolicies[0].InternetEgressEnabled || len(options.NATProfiles) != 1 || !options.NATProfiles[0].AllowInternetEgress || options.NATProfiles[0].PublicIPv4 != "8.8.4.2" {
+			if err != nil || options.LatestEpoch == nil || options.LatestEpoch.Epoch != 7 || len(options.LatestEpoch.Snapshot.NATPolicies) != 0 || len(options.NATProfiles) != 1 || !options.NATProfiles[0].AllowInternetEgress || options.NATProfiles[0].PublicIPv4 != "8.8.4.2" || !reflect.DeepEqual(options.NATProfiles[0].PublicIPv4s, []string{"8.8.4.3", "8.8.4.4"}) {
 				t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
 			}
+			pools, next, err := f.store.PublicIPPools(ctx, f.vpc.ClusterID, "")
+			if err != nil || next != "" || len(pools) != 1 || pools[0].Name != "公网出口池" || pools[0].CIDR != "8.8.4.0/24" || !pools[0].Enabled || !reflect.DeepEqual(pools[0].Addresses, []string{"8.8.4.3", "8.8.4.4"}) {
+				t.Fatal("public pool UI creation and disable/re-enable did not persist")
+			}
+			var originalPoolResult []byte
+			if f.store.DB.QueryRow("SELECT result FROM controller_public_ip_operations WHERE id=? AND action='pool.create'", pools[0].ID).Scan(&originalPoolResult) != nil {
+				t.Fatal("immutable pool creation operation missing")
+			}
+			var originalPool PublicIPResult
+			if json.Unmarshal(originalPoolResult, &originalPool) != nil || originalPool.Pool == nil || !reflect.DeepEqual(originalPool.Pool.Addresses, []string{"8.8.4.3"}) {
+				t.Fatal("pool extension rewrote the original inventory creation result")
+			}
+			leases, next, err := f.store.PublicIPLeases(ctx, f.config, f.vpc.ClusterID, pools[0].ID, "")
+			if err != nil || next != "" || len(leases) != 2 {
+				t.Fatal("release must retain the original lease and create a distinct allocation")
+			}
+			released, reserved := 0, 0
+			var activeLease string
+			for _, lease := range leases {
+				if lease.Address != "8.8.4.3" || lease.OwnerRef != f.vpc.OwnerRef || lease.VPCID != f.vpc.ID || lease.NodeID != policies[0].NodeID || lease.ProfileID != policies[0].ProfileID {
+					t.Fatal("public allocation escaped exact tenant/node/profile binding")
+				}
+				if lease.State == "released" && lease.BindingState == "released" && !lease.Releasable {
+					released++
+				} else if lease.State == "reserved" && lease.BindingState == "reserved" && lease.Releasable {
+					reserved++
+					activeLease = lease.ID
+				} else {
+					t.Fatal("final public lease binding state is not safely detached")
+				}
+				var raw []byte
+				if err := f.store.DB.QueryRow("SELECT result FROM controller_public_ip_operations WHERE id=? AND action='lease.allocate'", lease.ID).Scan(&raw); err != nil {
+					t.Fatal("immutable allocation operation missing")
+				}
+				var result PublicIPResult
+				if json.Unmarshal(raw, &result) != nil || result.Lease == nil || result.Lease.State != "reserved" || result.Lease.Address != lease.Address || result.Lease.ID != lease.ID {
+					t.Fatal("reclamation rewrote the historical allocation operation")
+				}
+			}
+			var active, inventory, operationCount int
+			var savedActive string
+			if !publicAllocationACKLost.Load() || publicAllocationPosts.Load() != 2 || released != 1 || reserved != 1 || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_active").Scan(&active) != nil || active != 1 || f.store.DB.QueryRow("SELECT lease_id FROM controller_public_ip_active WHERE address='8.8.4.3'").Scan(&savedActive) != nil || savedActive != activeLease || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_inventory").Scan(&inventory) != nil || inventory != 2 || f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_operations").Scan(&operationCount) != nil || operationCount != 7 {
+				t.Fatal("public pool allocation/reclamation inventory is not exclusive and durable")
+			}
+			for action, count := range map[string]int{"pool.create": 1, "pool.extend": 1, "pool.state": 2, "lease.allocate": 2, "lease.release": 1} {
+				var got int
+				if f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_operations WHERE action=?", action).Scan(&got) != nil || got != count {
+					t.Fatal("a public-IP UI operation was retried or omitted")
+				}
+			}
 			// Fixed schema: no emails, IDs, credentials, DSNs, cookies, SQL or logs.
-			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts, "public_egress_enabled": true, "public_egress_disabled": true, "pure_internet_reenabled": true})
+			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts, "public_egress_enabled": true, "public_egress_disabled": true, "pure_internet_reenabled": true, "original_node_post_prefix_count": 30, "public_pool_created": true, "public_pool_extended": true, "public_pool_state_managed": true, "public_ip_bound": true, "public_ip_unbound_after_all_release_receipts": true, "public_ip_reclaimed_and_reallocated": true, "public_ip_lease_history_retained": true, "public_ip_post_commit_ack_lost": publicAllocationACKLost.Load(), "public_ip_operations": operationCount, "public_ip_lease_count": len(leases)})
 			if err != nil || os.WriteFile(filepath.Join(caseDir, "fixture.json"), result, 0600) != nil {
 				t.Fatal("sanitized durable result unavailable")
 			}
@@ -206,4 +306,15 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 			return
 		}
 	}
+}
+
+// The normal public release guard verifies every exact phase request/receipt.
+func publicBrowserReleaseProof(t *testing.T, ctx context.Context, f overlayFixture, epoch OverlayEpoch) error {
+	t.Helper()
+	tx, err := f.store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return publicReleaseCompleteTx(ctx, tx, epoch)
 }

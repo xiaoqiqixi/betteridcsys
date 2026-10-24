@@ -93,7 +93,40 @@ func (e *Executor) probeNAT(ctx context.Context, c OverlayConfig, s overlayproto
 		}
 		return found
 	}
-	if !hasAddress(inside, g.IPv4, prefix.Bits()) || !hasAddress(outside, p.PublicIPv4, -1) {
+	if !hasAddress(inside, g.IPv4, prefix.Bits()) {
+		return ErrUnavailable
+	}
+	selected := p.PublicIPv4
+	for _, policy := range s.NATPolicies {
+		if policy.NodeID == c.Base.NodeID && policy.ProfileID == p.ID && policy.GatewayInstanceID == p.GatewayInstanceID && policy.VPCID == p.VPCID {
+			selected = natPolicyPublicIPv4(p, policy)
+		}
+	}
+	if !natPublicIPv4Approved(p, selected) {
+		return ErrUnavailable
+	}
+	// Pool approval alone is not proof that an address is usable. The root
+	// default and the effective selected address must actually exist on this
+	// dedicated outside veth. Other configured addresses must be in the same
+	// independent root grant; an unconfigured approved reserve is permitted.
+	outsideIPs, outsidePrefixes := map[string]bool{}, map[string]bool{}
+	uplink, _ := netip.ParseAddr(p.UplinkGatewayIPv4)
+	uplinkOnLink := false
+	for _, a := range outside.Addresses {
+		if a.Family != "inet" {
+			continue
+		}
+		ip, err := netip.ParseAddr(a.Local)
+		if err != nil || !ip.Is4() || ip.String() != a.Local || a.Prefix < 1 || a.Prefix > 32 || !natPublicIPv4Approved(p, a.Local) || outsideIPs[a.Local] {
+			return ErrUnavailable
+		}
+		q := netip.PrefixFrom(ip, a.Prefix).Masked()
+		outsideIPs[a.Local], outsidePrefixes[q.String()] = true, true
+		if a.Local == p.PublicIPv4 && q.Contains(uplink) {
+			uplinkOnLink = true
+		}
+	}
+	if !outsideIPs[p.PublicIPv4] || !outsideIPs[selected] || !uplinkOnLink {
 		return ErrUnavailable
 	}
 	// A host-side peer is independently proven, never an arbitrary physical NIC.
@@ -142,7 +175,7 @@ func (e *Executor) probeNAT(ctx context.Context, c OverlayConfig, s overlayproto
 			}
 		}
 	}
-	foundDefault, foundVPC := false, false
+	foundDefault, foundVPC, foundUplink := false, false, false
 	for _, r := range routes {
 		if r.Type == "local" || r.Type == "broadcast" {
 			if r.Table != "local" && r.Table != float64(255) {
@@ -197,13 +230,17 @@ func (e *Executor) probeNAT(ctx context.Context, c OverlayConfig, s overlayproto
 			continue
 		}
 		q, err := netip.ParsePrefix(r.Dst)
-		a, _ := netip.ParseAddr(p.PublicIPv4)
-		u, _ := netip.ParseAddr(p.UplinkGatewayIPv4)
-		if err != nil || r.Dev != p.OutsideInterface || r.Gateway != "" || !q.Contains(a) || !q.Contains(u) {
+		if err != nil || q.Masked() != q || r.Dev != p.OutsideInterface || r.Gateway != "" || !outsidePrefixes[r.Dst] || r.Type != "" && r.Type != "unicast" {
 			return ErrUnavailable
 		}
+		if q.Contains(uplink) {
+			foundUplink = true
+		}
 	}
-	if !foundDefault || !foundVPC {
+	// With only the three exact kernel policy rules below, the exact on-link
+	// uplink plus the one default route proves the selected configured source
+	// leaves through this outside interface, not a management/other-node route.
+	if !foundDefault || !foundVPC || !foundUplink {
 		return ErrUnavailable
 	}
 	// Policy routing could bypass these exact routes. Only kernel defaults exist.

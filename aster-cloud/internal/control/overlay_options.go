@@ -12,6 +12,7 @@ import (
 // OverlayOptions is a safe projection of root approval and current immutable
 // instance bindings. It is not an instruction to edit host files or devices.
 type OverlayOptions struct {
+	PublicIPLeases           []PublicIPLease           `json:"public_ip_leases"`
 	ClusterID                string                    `json:"cluster_id"`
 	Profiles                 []overlayproto.ProfilePin `json:"profiles"`
 	Mappings                 []OverlayMapping          `json:"mappings"`
@@ -162,6 +163,16 @@ func (s *SQLStore) OverlayOptions(ctx context.Context, c Config, clusterID strin
 			out.Instances = append(out.Instances, v)
 		}
 	}
+	out.PublicIPLeases, err = publicIPLeasesTx(ctx, tx, c, clusterID, "", "", true, 4097)
+	if err != nil {
+		return out, err
+	}
+	if len(out.PublicIPLeases) > 4096 {
+		return out, ErrCapacity
+	}
 	sort.Slice(out.Instances, func(i, j int) bool { return out.Instances[i].InstanceID < out.Instances[j].InstanceID })
+	if !publicIPProjectionFits(out) {
+		return out, ErrCapacity
+	}
 	return out, tx.Commit()
 }

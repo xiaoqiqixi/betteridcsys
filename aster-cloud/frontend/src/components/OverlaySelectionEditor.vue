@@ -248,6 +248,7 @@ const reason = (value: string) =>
     <OverlayNATEditor
       :model-value="modelValue.nat_policies || []"
       :profiles="options.nat_profiles"
+      :leases="options.public_ip_leases || []"
       :members="modelValue.members"
       :instances="options.instances"
       :gateways="modelValue.gateways"

@@ -139,3 +139,11 @@ TimeoutStopSec=45
 ### 运行事件与审计定位
 
 主控/被控stderr统一JSON白名单事件，独立CLI stdout保持原合同。节点未知结果或journal未确认使用WARN，绝不按日志成功自动重发。管理台支持按原任务ID查看独立详情、明确派发/核对及审计精确筛选；查询不会推进资源状态。限流、可选独立journald保留模板与恢复journal边界见 [LOGGING.md](../docs/LOGGING.md)。本轮未安装或启用这些unit模板，没有生产生命周期安装/升级/备份恢复工具；不能把手工部署说明称为已验收安装器。
+
+## 公网 IP 库存升级
+
+主控schema8增加公网池、append-only库存、历史租约、active占用和固定结果日志，
+不改财务schema。root附加地址改变完整NAT/overlay SHA，先备份并按既有
+previous pin显式恢复迁移，再使用[公网IP后台](../docs/PUBLIC_IP_MANAGEMENT.md)。
+不能删库存/lease/operation表降级或仅换旧binary回滚；须兼容程序或已验证的
+完整一致性备份恢复。旧未知节点任务必须保留，真实宿主验收仍后置。

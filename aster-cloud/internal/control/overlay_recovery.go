@@ -221,6 +221,9 @@ func (s *SQLStore) planOverlayRecovery(ctx context.Context, c Config, actor, ori
 	if e != nil {
 		return old, false, e
 	}
+	if e = validatePublicIPSnapshotTx(ctx, tx, c, snapshot); e != nil {
+		return old, false, e
+	}
 	recovery := &overlayproto.Recovery{Epoch: old.Epoch, SnapshotSHA256: old.SnapshotSHA256, Heads: append([]overlayproto.Head{}, heads...)}
 	epoch := OverlayEpoch{ID: newID, ClusterID: old.ClusterID, Epoch: snapshot.Epoch, SnapshotSHA256: sha, Snapshot: snapshot, Recovery: recovery, Phase: "prepare", State: "pending", ActorID: actor, RequestSHA256: digest, CreatedAt: now.UTC().Truncate(time.Microsecond), UpdatedAt: now.UTC().Truncate(time.Microsecond)}
 	raw, _ := json.Marshal(snapshot)
