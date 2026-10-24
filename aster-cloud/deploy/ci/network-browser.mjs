@@ -68,6 +68,7 @@ async function dialogExcludesNotices(name) {
     const dialog = document.querySelector('[role="dialog"]');
     const shade = dialog?.closest('.overlay-shade');
     const stack = document.querySelector('.toast-stack');
+    const app = document.querySelector('#app');
     if (!dialog || !shade) return { dialog_present: false };
     const stackStyle = stack ? getComputedStyle(stack) : null;
     const hidden = !stack || stackStyle.display === 'none' || stackStyle.visibility === 'hidden' || Number(stackStyle.opacity) === 0;
@@ -82,10 +83,12 @@ async function dialogExcludesNotices(name) {
     });
     const keyboardExcluded = items.every(item => hidden || !!item.closest('[inert]') || [...item.querySelectorAll('button,a,input,[tabindex]')].every(control => control.matches(':disabled') || control.tabIndex < 0));
     return { dialog_present: true, notice_count: items.length, below_or_hidden: behind,
+      background_app_visible: !!app && getComputedStyle(app).visibility !== 'hidden',
       pointer_excluded: !pointerReachable, keyboard_excluded: keyboardExcluded,
       focus_excluded: !document.activeElement?.closest('.toast-stack') };
   });
   assert.equal(evidence.dialog_present, true);
+  assert.equal(evidence.background_app_visible, true, 'The modal background app must stay visible, not disappear with its notices');
   assert.equal(evidence.below_or_hidden, true, 'A notice must never paint above the modal');
   assert.equal(evidence.pointer_excluded, true, 'A modal must block notice hit targets');
   assert.equal(evidence.keyboard_excluded, true, 'A modal must exclude notice buttons from tab focus');

@@ -61,8 +61,8 @@ function blur(id: number, event: FocusEvent) {
 }
 /* The real overlay makes #app inert. Hide its background notices too: neither
    an old success nor its dismiss button may cover a modal's content or footer. */
-:global(#app[inert]) .toast-stack,
-:global(#app[inert]) .toast-item {
+:global(#app[inert] .toast-stack),
+:global(#app[inert] .toast-item) {
   visibility: hidden;
   pointer-events: none;
 }
