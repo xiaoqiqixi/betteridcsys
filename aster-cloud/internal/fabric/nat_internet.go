@@ -66,13 +66,16 @@ func compileInternetNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfil
 		source := match(payload("ip", "saddr"), m.IPv4)
 		dest := match(payload("ip", "daddr"), m.IPv4)
 		for _, proto := range []int{6, 17} {
-			add("internet_out", source, match(meta("l4proto"), proto), bitmatch(ct("state"), 10), accept)
+			add("internet_out", source, match(meta("l4proto"), proto), bitmatch(ct("state"), []int{2, 8}), accept)
 			add("internet_in", dest, match(meta("l4proto"), proto), bitmatch(ct("state"), 2), bitmatch(ct("status"), 16), accept)
 		}
-		add("internet_out", source, match(meta("l4proto"), 1), match(payload("icmp", "type"), 8), bitmatch(ct("state"), 10), accept)
-		add("internet_in", dest, match(meta("l4proto"), 1), match(payload("icmp", "type"), 0), bitmatch(ct("state"), 2), bitmatch(ct("status"), 16), accept)
+		// The named ICMP payload carries the L4 protocol dependency. nft 1.0.2
+		// and 1.0.9 remove a redundant meta-l4proto match when listing it. Retain
+		// the protocol-specific payload, not a readback exception for that guard.
+		add("internet_out", source, match(payload("icmp", "type"), 8), bitmatch(ct("state"), []int{2, 8}), accept)
+		add("internet_in", dest, match(payload("icmp", "type"), 0), bitmatch(ct("state"), 2), bitmatch(ct("status"), 16), accept)
 		for _, kind := range []int{3, 11, 12} {
-			add("internet_in", dest, match(meta("l4proto"), 1), match(payload("icmp", "type"), kind), bitmatch(ct("state"), 4), accept)
+			add("internet_in", dest, match(payload("icmp", "type"), kind), bitmatch(ct("state"), 4), accept)
 		}
 		add("internet_snat", source, nftObject{"snat": nftObject{"addr": root.PublicIPv4, "family": "ip"}})
 	}

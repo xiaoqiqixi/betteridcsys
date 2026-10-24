@@ -285,7 +285,11 @@ async function inspect() {
         <dt>{{ tr("NAT 策略", "NAT policies") }}</dt>
         <dd>{{ source.nat_policies?.length || 0 }}</dd>
       </div>
-      <div v-for="policy in source.nat_policies || []" :key="policy.id">
+      <div
+        v-for="policy in source.nat_policies || []"
+        :key="policy.id"
+        class="recovery-policy"
+      >
         <dt>{{ policy.profile_id }} · {{ tr("出口范围", "Egress scope") }}</dt>
         <dd>
           {{
@@ -477,6 +481,10 @@ async function inspect() {
 .recovery-summary dd {
   margin: 0;
 }
+.recovery-policy > dd {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .pending-actions {
   display: flex;
   flex-wrap: wrap;
@@ -488,5 +496,12 @@ async function inspect() {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+}
+@media (max-width: 600px) {
+  .recovery-summary > .recovery-policy {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
 }
 </style>

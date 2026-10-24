@@ -120,6 +120,16 @@ DNS。这是 guest 路由准备，不是启用 NAT：后台关闭公网时数据
 上述是可重复门禁，**脚本存在、语法通过、本地假 runner 通过都不算实际
 Linux/实库/浏览器已通过**。本轮执行记录及 GitHub 同提交结果另保存在
 `artifacts/public-nat-20261024/`，不能套用前轮 71df3aa 的绿色构建。
+
+首轮 `ec2f765` 的实际 Ubuntu22/24 nft 输出揭示三类表示差异：`/32` 输出
+为单地址、ICMP payload 自带协议依赖而省略冗余 meta、组合 ct state 输出为
+`[2,8]`。已将真实 1.0.2 / 1.0.9 输出加入测试，修正 compiler 直接生成该
+canonical 表示；**未放宽 normalizeNFT**，移除任一 ct / SNAT / 地址隔离 /
+普通链 / ICMP 协议仍必须失败。该轮新增 MySQL 用例全部通过，但新原生入口
+未分流导致其 no-skip 门禁失败；分流名单现仅增加这个精确 native 测试名，
+对应 Ubuntu22/24 专用任务都必须实际 PASS，不能容忍任何 MySQL skip。
+修复后的最终提交仍需重新执行全部门禁，不能把原始 JSON fixture 当作包流通过。
+
 真实 KVM/libvirt、跨物理节点流量、实际公网地址 / 上联连通、宿主故障恢复、
 HA 与生产部署验收仍按要求后置；CI 隔离包流不等于已做这些真机验收。
 

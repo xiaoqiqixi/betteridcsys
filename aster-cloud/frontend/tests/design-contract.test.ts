@@ -62,7 +62,7 @@ describe("design contracts (static tokens, not browser computed)", () => {
       source.match(/\.nat-summary header > div\s*\{([^}]+)\}/)?.[1],
     ).toContain("min-width: 0");
   });
-  it("allows full-length NAT profile identities and localized egress labels to wrap in recovery summaries", () => {
+  it("wraps long recovery identities without squeezing egress modes or stacking the count rows", () => {
     const source = readFileSync(
       resolve(root, "components/OverlayEpochDialog.vue"),
       "utf8",
@@ -86,6 +86,17 @@ describe("design contracts (static tokens, not browser computed)", () => {
     )?.[1];
     expect(wrapping).toContain("min-width: 0");
     expect(wrapping).toContain("overflow-wrap: anywhere");
+    const mode = source.match(/\.recovery-policy > dd\s*\{([^}]+)\}/)?.[1];
+    expect(mode).toContain("flex-shrink: 0");
+    expect(mode).toContain("white-space: nowrap");
+    const mobilePolicy = source.match(
+      /@media \(max-width: 600px\)\s*\{\s*\.recovery-summary > \.recovery-policy\s*\{([^}]+)\}/,
+    )?.[1];
+    expect(mobilePolicy).toContain("flex-direction: column");
+    expect(mobilePolicy).toContain("align-items: flex-start");
+    expect(result.code).toContain(
+      ".recovery-summary > .recovery-policy[data-v-recovery-layout]",
+    );
   });
   it("keeps mobile navigation on the overlay surface and names the compact preferences control", () => {
     const nav = readFileSync(resolve(root, "components/NavLinks.vue"), "utf8");

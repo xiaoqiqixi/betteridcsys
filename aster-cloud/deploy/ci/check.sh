@@ -16,7 +16,7 @@ trap 'rm -rf -- "$scratch"' EXIT
 root_tls='^TestRootTLSConnectorUsesExistingProtectedTransport$'
 # Parser/encoder and isolated namespace packet tests require distribution tools
 # and privileges. Both run without skips in their required Ubuntu22/24 matrices.
-separate_native='^(TestRootTLSConnectorUsesExistingProtectedTransport|TestNativeOVSParserFlows|TestNativeOVSParserMeters|TestNativeNATPacketFlowAndRevocation)$'
+separate_native='^(TestRootTLSConnectorUsesExistingProtectedTransport|TestNativeOVSParserFlows|TestNativeOVSParserMeters|TestNativeNATPacketFlowAndRevocation|TestNativeNATInternetEgressAndRevocation)$'
 go test -mod=readonly -race -count=1 -v -skip "$separate_native" -timeout=10m ./... | tee "$scratch/tests.log"
 if grep -q -- '--- SKIP:' "$scratch/tests.log"; then
   echo 'MySQL acceptance must not skip any test.' >&2; exit 1
