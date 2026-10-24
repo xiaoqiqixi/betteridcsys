@@ -1,8 +1,21 @@
 <script setup lang="ts">
 import { CheckCircle2, X, AlertCircle } from "@lucide/vue";
 import type { Notice } from "../context";
-defineProps<{ notices: Notice[]; closeLabel: string }>();
-defineEmits<{ dismiss: [id: number] }>();
+defineProps<{ notices: readonly Notice[]; closeLabel: string }>();
+const emit = defineEmits<{
+  dismiss: [id: number];
+  pause: [id: number];
+  resume: [id: number];
+}>();
+function leave(id: number, event: PointerEvent) {
+  if (!(event.currentTarget as HTMLElement).contains(document.activeElement))
+    emit("resume", id);
+}
+function blur(id: number, event: FocusEvent) {
+  const item = event.currentTarget as HTMLElement;
+  const next = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+  if (!item.contains(next) && !item.matches(":hover")) emit("resume", id);
+}
 </script>
 <template>
   <div class="toast-stack" aria-live="polite" aria-relevant="additions">
@@ -12,6 +25,10 @@ defineEmits<{ dismiss: [id: number] }>();
         :key="notice.id"
         class="toast-item"
         :class="notice.kind"
+        @pointerenter="$emit('pause', notice.id)"
+        @pointerleave="leave(notice.id, $event)"
+        @focusin="$emit('pause', notice.id)"
+        @focusout="blur(notice.id, $event)"
       >
         <AlertCircle
           v-if="notice.kind === 'error'"
@@ -35,11 +52,18 @@ defineEmits<{ dismiss: [id: number] }>();
   position: fixed;
   right: 24px;
   bottom: 24px;
-  z-index: 300;
+  z-index: 90;
   display: flex;
   flex-direction: column;
   gap: 10px;
   width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+/* The real overlay makes #app inert. Hide its background notices too: neither
+   an old success nor its dismiss button may cover a modal's content or footer. */
+:global(#app[inert]) .toast-stack,
+:global(#app[inert]) .toast-item {
+  visibility: hidden;
   pointer-events: none;
 }
 .toast-item {

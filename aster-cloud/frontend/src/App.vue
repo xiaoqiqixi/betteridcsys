@@ -5,7 +5,8 @@ import { Server, Menu, SlidersHorizontal, LogOut } from "@lucide/vue";
 import { createApiClient } from "./api/client";
 import { useSession } from "./composables/session";
 import { usePreferences } from "./composables/preferences";
-import { consoleKey, type Notice } from "./context";
+import { consoleKey } from "./context";
+import { useNotices } from "./composables/notices";
 import NavLinks from "./components/NavLinks.vue";
 import UiOverlay from "./components/UiOverlay.vue";
 import UiSelect from "./components/UiSelect.vue";
@@ -19,13 +20,12 @@ const api = createApiClient(),
   prefs = usePreferences(),
   route = useRoute();
 const { tr } = prefs;
-const notices = shallowRef<Notice[]>([]),
-  mobileOpen = shallowRef(false),
+const { notices, notify, dismiss, pause, resume } = useNotices(
+  prefs.locale,
+  session.epoch,
+);
+const mobileOpen = shallowRef(false),
   preferencesOpen = shallowRef(false);
-let noticeID = 0;
-function notify(title: string, kind: "info" | "error" = "info") {
-  notices.value = [...notices.value.slice(-3), { id: ++noticeID, title, kind }];
-}
 provide(consoleKey, { api, session, prefs, notify });
 const pageTitle = computed(() =>
   route.path.startsWith("/nodes")
@@ -228,7 +228,9 @@ onBeforeUnmount(() => {
   ><ToastStack
     :notices="notices"
     :close-label="tr('关闭通知', 'Dismiss notification')"
-    @dismiss="(id) => (notices = notices.filter((n) => n.id !== id))"
+    @dismiss="dismiss"
+    @pause="pause"
+    @resume="resume"
   />
 </template>
 <style scoped>

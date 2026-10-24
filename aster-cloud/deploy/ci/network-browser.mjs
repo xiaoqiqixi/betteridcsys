@@ -54,6 +54,69 @@ async function noOverflow(name) {
   assert(size.scroll <= size.width, `${name}: ${JSON.stringify(size)}`);
   check(name, size);
 }
+async function singleInfoNotice(name) {
+  // Ignore the outgoing 150 ms transition, but never wait long enough for the
+  // five-second expiry to disguise a stack of newly emitted success notices.
+  await page.waitForFunction(() => document.querySelectorAll('.toast-item.info:not(.toast-leave-active)').length <= 1, undefined, { timeout: 600 });
+  const count = await page.locator('.toast-item.info:not(.toast-leave-active)').count();
+  assert(count <= 1);
+  check(name, { active_info_notices: count });
+}
+async function dialogExcludesNotices(name) {
+  await page.getByRole('dialog').waitFor();
+  const evidence = await page.evaluate(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    const shade = dialog?.closest('.overlay-shade');
+    const stack = document.querySelector('.toast-stack');
+    if (!dialog || !shade) return { dialog_present: false };
+    const stackStyle = stack ? getComputedStyle(stack) : null;
+    const hidden = !stack || stackStyle.display === 'none' || stackStyle.visibility === 'hidden' || Number(stackStyle.opacity) === 0;
+    const behind = hidden || Number(stackStyle.zIndex) < Number(getComputedStyle(shade).zIndex);
+    const items = [...document.querySelectorAll('.toast-item')];
+    const pointerReachable = items.some(item => {
+      const box = item.getBoundingClientRect();
+      const x = Math.max(0, Math.min(innerWidth - 1, box.x + box.width / 2));
+      const y = Math.max(0, Math.min(innerHeight - 1, box.y + box.height / 2));
+      const top = document.elementFromPoint(x, y);
+      return !!top && item.contains(top);
+    });
+    const keyboardExcluded = items.every(item => hidden || !!item.closest('[inert]') || [...item.querySelectorAll('button,a,input,[tabindex]')].every(control => control.matches(':disabled') || control.tabIndex < 0));
+    return { dialog_present: true, notice_count: items.length, below_or_hidden: behind,
+      pointer_excluded: !pointerReachable, keyboard_excluded: keyboardExcluded,
+      focus_excluded: !document.activeElement?.closest('.toast-stack') };
+  });
+  assert.equal(evidence.dialog_present, true);
+  assert.equal(evidence.below_or_hidden, true, 'A notice must never paint above the modal');
+  assert.equal(evidence.pointer_excluded, true, 'A modal must block notice hit targets');
+  assert.equal(evidence.keyboard_excluded, true, 'A modal must exclude notice buttons from tab focus');
+  assert.equal(evidence.focus_excluded, true);
+  check(name, evidence);
+}
+async function noticesExpireNaturally(name) {
+  // Moving the real pointer away lets the production hover-pause timer resume.
+  // No close click, clock mocking, DOM hiding or application-state mutation.
+  await page.mouse.move(0, 0);
+  assert.equal(await page.evaluate(() => !!document.activeElement?.closest('.toast-stack')), false);
+  await page.waitForFunction(() => document.querySelectorAll('.toast-item').length === 0, undefined, { timeout: 8000 });
+  check(name);
+}
+async function languageChangeClearsNotice() {
+  const notice = page.locator('.toast-item.info:not(.toast-leave-active)');
+  await notice.waitFor({ state: 'attached', timeout: 1000 });
+  assert.equal(await notice.count(), 1, 'Locale cleanup must be tested with a real pending notice');
+  const previousTitle = await notice.locator('p').innerText();
+  assert(/[\u3400-\u9fff]/.test(previousTitle), 'Expected the genuine Chinese action notice');
+  await page.getByRole('button', { name: '语言与外观', exact: true }).click();
+  await dialogExcludesNotices('language dialog suppresses the existing action notice');
+  await pick('界面语言', 'English');
+  // This must be locale cleanup, not a five-second expiry coincidence.
+  await page.waitForFunction(title => ![...document.querySelectorAll('.toast-item:not(.toast-leave-active) p')].some(item => item.textContent === title), previousTitle, { timeout: 600 });
+  assert.equal(await page.locator('.toast-item:not(.toast-leave-active)').count(), 0);
+  await pick('Language', '简体中文');
+  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await dialogClosed();
+  check('language switch removes the genuine previous-language notice immediately');
+}
 async function read(suffix) {
   assert(suffix.startsWith('/overlays/') && !suffix.includes('://'));
   return page.evaluate(async suffix => {
@@ -82,10 +145,12 @@ async function refreshDetail(id) {
 }
 async function action(label, submit, id) {
   await page.getByRole('button', { name: label, exact: true }).click();
+  await dialogExcludesNotices('operation confirmation excludes background notices');
   await page.getByRole('dialog').locator('input').fill(id);
   await page.getByRole('button', { name: submit, exact: true }).click();
   await dialogClosed();
   await refreshDetail(id);
+  await singleInfoNotice('consecutive confirmed actions keep at most one info notice');
 }
 async function advanceUntilStopped(id) {
   let detail = await read(`/overlays/epochs/${id}`);
@@ -192,9 +257,11 @@ try {
   assert(vpcs.items.some(v => v.name === '备份隔离网' && v.cidr === '10.44.0.0/24' && v.vni === 504));
   assert.equal(posts('/overlays/vpcs') - vpcBefore, 1);
   check('one UI VPC creation is persisted in real MySQL', { vpc_count: vpcs.items.length });
+  await singleInfoNotice('VPC creation keeps at most one info notice');
 
   phase = 'edit-route-nat';
   await page.getByRole('button', { name: '配置网络', exact: true }).click();
+  await dialogExcludesNotices('network editor excludes the VPC-created notice');
   await page.getByLabel('目标网段，每行一个', { exact: false }).fill('192.0.2.0/25');
   await page.getByLabel('公开端口', { exact: true }).fill('40002');
   await page.getByLabel('目标端口', { exact: true }).fill('2222');
@@ -238,6 +305,7 @@ try {
   assert.equal(forwarding.target_port, 2222);
   assert.equal(forwarding.source_cidr, '192.0.2.0/26');
   check('route and NAT changes persisted in exactly one new epoch', { epoch: detail.epoch.epoch });
+  await singleInfoNotice('new network plan replaces preceding info notices');
 
   phase = 'lost-ack';
   detail = await advanceUntilStopped(epochID);
@@ -257,6 +325,7 @@ try {
   detail = await read(`/overlays/epochs/${epochID}`);
   assert.equal(detail.epoch.state, 'pending');
   check('receipt reconciliation confirms the existing task without retrying advance');
+  await languageChangeClearsNotice();
   detail = await advanceUntilStopped(epochID);
   assert.equal(detail.epoch.state, 'succeeded');
   check('explicit continuation completes the remaining phases');
@@ -266,9 +335,12 @@ try {
 
   phase = 'explicit-recovery';
   await page.getByRole('button', { name: '恢复网络', exact: true }).click();
+  await dialogExcludesNotices('desktop recovery dialog is above and isolated from notices');
   await page.getByRole('dialog').locator('#overlay-change-form input').fill(epochID);
   await screenshot('desktop-recovery-dialog', false);
   await page.setViewportSize({ width: 390, height: 844 });
+  await dialogExcludesNotices('mobile recovery dialog is not covered by action notices');
+  await noticesExpireNaturally('background notice expires before the mobile recovery dialog screenshot');
   await screenshot('mobile-recovery-dialog', false);
   await noOverflow('mobile recovery dialog has no horizontal overflow');
   await page.getByRole('button', { name: '提交恢复', exact: true }).click();
@@ -280,10 +352,12 @@ try {
   assert.notEqual(recoveryID, epochID);
   assert.equal(detail.epoch.epoch, initial.epoch.epoch + 2);
   check('explicit recovery creates a distinct persisted epoch', { epoch: detail.epoch.epoch });
+  await singleInfoNotice('recovery creation keeps at most one info notice');
   detail = await advanceUntilStopped(recoveryID);
   assert.equal(detail.epoch.state, 'succeeded');
   assert.equal(detail.tasks.length, detail.epoch.snapshot.profiles.length * 3);
   check('recovery completes every node in all three phases via UI', { tasks: detail.tasks.length });
+  await noticesExpireNaturally('recovery completion notice expires before the final mobile screenshot');
   await screenshot('mobile-recovery-complete');
   await noOverflow('mobile recovery detail has no horizontal overflow');
   const original = await read(`/overlays/epochs/${epochID}`);
@@ -310,6 +384,7 @@ try {
   await pick('Appearance', 'Dark');
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   await dialogClosed();
+  await noticesExpireNaturally('dark overview has no stale notices before actual screenshots');
   await screenshot('mobile-network-english-dark');
   await noOverflow('mobile English dark page has no horizontal overflow');
   await page.setViewportSize({ width: 1440, height: 1000 });
