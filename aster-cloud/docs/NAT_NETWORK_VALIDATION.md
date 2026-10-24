@@ -1,7 +1,8 @@
 # NAT 与后台网络操作验证
 
 2026-10-23 至 2026-10-24。在 `981e0eaebab10899f1e6d9b583b498c7fd3eba23` 基线上继续开发，
-只更新 main；不创建标签、不替换财务 Release。`vps-billing/` 源码没有改动，
+只更新 main；不创建标签、不替换财务 Release。`vps-billing/` 业务源码没有改动，
+仅为修复安全扫描发现的漏洞更新前端测试工具的传递依赖锁定版本，详见下节。
 金额、支付与历史财务 / node 创建快照不参与网络变更。
 
 ## 实现与边界
@@ -33,7 +34,7 @@ IPv6 / hairpin / ICMP DNAT、自动公网地址与上联配置、NAT HA、共享
 | Ubuntu22 / nftables 1.0.2 | `TestNativeNATPacketFlowAndRevocation` 6.41 秒 PASS；实际三个临时 namespace 与 veth 验证 TCP SNAT、TCP / UDP DNAT、未批准端口拒绝、program 阶段隔离、撤销后现存 TCP 连接失效，以及宿主 nftables 未变化；0 SKIP / FAIL。不是 OVS / VM 端到端测试。 |
 | OVS 早期失败回归 | 全部 `^TestOVS` race 通过，5.861 秒；使用可核对的 runner 状态与原操作重放 / 核对测试，不是真实 libvirt guest。 |
 | Vue 管理台 | 初次 format、typecheck、build 与 616 项测试通过；实拍后修复通知遮挡并加入生命周期 / 稳定 ID 双向排序回归，最终数量单列下节。单测不代替实际浏览器记录。 |
-| 依赖与构建 | govulncheck 1.9.0 / Go 1.27.3 未发现漏洞；npm audit 0 漏洞；Linux 静态构建及 actionlint 1.7.7 通过。依赖及锁文件未更改，扫描结论仅对本次执行时间有效。 |
+| 依赖与构建 | 主控 govulncheck 1.9.0 / Go 1.27.3 未发现漏洞、npm audit 0 漏洞；Linux 静态构建及 actionlint 1.7.7 通过，主控依赖锁文件未更改。财务测试依赖另有后续安全修复，见下节；扫描结论仅对本次执行时间有效。 |
 
 原生测试 binary SHA-256：
 
@@ -88,6 +89,35 @@ Ubuntu24 GitHub runner 执行，见 [浏览器门禁](../deploy/ci/NETWORK_BROWS
 徽标保留不收缩单行空间，长标识列仍可换行，并补真实浏览器文本 Range 行数检查。
 最终完整前端检查为 18 个文件 / 629 项测试；对应新提交的浏览器门禁还必须
 实际通过通知层级、命中测试、键盘排除、旧语言清理和自然消失后的手机截图。
+
+提交 `036d3a0c5b6b4016a99a3693af02c98bfbe2f012` 的
+[cloud CI](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40054738477)
+九项全部成功。下载后复核十二张实拍：45 项浏览器检查通过、无 JavaScript
+错误，手机弹窗无遮挡、背景没有被误隐藏、英文 NAT 徽标单行。真实 MySQL
+fixture 仍为 3 个 epoch / 2 个 VPC / 18 个唯一节点 POST，财务 / node / 初始
+网络快照及回执不变；节点 RPC 仍是测试替身，不是物理网络或 KVM 验收。
+
+### 财务测试依赖安全修复
+
+同提交的 [财务 CI](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40054738473)
+已通过实库回归和原生 systemd / TLS / 业务 / 备份恢复 / 回滚，但 npm audit
+发现真实高危漏洞而失败；该轮后续浏览器与 workflow 检查未运行，不能算完整通过。
+漏洞来自开发依赖链 `jsdom 30.1.2 → undici ^8.11.2`，分别为
+[EventSource 内存耗尽](https://github.com/nodejs/undici/security/advisories/GHSA-4qv8-2p9j-2685)、
+[SRI 校验绕过](https://github.com/nodejs/undici/security/advisories/GHSA-f72v-6w45-q472) 和
+[Content-Encoding 异常导致拒绝服务](https://github.com/nodejs/undici/security/advisories/GHSA-xjj6-f33q-929c)。
+三项的 8.x 修复版本均从 8.12.2 开始；只将财务 `package-lock.json` 中 Undici
+的版本、下载地址和完整性三字段从 8.11.2 更新至主控已使用的 8.12.3。
+`package.json`、其他包、`dev: true` 和 Node `>=22.19.0` 条件均不变。
+这是 jsdom 测试工具链，不在生产客户端依赖中，业务源码没有引用两者；
+仍需验证更严格的依赖处理不会破坏测试，而不是宣称行为完全不变。
+
+在独立临时目录按修复后的锁文件干净安装（Node 24.19.0 / npm 11.17.0），
+format、typecheck、20 文件 / 962 项 Vitest、35 项数据层测试、生产构建全部通过，
+均无跳过；在线 npm audit 为 0 漏洞。构建产物为
+`index-DuSGQY1A.js` / `index-DVU10hcr.css`。本地证据保存在
+`finance-security-local.log` 与 `finance-security-audit.json`。最终完整验收仍须
+查看包含此锁文件修复的 main 提交对应两套 GitHub 工作流，不能借用旧提交结果。
 
 ## CI 与未验证项
 
