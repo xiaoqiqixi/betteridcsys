@@ -11,15 +11,16 @@ import (
 // receives a namespace/device/path from an HTTP request. The pinned node's root
 // config is the independent final authority for execution.
 type OverlayNATProfile struct {
-	NodeID             string                `json:"node_id"`
-	VPCID              string                `json:"vpc_id"`
-	GatewayInstanceID  string                `json:"gateway_instance_id"`
-	ProfileID          string                `json:"profile_id"`
-	ProfileSHA256      string                `json:"profile_sha256"`
-	PublicIPv4         string                `json:"public_ipv4"`
-	AllowSNAT          bool                  `json:"allow_snat"`
-	AllowedSourceCIDRs []string              `json:"allowed_source_cidrs"`
-	AllowedPorts       []OverlayNATPortRange `json:"allowed_ports"`
+	NodeID              string                `json:"node_id"`
+	VPCID               string                `json:"vpc_id"`
+	GatewayInstanceID   string                `json:"gateway_instance_id"`
+	ProfileID           string                `json:"profile_id"`
+	ProfileSHA256       string                `json:"profile_sha256"`
+	PublicIPv4          string                `json:"public_ipv4"`
+	AllowSNAT           bool                  `json:"allow_snat"`
+	AllowInternetEgress bool                  `json:"allow_internet_egress,omitempty"`
+	AllowedSourceCIDRs  []string              `json:"allowed_source_cidrs"`
+	AllowedPorts        []OverlayNATPortRange `json:"allowed_ports"`
 }
 type OverlayNATPortRange struct {
 	Protocol string `json:"protocol"`
@@ -49,7 +50,7 @@ func validOverlayPolicyApproval(cluster OverlayCluster, nodes map[string]bool) b
 	for _, g := range cluster.Gateways {
 		ip, err := netip.ParseAddr(g.IPv4)
 		mac, me := net.ParseMAC(g.MAC)
-		if !nodes[g.NodeID] || !nodeproto.ValidID(g.VPCID) || !nodeproto.ValidID(g.OwnerRef) || !nodeproto.ValidID(g.InstanceID) || g.InterfaceID != nodeproto.NetworkInterfaceID(g.InstanceID) || gateways[g.VPCID].InstanceID != "" || gatewayIDs[g.InstanceID] || gatewayIPs[g.VPCID+":"+g.IPv4] || macs[g.MAC] || err != nil || !ip.Is4() || !ip.IsPrivate() || ip.String() != g.IPv4 || me != nil || len(mac) != 6 || mac.String() != g.MAC || mac[0]&1 != 0 || g.MAC == "00:00:00:00:00:00" || len(g.AllowedPrefixes) < 1 || len(g.AllowedPrefixes) > 32 {
+		if !nodes[g.NodeID] || !nodeproto.ValidID(g.VPCID) || !nodeproto.ValidID(g.OwnerRef) || !nodeproto.ValidID(g.InstanceID) || g.InterfaceID != nodeproto.NetworkInterfaceID(g.InstanceID) || gateways[g.VPCID].InstanceID != "" || gatewayIDs[g.InstanceID] || gatewayIPs[g.VPCID+":"+g.IPv4] || macs[g.MAC] || err != nil || !ip.Is4() || !ip.IsPrivate() || ip.String() != g.IPv4 || me != nil || len(mac) != 6 || mac.String() != g.MAC || mac[0]&1 != 0 || g.MAC == "00:00:00:00:00:00" || g.AllowedPrefixes == nil || len(g.AllowedPrefixes) > 32 {
 			return false
 		}
 		prefixes := map[string]bool{}
@@ -68,6 +69,9 @@ func validOverlayPolicyApproval(cluster OverlayCluster, nodes map[string]bool) b
 		ip, err := netip.ParseAddr(p.PublicIPv4)
 		key := p.NodeID + ":" + p.ProfileID
 		if !nodes[p.NodeID] || !nodeproto.ValidID(p.VPCID) || !nodeproto.ValidNodeID(p.ProfileID) || !overlayproto.ValidSHA(p.ProfileSHA256) || g.NodeID != p.NodeID || g.InstanceID != p.GatewayInstanceID || profiles[key] || public[p.NodeID+":"+p.PublicIPv4] || natVPCs[p.VPCID] || natGateways[p.GatewayInstanceID] || err != nil || !ip.Is4() || !ip.IsGlobalUnicast() || ip.String() != p.PublicIPv4 || p.AllowedSourceCIDRs == nil || len(p.AllowedSourceCIDRs) > 32 || p.AllowedPorts == nil || len(p.AllowedPorts) > 64 {
+			return false
+		}
+		if p.AllowInternetEgress && (!p.AllowSNAT || !overlayproto.PublicInternetIPv4(p.PublicIPv4)) {
 			return false
 		}
 		prefixes := map[string]bool{}
@@ -100,10 +104,12 @@ func overlayPoliciesApproved(cluster OverlayCluster, snapshot overlayproto.Snaps
 			if root.NodeID != selected.NodeID || root.InstanceID != selected.InstanceID || root.InterfaceID != selected.InterfaceID || root.OwnerRef != selected.OwnerRef || root.VPCID != selected.VPCID || root.IPv4 != selected.IPv4 || root.MAC != selected.MAC {
 				continue
 			}
-			approved = len(selected.AllowedPrefixes) > 0
+			approved = selected.AllowedPrefixes != nil && root.AllowedPrefixes != nil
 			for _, prefix := range selected.AllowedPrefixes {
 				approved = approved && prefixWithin(prefix, root.AllowedPrefixes)
 			}
+			// Explicit [] is an inactive route selection, never a default-route
+			// approval. Internet forwarding is authorized separately below.
 		}
 		if !approved {
 			return false
@@ -112,16 +118,21 @@ func overlayPoliciesApproved(cluster OverlayCluster, snapshot overlayproto.Snaps
 	for _, selected := range snapshot.NATPolicies {
 		approved := false
 		selectedPrefixes := []string{}
+		gatewaySelected := false
 		for _, gateway := range snapshot.Gateways {
 			if gateway.NodeID == selected.NodeID && gateway.VPCID == selected.VPCID && gateway.InstanceID == selected.GatewayInstanceID {
 				selectedPrefixes = gateway.AllowedPrefixes
+				gatewaySelected = gateway.AllowedPrefixes != nil
 			}
 		}
 		for _, root := range cluster.NATProfiles {
 			if root.NodeID != selected.NodeID || root.VPCID != selected.VPCID || root.GatewayInstanceID != selected.GatewayInstanceID || root.ProfileID != selected.ProfileID || root.ProfileSHA256 != selected.ProfileSHA256 {
 				continue
 			}
-			approved = !selected.SNATEnabled || root.AllowSNAT
+			approved = gatewaySelected && (!selected.SNATEnabled || root.AllowSNAT)
+			if selected.InternetEgressEnabled {
+				approved = approved && selected.SNATEnabled && root.AllowSNAT && root.AllowInternetEgress && overlayproto.PublicInternetIPv4(root.PublicIPv4)
+			}
 			for _, forwarding := range selected.Forwardings {
 				portOK := false
 				for _, port := range root.AllowedPorts {

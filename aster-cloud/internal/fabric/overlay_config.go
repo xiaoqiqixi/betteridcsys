@@ -29,11 +29,14 @@ type OverlayConfig struct {
 	PreviousProfileSHA256 string                 `json:"previous_profile_sha256,omitempty"`
 }
 type OverlayGuestNetwork struct {
-	LocalVPCID      string   `json:"local_vpc_id"`
-	OwnerRef        string   `json:"owner_ref"`
-	CIDR            string   `json:"cidr"`
-	GatewayIPv4     string   `json:"gateway_ipv4"`
-	AllowedPrefixes []string `json:"allowed_prefixes"`
+	LocalVPCID          string   `json:"local_vpc_id"`
+	VPCID               string   `json:"vpc_id,omitempty"`
+	OwnerRef            string   `json:"owner_ref"`
+	CIDR                string   `json:"cidr"`
+	GatewayIPv4         string   `json:"gateway_ipv4"`
+	AllowedPrefixes     []string `json:"allowed_prefixes"`
+	AllowInternetEgress bool     `json:"allow_internet_egress,omitempty"`
+	DNSIPv4             []string `json:"dns_ipv4,omitempty"`
 }
 type OverlayPeer struct {
 	NodeID string `json:"node_id"`
@@ -70,7 +73,7 @@ func canonicalOverlayConfig(c OverlayConfig) (OverlayConfig, error) {
 		}
 	}
 	for i, g := range c.Gateways {
-		if !nodeRE.MatchString(g.NodeID) || !idRE.MatchString(g.InstanceID) || g.InterfaceID != InterfaceID(g.InstanceID) || !idRE.MatchString(g.OwnerRef) || !idRE.MatchString(g.VPCID) || g.AllowedPrefixes == nil || len(g.AllowedPrefixes) < 1 || len(g.AllowedPrefixes) > 32 || i > 0 && c.Gateways[i-1].VPCID == g.VPCID {
+		if !nodeRE.MatchString(g.NodeID) || !idRE.MatchString(g.InstanceID) || g.InterfaceID != InterfaceID(g.InstanceID) || !idRE.MatchString(g.OwnerRef) || !idRE.MatchString(g.VPCID) || g.AllowedPrefixes == nil || len(g.AllowedPrefixes) > 32 || i > 0 && c.Gateways[i-1].VPCID == g.VPCID {
 			return OverlayConfig{}, ErrInvalid
 		}
 		g.AllowedPrefixes = append([]string{}, g.AllowedPrefixes...)
@@ -99,16 +102,28 @@ func canonicalOverlayConfig(c OverlayConfig) (OverlayConfig, error) {
 	sort.Slice(c.GuestNetworks, func(i, j int) bool { return c.GuestNetworks[i].LocalVPCID < c.GuestNetworks[j].LocalVPCID })
 	for i, g := range c.GuestNetworks {
 		p, ok := overlayproto.Prefix(g.CIDR)
-		if !ok || !p.Addr().IsPrivate() || p.Bits() < 8 || p.Bits() > 30 || !idRE.MatchString(g.LocalVPCID) || !idRE.MatchString(g.OwnerRef) || !overlayproto.Usable(g.GatewayIPv4, p) || g.AllowedPrefixes == nil || len(g.AllowedPrefixes) < 1 || i > 0 && c.GuestNetworks[i-1].LocalVPCID == g.LocalVPCID {
+		if !ok || !p.Addr().IsPrivate() || p.Bits() < 8 || p.Bits() > 30 || !idRE.MatchString(g.LocalVPCID) || !idRE.MatchString(g.OwnerRef) || !overlayproto.Usable(g.GatewayIPv4, p) || g.AllowedPrefixes == nil || len(g.AllowedPrefixes) > 32 || i > 0 && c.GuestNetworks[i-1].LocalVPCID == g.LocalVPCID || g.VPCID != "" && !idRE.MatchString(g.VPCID) || g.AllowInternetEgress && !idRE.MatchString(g.VPCID) {
 			return OverlayConfig{}, ErrInvalid
 		}
 		g.AllowedPrefixes = append([]string{}, g.AllowedPrefixes...)
 		sort.Strings(g.AllowedPrefixes)
+		if len(g.DNSIPv4) > 4 {
+			return OverlayConfig{}, ErrInvalid
+		}
+		g.DNSIPv4 = append([]string(nil), g.DNSIPv4...)
+		dns := map[string]bool{}
+		for _, raw := range g.DNSIPv4 {
+			a, e := netip.ParseAddr(raw)
+			if e != nil || !a.Is4() || a.String() != raw || !a.IsGlobalUnicast() || dns[raw] || !(g.AllowInternetEgress && overlayproto.PublicInternetIPv4(raw) || prefixSubset(raw+"/32", g.AllowedPrefixes)) {
+				return OverlayConfig{}, ErrInvalid
+			}
+			dns[raw] = true
+		}
 		found := false
 		for _, gw := range c.Gateways {
 			a, _ := json.Marshal(g.AllowedPrefixes)
 			b, _ := json.Marshal(gw.AllowedPrefixes)
-			if gw.OwnerRef == g.OwnerRef && gw.IPv4 == g.GatewayIPv4 && string(a) == string(b) {
+			if gw.OwnerRef == g.OwnerRef && gw.IPv4 == g.GatewayIPv4 && string(a) == string(b) && (g.VPCID == "" || g.VPCID == gw.VPCID) {
 				found = true
 			}
 		}
@@ -171,7 +186,18 @@ func DecodeOverlayConfig(raw []byte) (OverlayConfig, error) {
 	_ = json.Unmarshal(fields["guest_networks"], &networks)
 	for _, r := range networks {
 		var g OverlayGuestNetwork
-		if object(r, []string{"local_vpc_id", "owner_ref", "cidr", "gateway_ipv4", "allowed_prefixes"}, &g) != nil {
+		guestKeys := []string{"local_vpc_id", "owner_ref", "cidr", "gateway_ipv4", "allowed_prefixes"}
+		var guestFields map[string]json.RawMessage
+		_ = json.Unmarshal(r, &guestFields)
+		for _, key := range []string{"vpc_id", "allow_internet_egress", "dns_ipv4"} {
+			if _, ok := guestFields[key]; ok {
+				guestKeys = append(guestKeys, key)
+			}
+		}
+		if object(r, guestKeys, &g) != nil {
+			return c, ErrInvalid
+		}
+		if value, exists := guestFields["dns_ipv4"]; exists && string(value) == "null" {
 			return c, ErrInvalid
 		}
 	}
@@ -185,7 +211,7 @@ func DecodeOverlayConfig(raw []byte) (OverlayConfig, error) {
 			natKeys := []string{"id", "namespace", "namespace_device", "namespace_inode", "dedicated_ack", "vpc_id", "vpc_cidr", "gateway_instance_id", "inside_interface", "outside_interface", "outside_peer", "public_ipv4", "uplink_gateway_ipv4", "allow_snat", "allowed_source_cidrs", "allowed_ports"}
 			var natFields map[string]json.RawMessage
 			_ = json.Unmarshal(r, &natFields)
-			for _, key := range []string{"previous_profile_sha256", "retired_previous_namespace_ack"} {
+			for _, key := range []string{"previous_profile_sha256", "retired_previous_namespace_ack", "allow_internet_egress"} {
 				if _, ok := natFields[key]; ok {
 					natKeys = append(natKeys, key)
 				}
@@ -271,6 +297,9 @@ func validateOverlayApproval(c OverlayConfig, s overlayproto.Snapshot) (OverlayC
 	if validateNATApproval(c, s) != nil {
 		return c, s, "", ErrConflict
 	}
+	if !internetGuestApproval(c, s) {
+		return c, s, "", ErrConflict
+	}
 	names := map[string]bool{}
 	for _, m := range s.Members {
 		if m.NodeID == c.Base.NodeID {
@@ -300,7 +329,7 @@ func validateOverlayApproval(c OverlayConfig, s overlayproto.Snapshot) (OverlayC
 				if v.ID != m.VPCID {
 					continue
 				}
-				if gn.OwnerRef != m.OwnerRef || gn.CIDR != v.CIDR {
+				if gn.OwnerRef != m.OwnerRef || gn.CIDR != v.CIDR || gn.VPCID != "" && gn.VPCID != m.VPCID {
 					return c, s, "", ErrConflict
 				}
 				for _, g := range s.Gateways {

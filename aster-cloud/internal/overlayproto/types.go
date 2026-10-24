@@ -190,7 +190,7 @@ func CanonicalSnapshot(s Snapshot) (Snapshot, string, error) {
 	for i, g := range s.Gateways {
 		v, ok := vpcs[g.VPCID]
 		p, _ := Prefix(v.CIDR)
-		if !ok || !nodes[g.NodeID] || g.OwnerRef != v.OwnerRef || !nodeproto.ValidID(g.InstanceID) || g.InterfaceID != nodeproto.NetworkInterfaceID(g.InstanceID) || !validMAC(g.MAC) || !Usable(g.IPv4, p) || ids[g.InstanceID] || ips[g.VPCID+":"+g.IPv4] || macs[g.MAC] || gateways[g.VPCID] || g.AllowedPrefixes == nil || len(g.AllowedPrefixes) < 1 || len(g.AllowedPrefixes) > 32 {
+		if !ok || !nodes[g.NodeID] || g.OwnerRef != v.OwnerRef || !nodeproto.ValidID(g.InstanceID) || g.InterfaceID != nodeproto.NetworkInterfaceID(g.InstanceID) || !validMAC(g.MAC) || !Usable(g.IPv4, p) || ids[g.InstanceID] || ips[g.VPCID+":"+g.IPv4] || macs[g.MAC] || gateways[g.VPCID] || g.AllowedPrefixes == nil || len(g.AllowedPrefixes) > 32 {
 			return Snapshot{}, "", ErrInput
 		}
 		ids[g.InstanceID] = true

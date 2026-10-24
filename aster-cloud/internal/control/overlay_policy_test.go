@@ -4,6 +4,7 @@ import (
 	"aster/cloud/internal/nodeproto"
 	"aster/cloud/internal/overlayproto"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -171,5 +172,140 @@ func TestOverlayNATRootPortRangeLimitMatchesNodeContract(t *testing.T) {
 	c.OverlayClusters[0].NATProfiles[0].AllowedPorts = append(ports, OverlayNATPortRange{Protocol: "tcp", Start: 2000, End: 2000})
 	if c.Valid() {
 		t.Fatal("65 ranges cannot execute on node")
+	}
+}
+
+func internetOverlayPolicyFixture() (Config, overlayproto.Snapshot) {
+	c, s := overlayPolicyFixture()
+	c.OverlayClusters[0].NATProfiles[0].PublicIPv4 = "8.8.8.8"
+	c.OverlayClusters[0].NATProfiles[0].AllowInternetEgress = true
+	c.OverlayClusters[0].NATProfiles[0].AllowedSourceCIDRs = []string{}
+	c.OverlayClusters[0].Gateways[0].AllowedPrefixes = []string{}
+	s.Gateways[0].AllowedPrefixes = []string{}
+	s.NATPolicies[0].Forwardings = []overlayproto.NATForwarding{}
+	s.NATPolicies[0].InternetEgressEnabled = true
+	return c, s
+}
+
+func TestOverlayInternetEgressRequiresSeparateRootApproval(t *testing.T) {
+	c, s := internetOverlayPolicyFixture()
+	if !c.Valid() || !overlayPoliciesApproved(c.OverlayClusters[0], s) {
+		t.Fatal("approved Internet-only gateway rejected")
+	}
+	if _, _, err := overlayproto.CanonicalSnapshot(s); err != nil {
+		t.Fatal("Internet-only snapshot rejected", err)
+	}
+	cases := map[string]func(*Config, *overlayproto.Snapshot){
+		"internet_not_approved": func(c *Config, _ *overlayproto.Snapshot) {
+			c.OverlayClusters[0].NATProfiles[0].AllowInternetEgress = false
+		},
+		"snat_not_approved":     func(c *Config, _ *overlayproto.Snapshot) { c.OverlayClusters[0].NATProfiles[0].AllowSNAT = false },
+		"snat_not_selected":     func(_ *Config, s *overlayproto.Snapshot) { s.NATPolicies[0].SNATEnabled = false },
+		"root_withdrawn":        func(c *Config, _ *overlayproto.Snapshot) { c.OverlayClusters[0].NATProfiles = nil },
+		"root_gateway_null":     func(c *Config, _ *overlayproto.Snapshot) { c.OverlayClusters[0].Gateways[0].AllowedPrefixes = nil },
+		"selected_gateway_null": func(_ *Config, s *overlayproto.Snapshot) { s.Gateways[0].AllowedPrefixes = nil },
+		"default_route":         func(_ *Config, s *overlayproto.Snapshot) { s.Gateways[0].AllowedPrefixes = []string{"0.0.0.0/0"} },
+		"unrouted_dnat": func(_ *Config, s *overlayproto.Snapshot) {
+			s.NATPolicies[0].Forwardings = []overlayproto.NATForwarding{{ID: strings.Repeat("2", 32), Protocol: "tcp", PublicPort: 40001, TargetInstanceID: s.Members[0].InstanceID, TargetPort: 22, SourceCIDR: "192.0.2.0/25"}}
+		},
+	}
+	// A gateway retained with explicit empty routes is a safe inactive state.
+	for _, nat := range [][]overlayproto.NATPolicy{nil, {}} {
+		inactive := s
+		inactive.NATPolicies = nat
+		if !overlayPoliciesApproved(c.OverlayClusters[0], inactive) {
+			t.Fatal("explicit empty gateway could not be retained when disabled")
+		}
+	}
+	for name, edit := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, s := internetOverlayPolicyFixture()
+			edit(&c, &s)
+			if c.Valid() && overlayPoliciesApproved(c.OverlayClusters[0], s) {
+				t.Fatal("unapproved Internet egress accepted")
+			}
+		})
+	}
+	for _, ip := range []string{"10.0.0.1", "127.0.0.1", "100.64.0.1", "169.254.169.254", "192.0.2.1", "198.51.100.2", "203.0.113.1", "198.18.0.1", "224.0.0.1", "::1", "8.8.8.8 "} {
+		t.Run(ip, func(t *testing.T) {
+			c, s := internetOverlayPolicyFixture()
+			c.OverlayClusters[0].NATProfiles[0].PublicIPv4 = ip
+			if c.Valid() || overlayPoliciesApproved(c.OverlayClusters[0], s) {
+				t.Fatal("non-public Internet SNAT address approved", ip)
+			}
+		})
+	}
+}
+
+func TestOverlayInternetEgressDoesNotBroadenDNATAuthority(t *testing.T) {
+	c, s := overlayPolicyFixture()
+	c.OverlayClusters[0].NATProfiles[0].PublicIPv4 = "8.8.8.8"
+	c.OverlayClusters[0].NATProfiles[0].AllowInternetEgress = true
+	s.NATPolicies[0].InternetEgressEnabled = true
+	if !c.Valid() || !overlayPoliciesApproved(c.OverlayClusters[0], s) {
+		t.Fatal("approved mixed prefix / Internet mode rejected")
+	}
+	for name, edit := range map[string]func(*overlayproto.Snapshot){
+		"source_outside_root": func(s *overlayproto.Snapshot) { s.NATPolicies[0].Forwardings[0].SourceCIDR = "1.1.1.0/24" },
+		"source_outside_selected": func(s *overlayproto.Snapshot) {
+			s.Gateways[0].AllowedPrefixes = []string{"192.0.2.128/25"}
+		},
+		"unapproved_port": func(s *overlayproto.Snapshot) { s.NATPolicies[0].Forwardings[0].PublicPort = 22 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, selected := overlayPolicyFixture()
+			selected.NATPolicies[0].InternetEgressEnabled = true
+			edit(&selected)
+			if overlayPoliciesApproved(c.OverlayClusters[0], selected) {
+				t.Fatal("Internet approval broadened port forwarding")
+			}
+		})
+	}
+}
+
+func TestOverlayInternetIntentPreservesLegacyBytes(t *testing.T) {
+	_, s := overlayPolicyFixture()
+	policies := s.NATPolicies
+	in := OverlayEpochInput{ClusterID: s.ClusterID, Members: []OverlayMemberInput{}, Gateways: s.Gateways, NATPolicies: &policies}
+	old, digest, err := canonicalOverlayInput(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(old)
+	if strings.Contains(string(raw), "internet_egress_enabled") || strings.Contains(string(raw), "allow_internet_egress") {
+		t.Fatal("default false modified legacy request bytes")
+	}
+	// Explicit false is the same existing intent; true is a distinct request.
+	decodedJSON := strings.Replace(string(raw), `"snat_enabled":true`, `"snat_enabled":true,"internet_egress_enabled":false`, 1)
+	var decoded OverlayEpochInput
+	if !strict([]byte(decodedJSON), &decoded) {
+		t.Fatal("explicit false did not decode")
+	}
+	_, falseDigest, err := canonicalOverlayInput(decoded)
+	if err != nil || falseDigest != digest {
+		t.Fatal("explicit false changed old intent", err)
+	}
+	(*decoded.NATPolicies)[0].InternetEgressEnabled = true
+	_, internetDigest, err := canonicalOverlayInput(decoded)
+	if err != nil || internetDigest == digest {
+		t.Fatal("Internet mode reused old idempotent intent", err)
+	}
+	root, _ := overlayPolicyFixture()
+	rootJSON, _ := json.Marshal(root.OverlayClusters[0].NATProfiles[0])
+	if strings.Contains(string(rootJSON), "allow_internet_egress") {
+		t.Fatal("default false changed root projection")
+	}
+}
+
+func TestOverlayGatewayPrefixesMustBeExplicitEvenForInternet(t *testing.T) {
+	_, s := internetOverlayPolicyFixture()
+	policies := s.NATPolicies
+	in := OverlayEpochInput{ClusterID: s.ClusterID, Members: []OverlayMemberInput{}, Gateways: s.Gateways, NATPolicies: &policies}
+	if _, _, err := canonicalOverlayInput(in); err != nil {
+		t.Fatal("explicit empty prefixes rejected", err)
+	}
+	in.Gateways[0].AllowedPrefixes = nil
+	if _, _, err := canonicalOverlayInput(in); !errors.Is(err, ErrInput) {
+		t.Fatal("null route array laundered to explicit empty", err)
 	}
 }

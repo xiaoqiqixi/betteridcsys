@@ -299,6 +299,7 @@ const stageComplete = (phase: string) =>
           <OverlaySnapshotPanel
             :snapshot="detail.data.value.epoch.snapshot"
             :vpcs="vpcs.data.value?.items"
+            :nat-profiles="options.data.value?.nat_profiles"
           />
         </section>
         <details class="version-proof">

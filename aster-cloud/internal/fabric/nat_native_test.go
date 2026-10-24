@@ -3,6 +3,7 @@ package fabric
 import (
 	"aster/cloud/internal/overlayproto"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -262,7 +264,13 @@ func startNativeNATHeldClient(t *testing.T, ns, url string) string {
 func TestNativeNATHelper(t *testing.T) {
 	switch os.Getenv("ASTER_NAT_HELPER") {
 	case "hold":
-		client := http.Client{Timeout: 1200 * time.Millisecond, Transport: &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 1}}
+		var dials atomic.Int32
+		client := http.Client{Timeout: 1200 * time.Millisecond, Transport: &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 1, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if dials.Add(1) != 1 {
+				return nil, fmt.Errorf("held-connection probe forbids reconnect")
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}}}
 		ready := os.Getenv("ASTER_NAT_READY")
 		response, err := client.Get(os.Getenv("ASTER_NAT_ADDRESS"))
 		if err != nil {
@@ -328,6 +336,34 @@ func TestNativeNATHelper(t *testing.T) {
 		server := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "NAT_REMOTE="+r.RemoteAddr) }), ReadHeaderTimeout: 2 * time.Second}
 		_ = server.Serve(listener)
 	case "client":
+		if os.Getenv("ASTER_NAT_NETWORK") == "icmp4" {
+			address := os.Getenv("ASTER_NAT_ADDRESS")
+			conn, err := net.DialIP("ip4:icmp", nil, &net.IPAddr{IP: net.ParseIP(address)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			_ = conn.SetDeadline(time.Now().Add(1200 * time.Millisecond))
+			request := []byte{8, 0, 0, 0, 0x4a, 0x53, 0, 1, 'n', 'a', 't', '-', 'e', 'c', 'h', 'o'}
+			var sum uint32
+			for i := 0; i < len(request); i += 2 {
+				sum += uint32(binary.BigEndian.Uint16(request[i:]))
+			}
+			for sum>>16 != 0 {
+				sum = (sum & 0xffff) + (sum >> 16)
+			}
+			binary.BigEndian.PutUint16(request[2:4], ^uint16(sum))
+			if _, err = conn.Write(request); err != nil {
+				t.Fatal(err)
+			}
+			buf := make([]byte, 256)
+			n, err := conn.Read(buf)
+			if err != nil || n < 8 || buf[0] != 0 || buf[1] != 0 || binary.BigEndian.Uint16(buf[4:6]) != 0x4a53 || binary.BigEndian.Uint16(buf[6:8]) != 1 {
+				t.Fatalf("ICMP echo reply: %v %x", err, buf[:n])
+			}
+			fmt.Print("NAT_ICMP_REPLY=" + address)
+			return
+		}
 		if os.Getenv("ASTER_NAT_NETWORK") == "udp4" {
 			conn, err := net.DialTimeout("udp4", os.Getenv("ASTER_NAT_ADDRESS"), time.Second)
 			if err != nil {

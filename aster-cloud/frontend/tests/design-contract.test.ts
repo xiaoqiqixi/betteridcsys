@@ -62,6 +62,31 @@ describe("design contracts (static tokens, not browser computed)", () => {
       source.match(/\.nat-summary header > div\s*\{([^}]+)\}/)?.[1],
     ).toContain("min-width: 0");
   });
+  it("allows full-length NAT profile identities and localized egress labels to wrap in recovery summaries", () => {
+    const source = readFileSync(
+      resolve(root, "components/OverlayEpochDialog.vue"),
+      "utf8",
+    );
+    const { descriptor } = parse(source);
+    const style = descriptor.styles.find((entry) => entry.scoped)!;
+    const result = compileStyle({
+      source: style.content,
+      filename: "OverlayEpochDialog.vue",
+      id: "data-v-recovery-layout",
+      scoped: true,
+    });
+    expect(result.errors).toEqual([]);
+    for (const tag of ["dt", "dd"]) {
+      expect(result.code).toContain(
+        `.recovery-summary ${tag}[data-v-recovery-layout]`,
+      );
+    }
+    const wrapping = source.match(
+      /\.recovery-summary dt,\s*\.recovery-summary dd\s*\{([^}]+)\}/,
+    )?.[1];
+    expect(wrapping).toContain("min-width: 0");
+    expect(wrapping).toContain("overflow-wrap: anywhere");
+  });
   it("keeps mobile navigation on the overlay surface and names the compact preferences control", () => {
     const nav = readFileSync(resolve(root, "components/NavLinks.vue"), "utf8");
     const app = readFileSync(resolve(root, "App.vue"), "utf8");

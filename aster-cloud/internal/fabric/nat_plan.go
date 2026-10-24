@@ -94,6 +94,16 @@ func compileNAT(c OverlayConfig, s overlayproto.Snapshot, root NATProfile, isola
 		add("forward", match(meta("iifname"), root.OutsideInterface), match(meta("oifname"), root.InsideInterface), match(payload("ip", "saddr"), prefixExpr(f.SourceCIDR)), match(payload("ip", "daddr"), m.IPv4), match(payload(f.Protocol, "dport"), f.TargetPort), bitmatch(ct("status"), 32), accept)
 		add("forward", match(meta("iifname"), root.InsideInterface), match(meta("oifname"), root.OutsideInterface), match(payload("ip", "saddr"), m.IPv4), match(payload("ip", "daddr"), prefixExpr(f.SourceCIDR)), match(payload(f.Protocol, "sport"), f.TargetPort), bitmatch(ct("status"), 32), established, accept)
 	}
+	if policy.InternetEgressEnabled {
+		// Declare ordinary chains before rules; nft input declaration order is
+		// significant even though cross-chain listing order is not.
+		rules := []nftObject{}
+		appendRule := func(chain string, expr ...any) {
+			rules = append(rules, nftObject{"rule": nftObject{"family": "inet", "table": natTable, "chain": chain, "expr": expr}})
+		}
+		objects = append(objects, compileInternetNAT(c, s, root, *policy, appendRule)...)
+		objects = append(objects, rules...)
+	}
 	raw, _ := json.Marshal(objects)
 	if len(raw) > 512<<10 {
 		return nil, ErrInvalid

@@ -140,7 +140,11 @@ assert value.get('passed') is True
 assert value.get('financial_and_node_snapshots_unchanged') is True
 assert value.get('initial_network_snapshot_and_receipts_unchanged') is True
 assert value.get('lost_ack_reconciled') is True
-assert value.get('node_posts_unique') is True and value.get('node_post_count') == 18
+assert value.get('node_posts_unique') is True and value.get('node_post_count') == 30
+assert value.get('epochs') == 5
+assert value.get('public_egress_enabled') is True
+assert value.get('public_egress_disabled') is True
+assert value.get('pure_internet_reenabled') is True
 report = json.loads((output / 'report.json').read_text())
 assert report.get('passed') is True, 'UI report must confirm completion'
 for path in output.iterdir():

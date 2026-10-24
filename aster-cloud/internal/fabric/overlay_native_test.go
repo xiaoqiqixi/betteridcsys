@@ -92,6 +92,29 @@ func nativeOverlayPlans(t *testing.T) map[string]overlayPlan {
 		}
 		out[name] = p
 	}
+	for _, name := range []string{"internet_local_nat", "internet_remote_nat"} {
+		_, _, c, s := internetNATFixture(t)
+		g := s.Gateways[0]
+		ports := []overlayPort{{Name: TAPName(s.Members[0].InstanceID), OFPort: 1}, {Name: overlayTunnelName("node-a", "node-b"), OFPort: 7}}
+		if name == "internet_remote_nat" {
+			g.NodeID = "node-b"
+			c.Gateways[0], s.Gateways[0] = g, g
+			s.NATPolicies[0].NodeID = g.NodeID
+			c.NATProfiles = nil
+		} else {
+			ports = append(ports, overlayPort{Name: TAPName(g.InstanceID), OFPort: 32767})
+		}
+		sha, err := OverlayConfigSHA256(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Profiles[0].ProfileSHA256 = sha
+		p, err := compileOverlay(c, s, ports)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out[name] = p
+	}
 	single, err := Compile(topologyFixture())
 	if err != nil {
 		t.Fatal(err)
@@ -234,12 +257,18 @@ func TestNativeOVSParserMeters(t *testing.T) {
 
 func TestNativeOverlayParserFixturesCoverGatewayTunnelMeterAndBounds(t *testing.T) {
 	plans := nativeOverlayPlans(t)
-	if len(plans) != 5 {
+	if len(plans) != 7 {
 		t.Fatal("native fixture coverage changed")
 	}
 	for _, name := range []string{"local_router", "remote_router"} {
 		if !strings.Contains(strings.Join(plans[name].Flows, "\n"), "nw_dst=172.20.0.0/16") {
 			t.Fatal("gateway route fixture missing", name)
+		}
+	}
+	for _, name := range []string{"internet_local_nat", "internet_remote_nat"} {
+		flows := strings.Join(plans[name].Flows, "\n")
+		if !strings.Contains(flows, "priority=190,") || !strings.Contains(flows, "priority=195,") || !strings.Contains(flows, "nw_dst=169.254.0.0/16") {
+			t.Fatal("Internet fallback/protected-range parser coverage missing", name)
 		}
 	}
 	if !strings.Contains(strings.Join(plans["cross_node"].Flows, "\n"), "tun_id=") || len(plans["max_vni_port"].Meters) != 2 {

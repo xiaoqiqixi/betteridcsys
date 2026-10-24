@@ -50,8 +50,14 @@ async function screenshot(name, fullPage = true) {
   report.screenshots.push(`${name}.png`);
 }
 async function noOverflow(name) {
-  const size = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
+  const size = await page.evaluate(() => ({
+    width: innerWidth, scroll: document.documentElement.scrollWidth,
+    dialog_regions: [...document.querySelectorAll('[role="dialog"], [role="dialog"] .overlay-body')].map(el => ({
+      width: el.clientWidth, scroll: el.scrollWidth,
+    })),
+  }));
   assert(size.scroll <= size.width, `${name}: ${JSON.stringify(size)}`);
+  assert(size.dialog_regions.every(region => region.scroll <= region.width + 1), `${name}: dialog content must not scroll horizontally: ${JSON.stringify(size)}`);
   check(name, size);
 }
 async function singleInfoNotice(name) {
@@ -137,6 +143,30 @@ async function pick(label, option) {
   await page.getByRole('combobox', { name: label, exact: true }).click();
   await page.getByRole('option', { name: option, exact: true }).click();
 }
+async function networkOverview() {
+  await page.getByRole('link', { name: '返回网络管理', exact: true }).click();
+  await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
+  await page.getByRole('button', { name: '配置网络', exact: true }).waitFor();
+}
+async function submitNetworkPlan(expectedEpoch) {
+  const before = posts('/overlays/epochs');
+  await page.getByRole('dialog').locator('.confirmation input').fill('cluster-fixture');
+  await page.getByRole('button', { name: '应用网络配置', exact: true }).click();
+  await dialogClosed();
+  await page.waitForURL(/#\/networks\/epochs\/[a-f0-9]{32}$/);
+  const id = page.url().split('/').at(-1);
+  const detail = await read(`/overlays/epochs/${id}`);
+  assert.equal(posts('/overlays/epochs') - before, 1);
+  assert.equal(detail.epoch.epoch, expectedEpoch);
+  return { id, detail };
+}
+async function publicOverview(label, english = false) {
+  const card = page.locator('.nat-summary');
+  assert.equal(await card.count(), 1);
+  assert((await card.innerText()).includes('8.8.4.2'));
+  assert((await card.innerText()).includes(english ? 'Public IPv4 Internet egress selected' : '公网 IPv4 出口已选择'));
+  check(label);
+}
 async function refreshDetail(id) {
   await Promise.all([
     page.waitForResponse(r => new URL(r.url()).pathname === `/console/v1/overlays/epochs/${id}` && r.request().method() === 'GET' && r.status() === 200),
@@ -220,12 +250,14 @@ try {
   const initial = await read(`/overlays/epochs/${initialID}`);
   assert.equal(initial.epoch.state, 'succeeded');
   assert.equal(initial.epoch.snapshot.nat_policies.length, 1);
+  assert.equal(initial.epoch.snapshot.nat_policies[0].internet_egress_enabled ?? false, false);
+  assert.equal(initialOptions.nat_profiles[0].allow_internet_egress, true);
+  assert.equal(initialOptions.nat_profiles[0].public_ipv4, '8.8.4.2');
+  check('root-approved public Internet option does not rewrite the initial legacy epoch');
 
   phase = 'responsive-overview';
-  await screenshot('desktop-network');
   await noOverflow('desktop overview has no horizontal overflow');
   await page.setViewportSize({ width: 390, height: 844 });
-  await screenshot('mobile-network');
   await noOverflow('mobile overview has no horizontal overflow');
   await page.getByRole('button', { name: '新建 VPC', exact: true }).click();
   await screenshot('mobile-vpc-create', false);
@@ -269,6 +301,9 @@ try {
   await page.getByLabel('公开端口', { exact: true }).fill('40002');
   await page.getByLabel('目标端口', { exact: true }).fill('2222');
   await page.getByLabel('允许访问的来源网段', { exact: false }).fill('192.0.2.0/26');
+  await pick('出口范围', '公网 IPv4');
+  assert.equal((await page.getByRole('combobox', { name: '出口范围', exact: true }).innerText()).trim(), '公网 IPv4');
+  check('public Internet mode is selected with the real custom egress control');
   await page.getByRole('button', { name: '添加端口映射', exact: true }).click();
   assert.equal(await page.getByLabel('公开端口', { exact: true }).count(), 2);
   await page.getByRole('button', { name: '删除端口映射 2', exact: true }).click();
@@ -294,7 +329,11 @@ try {
   assert.equal(await page.getByLabel('公开端口', { exact: true }).inputValue(), '40002');
   check('dirty form discard prompt preserves unsaved NAT edits');
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.getByRole('dialog').locator('#overlay-change-form input').fill('cluster-fixture');
+  await page.getByRole('dialog').locator('.confirmation input').fill('cluster-fixture');
+  assert.equal(await page.getByRole('button', { name: '应用网络配置', exact: true }).isDisabled(), true);
+  await page.getByRole('dialog').locator('.public-consent input[type="checkbox"]').check();
+  assert.equal(await page.getByRole('button', { name: '应用网络配置', exact: true }).isEnabled(), true);
+  check('public Internet plan requires explicit visible consent as well as cluster confirmation');
   const planBefore = posts('/overlays/epochs');
   await page.getByRole('button', { name: '应用网络配置', exact: true }).click();
   await dialogClosed();
@@ -303,6 +342,8 @@ try {
   let detail = await read(`/overlays/epochs/${epochID}`);
   assert.equal(posts('/overlays/epochs') - planBefore, 1);
   assert.deepEqual(detail.epoch.snapshot.gateways[0].allowed_prefixes, ['192.0.2.0/25']);
+  assert.equal(detail.epoch.snapshot.nat_policies[0].internet_egress_enabled, true);
+  assert.equal(detail.epoch.snapshot.nat_policies[0].snat_enabled, true);
   const forwarding = detail.epoch.snapshot.nat_policies[0].forwardings[0];
   assert.equal(forwarding.public_port, 40002);
   assert.equal(forwarding.target_port, 2222);
@@ -339,7 +380,10 @@ try {
   phase = 'explicit-recovery';
   await page.getByRole('button', { name: '恢复网络', exact: true }).click();
   await dialogExcludesNotices('desktop recovery dialog is above and isolated from notices');
-  await page.getByRole('dialog').locator('#overlay-change-form input').fill(epochID);
+  await page.getByRole('dialog').locator('.confirmation input').fill(epochID);
+  assert.equal(await page.getByRole('button', { name: '提交恢复', exact: true }).isDisabled(), true);
+  await page.getByRole('dialog').locator('.public-consent input[type="checkbox"]').check();
+  check('same-selection public Internet recovery requires a fresh explicit consent');
   await screenshot('desktop-recovery-dialog', false);
   await page.setViewportSize({ width: 390, height: 844 });
   await dialogExcludesNotices('mobile recovery dialog is not covered by action notices');
@@ -354,6 +398,7 @@ try {
   assert(detail.epoch.recovery);
   assert.notEqual(recoveryID, epochID);
   assert.equal(detail.epoch.epoch, initial.epoch.epoch + 2);
+  assert.equal(detail.epoch.snapshot.nat_policies[0].internet_egress_enabled, true);
   check('explicit recovery creates a distinct persisted epoch', { epoch: detail.epoch.epoch });
   await singleInfoNotice('recovery creation keeps at most one info notice');
   detail = await advanceUntilStopped(recoveryID);
@@ -374,14 +419,82 @@ try {
   assert.deepEqual(receiptProof(untouched), receiptProof(initial));
   check('recovery preserves original snapshots and task receipts');
 
+  phase = 'disable-public-egress';
+  await networkOverview();
+  await page.getByRole('button', { name: '配置网络', exact: true }).click();
+  await dialogExcludesNotices('public egress disable editor excludes background notices');
+  await pick('出站地址转换', '关闭');
+  assert.equal((await page.getByRole('combobox', { name: '出口范围', exact: true }).innerText()).trim(), '仅指定网段');
+  assert.equal(await page.getByRole('dialog').locator('.public-consent').count(), 0);
+  await page.getByRole('button', { name: '删除端口映射 1', exact: true }).click();
+  await page.getByLabel('目标网段，每行一个', { exact: false }).fill('');
+  assert.equal(await page.getByLabel('公开端口', { exact: true }).count(), 0);
+  const disabledPlan = await submitNetworkPlan(4);
+  const disabledPolicy = disabledPlan.detail.epoch.snapshot.nat_policies[0];
+  assert.equal(disabledPolicy.snat_enabled, false);
+  assert.equal(disabledPolicy.internet_egress_enabled ?? false, false);
+  assert.deepEqual(disabledPolicy.forwardings, []);
+  assert.deepEqual(disabledPlan.detail.epoch.snapshot.gateways[0].allowed_prefixes, []);
+  check('one UI plan disables SNAT and public Internet while retaining an explicit empty gateway', { epoch: 4 });
+  detail = await advanceUntilStopped(disabledPlan.id);
+  assert.equal(detail.epoch.state, 'succeeded');
+  check('public egress disable completes every node through the real coordinator');
+
+  phase = 'internet-without-prefix-routes';
+  await networkOverview();
+  await page.getByRole('button', { name: '配置网络', exact: true }).click();
+  await dialogExcludesNotices('Internet-only editor excludes background notices');
+  assert.equal(await page.getByLabel('目标网段，每行一个', { exact: false }).inputValue(), '');
+  assert.equal(await page.getByLabel('公开端口', { exact: true }).count(), 0);
+  await pick('出站地址转换', '开启');
+  await pick('出口范围', '公网 IPv4');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('dialog').locator('.nat-profile .egress-fields').scrollIntoViewIfNeeded();
+  await screenshot('mobile-public-egress-editor', false);
+  await noOverflow('mobile Internet-only editor has no horizontal overflow');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('dialog').locator('.nat-profile .egress-fields').scrollIntoViewIfNeeded();
+  await screenshot('desktop-public-egress-editor', false);
+  await page.getByRole('dialog').locator('.public-consent input[type="checkbox"]').check();
+  const publicPlan = await submitNetworkPlan(5);
+  const publicPolicy = publicPlan.detail.epoch.snapshot.nat_policies[0];
+  assert.equal(publicPolicy.snat_enabled, true);
+  assert.equal(publicPolicy.internet_egress_enabled, true);
+  assert.deepEqual(publicPolicy.forwardings, []);
+  assert.deepEqual(publicPlan.detail.epoch.snapshot.gateways[0].allowed_prefixes, []);
+  check('pure public Internet plan persists without prefix routes or DNAT mappings', { epoch: 5 });
+  detail = await advanceUntilStopped(publicPlan.id);
+  assert.equal(detail.epoch.state, 'succeeded');
+  assert.equal(detail.tasks.length, 6);
+  check('Internet-only policy completes all six node phases without a destination allowlist');
+  const persistedDisabled = await read(`/overlays/epochs/${disabledPlan.id}`);
+  assert.equal(persistedDisabled.epoch.snapshot.nat_policies[0].snat_enabled, false);
+  assert.equal(persistedDisabled.epoch.snapshot.nat_policies[0].internet_egress_enabled ?? false, false);
+  assert.deepEqual(persistedDisabled.epoch.snapshot.gateways[0].allowed_prefixes, []);
+  assert.deepEqual(persistedDisabled.epoch.snapshot.nat_policies[0].forwardings, []);
+  const persistedOriginal = await read(`/overlays/epochs/${epochID}`);
+  assert.equal(persistedOriginal.epoch.snapshot_sha256, originalSHA);
+  assert.deepEqual(persistedOriginal.epoch.snapshot, originalSnapshot);
+  assert.deepEqual(receiptProof(persistedOriginal), originalReceipts);
+  check('later public enablement preserves the disabled epoch and original receipt history');
+
   phase = 'navigation-appearance';
-  await page.getByRole('link', { name: '返回网络管理', exact: true }).click();
-  await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
+  await networkOverview();
   await page.goBack();
   await page.getByRole('heading', { name: /网络变更/ }).waitFor();
   await page.goForward();
   await page.getByRole('heading', { name: 'VPC 与路由', exact: true }).waitFor();
   check('browser Back and Forward restore the expected network pages');
+  await noticesExpireNaturally('public overview has no stale notices before actual light screenshots');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await publicOverview('mobile Chinese light overview displays the persisted public mode and egress address');
+  await noOverflow('mobile Chinese light public overview has no horizontal overflow');
+  await screenshot('mobile-network');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await publicOverview('desktop Chinese light overview displays the persisted public mode and egress address');
+  await noOverflow('desktop Chinese light public overview has no horizontal overflow');
+  await screenshot('desktop-network');
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '语言与外观', exact: true }).click();
   await pick('界面语言', 'English');
   await pick('Appearance', 'Dark');
@@ -409,8 +522,10 @@ try {
   assert(natBadgeLines.every(badge => badge.has_text && badge.text_lines === 1), 'Mobile English NAT badge text must remain on one rendered line');
   check('mobile English NAT status text does not wrap', { badges: natBadgeLines });
   await noOverflow('mobile English dark page has no horizontal overflow');
+  await publicOverview('mobile English dark overview displays the persisted public mode and egress address', true);
   await screenshot('mobile-network-english-dark');
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await publicOverview('desktop English dark overview displays the persisted public mode and egress address', true);
   await screenshot('desktop-network-english-dark');
   await noOverflow('desktop English dark page has no horizontal overflow');
   // Read only rendered text to catch accidental raw ISO rendering; never serialize DOM.
@@ -418,6 +533,9 @@ try {
   check('visible dates are localized, not raw microsecond ISO values');
   assert.deepEqual(report.console_errors, []);
   check('no browser JavaScript errors');
+  report.public_egress_enabled = true;
+  report.public_egress_disabled = true;
+  report.pure_internet_reenabled = true;
   report.status = 'passed';
   report.passed = true;
   console.log('PASS real MySQL network management browser acceptance');

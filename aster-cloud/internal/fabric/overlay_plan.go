@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 type overlayPort struct {
@@ -116,11 +117,18 @@ func compileOverlay(c OverlayConfig, s overlayproto.Snapshot, ports []overlayPor
 	}
 	for _, g := range s.Gateways {
 		v := vpcs[g.VPCID]
+		internet := internetGatewayEnabled(s, g)
 		src, act, ok := incoming(g.NodeID, g.InstanceID, g.MAC, v.VNI)
 		if ok {
 			p.Flows = append(p.Flows, src+"ip,nw_src="+g.IPv4+" actions="+act)
 			for _, prefix := range g.AllowedPrefixes {
 				p.Flows = append(p.Flows, src+"ip,nw_src="+prefix+" actions="+act)
+			}
+			if internet {
+				for _, blocked := range internetBlockedCIDRs(c, s) {
+					p.Flows = append(p.Flows, strings.Replace(src, "priority=200,", "priority=195,", 1)+"ip,nw_src="+blocked+" actions=drop")
+				}
+				p.Flows = append(p.Flows, strings.Replace(src, "priority=200,", "priority=190,", 1)+"ip actions="+act)
 			}
 			appendARPIn(src, g.IPv4, g.MAC, act)
 		}
@@ -129,6 +137,12 @@ func compileOverlay(c OverlayConfig, s overlayproto.Snapshot, ports []overlayPor
 			p.Flows = append(p.Flows, dst+"ip,nw_dst="+g.IPv4+",dl_dst="+g.MAC+" actions="+act)
 			for _, prefix := range g.AllowedPrefixes {
 				p.Flows = append(p.Flows, dst+"ip,nw_dst="+prefix+",dl_dst="+g.MAC+" actions="+act)
+			}
+			if internet {
+				for _, blocked := range internetBlockedCIDRs(c, s) {
+					p.Flows = append(p.Flows, strings.Replace(dst, "priority=200,", "priority=195,", 1)+"ip,nw_dst="+blocked+",dl_dst="+g.MAC+" actions=drop")
+				}
+				p.Flows = append(p.Flows, strings.Replace(dst, "priority=200,", "priority=190,", 1)+"ip,dl_dst="+g.MAC+" actions="+act)
 			}
 			appendARPOut(dst, g.IPv4, g.MAC, act)
 		}

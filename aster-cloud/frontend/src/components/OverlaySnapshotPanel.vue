@@ -1,9 +1,18 @@
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
-import type { OverlaySnapshot, OverlayVPC } from "../api/overlay";
+import type {
+  NATPolicy,
+  NATProfile,
+  OverlaySnapshot,
+  OverlayVPC,
+} from "../api/overlay";
 import { useConsole } from "../context";
 import StatusBadge from "./StatusBadge.vue";
-const props = defineProps<{ snapshot: OverlaySnapshot; vpcs?: OverlayVPC[] }>();
+const props = defineProps<{
+  snapshot: OverlaySnapshot;
+  vpcs?: OverlayVPC[];
+  natProfiles?: NATProfile[];
+}>();
 const {
   prefs: { tr },
 } = useConsole();
@@ -11,6 +20,15 @@ const name = (id: string) =>
   props.vpcs?.find((v) => v.id === id)?.name ||
   props.snapshot.vpcs.find((v) => v.id === id)?.cidr ||
   id;
+const egressIPv4 = (policy: NATPolicy) =>
+  props.natProfiles?.find(
+    (profile) =>
+      profile.node_id === policy.node_id &&
+      profile.vpc_id === policy.vpc_id &&
+      profile.gateway_instance_id === policy.gateway_instance_id &&
+      profile.profile_id === policy.profile_id &&
+      profile.profile_sha256 === policy.profile_sha256,
+  )?.public_ipv4;
 </script>
 <template>
   <div class="snapshot-panel">
@@ -63,6 +81,14 @@ const name = (id: string) =>
             {{ prefix }}
           </li>
         </ul>
+        <p v-if="!gateway.allowed_prefixes.length" class="field-note">
+          {{
+            tr(
+              "未添加指定网段；公网访问由出口范围单独控制。",
+              "No specific destination prefixes. Internet access is controlled separately by the egress scope.",
+            )
+          }}
+        </p>
       </article>
     </section>
     <section>
@@ -89,6 +115,31 @@ const name = (id: string) =>
             policy.snat_enabled
               ? tr("出站地址转换已选择", "Outbound translation selected")
               : tr("出站地址转换关闭", "Outbound translation off")
+          }}
+        </p>
+        <p class="egress-summary">
+          {{
+            policy.internet_egress_enabled
+              ? tr(
+                  "公网 IPv4 出口已选择",
+                  "Public IPv4 Internet egress selected",
+                )
+              : tr(
+                  "公网出口关闭 · 仅指定网段",
+                  "Internet egress off · selected prefixes only",
+                )
+          }}
+        </p>
+        <p v-if="egressIPv4(policy)" class="field-note">
+          {{ tr("出口配置 IPv4", "Configured egress IPv4") }}
+          <code>{{ egressIPv4(policy) }}</code>
+        </p>
+        <p v-else-if="policy.internet_egress_enabled" class="field-note">
+          {{
+            tr(
+              "此版本的出口地址暂不可确认，请核对节点出口配置。",
+              "The egress address for this version cannot be confirmed. Review the node egress configuration.",
+            )
           }}
         </p>
         <div
@@ -212,6 +263,12 @@ const name = (id: string) =>
   padding-top: 14px;
   margin-top: 14px;
   font-size: 13px;
+}
+.egress-summary {
+  font-size: 13px;
+  line-height: 1.7;
+  font-weight: 500;
+  overflow-wrap: anywhere;
 }
 .forward-summary span {
   font-size: 12px;

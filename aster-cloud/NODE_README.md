@@ -460,8 +460,11 @@ Never delete journals or archives to unlock a failed bridge.
 An independently root-approved `aster.overlay/1` contract now connects fixed-peer
 VXLAN, full global-VPC epochs, constrained router-appliance forwarding and explicit
 all-node recovery to VM creation/start/stop. New VM seed/XML use approved MTU and
-routes; old immutable bindings/seeds are not rewritten. Internet, NAT, DHCP,
-floating IP, dynamic routing and real-host acceptance are not implied. The original
+routes; old immutable bindings/seeds are not rewritten. Separately approved
+namespace SNAT/DNAT and public IPv4 egress now have real controller/UI intent,
+three-phase execution and independent per-node root approvals; see
+[public NAT egress](docs/PUBLIC_NAT_EGRESS.md). DHCP, floating IP allocation,
+dynamic routing and real-host acceptance are not implied. The original
 single-host contract stays unchanged when overlay is not configured. See
 [network implementation and boundaries](docs/OVERLAY_DESIGN.md),
 [deployment/recovery runbook](deploy/OVERLAY_OPERATIONS.md), and

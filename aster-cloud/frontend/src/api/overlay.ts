@@ -26,6 +26,27 @@ export const prefix = (v: unknown): v is string => {
   const value = ip.split(".").reduce((n, part) => n * 256 + Number(part), 0);
   return value % 2 ** (32 - Number(bits)) === 0;
 };
+// Keep this fixed special-use list aligned with the node's public-egress guard.
+// Legacy prefix-only NAT may intentionally use a private or benchmark address.
+const nonPublicIPv4Prefixes = [
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "172.16.0.0/12",
+  "192.0.0.0/24",
+  "192.0.2.0/24",
+  "192.88.99.0/24",
+  "192.168.0.0/16",
+  "198.18.0.0/15",
+  "198.51.100.0/24",
+  "203.0.113.0/24",
+  "224.0.0.0/4",
+  "240.0.0.0/4",
+];
+export const publicIPv4 = (v: unknown): v is string =>
+  ipv4(v) && !nonPublicIPv4Prefixes.some((p) => containsPrefix(p, `${v}/32`));
 const privateSubnet = (v: unknown): v is string => {
   if (!prefix(v)) return false;
   const [address, bits] = v.split("/");
@@ -103,6 +124,7 @@ export interface NATPolicy {
   profile_id: string;
   profile_sha256: string;
   snat_enabled: boolean;
+  internet_egress_enabled?: boolean;
   forwardings: NATForwarding[];
 }
 export interface NATProfile {
@@ -113,6 +135,7 @@ export interface NATProfile {
   profile_sha256: string;
   public_ipv4: string;
   allow_snat: boolean;
+  allow_internet_egress?: boolean;
   allowed_source_cidrs: string[];
   allowed_ports: { protocol: "tcp" | "udp"; start: number; end: number }[];
 }
@@ -233,7 +256,7 @@ export const validGateway = (v: unknown): v is OverlayGateway =>
   text(v.mac) &&
   /^(?:[a-f0-9]{2}:){5}[a-f0-9]{2}$/.test(v.mac) &&
   array(v.allowed_prefixes, prefix, 32) &&
-  v.allowed_prefixes.length > 0 &&
+  !v.allowed_prefixes.includes("0.0.0.0/0") &&
   unique(v.allowed_prefixes, (x) => x);
 export const validMember = (v: unknown): v is OverlayMember =>
   validMemberInput(v) &&
@@ -445,6 +468,9 @@ export function canonicalSelection(v: OverlaySelection): OverlaySelection {
           profile_id: p.profile_id,
           profile_sha256: p.profile_sha256,
           snat_enabled: p.snat_enabled,
+          ...(p.internet_egress_enabled === true
+            ? { internet_egress_enabled: true }
+            : {}),
           forwardings: p.forwardings
             .map((f) => ({
               id: f.id,
@@ -526,6 +552,9 @@ export const validNATPolicy = (v: unknown): v is NATPolicy =>
   clusterID(v.profile_id) &&
   sha256(v.profile_sha256) &&
   typeof v.snat_enabled === "boolean" &&
+  (v.internet_egress_enabled === undefined ||
+    typeof v.internet_egress_enabled === "boolean") &&
+  (v.internet_egress_enabled !== true || v.snat_enabled === true) &&
   array(v.forwardings, validNATForwarding, 128) &&
   unique(v.forwardings, (f) => f.id);
 export const validNATProfile = (v: unknown): v is NATProfile =>
@@ -537,6 +566,9 @@ export const validNATProfile = (v: unknown): v is NATProfile =>
   sha256(v.profile_sha256) &&
   ipv4(v.public_ipv4) &&
   typeof v.allow_snat === "boolean" &&
+  (v.allow_internet_egress === undefined ||
+    typeof v.allow_internet_egress === "boolean") &&
+  (v.allow_internet_egress !== true || publicIPv4(v.public_ipv4)) &&
   array(v.allowed_source_cidrs, prefix, 32) &&
   array(
     v.allowed_ports,
@@ -640,6 +672,9 @@ export function validSelection(
     if (
       !approved ||
       (p.snat_enabled && !approved.allow_snat) ||
+      (p.internet_egress_enabled === true &&
+        (approved.allow_internet_egress !== true ||
+          !publicIPv4(approved.public_ipv4))) ||
       !selection.gateways.some(
         (g) =>
           g.node_id === p.node_id &&

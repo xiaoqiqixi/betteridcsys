@@ -40,6 +40,7 @@ const source = canonicalSelection(
 );
 const draft = shallowRef<OverlaySelection>(structuredClone(source)),
   recoveryMode = shallowRef("same"),
+  publicConfirmed = shallowRef(false),
   confirmation = shallowRef(""),
   error = shallowRef(""),
   reading = shallowRef(false);
@@ -71,6 +72,14 @@ const replacement = computed(
 );
 const desired = computed(() =>
   replacement.value ? canonicalSelection(draft.value) : source,
+);
+const publicPolicies = computed(() =>
+  (desired.value.nat_policies || []).filter((p) => p.internet_egress_enabled),
+);
+watch(
+  () => JSON.stringify(publicPolicies.value),
+  () => (publicConfirmed.value = false),
+  { flush: "sync" },
 );
 function current(ticket: number, identity: number) {
   return (
@@ -115,7 +124,11 @@ function matching(value: unknown, key: string) {
       });
 }
 async function save() {
-  if (blocked.value || confirmation.value !== expectedConfirmation.value)
+  if (
+    blocked.value ||
+    confirmation.value !== expectedConfirmation.value ||
+    (publicPolicies.value.length > 0 && !publicConfirmed.value)
+  )
     return;
   error.value = "";
   if (
@@ -272,8 +285,35 @@ async function inspect() {
         <dt>{{ tr("NAT 策略", "NAT policies") }}</dt>
         <dd>{{ source.nat_policies?.length || 0 }}</dd>
       </div>
+      <div v-for="policy in source.nat_policies || []" :key="policy.id">
+        <dt>{{ policy.profile_id }} · {{ tr("出口范围", "Egress scope") }}</dt>
+        <dd>
+          {{
+            policy.internet_egress_enabled
+              ? tr("公网 IPv4", "Public IPv4 Internet")
+              : tr("仅指定网段", "Selected prefixes only")
+          }}
+        </dd>
+      </div>
     </dl>
     <form id="overlay-change-form" @submit.prevent="save">
+      <label v-if="publicPolicies.length" class="public-consent">
+        <input v-model="publicConfirmed" type="checkbox" :disabled="blocked" />
+        <span
+          ><strong>{{
+            tr(
+              "允许所选 VPC 访问公网 IPv4",
+              "Allow the selected VPCs to access the IPv4 Internet",
+            )
+          }}</strong>
+          <span>{{
+            tr(
+              "实例将共用所选出口地址访问公网。请确认出口容量与使用范围；私有网段、管理地址及端口映射限制仍然保留。",
+              "Instances will share the selected egress address for Internet access. Confirm the egress capacity and intended scope. Private networks, management addresses and port-mapping restrictions remain protected.",
+            )
+          }}</span>
+        </span>
+      </label>
       <label class="field confirmation"
         ><span>{{
           recover
@@ -308,17 +348,20 @@ async function inspect() {
         >{{ tr("查看原变更", "View original change") }}</RouterLink
       >
     </div>
-    <template #footer
-      ><UiButton
-        :disabled="mutation.busy.value || reading"
-        @click="emit('close')"
-        >{{ tr("取消", "Cancel") }}</UiButton
+    <template #footer="{ close }"
+      ><UiButton :disabled="mutation.busy.value || reading" @click="close">{{
+        tr("取消", "Cancel")
+      }}</UiButton
       ><UiButton
         variant="primary"
         form="overlay-change-form"
         type="submit"
         :busy="mutation.busy.value"
-        :disabled="blocked || confirmation !== expectedConfirmation"
+        :disabled="
+          blocked ||
+          confirmation !== expectedConfirmation ||
+          (publicPolicies.length > 0 && !publicConfirmed)
+        "
         >{{
           recover
             ? tr("提交恢复", "Submit recovery")
@@ -351,6 +394,61 @@ async function inspect() {
   margin-top: 24px;
   border-top: 1px solid var(--border);
 }
+.public-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  margin-top: 24px;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  background: var(--subtle);
+  cursor: pointer;
+  min-height: 44px;
+}
+.public-consent input {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  display: grid;
+  place-content: center;
+  background: var(--surface);
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.public-consent input::before {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid var(--on-accent);
+  border-bottom: 2px solid var(--on-accent);
+  transform: translateY(-1px) rotate(-45deg);
+  opacity: 0;
+}
+.public-consent input:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.public-consent input:checked::before {
+  opacity: 1;
+}
+.public-consent > span {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.public-consent strong {
+  font-weight: 600;
+}
+.public-consent > span > span {
+  color: var(--secondary);
+}
 .confirmation code {
   color: var(--secondary);
   overflow-wrap: anywhere;
@@ -367,6 +465,11 @@ async function inspect() {
   justify-content: space-between;
   gap: 16px;
   font-size: 14px;
+}
+.recovery-summary dt,
+.recovery-summary dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .recovery-summary dt {
   color: var(--secondary);

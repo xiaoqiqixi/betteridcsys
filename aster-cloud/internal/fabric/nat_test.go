@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,7 +116,9 @@ func (f *natFake) RunNamespace(ctx context.Context, p NATProfile, binary string,
 			if f.badRoute {
 				gw = "203.0.113.123"
 			}
-			return []byte(fmt.Sprintf(`[{"dst":"default","gateway":%q,"dev":%q},{"dst":"10.11.0.0/24","dev":%q},{"dst":"198.51.100.0/24","dev":%q}]`, gw, p.OutsideInterface, p.InsideInterface, p.OutsideInterface)), nil
+			public, _ := netip.ParseAddr(p.PublicIPv4)
+			connected := netip.PrefixFrom(public, 24).Masked().String()
+			return []byte(fmt.Sprintf(`[{"dst":"default","gateway":%q,"dev":%q},{"dst":"10.11.0.0/24","dev":%q},{"dst":%q,"dev":%q}]`, gw, p.OutsideInterface, p.InsideInterface, connected, p.OutsideInterface)), nil
 		}
 		if a == "-j -4 rule show" {
 			return []byte(`[{"priority":0,"src":"all","table":"local"},{"priority":32766,"src":"all","table":"main"},{"priority":32767,"src":"all","table":"default"}]`), nil

@@ -342,6 +342,7 @@ function page(value: number | null) {
             v-if="latest"
             :snapshot="latest.snapshot"
             :vpcs="vpcs.data.value?.items"
+            :nat-profiles="options.data.value?.nat_profiles"
           />
           <p v-else class="field-note">
             {{

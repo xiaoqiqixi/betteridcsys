@@ -8,6 +8,8 @@ There is **no live KVM node**: the existing deterministic node RPC test double
 records receipts and loses exactly one `program` acknowledgement. Actual Linux
 NAT packet flow is checked separately in the Ubuntu 22.04/24.04 `native-nat`
 matrix; browser acceptance does not establish physical cross-node reachability.
+The public address `8.8.4.2` in this fixture is **synthetic approval metadata**:
+it is not assigned, contacted, claimed as owned, or configured as a runner route.
 
 ## Reproduce in a disposable Ubuntu 24.04 runner
 
@@ -47,6 +49,14 @@ for the test result. Passing additionally requires database assertions that
 plan, VPC creation, lost-ACK reconciliation and recovery actually persisted,
 and that original financial/node request bytes, network snapshot bytes and
 initial node receipts stayed unchanged. UI success alone is not sufficient.
+The fixture additionally requires exactly **five epochs, two VPCs and thirty
+unique node task POSTs**. Epoch 1 is the original prefix-only snapshot. Through
+visible UI controls, epoch 2 enables public IPv4 Internet while retaining its
+explicit route and DNAT mapping, epoch 3 recovers that selection after the lost
+ACK, epoch 4 disables SNAT/Internet and removes routes/mappings, and epoch 5
+re-enables Internet with **empty explicit route and DNAT lists**. The fourth
+snapshot must stay disabled and unchanged after the fifth is complete. A
+passing report never substitutes a receipt for a different Internet-mode hash.
 The fixture database, credentials, cookies, NSS profile, remaining TLS key,
 private logs and package scratch are removed by the owned cleanup routines.
 
@@ -65,6 +75,13 @@ keyboard focus, Escape, Back/Forward, custom selects, route/NAT editing, VPC
 creation, explicit continuation and read-only receipt reconciliation. Each
 continuation uses at most one POST followed by bounded GET observation; no write
 retry loop hides uncertainty.
+The original coverage and twelve screenshot names remain. Two additional
+`*-public-egress-editor.png` screenshots show the Internet-only editor. Final
+Chinese/light and English/dark overview screenshots are taken after epoch 5 and
+must show its persisted public mode and synthetic egress IPv4. Plan and recovery
+both require the real public-access consent checkbox plus typed confirmation;
+the test never bypasses either by manipulating component state or issuing a
+write through `fetch`.
 
 The notification regression gate also checks that consecutive information notices
 do not accumulate, that a modal excludes background notices from paint/hit/focus,
