@@ -185,11 +185,67 @@ keyboard focus, Escape, Back/Forward, custom selects, route/NAT editing, VPC
 creation, explicit continuation and read-only receipt reconciliation. Each
 continuation uses at most one POST followed by bounded GET observation; no write
 retry loop hides uncertainty.
+
+### Responsive navigation shell
+
+`sidebar-browser.mjs` adds a read-only shell phase on the **actual persisted
+epoch-five network overview**, not an injected tall DOM or mocked response. The
+original business workflow/checks, POST counts and thirteen-epoch proof remain
+unchanged. Shell geometry and interaction evidence is stored independently in
+`report.sidebar_checks`; it does not replace the original business checks.
+
+- At **320, 390, 768, 1024, 1025 and 1440 CSS pixels**, scroll the real document
+  to its top, middle and bottom. Verify a genuinely long page, reachable sticky
+  topbar, main/rail non-overlap, document footer and horizontal bounds. At
+  `<=1024px` only the navigation trigger is present and the workspace uses the
+  full width. Above it, the document-height grid sidebar track is distinct from
+  its **viewport-height sticky `.sidebar-panel`**; track/background height must
+  not be confused with the actual visible navigation panel.
+- At **1440x360 and 1025x360**, the real six-link administrator navigation must
+  overflow. Wheel input scrolls `.sidebar-navigation`, not the page or panel;
+  brand and account remain visible. Tab through every link and sign-out without
+  activating sign-out, checking actual focus, clipping and pointer hit targets.
+- **720x450 and 512x384 CSS viewports** test the reflow equivalents of 200% zoom
+  at 1440x900 and 1024x768. They are explicitly *equivalent CSS viewport* tests,
+  not a claim to have changed browser zoom or tested a physical phone. Changing
+  device pixel ratio is not used as fake zoom evidence.
+- Open the real drawer at the bottom of the long page, verify focus wrap,
+  background `inert` and scroll locking, and close by Escape, backdrop and
+  browser Back. Visible link navigation must reach its actual route and close
+  the drawer. The **1024→1025** transition must consume its overlay history
+  entry, clear scroll/inert state and focus main; focusing a desktop sidebar
+  link then moving **1025→1024** must restore focus to the compact menu trigger.
+  Focus and actually click the visible skip-to-content link in each language;
+  it must focus the main landmark without replacing the hash-router URL.
+- Repeat the breakpoint geometry, short-screen keyboard/scroll and transition
+  gates in English/dark without replacing the Chinese/light evidence. Every
+  shell phase compares business POST/attempt counts before and after: layout
+  testing cannot create an order, network epoch, rule or other resource.
+
+Twelve new **viewport** screenshots are recorded in the separate fixed
+`report.sidebar_screenshots` manifest; the original `report.screenshots` retains
+all fifty-two business PNGs. The complete artifact therefore has **64 PNGs**:
+
+```
+sidebar-320-top.png                 sidebar-320-drawer.png
+sidebar-390-bottom.png              sidebar-390-drawer.png
+sidebar-768-drawer.png              sidebar-1024-drawer.png
+sidebar-1025-middle.png             sidebar-1440-bottom.png
+sidebar-1440-short-nav-bottom.png   sidebar-1025-short-nav-bottom.png
+sidebar-zoom-720-drawer.png         sidebar-zoom-512-drawer.png
+```
+
+Before/after reproduction uses the same signed-in business route and CSS
+viewports. `sidebarLayout(page)` is an exported read-only measurement helper for
+the old bundle; it cannot produce a passing acceptance result. Preserve the
+before failure/viewport images separately from the final run. No baseline mode
+or optional skip disables the mandatory assertions above.
+
 The original fourteen screenshots remain, including the two
 `*-public-egress-editor.png` images showing the Internet-only editor. Eighteen
 additional desktop/mobile images show pool creation, extension, inventory,
 allocation, bound NAT selection, bound leases, reclamation, lease history and
-English/dark lease presentation. Twelve further real images show floating binding and bound/history resources, direct creation and the instance public panel: **44 original PNGs**. Eight additional actual desktop/mobile images cover the custom public-ingress editor, applied allow rules, empty revoked policy and English/dark policy presentation: **52 PNGs total**. New dialogs and list pages are measured at
+English/dark lease presentation. Twelve further real images show floating binding and bound/history resources, direct creation and the instance public panel: **44 original PNGs**. Eight additional actual desktop/mobile images cover the custom public-ingress editor, applied allow rules, empty revoked policy and English/dark policy presentation: **52 business PNGs**, retained alongside the twelve shell PNGs above (**64 total**). New dialogs and list pages are measured at
 1440, 390 and 320 CSS pixels for actual horizontal overflow. Final
 Chinese/light and English/dark overview screenshots are taken after epoch 5 and
 must show its persisted public mode and synthetic egress IPv4. Plan and recovery

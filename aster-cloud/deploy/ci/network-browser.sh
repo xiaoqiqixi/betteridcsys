@@ -248,7 +248,34 @@ assert len(report.get('public_ip_write_attempts', [])) == 16
 assert len(report.get('public_ingress_write_attempts', [])) == 3
 assert report.get('public_ingress_configured_default_deny_moved_revoked') is True
 assert report.get('public_ingress_immutable_operations') is True
-assert len(report.get('screenshots', [])) == 52, 'Required actual direct/floating mobile and desktop screenshots missing'
+business_screenshots = report.get('screenshots', [])
+assert len(business_screenshots) == len(set(business_screenshots)) == 52, 'Original 52 actual business screenshots must remain complete'
+required_sidebar = {
+    'sidebar-320-top.png', 'sidebar-320-drawer.png',
+    'sidebar-390-bottom.png', 'sidebar-390-drawer.png',
+    'sidebar-768-drawer.png', 'sidebar-1024-drawer.png',
+    'sidebar-1025-middle.png', 'sidebar-1440-bottom.png',
+    'sidebar-1440-short-nav-bottom.png', 'sidebar-1025-short-nav-bottom.png',
+    'sidebar-zoom-720-drawer.png', 'sidebar-zoom-512-drawer.png',
+}
+sidebar_screenshots = report.get('sidebar_screenshots', [])
+assert len(sidebar_screenshots) == 12 and set(sidebar_screenshots) == required_sidebar, 'All 12 responsive sidebar screenshots are mandatory'
+assert not set(business_screenshots) & required_sidebar, 'Sidebar evidence cannot replace original business screenshots'
+assert {p.name for p in output.glob('*.png')} == set(business_screenshots) | required_sidebar, 'Exact 64 actual PNG files must match the two disjoint report lists'
+assert len(report.get('checks', [])) >= 162, 'Original business coverage must not be reduced'
+assert report.get('console_errors') == [], 'The real browser must not have JavaScript errors'
+sidebar_checks = report.get('sidebar_checks', [])
+assert len(sidebar_checks) >= 51, 'Responsive geometry and real navigation lifecycle must both execute'
+for mode, count in (('chinese-light', 36), ('english-dark', 15)):
+    entries = [c for c in sidebar_checks if c.get('mode') == mode]
+    assert len(entries) >= count, 'Both language/theme sidebar matrices must execute'
+    for name in ('1024 to 1025 closes drawer, clears inert/history and focuses main',
+                 'focused desktop sidebar becomes a reachable compact menu at 1024px',
+                 'visible drawer navigation closes the overlay and reaches the actual route',
+                 '1440px 360px short-screen independent scroll and keyboard access',
+                 '1025px 360px short-screen independent scroll and keyboard access',
+                 'visible skip-link click focuses main without changing the hash route or making a write'):
+        assert any(c.get('name') == name for c in entries), 'A required sidebar geometry/lifecycle proof is missing'
 assert report.get('public_ip_failed_writes') == [{'method': 'POST', 'path': '/console/v1/public-ips/leases'}], 'Only the single original allocation transport fault is permitted'
 
 for path in output.iterdir():

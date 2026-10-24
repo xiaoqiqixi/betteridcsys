@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { sidebarBrowserAcceptance } from './sidebar-browser.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -570,6 +571,9 @@ try {
   await publicOverview('desktop Chinese light overview displays the persisted public mode and egress address');
   await noOverflow('desktop Chinese light public overview has no horizontal overflow');
   await screenshot('desktop-network');
+  phase = 'responsive-sidebar';
+  await sidebarBrowserAcceptance({ page, output, report });
+  phase = 'navigation-appearance';
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '语言与外观', exact: true }).click();
   await pick('界面语言', 'English');
@@ -604,6 +608,7 @@ try {
   await publicOverview('desktop English dark overview displays the persisted public mode and egress address', true);
   await screenshot('desktop-network-english-dark');
   await noOverflow('desktop English dark page has no horizontal overflow');
+  await sidebarBrowserAcceptance({ page, output, report, capture: false, english: true });
   // Read only rendered text to catch accidental raw ISO rendering; never serialize DOM.
   assert(!/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+Z/.test(await page.locator('main').innerText()));
   check('visible dates are localized, not raw microsecond ISO values');

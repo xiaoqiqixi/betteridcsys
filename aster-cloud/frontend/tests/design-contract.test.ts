@@ -120,6 +120,23 @@ describe("design contracts (static tokens, not browser computed)", () => {
       ":title=\"tr('语言与外观', 'Language & appearance')\"",
     );
   });
+  it("separates the full-page sidebar track from its independently scrolling viewport panel", () => {
+    const app = readFileSync(resolve(root, "App.vue"), "utf8");
+    const shell = app.match(/\.console-shell\s*\{([^}]+)\}/)?.[1];
+    expect(shell).toContain("display: grid");
+    expect(shell).toContain("minmax(0, 1fr)");
+    const track = app.match(/\.sidebar\s*\{([^}]+)\}/)?.[1];
+    expect(track).toContain("background: var(--sidebar-bg)");
+    expect(track).not.toContain("position: fixed");
+    const panel = app.match(/\.sidebar-panel\s*\{([^}]+)\}/)?.[1];
+    expect(panel).toContain("position: sticky");
+    expect(panel).toContain("height: 100dvh");
+    const nav = app.match(/\.sidebar-navigation\s*\{([^}]+)\}/)?.[1];
+    expect(nav).toContain("min-height: 0");
+    expect(nav).toContain("overflow-y: auto");
+    expect(app).toContain("@media (max-width: 1024px)");
+    expect(app).not.toContain("margin-left: 232px");
+  });
   it("lets drawer content fill remaining height and lets closing surfaces stop intercepting new input", () => {
     const overlay = readFileSync(
       resolve(root, "components/UiOverlay.vue"),

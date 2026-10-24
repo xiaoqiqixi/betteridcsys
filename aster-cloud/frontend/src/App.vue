@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, provide, shallowRef } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  shallowRef,
+  useTemplateRef,
+  watch,
+} from "vue";
 import { RouterView, useRoute } from "vue-router";
 import { Server, Menu, SlidersHorizontal, LogOut } from "@lucide/vue";
 import { createApiClient } from "./api/client";
@@ -26,6 +35,11 @@ const { notices, notify, dismiss, pause, resume } = useNotices(
 );
 const mobileOpen = shallowRef(false),
   preferencesOpen = shallowRef(false);
+const sidebar = useTemplateRef<HTMLElement>("sidebar"),
+  navigationTrigger = useTemplateRef<HTMLButtonElement>("navigationTrigger"),
+  mainContent = useTemplateRef<HTMLElement>("mainContent");
+let navigationMedia: MediaQueryList | undefined,
+  lastNavigationFocus: HTMLElement | null = null;
 provide(consoleKey, { api, session, prefs, notify });
 const pageTitle = computed(() =>
   route.path.startsWith("/nodes")
@@ -72,19 +86,92 @@ function appearance(value: string) {
 function focus() {
   if (session.user.value && !session.busy.value) void session.refresh();
 }
+function skipToContent() {
+  mainContent.value?.focus();
+}
+function rememberNavigationFocus(event: FocusEvent) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (sidebar.value?.contains(target) || target === navigationTrigger.value)
+    lastNavigationFocus = target;
+  else if (target !== document.body && target !== document.documentElement)
+    lastNavigationFocus = null;
+}
+function clearNavigationPointerFocus(event: PointerEvent) {
+  const target = event.target;
+  if (
+    target instanceof Node &&
+    !sidebar.value?.contains(target) &&
+    !navigationTrigger.value?.contains(target)
+  )
+    lastNavigationFocus = null;
+}
+function navigationViewportChanged(
+  event: Pick<MediaQueryListEvent, "matches">,
+) {
+  // display:none can blur a link to BODY before the media event. Remember
+  // only navigation focus, clearing it when the user interacts elsewhere.
+  const current = document.activeElement;
+  const active =
+    (current === document.body || current === document.documentElement) &&
+    lastNavigationFocus?.isConnected
+      ? lastNavigationFocus
+      : current;
+  if (event.matches) {
+    if (active instanceof Node && sidebar.value?.contains(active))
+      void nextTick(() => {
+        if (navigationMedia?.matches) navigationTrigger.value?.focus();
+      });
+    return;
+  }
+  // Consume the drawer's own history/scroll lock through UiOverlay cleanup.
+  // Never leave an open modal over the desktop or restore focus to a hidden
+  // mobile trigger after crossing the navigation breakpoint.
+  if (mobileOpen.value || active === navigationTrigger.value) {
+    mobileOpen.value = false;
+    void nextTick(() => {
+      if (navigationMedia && !navigationMedia.matches)
+        mainContent.value?.focus({ preventScroll: true });
+    });
+  }
+}
+watch(
+  () => route.fullPath,
+  () => (mobileOpen.value = false),
+);
+watch(
+  () => session.user.value?.id,
+  () => {
+    mobileOpen.value = false;
+    lastNavigationFocus = null;
+  },
+);
 onMounted(() => {
   void session.refresh();
+  navigationMedia = matchMedia("(max-width: 1024px)");
+  navigationMedia.addEventListener("change", navigationViewportChanged);
+  document.addEventListener("focusin", rememberNavigationFocus);
+  document.addEventListener("pointerdown", clearNavigationPointerFocus);
   window.addEventListener("focus", focus);
 });
 onBeforeUnmount(() => {
   prefs.dispose();
+  navigationMedia?.removeEventListener("change", navigationViewportChanged);
+  navigationMedia = undefined;
+  lastNavigationFocus = null;
+  document.removeEventListener("focusin", rememberNavigationFocus);
+  document.removeEventListener("pointerdown", clearNavigationPointerFocus);
   window.removeEventListener("focus", focus);
 });
 </script>
 <template>
-  <a class="skip-link" href="#main-content">{{
-    tr("跳到主要内容", "Skip to content")
-  }}</a>
+  <a
+    v-if="session.user.value"
+    class="skip-link"
+    href="#main-content"
+    @click.prevent="skipToContent"
+    >{{ tr("跳到主要内容", "Skip to content") }}</a
+  >
   <div v-if="!session.ready.value" class="boot-state">
     <div class="boot-mark"><Server :size="26" aria-hidden="true" />Aster</div>
     <StateBlock loading />
@@ -104,45 +191,50 @@ onBeforeUnmount(() => {
     <LoginPage
   /></template>
   <div v-else class="console-shell">
-    <aside class="sidebar">
-      <a class="brand" href="#/instances"
-        ><span class="brand-symbol"
-          ><Server :size="21" aria-hidden="true" /></span
-        ><span
-          >Aster<span class="brand-subtitle">{{
-            tr("云管理", "Cloud console")
-          }}</span></span
-        ></a
-      ><NavLinks tone="sidebar" />
-      <div class="sidebar-account">
-        <div class="account-avatar">
-          {{
-            (session.user.value.name || session.user.value.email)
-              .slice(0, 1)
-              .toLocaleUpperCase()
-          }}
+    <aside ref="sidebar" class="sidebar">
+      <div class="sidebar-panel">
+        <a class="brand" href="#/instances"
+          ><span class="brand-symbol"
+            ><Server :size="21" aria-hidden="true" /></span
+          ><span
+            >Aster<span class="brand-subtitle">{{
+              tr("云管理", "Cloud console")
+            }}</span></span
+          ></a
+        ><NavLinks tone="sidebar" class="sidebar-navigation" />
+        <div class="sidebar-account">
+          <div class="account-avatar">
+            {{
+              (session.user.value.name || session.user.value.email)
+                .slice(0, 1)
+                .toLocaleUpperCase()
+            }}
+          </div>
+          <div class="account-info">
+            <strong>{{ session.user.value.name }}</strong
+            ><span>{{ roleText }}</span>
+          </div>
+          <button
+            type="button"
+            class="sidebar-logout"
+            :disabled="session.busy.value"
+            :aria-label="tr('退出登录', 'Sign out')"
+            @click="session.logout"
+          >
+            <LogOut :size="18" aria-hidden="true" />
+          </button>
         </div>
-        <div class="account-info">
-          <strong>{{ session.user.value.name }}</strong
-          ><span>{{ roleText }}</span>
-        </div>
-        <button
-          type="button"
-          class="sidebar-logout"
-          :disabled="session.busy.value"
-          :aria-label="tr('退出登录', 'Sign out')"
-          @click="session.logout"
-        >
-          <LogOut :size="18" aria-hidden="true" />
-        </button>
       </div>
     </aside>
     <div class="console-workspace">
       <header class="topbar">
         <div class="topbar-leading">
           <button
+            ref="navigationTrigger"
             class="icon-button mobile-menu"
             type="button"
+            :aria-expanded="mobileOpen"
+            aria-haspopup="dialog"
             :aria-label="tr('打开导航', 'Open navigation')"
             @click="mobileOpen = true"
           >
@@ -163,7 +255,12 @@ onBeforeUnmount(() => {
           }}</span>
         </button>
       </header>
-      <main id="main-content" class="main-content" tabindex="-1">
+      <main
+        ref="mainContent"
+        id="main-content"
+        class="main-content"
+        tabindex="-1"
+      >
         <InlineError
           v-if="session.error.value"
           :error="session.error.value"
@@ -258,20 +355,33 @@ onBeforeUnmount(() => {
   z-index: 20;
 }
 .console-shell {
-  display: flex;
+  --sidebar-width: clamp(216px, 18vw, 232px);
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100dvh;
 }
 .sidebar {
-  width: 232px;
-  flex-shrink: 0;
-  position: fixed;
-  inset: 0 auto 0 0;
+  min-width: 0;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
-  padding: 30px 18px 18px;
+}
+.sidebar-panel {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  min-height: 0;
+  padding: clamp(16px, 3dvh, 30px) 18px 18px;
   display: flex;
   flex-direction: column;
-  z-index: 40;
+  overflow-y: auto;
+}
+.sidebar-navigation {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sidebar-border) var(--sidebar-bg);
 }
 .brand {
   display: flex;
@@ -280,7 +390,8 @@ onBeforeUnmount(() => {
   color: var(--sidebar-text);
   text-decoration: none;
   padding: 0 12px;
-  margin-bottom: 42px;
+  margin-bottom: clamp(12px, 4dvh, 42px);
+  flex-shrink: 0;
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.025em;
@@ -292,6 +403,7 @@ onBeforeUnmount(() => {
   place-items: center;
   border: 1px solid var(--sidebar-border);
   border-radius: 10px;
+  flex-shrink: 0;
 }
 .brand-subtitle {
   display: block;
@@ -302,7 +414,8 @@ onBeforeUnmount(() => {
   letter-spacing: 0.02em;
 }
 .sidebar-account {
-  margin-top: auto;
+  margin-top: 16px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -336,8 +449,9 @@ onBeforeUnmount(() => {
   margin-top: 5px;
 }
 .sidebar-logout {
-  width: 36px;
+  width: 44px;
   height: 44px;
+  flex-shrink: 0;
   display: grid;
   place-items: center;
   background: none;
@@ -349,8 +463,6 @@ onBeforeUnmount(() => {
   background: var(--sidebar-hover);
 }
 .console-workspace {
-  margin-left: 232px;
-  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -404,6 +516,7 @@ onBeforeUnmount(() => {
 }
 .main-content {
   flex: 1;
+  min-width: 0;
   width: 100%;
   outline: none;
 }
@@ -428,27 +541,12 @@ onBeforeUnmount(() => {
   gap: 24px;
   min-height: 200px;
 }
-@media (max-width: 900px) {
-  .sidebar {
-    width: 204px;
-    padding-inline: 12px;
+@media (max-width: 1024px) {
+  .console-shell {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .console-workspace {
-    margin-left: 204px;
-  }
-  .topbar {
-    padding-inline: 28px;
-  }
-  .workspace-footer {
-    padding-inline: 28px;
-  }
-}
-@media (max-width: 720px) {
   .sidebar {
     display: none;
-  }
-  .console-workspace {
-    margin-left: 0;
   }
   .topbar {
     height: 64px;
