@@ -222,6 +222,14 @@ unchanged. Shell geometry and interaction evidence is stored independently in
   shell phase compares business POST/attempt counts before and after: layout
   testing cannot create an order, network epoch, rule or other resource.
 
+The desktop navigation scrollport explicitly uses `tabindex="-1"`: its real
+links provide the keyboard stops and auto-scroll into view. This avoids relying
+on browser-dependent implicit scroller focus. [Mozilla's scroller-focus
+report](https://bugzilla.mozilla.org/show_bug.cgi?id=1069739) documents the
+behavior difference; it is background, not a replacement for the real Firefox
+Tab assertions above. A failed assertion exports only fixed focus identities
+(tag, known shell elements and link index), never text, DOM or credentials.
+
 Twelve new **viewport** screenshots are recorded in the separate fixed
 `report.sidebar_screenshots` manifest; the original `report.screenshots` retains
 all fifty-two business PNGs. The complete artifact therefore has **64 PNGs**:

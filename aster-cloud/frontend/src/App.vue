@@ -201,7 +201,7 @@ onBeforeUnmount(() => {
               tr("云管理", "Cloud console")
             }}</span></span
           ></a
-        ><NavLinks tone="sidebar" class="sidebar-navigation" />
+        ><NavLinks tone="sidebar" class="sidebar-navigation" tabindex="-1" />
         <div class="sidebar-account">
           <div class="account-avatar">
             {{

@@ -182,7 +182,19 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     for (let i = 0; i < count; i++) {
       await page.keyboard.press('Tab');
       const link = links.nth(i);
-      assert.equal(await link.evaluate(el => document.activeElement === el), true, 'Tab must follow every real sidebar link');
+      const focused = await link.evaluate(el => document.activeElement === el);
+      if (!focused) {
+        const identity = await page.evaluate(() => {
+          const active = document.activeElement;
+          return { tag: active?.tagName || '', navigation: active === document.querySelector('.sidebar-navigation'),
+            panel: active === document.querySelector('.sidebar-panel'), body: active === document.body,
+            main: active === document.querySelector('#main-content'), skip: active === document.querySelector('.skip-link'),
+            brand: active === document.querySelector('.sidebar .brand'), logout: active === document.querySelector('.sidebar-logout'),
+            link_index: [...document.querySelectorAll('.sidebar-navigation a')].indexOf(active) };
+        });
+        report.sidebar_focus_failure = { width, expected_link_index: i, ...identity };
+        assert.fail(`Tab must follow every real sidebar link: expected=${i}, actual=${JSON.stringify(identity)}`);
+      }
       await hitAndFocus(page, link, '.sidebar-navigation');
     }
     await page.keyboard.press('Tab');

@@ -201,6 +201,44 @@ describe("real app responsive navigation lifecycle", () => {
     expect(f.writes).toEqual([]);
   });
 
+  it("keeps only the desktop scrollport out of sequential focus while its real links remain keyboard destinations", async () => {
+    const f = await shellFixture(false);
+    const desktopNav = f.wrapper.get<HTMLElement>("nav.sidebar-navigation");
+    expect(desktopNav.attributes("tabindex")).toBe("-1");
+    expect(desktopNav.element.tabIndex).toBe(-1);
+    const desktopLinks = desktopNav.findAll<HTMLAnchorElement>("a[href]");
+    expect(desktopLinks.length).toBeGreaterThan(0);
+    const validLink = (link: HTMLAnchorElement) => {
+      expect(link.tabIndex).toBe(0);
+      const href = link.getAttribute("href");
+      expect(href).toMatch(/^#\//);
+      expect(new URL(link.href).origin).toBe(location.origin);
+      expect(f.router.resolve(href!.slice(1)).matched.length).toBeGreaterThan(
+        0,
+      );
+    };
+    for (const link of desktopLinks) validLink(link.element);
+    f.compactMedia.change(true);
+    await flushPromises();
+    await f.openNavigation();
+    const surfaceNav = f
+      .dialog()
+      ?.querySelector<HTMLElement>("nav.tone-surface");
+    expect(surfaceNav).toBeInstanceOf(HTMLElement);
+    expect(surfaceNav!.hasAttribute("tabindex")).toBe(false);
+    expect(surfaceNav!.classList.contains("sidebar-navigation")).toBe(false);
+    const surfaceLinks = [
+      ...surfaceNav!.querySelectorAll<HTMLAnchorElement>("a[href]"),
+    ];
+    expect(surfaceLinks.map((link) => link.getAttribute("href"))).toEqual(
+      desktopLinks.map((link) => link.attributes("href")),
+    );
+    for (const link of surfaceLinks) validLink(link);
+    expect(f.writes).toEqual([]);
+    // Native Firefox Tab order is checked strictly by the browser harness;
+    // jsdom only proves that the actual App attributes reach the intended nav.
+  });
+
   it("closes at the desktop boundary, restores main focus and never resurrects the drawer when compact returns", async () => {
     const f = await shellFixture();
     await f.openNavigation();
