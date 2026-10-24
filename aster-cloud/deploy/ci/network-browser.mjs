@@ -1227,7 +1227,7 @@ try {
   report.failure = { phase, kind: error instanceof Error ? error.name : 'Error', message: safeMessage(error) };
   // No raw error object/stack or HTML. A screenshot is safe only on a signed-in business page.
   if (signedIn && page && !page.isClosed()) {
-    try { await screenshot('failure'); } catch { /* Do not mask the original failure. */ }
+    try { await screenshot('failure', false); } catch { /* Do not mask the original failure. */ }
   }
   console.error(`FAIL ${phase}: ${safeMessage(error)}`);
   process.exitCode = 1;

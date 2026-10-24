@@ -50,19 +50,28 @@ export async function sidebarLayout(page) {
   });
 }
 
-async function hitAndFocus(page, locator, bounds) {
+async function hitAndFocus(page, locator, bounds, onFailure) {
   await locator.focus();
   await settle(page);
   const result = await locator.evaluate((el, bounds) => {
     const r = el.getBoundingClientRect(), clip = bounds ? document.querySelector(bounds)?.getBoundingClientRect() : null;
     const x = r.left + r.width / 2, y = r.top + r.height / 2;
     const top = document.elementFromPoint(x, y);
-    return { focused: document.activeElement === el, visible: r.width > 0 && r.height > 0,
+    const checks = { focused: document.activeElement === el, visible: r.width > 0 && r.height > 0,
       in_viewport: r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1,
       in_clip: !clip || r.top >= clip.top - 1 && r.bottom <= clip.bottom + 1 && r.left >= clip.left - 1 && r.right <= clip.right + 1,
       hit: !!top && (top === el || el.contains(top)) };
+    const box = rect => rect ? Object.fromEntries(['left','top','right','bottom'].map(key => [key,Math.round(rect[key] * 100) / 100])) : null;
+    const region = bounds ? document.querySelector(bounds) : null;
+    return { checks, width: innerWidth, height: innerHeight, tag: el.tagName,
+      link_index: [...document.querySelectorAll('.sidebar-navigation a')].indexOf(el),
+      logout: el === document.querySelector('.sidebar-logout'), bounds: bounds || '',
+      target_rect: box(r), clip_rect: box(clip), clip_scroll_top: region?.scrollTop ?? null };
   }, bounds);
-  assert(Object.values(result).every(Boolean), `Shell control is clipped, obscured or unreachable: ${JSON.stringify(result)}`);
+  if (!Object.values(result.checks).every(Boolean)) {
+    onFailure?.(result);
+    assert.fail(`Shell control is clipped, obscured or unreachable: ${JSON.stringify(result)}`);
+  }
   return result;
 }
 
@@ -71,6 +80,7 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
   const writeCount = () => report.requests.filter(r => r.method === 'POST').length;
   const writes = writeCount(), ingressWrites = report.public_ingress_write_attempts.length,
     publicWrites = report.public_ip_write_attempts.length;
+  let completed = false;
   report.sidebar_checks ??= [];
   report.sidebar_screenshots ??= [];
   function passed(name, evidence = {}) {
@@ -173,7 +183,7 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     const after = await sidebarLayout(page);
     assert(Math.abs(after.scroll_y - before.scroll_y) <= 1, 'Scrolling sidebar navigation must not scroll the business document');
     assert(Math.abs(after.brand.top - before.brand.top) <= 1 && Math.abs(after.account.bottom - before.account.bottom) <= 1);
-    await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel');
+    await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel', evidence => { report.sidebar_control_failure = evidence; });
     await image(name);
     await page.locator('.sidebar .brand').focus();
     const links = page.locator('.sidebar-navigation a');
@@ -195,11 +205,11 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
         report.sidebar_focus_failure = { width, expected_link_index: i, ...identity };
         assert.fail(`Tab must follow every real sidebar link: expected=${i}, actual=${JSON.stringify(identity)}`);
       }
-      await hitAndFocus(page, link, '.sidebar-navigation');
+      await hitAndFocus(page, link, '.sidebar-navigation', evidence => { report.sidebar_control_failure = evidence; });
     }
     await page.keyboard.press('Tab');
     assert.equal(await page.locator('.sidebar-logout').evaluate(el => document.activeElement === el),true, 'The real tab sequence must reach sign-out without activating it');
-    await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel');
+    await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel', evidence => { report.sidebar_control_failure = evidence; });
     passed(`${width}px 360px short-screen independent scroll and keyboard access`, { links: count, before, after });
   }
 
@@ -262,8 +272,13 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     assert.equal(report.public_ingress_write_attempts.length,ingressWrites);
     assert.equal(report.public_ip_write_attempts.length,publicWrites);
     if (capture) assert.deepEqual([...report.sidebar_screenshots].sort(),[...SIDEBAR_SCREENSHOTS].sort());
+    completed = true;
   } finally {
-    await size(originalViewport.width,originalViewport.height);
-    if (page.url() === originalURL && await page.getByRole('dialog').count() === 0) await scrollPage(page,'top');
+    // Do not erase a real short-screen failure before the caller captures its
+    // signed-in failure.png. Only a complete passing phase restores the viewport.
+    if (completed) {
+      await size(originalViewport.width,originalViewport.height);
+      if (page.url() === originalURL && await page.getByRole('dialog').count() === 0) await scrollPage(page,'top');
+    }
   }
 }
