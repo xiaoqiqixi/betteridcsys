@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
+import { compileStyle, parse } from "@vue/compiler-sfc";
 import { auditNames } from "../src/format";
 const root = resolve(import.meta.dirname, "../src");
 const css = readFileSync(resolve(root, "style.css"), "utf8");
@@ -28,6 +29,24 @@ const themes = [
   ),
 );
 describe("design contracts (static tokens, not browser computed)", () => {
+  it("compiles the modal notification rule without hiding the entire application", () => {
+    const source = readFileSync(
+      resolve(root, "components/ToastStack.vue"),
+      "utf8",
+    );
+    const { descriptor } = parse(source);
+    const style = descriptor.styles.find((entry) => entry.scoped)!;
+    const result = compileStyle({
+      source: style.content,
+      filename: "ToastStack.vue",
+      id: "data-v-toast-contract",
+      scoped: true,
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.code).toMatch(/#app\[inert\]\s+\.toast-stack/);
+    expect(result.code).toMatch(/#app\[inert\]\s+\.toast-item/);
+    expect(result.code).not.toMatch(/#app\[inert\]\s*\{/);
+  });
   it("keeps mobile navigation on the overlay surface and names the compact preferences control", () => {
     const nav = readFileSync(resolve(root, "components/NavLinks.vue"), "utf8");
     const app = readFileSync(resolve(root, "App.vue"), "utf8");
