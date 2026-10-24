@@ -580,6 +580,11 @@ func TestMySQLConsoleHTTPSessionsRBACAndExplicitDispatch(t *testing.T) {
 			if status != 200 || json.Unmarshal(raw, &detail) != nil || len(detail.Artifacts) != tc.artifacts || len(detail.Migrations) != tc.migrations {
 				t.Fatal("metadata permission boundary", status, len(detail.Artifacts), len(detail.Migrations))
 			}
+			for _, historical := range detail.Migrations {
+				if historical.SourceRetirementState != "" || historical.SourceRetirementOperationID != "" {
+					t.Fatal("historical storage/1 metadata invented a retirement receipt")
+				}
+			}
 			consoleHTTPPrivateCheck(t, raw, tc.browser, c)
 			for _, private := range []string{strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), `"fence_token"`, `"manifest_sha256"`, `"target_profile_sha256"`} {
 				if strings.Contains(string(raw), private) {

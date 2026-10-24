@@ -424,11 +424,55 @@ func (f *publicVMFixture) addTarget(t *testing.T) NodeProfile {
 	if e := f.store.Heartbeat(context.Background(), p, caps, f.now, time.Minute); e != nil {
 		t.Fatal(e)
 	}
+	// Registration is fail closed: a healthy heartbeat alone must never open
+	// admission. The fixture must perform the same explicit operator release
+	// required by real nodes, rather than weakening the migration capacity gate.
+	if e := f.store.Maintenance(context.Background(), p.ID, false); e != nil {
+		t.Fatal(e)
+	}
 	if !f.config.Valid() {
 		t.Fatal("target config")
 	}
 	return p
 }
+
+func TestMySQLPublicVMDirectMigrationRequiresExplicitTargetMaintenanceRelease(t *testing.T) {
+	f := mysqlPublicVMFixture(t)
+	target := f.addTarget(t)
+	ctx := context.Background()
+	created := f.create(t)
+	w := f.worker()
+	if _, e := w.Dispatch(ctx, created.ID); e != nil {
+		t.Fatal(e)
+	}
+	f.power(t, created.InstanceID, "shutdown")
+	if e := f.store.Maintenance(ctx, target.ID, true); e != nil {
+		t.Fatal(e)
+	}
+	root := f.config.DirectPublicProfiles[1]
+	caps := testCapabilities(target, f.now)
+	caps.NetworkProfiles = append(caps.NetworkProfiles, nodeproto.DirectPublicCapability)
+	caps.DirectPublicNetwork = &nodeproto.DirectPublicApproval{ProfileID: root.ProfileID, ProfileSHA256: root.ProfileSHA256, CIDR: root.CIDR, Gateway: root.GatewayIPv4, Addresses: root.PublicIPv4s}
+	if e := f.store.Heartbeat(ctx, target, caps, f.now, time.Minute); e != nil {
+		t.Fatal(e)
+	}
+	input := OperationInput{Action: "migrate_prepare", Confirmation: created.InstanceID, TargetNodeID: target.ID}
+	key := id()
+	if _, _, e := f.store.CreateOperation(ctx, f.config, f.actor, created.InstanceID, key, input, f.now); !errors.Is(e, ErrCapacity) {
+		t.Fatal("heartbeat silently released target maintenance", e)
+	}
+	var intents int
+	if e := f.store.DB.QueryRow("SELECT COUNT(*) FROM controller_public_ip_bindings WHERE id=?", key).Scan(&intents); e != nil || intents != 0 {
+		t.Fatal("closed target left a migration intent", intents, e)
+	}
+	if e := f.store.Maintenance(ctx, target.ID, false); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e := f.store.CreateOperation(ctx, f.config, f.actor, created.InstanceID, key, input, f.now); e != nil {
+		t.Fatal("explicit healthy target release did not open admission", e)
+	}
+}
+
 func TestMySQLPublicVMDirectMigrationFrozenGenerationBoundaries(t *testing.T) {
 	for _, kind := range []string{"rejected_prepare_retry", "old_prepare_on_new_generation", "unknown_source_no_new_key"} {
 		t.Run(kind, func(t *testing.T) {
@@ -686,6 +730,14 @@ func TestMySQLPublicVMRetireRequiresExactRealTargetReceipt(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	migration, e := scanMigration(f.store.DB.QueryRowContext(ctx, "SELECT "+migrationColumns+" FROM controller_migrations WHERE id=?", prepare.ID))
+	if e != nil {
+		t.Fatal(e)
+	}
+	console := Console{Store: f.store}
+	if e = console.retirementView(ctx, &migration); e != nil || migration.SourceRetirementState != "required" || migration.SourceRetirementOperationID != "" {
+		t.Fatal("storage/2 retirement requirement was hidden", migration, e)
+	}
 	input := OperationInput{Action: "migrate_retire_source", Confirmation: created.ID, ArtifactID: prepare.ID}
 	if _, _, e = f.store.CreateOperation(ctx, f.config, f.actor, created.ID, id(), input, f.now); !errors.Is(e, ErrState) {
 		t.Fatal("browser bool/fake proof admitted", e)
@@ -693,6 +745,9 @@ func TestMySQLPublicVMRetireRequiresExactRealTargetReceipt(t *testing.T) {
 	retire, _, e := w.CreateRetireSource(ctx, f.actor, created.ID, id(), input)
 	if e != nil {
 		t.Fatal("verified target planning", e)
+	}
+	if e = console.retirementView(ctx, &migration); e != nil || migration.SourceRetirementState != "pending" || migration.SourceRetirementOperationID != retire.ID {
+		t.Fatal("retirement ACK became success", migration, e)
 	}
 	typed, e := nodeproto.DecodeStorageTask(retire.Request)
 	if e != nil || typed.RetireProof.IsZero() || typed.DirectPublic.NodeID != f.node.ID || typed.DirectPublic.Generation != 1 {
@@ -716,6 +771,9 @@ func TestMySQLPublicVMRetireRequiresExactRealTargetReceipt(t *testing.T) {
 	}
 	if e = f.store.DB.QueryRow("SELECT released FROM controller_reservations WHERE operation_id=?", created.ID).Scan(&released); e != nil || !released {
 		t.Fatal("exact retirement failed", released, e)
+	}
+	if e = console.retirementView(ctx, &migration); e != nil || migration.SourceRetirementState != "succeeded" || migration.SourceRetirementOperationID != retire.ID {
+		t.Fatal("exact retirement receipt was not projected", migration, e)
 	}
 }
 
