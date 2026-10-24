@@ -12,14 +12,14 @@
 - 节点不运行外部传入 shell；仅允许预定义动作、审批镜像、存储和网络。客户端提供路径、XML、SSH 命令或下载 URL 均不是合法资源参数。
 - 被控面向 Ubuntu 22.04 及以上的 amd64 宿主机。每个发行版必须单独经过 doctor、真 KVM 和重启恢复验收；不能把交叉编译称为全版本兼容。
 
-本轮包含独立管理台、staff RBAC、实例动作，以及旧普通网络实例的停止态快照/备份与四阶段冷迁移。此前独立的 OVS CLI 核心现已通过 **MySQL 同事务 IPAM/任务绑定 → `aster.node/2` → 节点持久绑定 → fabric 启停门禁** 接入显式 VPC 创建/启动：先整桥隔离、paused/link-down 启动，再核验 TAP 身份与实时 flow/meter，最后放行；停机先隔离并清除旧端口规则。基础合同仍是单宿主私有 IPv4；新显式 `aster.overlay/1` 已连接全局 VPC/三阶段主控任务、固定 VXLAN peer、批准网关转发与原 VM 启停 gate。新实例先完成全组 epoch 再创建，失败使用新 recovery epoch。详见 [网络合同与恢复](docs/OVERLAY_DESIGN.md)。现增加 root 批准的独立 namespace IPv4 SNAT、TCP/UDP 单端口 DNAT，以及后台 VPC、成员、路由、NAT 和恢复管理；仅允许已批准前缀，不是无限制 Internet 出口，也不代表公网/跨节点连通性已验收。OVS 实例明确拒绝旧存储/迁移合同及旧仅观察电源状态的 reconcile，另有显式网络恢复流程，重启须显式关机再启动。热迁移、租户 SSO 和生产宿主验收也不在已完成范围。具体实现、支持范围、命令和测试结果见下列记录；当前禁止直接用于真实客户销售。没有用假按钮、内存数据或模拟执行器冒充已完成的主控功能。
+本轮包含独立管理台、staff RBAC、实例动作，以及旧普通网络实例的停止态快照/备份与四阶段冷迁移。此前独立的 OVS CLI 核心现已通过 **MySQL 同事务 IPAM/任务绑定 → `aster.node/2` → 节点持久绑定 → fabric 启停门禁** 接入显式 VPC 创建/启动：先整桥隔离、paused/link-down 启动，再核验 TAP 身份与实时 flow/meter，最后放行；停机先隔离并清除旧端口规则。基础合同仍是单宿主私有 IPv4；新显式 `aster.overlay/1` 已连接全局 VPC/三阶段主控任务、固定 VXLAN peer、批准网关转发与原 VM 启停 gate。新实例先完成全组 epoch 再创建，失败使用新 recovery epoch。详见 [网络合同与恢复](docs/OVERLAY_DESIGN.md)。现增加 root 批准的独立 namespace IPv4 SNAT、TCP/UDP 单端口 DNAT，以及后台 VPC、成员、路由、NAT 和恢复管理；出口现支持独立批准的公网 IPv4 模式，可在后台启停与恢复，不再要求逐个批准公网目的前缀；管理网、underlay、元数据及私网隔离保留，物理公网/跨节点连通性仍未验收。OVS 实例明确拒绝旧存储/迁移合同及旧仅观察电源状态的 reconcile，另有显式网络恢复流程，重启须显式关机再启动。热迁移、租户 SSO 和生产宿主验收也不在已完成范围。具体实现、支持范围、命令和测试结果见下列记录；当前禁止直接用于真实客户销售。没有用假按钮、内存数据或模拟执行器冒充已完成的主控功能。
 
 - [功能与验收矩阵](docs/ARCHITECTURE.md)
 - [本轮开发验证](docs/VALIDATION.md) · [管理台与资源 API](docs/CONSOLE_API.md) · [日志与审计](docs/LOGGING.md)
 - [主控运维](deploy/controller-OPERATIONS.md) · [KVM 被控运维](NODE_README.md)
 - [术语](GLOSSARY.md)
 - [KVM 加强版逐项差距](docs/KVM_ENHANCED_PARITY.md) · [网络/IPAM API](docs/NETWORK_API.md) · [OVS 核心与嵌入门禁](internal/fabric/README.md) · [本轮 OVS 集成验收记录](docs/OVS_VM_GATE_VALIDATION.md)
-- [后台网络管理合同](docs/NETWORK_MANAGEMENT.md) · [NAT 执行与审批边界](internal/fabric/NAT.md) · [NAT 与网络管理验收记录](docs/NAT_NETWORK_VALIDATION.md)
+- [公网 NAT 出口](docs/PUBLIC_NAT_EGRESS.md) · [后台网络管理合同](docs/NETWORK_MANAGEMENT.md) · [NAT 执行与审批边界](internal/fabric/NAT.md) · [NAT 与网络管理验收记录](docs/NAT_NETWORK_VALIDATION.md)
 - [既有财务资源适配 CLI](plugins/billingconnector/README.md) · [财务系统插件管理器 resource transport](../vps-billing/docs/RESOURCE_PLUGINS.md)
 - 财务产品配置合同：[PRODUCT_CONFIGURATION.md](../vps-billing/docs/PRODUCT_CONFIGURATION.md)
 

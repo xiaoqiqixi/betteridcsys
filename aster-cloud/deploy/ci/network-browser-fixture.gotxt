@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,6 +38,20 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	}
 	f := mysqlOverlayFixture(t)
 	gateway, policies := f.approveNAT(t)
+	// Safe controller projection only: the synthetic public address is never
+	// configured on the runner and the node RPC remains an explicit substitute.
+	// Epoch 1 retains the legacy prefix-only policy; the real UI selects public
+	// Internet mode in epoch 2, disables it in epoch 4 and re-enables it without
+	// any explicit destination prefixes in epoch 5.
+	f.config.OverlayClusters[0].NATProfiles[0].AllowInternetEgress = true
+	f.config.OverlayClusters[0].NATProfiles[0].PublicIPv4 = "8.8.4.2"
+	// Legal maximum-length unbroken ID exercises real mobile wrapping, not
+	// just a short display fixture or a component-only layout assertion.
+	f.config.OverlayClusters[0].NATProfiles[0].ProfileID = strings.Repeat("w", 64)
+	policies[0].ProfileID = f.config.OverlayClusters[0].NATProfiles[0].ProfileID
+	if !f.config.Valid() {
+		t.Fatal("public Internet browser projection invalid")
+	}
 	ctx := context.Background()
 	if _, err = f.store.DB.Exec("UPDATE controller_overlay_vpcs SET name=? WHERE id=?", "业务内网", f.vpc.ID); err != nil {
 		t.Fatal("fixture VPC name unavailable")
@@ -157,13 +172,33 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 				uniquePosts[task.OperationID] = true
 			}
 			rpc.mu.Unlock()
-			// Initial, planned and recovered epochs each send exactly six unique
-			// tasks. Lost ACK reconciliation must never resend the original POST.
-			if epochs != 3 || vpcs != 2 || audit <= initialAudit || completed < 2 || gets < 1 || posts != 3*len(initialTasks) || len(uniquePosts) != posts || !lostACKConsumed {
+			// Five epochs each send exactly six unique tasks. Lost ACK
+			// reconciliation must never resend the original POST.
+			if epochs != 5 || vpcs != 2 || audit <= initialAudit || completed != 4 || gets < 1 || len(initialTasks) != 6 || posts != 5*len(initialTasks) || len(uniquePosts) != posts || !lostACKConsumed {
+				t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
+			}
+			for version := int64(1); version <= 5; version++ {
+				var operationID string
+				if err := f.store.DB.QueryRow("SELECT id FROM controller_overlay_epochs WHERE cluster_id=? AND epoch=?", f.vpc.ClusterID, version).Scan(&operationID); err != nil {
+					t.Fatal("durable browser evidence unavailable")
+				}
+				saved, err := f.store.OverlayEpoch(ctx, operationID)
+				if err != nil || len(saved.Snapshot.NATPolicies) != 1 || len(saved.Snapshot.Gateways) != 1 {
+					t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
+				}
+				policy, routes := saved.Snapshot.NATPolicies[0], saved.Snapshot.Gateways[0].AllowedPrefixes
+				wantInternet := version == 2 || version == 3 || version == 5
+				wantSNAT := version != 4
+				if policy.InternetEgressEnabled != wantInternet || policy.SNATEnabled != wantSNAT || routes == nil || version >= 4 && (len(routes) != 0 || len(policy.Forwardings) != 0) || version < 4 && (len(routes) != 1 || len(policy.Forwardings) != 1) || version != 2 && saved.State != "succeeded" || version == 2 && saved.State != "superseded" {
+					t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
+				}
+			}
+			options, err := f.store.OverlayOptions(ctx, f.config, f.vpc.ClusterID)
+			if err != nil || options.LatestEpoch == nil || options.LatestEpoch.Epoch != 5 || !options.LatestEpoch.Snapshot.NATPolicies[0].InternetEgressEnabled || len(options.NATProfiles) != 1 || !options.NATProfiles[0].AllowInternetEgress || options.NATProfiles[0].PublicIPv4 != "8.8.4.2" {
 				t.Fatal("required browser plan/reconcile/recovery/VPC persistence did not execute")
 			}
 			// Fixed schema: no emails, IDs, credentials, DSNs, cookies, SQL or logs.
-			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts})
+			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts, "public_egress_enabled": true, "public_egress_disabled": true, "pure_internet_reenabled": true})
 			if err != nil || os.WriteFile(filepath.Join(caseDir, "fixture.json"), result, 0600) != nil {
 				t.Fatal("sanitized durable result unavailable")
 			}

@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { Plus, Trash2 } from "@lucide/vue";
 import { key32 } from "../api/client";
+import { publicIPv4 } from "../api/overlay";
 import type {
   NATForwarding,
   NATPolicy,
@@ -81,8 +82,47 @@ function toggle(p: NATProfile) {
 }
 function snat(p: NATProfile, value: string) {
   const old = policyFor(p);
-  if (!old) return;
-  publish({ ...old, snat_enabled: value === "true" }, old);
+  if (!old || (value === "true" && !p.allow_snat)) return;
+  const next = { ...old, snat_enabled: value === "true" };
+  if (!next.snat_enabled) delete next.internet_egress_enabled;
+  publish(next, old);
+}
+const internetAvailable = (p: NATProfile) =>
+  p.allow_snat && p.allow_internet_egress === true && publicIPv4(p.public_ipv4);
+function egress(p: NATProfile, value: string) {
+  const old = policyFor(p);
+  if (
+    !old ||
+    (value === "internet" && (!old.snat_enabled || !internetAvailable(p)))
+  )
+    return;
+  const next = { ...old };
+  if (value === "internet") next.internet_egress_enabled = true;
+  else delete next.internet_egress_enabled;
+  publish(next, old);
+}
+function internetReason(p: NATProfile) {
+  if (!p.allow_internet_egress)
+    return tr(
+      "节点尚未开放此出口的公网访问，请先由运维人员配置出口权限。",
+      "Internet access is not enabled for this egress profile. Ask an operator to configure its permission first.",
+    );
+  if (!publicIPv4(p.public_ipv4))
+    return tr(
+      "此出口没有可用的公网 IPv4 地址，请先核对节点出口配置。",
+      "This egress profile has no usable public IPv4 address. Review the node egress configuration first.",
+    );
+  if (!p.allow_snat)
+    return tr(
+      "此出口未开放出站地址转换，暂不可用于公网访问。",
+      "Outbound translation is not permitted for this egress profile, so Internet access is unavailable.",
+    );
+  if (!policyFor(p)?.snat_enabled)
+    return tr(
+      "先开启出站地址转换，再选择公网出口。",
+      "Enable outbound translation before selecting Internet access.",
+    );
+  return "";
 }
 function nextPort(p: NATProfile) {
   const old = policyFor(p);
@@ -163,8 +203,8 @@ const missing = computed(() =>
       <p>
         {{
           tr(
-            "使用已批准的出口地址。源地址和端口须在允许范围内，管理网络始终受保护。",
-            "Use approved egress addresses. Source networks and ports must stay within permitted ranges; management networks remain protected.",
+            "选择出口与访问范围。端口映射仍受来源和端口限制，管理网络始终受保护。",
+            "Choose an egress profile and access scope. Port mappings retain their source and port restrictions; management networks remain protected.",
           )
         }}
       </p>
@@ -186,7 +226,10 @@ const missing = computed(() =>
       <header class="profile-header">
         <div>
           <h4>{{ name(profile.vpc_id) }}</h4>
-          <p>{{ profile.public_ipv4 }} · {{ profile.node_id }}</p>
+          <p>
+            {{ tr("出口 IPv4", "Egress IPv4") }}
+            <code>{{ profile.public_ipv4 }}</code> · {{ profile.node_id }}
+          </p>
         </div>
         <UiButton
           :disabled="
@@ -209,29 +252,83 @@ const missing = computed(() =>
           )
         }}
       </p>
-      <template v-if="policyFor(profile)"
-        ><label class="field"
-          >{{ tr("出站地址转换（SNAT）", "Outbound translation (SNAT)")
-          }}<UiSelect
-            :model-value="String(policyFor(profile)!.snat_enabled)"
-            :options="[
-              { value: 'false', label: tr('关闭', 'Off') },
-              {
-                value: 'true',
-                label: tr('开启', 'On'),
-                disabled: !profile.allow_snat,
-              },
-            ]"
-            :disabled="disabled"
-            :label="tr('出站地址转换', 'Outbound translation')"
-            @update:model-value="snat(profile, $event)"
-          /><span class="field-note">{{
+      <template v-if="policyFor(profile)">
+        <div class="egress-fields">
+          <label class="field"
+            >{{ tr("出站地址转换（SNAT）", "Outbound translation (SNAT)")
+            }}<UiSelect
+              :model-value="String(policyFor(profile)!.snat_enabled)"
+              :options="[
+                { value: 'false', label: tr('关闭', 'Off') },
+                {
+                  value: 'true',
+                  label: tr('开启', 'On'),
+                  disabled: !profile.allow_snat,
+                },
+              ]"
+              :disabled="disabled"
+              :label="tr('出站地址转换', 'Outbound translation')"
+              @update:model-value="snat(profile, $event)"
+            /><span class="field-note">{{
+              policyFor(profile)!.snat_enabled
+                ? tr(
+                    "出站流量使用上方出口 IPv4 地址。",
+                    "Outbound traffic uses the egress IPv4 address shown above.",
+                  )
+                : tr(
+                    "关闭时同时停用公网出口，不影响单独配置的端口映射。",
+                    "Turning this off also disables Internet egress; independently configured port mappings are retained.",
+                  )
+            }}</span></label
+          >
+          <label class="field"
+            >{{ tr("出口范围", "Egress scope")
+            }}<UiSelect
+              :model-value="
+                policyFor(profile)!.internet_egress_enabled
+                  ? 'internet'
+                  : 'prefixes'
+              "
+              :options="[
+                {
+                  value: 'prefixes',
+                  label: tr('仅指定网段', 'Selected prefixes only'),
+                },
+                {
+                  value: 'internet',
+                  label: tr('公网 IPv4', 'Public IPv4 Internet'),
+                  disabled:
+                    !internetAvailable(profile) ||
+                    !policyFor(profile)!.snat_enabled,
+                },
+              ]"
+              :disabled="disabled"
+              :label="tr('出口范围', 'Egress scope')"
+              @update:model-value="egress(profile, $event)"
+            /><span class="field-note">{{
+              policyFor(profile)!.internet_egress_enabled
+                ? tr(
+                    "允许此 VPC 通过出口访问公网 IPv4；私有网段与管理地址不会因此开放。",
+                    "Allows this VPC to reach public IPv4 destinations through the egress profile. Private and management addresses remain blocked.",
+                  )
+                : tr(
+                    "仅访问网关中列出的目标网段；列表留空时不开放出站访问。",
+                    "Only the gateway destination prefixes are reachable. An empty list grants no outbound access.",
+                  )
+            }}</span></label
+          >
+        </div>
+        <p v-if="internetReason(profile)" class="egress-unavailable field-note">
+          {{ internetReason(profile) }}
+        </p>
+        <p class="field-note selection-note">
+          {{
             tr(
-              "仅对已选择网关的目标网段生效，不开放全网默认路由。",
-              "Applies only to the selected gateway destination prefixes; it does not enable an unrestricted default route.",
+              "这里只保存本次选择，应用网络配置并核对节点回执后才会生效。",
+              "These are selections for this change. Apply the configuration and review node receipts before treating them as active.",
             )
-          }}</span></label
-        >
+          }}
+        </p>
         <div
           v-for="(rule, index) in policyFor(profile)!.forwardings"
           :key="rule.id"
@@ -411,6 +508,19 @@ const missing = computed(() =>
   margin-top: 24px;
   padding-top: 14px;
 }
+.egress-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.egress-unavailable {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--subtle);
+}
+.selection-note {
+  margin-top: 16px;
+}
 .rule-heading {
   display: flex;
   justify-content: space-between;
@@ -441,6 +551,11 @@ const missing = computed(() =>
 .nat-warning code {
   display: block;
   overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .egress-fields {
+    grid-template-columns: 1fr;
+  }
 }
 @media (max-width: 420px) {
   .forward-grid {

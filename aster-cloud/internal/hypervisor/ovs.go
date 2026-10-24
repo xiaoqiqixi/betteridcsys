@@ -353,9 +353,20 @@ func (m *Manager) seedOVS(ctx context.Context, i Instance) error {
 			if route.OwnerRef != i.OwnerRef || route.CIDR != i.Network.CIDR || route.GatewayIPv4 == i.IPv4 {
 				return ErrOwnership
 			}
-			network += "    routes:\n"
+			if len(route.AllowedPrefixes) > 0 || route.AllowInternetEgress {
+				network += "    routes:\n"
+			}
 			for _, prefix := range route.AllowedPrefixes {
 				network += fmt.Sprintf("      - to: %q\n        via: %q\n", prefix, route.GatewayIPv4)
+			}
+			if route.AllowInternetEgress {
+				network += fmt.Sprintf("      - to: %q\n        via: %q\n", "0.0.0.0/0", route.GatewayIPv4)
+			}
+			if len(route.DNSIPv4) > 0 {
+				network += "    nameservers:\n      addresses:\n"
+				for _, address := range route.DNSIPv4 {
+					network += fmt.Sprintf("        - %q\n", address)
+				}
 			}
 		}
 	}

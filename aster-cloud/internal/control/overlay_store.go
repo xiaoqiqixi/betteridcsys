@@ -241,6 +241,9 @@ func canonicalOverlayInput(in OverlayEpochInput) (OverlayEpochInput, string, err
 		}
 	}
 	for i, g := range in.Gateways {
+		if g.AllowedPrefixes == nil {
+			return in, "", ErrInput
+		}
 		g.AllowedPrefixes = append([]string{}, g.AllowedPrefixes...)
 		sort.Strings(g.AllowedPrefixes)
 		in.Gateways[i] = g

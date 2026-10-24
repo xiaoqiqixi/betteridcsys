@@ -8,19 +8,76 @@ It enables IPv4 SNAT and explicit TCP/UDP single-port DNAT to **enabled, frozen
 members of that VPC**, including members on other overlay participants. NAT does
 not alter the financial contract, original node/2 binding or an old snapshot.
 
-This is **approved-prefix egress**, not an unrestricted Internet default route.
-The root gateway's destination prefixes cannot overlap VPCs, management,
-underlay, loopback, multicast or metadata ranges. A selected route can narrow a
-root prefix or be removed. DNAT source prefixes must be contained both in the
-root NAT source approval and the selected gateway prefixes (OVS reverse path
-protection remains effective). No `0.0.0.0/0`, IPv6 NAT, hairpin NAT, ICMP DNAT,
-public address allocation or automatic physical-uplink configuration is claimed.
+Egress has two independent modes: **approved-prefix SNAT** and explicitly
+approved **public IPv4 Internet SNAT**. Existing policies without
+`internet_egress_enabled` keep their original canonical bytes and prefix-only
+behavior. Internet egress does not insert `0.0.0.0/0` into the old route approval.
+The root gateway's explicit destination prefixes still cannot overlap VPCs,
+management, underlay, loopback, multicast or metadata ranges. A selected route
+can narrow a root prefix or be removed. DNAT source prefixes must be contained
+both in the root NAT source approval and selected gateway prefixes; enabling
+Internet egress never grants unrestricted inbound DNAT. No IPv6 NAT, hairpin
+NAT, ICMP DNAT, public address allocation or automatic physical-uplink
+configuration is claimed.
 
 The administrator uses the controller network UI to select approved gateways,
 prefixes and NAT profiles, submit an epoch, inspect node phases and explicitly
 recover an uncertain epoch. Root provisioning remains a separate host operation:
 HTTP administrators cannot name a host interface, namespace path, arbitrary
 command or unapproved public IP.
+
+## Public Internet egress
+
+The private root NAT profile opts in with `allow_internet_egress: true`, which
+requires `allow_snat: true` and a canonical public-unicast `public_ipv4` (not
+RFC1918, shared/CGNAT, loopback, link-local, documentation, benchmarking,
+multicast or other conservatively reserved ranges). Old profiles keep their
+hashes because a false flag is omitted. The uplink is still prepared and pinned
+by root; this approval does not allocate an address or prove that the provider
+has routed it.
+
+Every overlay participant also requires an exact root `guest_networks` entry
+with `allow_internet_egress: true`, `vpc_id` equal to the selected overlay VPC,
+and matching owner/CIDR/gateway. Local members additionally need their precise
+local-VPC mapping approved. A remote participant cannot acquire a public
+gateway merely from a controller request or another node's NAT approval.
+Root guest-network seed approval can carry `dns_ipv4`; see the guest-network
+contract. Existing installed guests are not silently rewritten by a network
+epoch. Empty explicit `allowed_prefixes: []` remains empty: by itself it grants
+no Internet access.
+
+After this root provisioning/migration, the management UI can enable or disable
+`internet_egress_enabled` on a selected SNAT policy, inspect its approval and
+submit/recover the same three-phase epoch as other network changes. Internet
+egress requires SNAT; disabling SNAT disables that policy's Internet permission.
+The actual public source remains the approved profile address, not UI input.
+
+The new public path accepts member-initiated TCP, UDP and ICMP echo to public
+IPv4 destinations outside all explicit gateway prefixes. It denies the shared
+reserved-address floor **plus** root protected CIDRs, local/peer underlay IPs,
+all snapshot VPC ranges and local NAT public/uplink interface addresses. Public
+management addresses are protected too. The same exclusions apply to incoming
+Internet source addresses. Explicit old root-approved routes and exact DNAT
+rules remain separate and take precedence; public permission does not broaden
+their approval or destination/port/source semantics.
+
+Namespace `internet_out`, `internet_in` and `internet_snat` ordinary chains
+share per-direction deny lists rather than duplicating them for every member.
+Initiating packets must be new/established tracked flows, not invalid/untracked
+packets that could escape without a translation. Responses require an exact enabled member destination and established
+source-NAT conntrack state. Related ICMP accepts only destination-unreachable
+(including PMTU), time-exceeded and parameter-problem errors; unrelated errors,
+echo requests from outside and unsolicited TCP/UDP ingress remain denied. No
+arbitrary `established,related accept` rule is added. Kernel ICMP error behavior
+from private intermediate routers remains denied by the isolation floor.
+
+OVS adds only gateway-identity-specific priority-190 public fallback flows and
+priority-195 exclusions. Existing approved routes retain priority 200. The
+gateway's exact MAC, local port or remote tunnel source/destination/VNI and
+metadata restrictions remain in force; no unknown-MAC learning, flooding,
+peer-to-peer transit or policing bypass is introduced. The namespace firewall
+is authoritative for transport/conntrack checks, while OVS retains identity and
+cross-VPC/underlay isolation.
 
 ## Root prerequisites and private profile
 
@@ -164,9 +221,28 @@ keeps an actual TCP connection open during revocation, and asserts the host nft
 rules are unchanged. It does **not** test OVS forwarding or KVM: those remain the
 separate overlay parser/packet-model and deferred real-host acceptance tracks.
 
+`TestNativeNATInternetEgressAndRevocation` is an additional mandatory Ubuntu
+22/24 gate under the same variable. Three isolated namespaces use public-syntax
+addresses on temporary veth/loopback only, with **no external packet path**.
+The test proves TCP/UDP egress and responses to a destination absent from every
+explicit prefix, observed translated source, real ICMP echo replies,
+prepare/program isolation, denial of unsolicited ingress and private/metadata/
+public-underlay/protected destinations, and interruption of an already-open
+TCP connection when Internet permission is disabled. That held client forbids
+redial, so a reconnection cannot substitute for the physical-connection check.
+Host nft rules must remain byte-for-byte unchanged. This gate does not claim
+live provider routing, physical uplink, real OVS forwarding, KVM or native PMTU
+error injection; the constrained related-ICMP policy has compiler packet-model
+coverage.
+
 Local fake tests cover three-phase ordering, exact replay, uncertain command
 failures, stale namespace/peer/route, foreign tables, root pins, source/port/target
 confusion, removal/default-drop, read-only drift and configuration canonicality.
+Public tests additionally cover every reserved class, public management and
+underlay exclusions, full 128-member rule bounds, removed conntrack/exclusion/
+ordinary-chain readback drift, exact local/remote gateway packet identities,
+policing and disabled-member behavior. Native OVS parser fixtures now include
+both local and remote public NAT fallback/exclusion plans.
 Migration tests inject write/sync/rename/directory-sync failures at each durable
 boundary. No real KVM, physical uplink/public reachability or HA failover claim
 follows from these isolated tests.
@@ -177,3 +253,5 @@ follows from these isolated tests.
 - [Atomic rule replacement](https://wiki.nftables.org/wiki-nftables/index.php/Atomic_rule_replacement) — whole-file atomic updates, not incremental shell rules.
 - [libnftables JSON schema](https://manpages.debian.org/bookworm/libnftables1/libnftables-json.5.en.html) — inet NAT family, match/bitmask operators and object structure.
 - [ip-netns manual](https://man7.org/linux/man-pages/man8/ip-netns.8.html) — named namespaces and descriptor lifetime.
+- [Conntrack state and status](https://wiki.nftables.org/wiki-nftables/index.php/Matching_connection_tracking_stateful_metainformation) and [Linux conntrack UAPI](https://github.com/torvalds/linux/blob/master/include/uapi/linux/netfilter/nf_conntrack_common.h) — established/related and source-NAT status guards.
+- [IANA IPv4 special-purpose registry](https://www.iana.org/assignments/iana-ipv4-special-registry) — conservative public address exclusions; no claim of provider routing from address syntax.

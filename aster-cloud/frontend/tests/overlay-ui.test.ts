@@ -11,7 +11,11 @@ import {
   overlayTasks,
   overlayVPC,
 } from "./overlay-fixtures";
-import type { OverlayEpoch, OverlaySelection } from "../src/api/overlay";
+import type {
+  OverlayEpoch,
+  OverlayOptions,
+  OverlaySelection,
+} from "../src/api/overlay";
 const cleanups: Array<() => void> = [];
 beforeEach(() => {
   vi.resetModules();
@@ -54,6 +58,7 @@ async function setup(
     payload: unknown,
     key: string,
   ) => unknown | Promise<unknown>,
+  overrides?: { options?: OverlayOptions; recover?: OverlayEpoch },
 ) {
   const [
     { consoleKey },
@@ -122,10 +127,10 @@ async function setup(
       : kind === "plan" || kind === "recover"
         ? {
             cluster: overlayVPC.cluster_id,
-            options: structuredClone(overlayOption),
+            options: structuredClone(overrides?.options || overlayOption),
             vpcs: [structuredClone(overlayVPC)],
             ...(kind === "recover"
-              ? { recover: structuredClone(overlayEpoch) }
+              ? { recover: structuredClone(overrides?.recover || overlayEpoch) }
               : {}),
           }
         : {};
@@ -498,6 +503,266 @@ describe("network management UI", () => {
     waiting.resolve({ items: [] });
     await flushPromises();
     expect(f.wrapper.text()).toContain("尚未配置网络集群");
+    expect(f.calls).toHaveLength(0);
+  });
+});
+function publicOptions() {
+  const options = structuredClone(overlayOption);
+  options.nat_profiles[0]!.allow_internet_egress = true;
+  options.nat_profiles[0]!.public_ipv4 = "8.8.4.4";
+  return options;
+}
+async function choose(label: string, option: string) {
+  await body()
+    .get(`button[role=combobox][aria-label="${label}"]`)
+    .trigger("click");
+  const target = body()
+    .findAll("[role=option]")
+    .find((item) => item.text() === option);
+  expect(target, `option ${option}`).toBeDefined();
+  await target!.trigger("pointerdown");
+  await flushPromises();
+}
+describe("public NAT egress management", () => {
+  it("keeps a changed public selection behind the existing discard guard when cancelling", async () => {
+    const f = await setup("plan", undefined, { options: publicOptions() });
+    await choose("出口范围", "公网 IPv4");
+    await button("取消").trigger("click");
+    await flushPromises();
+    expect(f.wrapper.emitted("close")).toBeUndefined();
+    expect(body().get(".discard-box").text()).toContain("放弃更改");
+    await button("继续编辑").trigger("click");
+    expect(body().get('button[aria-label="出口范围"]').text()).toContain(
+      "公网 IPv4",
+    );
+    expect(f.calls).toHaveLength(0);
+  });
+  it("selects an approved public egress but requires explicit scope confirmation before POST", async () => {
+    const f = await setup(
+      "plan",
+      (m, _p, b, k) => (m === "POST" ? { epoch: planned(k, b) } : undefined),
+      { options: publicOptions() },
+    );
+    await choose("出口范围", "公网 IPv4");
+    expect(body().text()).toContain("8.8.4.4");
+    expect(body().text()).toContain("这里只保存本次选择");
+    expect(body().text()).toContain("私有网段与管理地址不会因此开放");
+    await confirmChange();
+    expect(f.calls).toHaveLength(0);
+    expect(button("应用网络配置").attributes("disabled")).toBeDefined();
+    await body().get(".public-consent input").setValue(true);
+    await confirmChange();
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.body).toMatchObject({
+      nat_policies: [
+        {
+          ...overlayNAT,
+          internet_egress_enabled: true,
+        },
+      ],
+    });
+    expect(f.wrapper.emitted("saved")).toHaveLength(1);
+    expect(stored()).toHaveLength(0);
+  });
+  it.each(["snat", "scope"] as const)(
+    "turning off public access via %s omits the flag while retaining independent port mappings",
+    async (mode) => {
+      const f = await setup(
+        "plan",
+        (m, _p, b, k) => (m === "POST" ? { epoch: planned(k, b) } : undefined),
+        { options: publicOptions() },
+      );
+      await choose("出口范围", "公网 IPv4");
+      if (mode === "snat") await choose("出站地址转换", "关闭");
+      else await choose("出口范围", "仅指定网段");
+      expect(body().find(".public-consent").exists()).toBe(false);
+      expect(body().get('button[aria-label="出口范围"]').text()).toContain(
+        "仅指定网段",
+      );
+      await confirmChange();
+      expect(f.calls).toHaveLength(1);
+      const policy = (f.calls[0]!.body as OverlaySelection).nat_policies![0]!;
+      expect(policy).not.toHaveProperty("internet_egress_enabled");
+      expect(policy.snat_enabled).toBe(mode !== "snat");
+      expect(policy.forwardings).toEqual(overlayNAT.forwardings);
+    },
+  );
+  it("supports Internet-only egress with an explicitly empty route list and no DNAT", async () => {
+    const f = await setup(
+      "plan",
+      (m, _p, b, k) => (m === "POST" ? { epoch: planned(k, b) } : undefined),
+      { options: publicOptions() },
+    );
+    // Icon-only actions use an accessible name rather than visible copy.
+    await body().get('button[aria-label="删除端口映射 1"]').trigger("click");
+    await body().get("textarea").setValue("");
+    expect(body().get("textarea").element.value).toBe("");
+    await choose("出口范围", "公网 IPv4");
+    await body().get(".public-consent input").setValue(true);
+    await confirmChange();
+    expect(f.calls).toHaveLength(1);
+    const selection = f.calls[0]!.body as OverlaySelection;
+    expect(selection.gateways[0]!.allowed_prefixes).toEqual([]);
+    expect(selection.nat_policies![0]).toMatchObject({
+      snat_enabled: true,
+      internet_egress_enabled: true,
+      forwardings: [],
+    });
+  });
+  it.each([undefined, false])(
+    "does not offer unapproved public egress (%s)",
+    async (approved) => {
+      const options = publicOptions();
+      options.nat_profiles[0]!.allow_internet_egress = approved;
+      const f = await setup("plan", undefined, { options });
+      expect(body().text()).toContain("节点尚未开放此出口的公网访问");
+      await choose("出口范围", "公网 IPv4");
+      expect(body().get("[role=option][aria-disabled=true]").text()).toContain(
+        "公网 IPv4",
+      );
+      expect(body().get('button[aria-label="出口范围"]').text()).toContain(
+        "仅指定网段",
+      );
+      expect(body().find(".public-consent").exists()).toBe(false);
+      expect(f.calls).toHaveLength(0);
+    },
+  );
+  it("keeps the public option unavailable while SNAT is off and supports keyboard selection after enabling it", async () => {
+    await setup("plan", undefined, { options: publicOptions() });
+    await choose("出站地址转换", "关闭");
+    expect(body().text()).toContain("先开启出站地址转换");
+    const scope = body().get('button[aria-label="出口范围"]');
+    await scope.trigger("keydown", { key: "Enter" });
+    await scope.trigger("keydown", { key: "End" });
+    await scope.trigger("keydown", { key: "Enter" });
+    expect(scope.text()).toContain("仅指定网段");
+    await choose("出站地址转换", "开启");
+    await scope.trigger("keydown", { key: "Enter" });
+    await scope.trigger("keydown", { key: "End" });
+    await scope.trigger("keydown", { key: "Enter" });
+    expect(scope.text()).toContain("公网 IPv4");
+    expect(body().find(".public-consent").exists()).toBe(true);
+  });
+  it("shows invalid node egress addresses without allowing them to be selected", async () => {
+    const options = publicOptions();
+    options.nat_profiles[0]!.public_ipv4 = "10.0.0.5";
+    await setup("plan", undefined, { options });
+    expect(body().text()).toContain("没有可用的公网 IPv4 地址");
+    await choose("出口范围", "公网 IPv4");
+    expect(body().find(".public-consent").exists()).toBe(false);
+  });
+  it("locks public controls and confirmation when management permission is lost", async () => {
+    const f = await setup("plan", undefined, { options: publicOptions() });
+    await choose("出口范围", "公网 IPv4");
+    f.context.session.user.value = {
+      ...f.context.session.user.value!,
+      permissions: ["nodes.read"],
+    };
+    await flushPromises();
+    expect(
+      body().get('button[aria-label="出口范围"]').attributes("disabled"),
+    ).toBeDefined();
+    expect(
+      body().get(".public-consent input").attributes("disabled"),
+    ).toBeDefined();
+    await confirmChange();
+    expect(f.calls).toHaveLength(0);
+  });
+  it("does not acknowledge a lost POST when the GET has the other public egress mode", async () => {
+    let accepted: OverlayEpoch | undefined;
+    const f = await setup(
+      "plan",
+      (m, p, b, k) => {
+        if (m === "POST") {
+          accepted = planned(k, b);
+          throw new Error("lost acknowledgement");
+        }
+        if (accepted && p === `/overlays/epochs/${accepted.id}`) {
+          const wrong = structuredClone(accepted);
+          delete wrong.snapshot.nat_policies![0]!.internet_egress_enabled;
+          return { epoch: wrong, tasks: [] };
+        }
+        return undefined;
+      },
+      { options: publicOptions() },
+    );
+    await choose("出口范围", "公网 IPv4");
+    await body().get(".public-consent input").setValue(true);
+    await confirmChange();
+    expect(f.calls).toHaveLength(1);
+    expect(stored()[0].body.nat_policies[0].internet_egress_enabled).toBe(true);
+    await button("只读核对原变更").trigger("click");
+    await flushPromises();
+    expect(stored()).toHaveLength(1);
+    expect(f.calls).toHaveLength(1);
+    expect(f.wrapper.emitted("saved")).toBeUndefined();
+    expect(body().find("[role=alert]").exists()).toBe(true);
+  });
+  it.each(["overview", "detail"] as const)(
+    "shows public scope and the pinned output address in %s",
+    async (kind) => {
+      const options = publicOptions();
+      const record = structuredClone(overlayEpoch);
+      record.snapshot.nat_policies![0]!.internet_egress_enabled = true;
+      const f = await setup(kind, (m, p) => {
+        if (m !== "GET") return;
+        if (p.startsWith("/overlays/options?"))
+          return { ...options, latest_epoch: record };
+        if (p === `/overlays/epochs/${record.id}`)
+          return { epoch: record, tasks: overlayTasks(record) };
+      });
+      expect(f.wrapper.text()).toContain("公网 IPv4 出口已选择");
+      expect(f.wrapper.text()).toContain("8.8.4.4");
+      f.context.prefs.locale.value = "en";
+      await flushPromises();
+      expect(f.wrapper.text()).toContain(
+        "Public IPv4 Internet egress selected",
+      );
+      expect(f.calls).toHaveLength(0);
+    },
+  );
+  it("shows and confirms the retained public mode when recovering the original selection", async () => {
+    const options = publicOptions();
+    const record = structuredClone(overlayEpoch);
+    record.snapshot.nat_policies![0]!.internet_egress_enabled = true;
+    options.latest_epoch = record;
+    const f = await setup(
+      "recover",
+      (m, _p, b, k) => {
+        if (m !== "POST") return;
+        const result = planned(k, b, true);
+        result.snapshot.nat_policies![0]!.internet_egress_enabled = true;
+        return { epoch: result };
+      },
+      { options, recover: record },
+    );
+    expect(body().get(".recovery-summary").text()).toContain("公网 IPv4");
+    await confirmChange(record.id);
+    expect(f.calls).toHaveLength(0);
+    await body().get(".public-consent input").setValue(true);
+    await confirmChange(record.id);
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.body).toEqual({
+      expected_snapshot_sha256: record.snapshot_sha256,
+    });
+    expect(f.wrapper.emitted("saved")).toHaveLength(1);
+  });
+  it("keeps a maximum-length unbroken profile identity readable in the retained recovery summary", async () => {
+    const options = publicOptions();
+    const record = structuredClone(overlayEpoch);
+    const profile = "w".repeat(64);
+    record.snapshot.nat_policies![0]!.profile_id = profile;
+    record.snapshot.nat_policies![0]!.internet_egress_enabled = true;
+    options.nat_profiles[0]!.profile_id = profile;
+    options.latest_epoch = record;
+    const f = await setup("recover", undefined, { options, recover: record });
+    expect(body().get(".recovery-summary").text()).toContain(profile);
+    f.context.prefs.locale.value = "en";
+    await flushPromises();
+    expect(body().get(".recovery-summary").text()).toContain(profile);
+    expect(body().get(".recovery-summary").text()).toContain(
+      "Public IPv4 Internet",
+    );
     expect(f.calls).toHaveLength(0);
   });
 });

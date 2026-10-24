@@ -111,6 +111,7 @@ jobs:
           go test -mod=readonly -race -c -o "$RUNNER_TEMP/aster-nat.test" ./internal/fabric
           sudo -- env ASTER_NATIVE_NAT=1 "$RUNNER_TEMP/aster-nat.test" -test.v -test.count=1 -test.timeout=3m -test.run '^TestNativeNAT' | tee native-nat.log
           grep -q '^--- PASS: TestNativeNATPacketFlowAndRevocation ' native-nat.log
+          grep -q '^--- PASS: TestNativeNATInternetEgressAndRevocation ' native-nat.log
           if grep -qE -- '--- (SKIP|FAIL):' native-nat.log; then
             echo 'Native NAT gate must not skip or fail.' >&2; exit 1
           fi

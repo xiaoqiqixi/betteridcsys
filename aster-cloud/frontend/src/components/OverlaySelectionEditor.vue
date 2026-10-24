@@ -82,7 +82,9 @@ function prefixes(g: OverlayGateway, value: string) {
       gatewayKey(v) === gatewayKey(g)
         ? {
             ...v,
-            allowed_prefixes: value.split(/[\n,]+/).map((x) => x.trim()),
+            allowed_prefixes: value.trim()
+              ? value.split(/[\n,]+/).map((x) => x.trim())
+              : [],
           }
         : v,
     ),
@@ -179,8 +181,8 @@ const reason = (value: string) =>
         <p>
           {{
             tr(
-              "每个 VPC 使用一个已批准网关，仅转发列出的目标网段。",
-              "Choose one approved gateway per VPC. Only the listed destination prefixes are routed.",
+              "每个 VPC 使用一个网关，在此配置指定网段。公网访问范围在下方 NAT 出口中单独设置。",
+              "Choose one gateway per VPC and configure specific destination prefixes here. Internet access is configured separately in the NAT egress section below.",
             )
           }}
         </p>
@@ -225,13 +227,20 @@ const reason = (value: string) =>
             :value="selectedGateway(gateway)?.allowed_prefixes.join('\n')"
             :disabled="disabled"
             rows="3"
+            :placeholder="tr('不添加指定网段', 'No destination prefixes')"
             spellcheck="false"
             @input="
               prefixes(gateway, ($event.target as HTMLTextAreaElement).value)
             "
           /><span class="field-note"
             >{{ tr("批准范围：", "Approved ranges: ")
-            }}{{ gateway.allowed_prefixes.join(", ") }}</span
+            }}{{ gateway.allowed_prefixes.join(", ") || tr("无", "None") }} ·
+            {{
+              tr(
+                "留空只关闭指定网段路由，不会自动开放公网。",
+                "Leaving this empty disables specific routes; it never enables Internet access automatically.",
+              )
+            }}</span
           ></label
         >
       </article>

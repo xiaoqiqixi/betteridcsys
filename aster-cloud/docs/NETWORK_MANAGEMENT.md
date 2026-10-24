@@ -66,7 +66,11 @@ Origin 校验。网络读取需要 `nodes.read`；创建 VPC 还需 `nodes.manag
 
 - 网关身份不可更换；选中的路由必须位于 root 批准前缀内。例如上限 `/24`
   可以选择其中的 `/25`，不能扩大为 `/16`。
-- NAT 使用同一网关的已选目的网段，并非 `0.0.0.0/0` 默认全网出口。
+- NAT 出口有“仅指定网段”和“公网 IPv4”两种独立模式。前者使用已选目的
+  网段；后者在独立 root 批准下允许公网出站，不要求逐个批准 Internet 前缀，
+  但仍隔离管理网、underlay、元数据、私网和特殊用途地址，详见
+  [公网 NAT 出口](PUBLIC_NAT_EGRESS.md)。不能把 `0.0.0.0/0` 塞进旧路由白名单。
+  `allowed_prefixes: []` 是无指定路由，不自动开启公网；`null` 无效。
 - DNAT 仅支持 TCP / UDP 的单个公共端口映射；目标必须是同一 VPC 内已启用的
   冻结成员。公共端口、来源网段、NAT profile 摘要都必须匹配批准范围。
   每个 root NAT profile 最多批准 64 段公共端口范围，与节点执行合同一致。
@@ -85,7 +89,7 @@ Origin 校验。网络读取需要 `nodes.read`；创建 VPC 还需 `nodes.manag
 
 ```text
 policy = {id, node_id, vpc_id, gateway_instance_id, profile_id,
-          profile_sha256, snat_enabled, forwardings:[
+          profile_sha256, snat_enabled, internet_egress_enabled?, forwardings:[
             {id, protocol, public_port, target_instance_id, target_port, source_cidr}
           ]}
 ```
@@ -93,6 +97,13 @@ policy = {id, node_id, vpc_id, gateway_instance_id, profile_id,
 省略 `nat_policies` 表示保留上一份策略；显式 `[]` 表示删除全部 NAT；
 `null` 无效。两种有效语义具有不同幂等摘要。旧版不含 NAT 的快照字节和
 摘要保持不变；新购实例的自动预留变更同样保留已有 NAT，而不重写历史。
+
+`internet_egress_enabled` 只有 `true` 才写入 canonical bytes；省略或 `false`
+保持原前缀模式的字节 / 摘要。公网模式必须同时启用 SNAT，且安全投影
+`nat_profiles[].allow_internet_egress` 已批准、`public_ipv4` 是有效公网地址。
+管理员可通过现有完整网络变更启停公网，关闭 SNAT 自动关闭公网模式；公网
+启用和恢复需单独确认。界面展示实际选择范围和出口 IP，但“已完成”只表示
+节点阶段回执已确认，不代表主控已经探测到真实 Internet 连通性。
 
 每个 VPC 最多一份 NAT 策略；最多 32 份策略，每份最多 128 条端口规则。
 这些是单次完整意图的有界容量，不是累计 64 次变更上限。

@@ -9,6 +9,7 @@ import {
   matchesRecovery,
   matchesVPC,
   overlayOptions,
+  publicIPv4,
   prefix,
   sameSelection,
   validEpoch,
@@ -277,6 +278,155 @@ describe("overlay network contracts", () => {
         epoch.snapshot,
       ),
     ).toBe(false);
+  });
+});
+describe("public IPv4 egress contracts", () => {
+  function publicSelection() {
+    const selection = structuredClone(epoch.snapshot);
+    selection.gateways[0]!.allowed_prefixes = [];
+    selection.nat_policies![0] = {
+      ...selection.nat_policies![0]!,
+      internet_egress_enabled: true,
+      forwardings: [],
+    };
+    const approved = structuredClone(options);
+    approved.nat_profiles[0]!.public_ipv4 = "8.8.4.4";
+    approved.nat_profiles[0]!.allow_internet_egress = true;
+    return { selection, approved };
+  }
+  it("allows an explicitly selected empty route list for Internet-only SNAT", () => {
+    const { selection, approved } = publicSelection();
+    expect(validSelection(selection, approved)).toBe(true);
+    expect(validEpoch({ ...epoch, snapshot: selection })).toBe(true);
+    expect(overlayOptions(approved)).toBe(true);
+  });
+  it("keeps legacy absent/false modes equivalent, serializes only true and never loses public intent", () => {
+    const { selection } = publicSelection();
+    expect(canonicalSelection(selection).nat_policies![0]).toHaveProperty(
+      "internet_egress_enabled",
+      true,
+    );
+    const legacy = structuredClone(selection);
+    legacy.nat_policies![0]!.internet_egress_enabled = false;
+    const omitted = structuredClone(legacy);
+    delete omitted.nat_policies![0]!.internet_egress_enabled;
+    expect(canonicalSelection(legacy).nat_policies![0]).not.toHaveProperty(
+      "internet_egress_enabled",
+    );
+    expect(sameSelection(legacy, omitted)).toBe(true);
+    expect(sameSelection(selection, legacy)).toBe(false);
+    const input = {
+      ...canonicalSelection(selection),
+      cluster_id: epoch.cluster_id,
+      expected_epoch: 0,
+    };
+    expect(matchesEpoch({ ...epoch, snapshot: legacy }, epoch.id, input)).toBe(
+      false,
+    );
+  });
+  it("rejects unapproved public egress, nonpublic addresses and Internet mode without SNAT", () => {
+    const { selection, approved } = publicSelection();
+    const denied = structuredClone(approved);
+    delete denied.nat_profiles[0]!.allow_internet_egress;
+    expect(validSelection(selection, denied)).toBe(false);
+    denied.nat_profiles[0]!.allow_internet_egress = false;
+    expect(validSelection(selection, denied)).toBe(false);
+    const noSnat = structuredClone(selection);
+    noSnat.nat_policies![0]!.snat_enabled = false;
+    expect(validNATPolicy(noSnat.nat_policies![0])).toBe(false);
+    expect(validSelection(noSnat, approved)).toBe(false);
+    const privateProfile = {
+      ...approved.nat_profiles[0]!,
+      public_ipv4: "10.1.2.3",
+    };
+    expect(validNATProfile(privateProfile)).toBe(false);
+    expect(
+      validSelection(selection, {
+        ...approved,
+        nat_profiles: [privateProfile],
+      }),
+    ).toBe(false);
+    // Legacy approved-prefix NAT keeps accepting its pre-existing private or
+    // benchmark egress profile; the new public guard is opt-in only.
+    expect(validNATProfile(options.nat_profiles[0])).toBe(true);
+  });
+  it.each([null, "true", 1, {}, []])(
+    "rejects malformed public capability or intent %j",
+    (value) => {
+      expect(validNATPolicy({ ...nat, internet_egress_enabled: value })).toBe(
+        false,
+      );
+      expect(
+        validNATProfile({
+          ...options.nat_profiles[0],
+          allow_internet_egress: value,
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    "0.0.0.0",
+    "10.0.0.1",
+    "100.64.0.1",
+    "127.0.0.1",
+    "169.254.169.254",
+    "172.16.0.1",
+    "192.168.1.1",
+    "192.0.2.1",
+    "198.18.1.1",
+    "198.51.100.1",
+    "203.0.113.1",
+    "224.0.0.1",
+    "240.0.0.1",
+    "255.255.255.255",
+    "8.8.8.8/32",
+    "8.008.8.8",
+  ])("does not label special-use address %s as an Internet egress", (value) => {
+    expect(publicIPv4(value)).toBe(false);
+  });
+  it.each(["1.1.1.1", "8.8.4.4", "9.9.9.9"])(
+    "accepts public unicast address %s",
+    (value) => expect(publicIPv4(value)).toBe(true),
+  );
+  it("does not let public mode broaden DNAT sources or replace route approval", () => {
+    const { selection, approved } = publicSelection();
+    selection.nat_policies![0]!.forwardings = nat.forwardings;
+    expect(validSelection(selection, approved)).toBe(false);
+    selection.gateways[0]!.allowed_prefixes = gateway.allowed_prefixes;
+    expect(validSelection(selection, approved)).toBe(true);
+    selection.gateways[0]!.allowed_prefixes = ["0.0.0.0/0"];
+    expect(validSelection(selection, approved)).toBe(false);
+  });
+  it("will not acknowledge a recovery GET with the wrong public mode", () => {
+    const { selection } = publicSelection();
+    const recovered = {
+      ...epoch,
+      id: "f".repeat(32),
+      epoch: 2,
+      snapshot: {
+        ...selection,
+        epoch: 2,
+        previous_sha256: epoch.snapshot_sha256,
+      },
+      recovery: {
+        epoch: 1,
+        snapshot_sha256: epoch.snapshot_sha256,
+        heads: [
+          {
+            node_id: "node-east",
+            cluster_id: epoch.cluster_id,
+            epoch: 1,
+            snapshot_sha256: epoch.snapshot_sha256,
+          },
+        ],
+      },
+    };
+    expect(matchesRecovery(recovered, recovered.id, epoch, selection)).toBe(
+      true,
+    );
+    const wrong = structuredClone(recovered);
+    delete wrong.snapshot.nat_policies![0]!.internet_egress_enabled;
+    expect(matchesRecovery(wrong, wrong.id, epoch, selection)).toBe(false);
   });
 });
 describe("recovery candidate boundaries", () => {
