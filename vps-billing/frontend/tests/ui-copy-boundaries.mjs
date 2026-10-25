@@ -1,5 +1,5 @@
-// Read-only assertions shared by browser runners. These helpers neither create
-// sessions nor intercept responses; callers retain their API/fixture boundaries.
+// Read-only assertions and pure fault-response formatting for browser runners.
+// These helpers never create sessions or install routes; callers retain boundaries.
 import assert from "node:assert/strict";
 import { expect } from "@playwright/test";
 
@@ -74,19 +74,44 @@ export async function assertAuditCopy(page, action, title) {
   await expect(help.locator("p")).toBeHidden();
 }
 
-export async function assertReadFailureCopy(page) {
+export function malformedReadReply(actual) {
+  assert.equal(
+    actual.status(),
+    200,
+    "Schema faults require an actual successful read",
+  );
+  const body = JSON.stringify({ data: { malformed_read: true } });
+  // Never carry the upstream Content-Length/Encoding/Transfer-Encoding into a
+  // different body. This must be valid HTTP+JSON with only the DTO invalid.
+  return {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(new TextEncoder().encode(body).byteLength),
+      "cache-control": "no-store",
+    },
+    body,
+  };
+}
+
+export async function assertReadFailureCopy(page, checkpoint = async () => {}) {
+  await checkpoint("read-fault-locale");
   const en = await english(page),
     alert = page.getByRole("alert");
+  await checkpoint("read-fault-message");
   await expect(alert).toContainText(
     en
       ? "Unable to load this information. Please reload."
       : "暂时无法加载，请重新加载。",
   );
+  await checkpoint("read-fault-no-write-warning");
   await expect(alert).not.toContainText(
     /核对|重复提交|请勿视为成功|unconfirmed|submitting/,
   );
+  await checkpoint("read-fault-retry");
   await expect(
     alert.getByRole("button", { name: en ? "Retry" : "重新加载", exact: true }),
   ).toBeVisible();
+  await checkpoint("read-fault-no-empty");
   await expect(page.locator(".gh-workspace,.gh-empty")).toHaveCount(0);
 }

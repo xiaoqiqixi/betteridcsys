@@ -168,6 +168,36 @@ class BrowserMySQLGuards(unittest.TestCase):
         self.assertNotIn("private diagnostic", json.dumps(result))
 
 
+    def test_generated_ca_is_added_only_to_acceptance_child(self):
+        scratch = self.temp / "case"
+        scratch.mkdir(mode=0o700)
+        ca = scratch / "ca.pem"
+        ca.write_text("owned certificate")
+        ca.chmod(0o600)
+        base = {"PATH": "/usr/bin"}
+        child = runner.acceptance_environment(base, scratch)
+        self.assertEqual(child["NODE_EXTRA_CA_CERTS"], str(ca))
+        self.assertNotIn("NODE_EXTRA_CA_CERTS", base)
+        self.assertNotIn("NODE_TLS_REJECT_UNAUTHORIZED", child)
+
+    def test_external_node_trust_override_is_rejected(self):
+        for key in ("NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED"):
+            with self.assertRaises(runner.Failure):
+                runner.acceptance_environment({key: "inherited"}, self.temp)
+
+    def test_ca_symlink_or_nonprivate_file_is_rejected(self):
+        scratch = self.temp / "case"
+        scratch.mkdir(mode=0o700)
+        ca = scratch / "ca.pem"
+        target = scratch / "other.pem"
+        target.write_text("owned")
+        target.chmod(0o600)
+        ca.symlink_to(target)
+        with self.assertRaises(runner.Failure): runner.acceptance_environment({}, scratch)
+        ca.unlink(); ca.write_text("owned"); ca.chmod(0o644)
+        with self.assertRaises(runner.Failure): runner.acceptance_environment({}, scratch)
+
+
 
 class BrowserMySQLEvidence(unittest.TestCase):
     def setUp(self):
@@ -277,7 +307,8 @@ class BrowserMySQLProgress(unittest.TestCase):
         self.scratch = Path(self.temporary.name).resolve()
         self.path = self.scratch / "progress.json"
         self.value = {"schema": "aster-billing-browser-progress-v1", "phase": "currency-assert",
-                      "role": "admin", "size": "mobile", "locale": "en"}
+                      "role": "admin", "size": "mobile", "locale": "en",
+                      "fault_hits": 1, "fault_http_200": 1, "fault_fulfilled": 1, "fault_failed": 0}
         self.write()
 
     def write(self):
@@ -297,7 +328,8 @@ class BrowserMySQLProgress(unittest.TestCase):
     def test_every_source_phase_has_an_allowlisted_diagnostic(self):
         import re
         script = SCRIPT.parents[2] / "frontend/tests/browser-mysql.mjs"
-        phases = set(re.findall(r'progress\("([a-z-]+)"', script.read_text()))
+        shared = script.with_name("ui-copy-boundaries.mjs")
+        phases = set(re.findall(r'(?:progress|checkpoint)\("([a-z-]+)"', script.read_text() + shared.read_text()))
         self.assertEqual(phases, runner.BROWSER_PHASES)
 
     def test_unrecognized_field_rejected(self):
@@ -308,6 +340,14 @@ class BrowserMySQLProgress(unittest.TestCase):
         for key in ("schema", "phase", "role", "size", "locale"):
             previous = self.value[key]
             for value in ("private", None, [], 1, True):
+                self.value[key] = value
+                self.write(); self.rejected()
+            self.value[key] = previous
+
+    def test_unbounded_or_non_integer_fault_counts_rejected(self):
+        for key in ("fault_hits", "fault_http_200", "fault_fulfilled", "fault_failed"):
+            previous = self.value[key]
+            for value in (-1, 33, True, 1.5, "private", None):
                 self.value[key] = value
                 self.write(); self.rejected()
             self.value[key] = previous

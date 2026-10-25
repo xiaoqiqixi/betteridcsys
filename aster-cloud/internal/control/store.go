@@ -110,6 +110,12 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 				return e
 			}
 		}
+		if migration.Version == 11 {
+			existingIndexes, e = usersPaginationMigrationPlan(ctx, conn, migration.SQL)
+			if e != nil {
+				return e
+			}
+		}
 		for _, statement := range strings.Split(migration.SQL, ";") {
 			if q := strings.TrimSpace(statement); q != "" {
 				if existingIndexes[q] {
@@ -122,6 +128,11 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		}
 		if migration.Version == 4 {
 			if e = checkAuditQueryIndexes(ctx, conn); e != nil {
+				return e
+			}
+		}
+		if migration.Version == 11 {
+			if e = checkUsersPaginationIndex(ctx, conn); e != nil {
 				return e
 			}
 		}
@@ -185,6 +196,9 @@ func (s *SQLStore) Check(ctx context.Context) error {
 		rows.Close()
 	}
 	if err := checkAuditQueryIndexes(ctx, s.DB); err != nil {
+		return err
+	}
+	if err := checkUsersPaginationIndex(ctx, s.DB); err != nil {
 		return err
 	}
 	if e := (&networking.Store{DB: s.DB}).Check(ctx); e != nil {

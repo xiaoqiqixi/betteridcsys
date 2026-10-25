@@ -147,6 +147,21 @@ class CloudPackageTests(unittest.TestCase):
         second = self.package(self.base / "second")
         self.assertEqual([p.read_bytes() for p in first], [p.read_bytes() for p in second])
 
+    def test_new_users_index_schema_is_bound_to_requested_commit(self):
+        original = self.commit
+        self.write("aster-cloud/migrations/011_console_users_pagination.sql",
+                   "CREATE INDEX controller_console_users_created_id ON controller_console_users (created_at,id);\n")
+        latest = self.commit_all()
+        for commit, schema, output in ((latest, 11, self.output), (original, 10, self.base / "older")):
+            controller, node, _ = self.package(commit=commit, output=output)
+            _, controller_files = self.read_archive(controller)
+            _, node_files = self.read_archive(node)
+            manifest = json.loads(controller_files["manifest.json"])
+            self.assertEqual(manifest["source_commit"], commit)
+            self.assertEqual(manifest["data_schemas"], {"controller_mysql": schema})
+            self.assertEqual(json.loads(node_files["manifest.json"])["data_schemas"],
+                             {"node_journal": 5, "fabric_journal": 3})
+
     def test_snapshot_is_requested_commit_not_worktree_head(self):
         self.write("aster-cloud/README.md", "new committed README\n")
         self.commit_all()

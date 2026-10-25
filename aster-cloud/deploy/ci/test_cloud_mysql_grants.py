@@ -265,6 +265,9 @@ def run_contract(fixture):
             index_count = admin.run("SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='" + database + "' AND INDEX_NAME IN ('controller_audit_action_time','controller_audit_actor_time','controller_audit_target_time','controller_identity_audit_action_time','controller_identity_audit_actor_time','controller_identity_audit_target_time');\n").strip()
             require(index_count == b"6", "REAL_AUDIT_INDEXES_MISSING")
             report["checks"].append("all-source-sql-migrations-including-fk-and-six-004-indexes")
+            users_index = admin.run("SELECT COUNT(*),SUM(CASE WHEN BINARY TABLE_NAME='controller_console_users' AND BINARY INDEX_NAME='controller_console_users_created_id' AND NON_UNIQUE=1 AND SUB_PART IS NULL AND INDEX_TYPE='BTREE' AND IS_VISIBLE='YES' AND EXPRESSION IS NULL AND COLLATION='A' AND ((SEQ_IN_INDEX=1 AND COLUMN_NAME='created_at') OR (SEQ_IN_INDEX=2 AND COLUMN_NAME='id')) THEN 1 ELSE 0 END) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='" + database + "' AND TABLE_NAME='controller_console_users' AND INDEX_NAME='controller_console_users_created_id';\n").strip()
+            require(users_index == b"2\t2", "REAL_USERS_PAGINATION_INDEX_INVALID")
+            report["checks"].append("exact-011-users-pagination-index")
             report.pop("migration_under_test", None)
             phase = "real-runtime-dml-and-migration-ddl"
             migrator.run("CREATE TABLE contract_permissions(id INT PRIMARY KEY,note VARCHAR(40)); ALTER TABLE contract_permissions ADD COLUMN extra INT NULL; CREATE INDEX contract_note_idx ON contract_permissions(note);\n", database=database)

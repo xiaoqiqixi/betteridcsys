@@ -24,6 +24,14 @@ DSN只允许独立`aster_controller`/`aster_cloud`及其`_`前缀子命名空间
 
 服务单元`controller-aster.service`提供sandbox和资源上限模板，**未自动安装/启用**。本期API进程为读取root-private策略而仍以root UID运行，但capabilities清空、只读系统、无VM命令执行；不能把它说成已经完成最小权限分离。发行前需在目标发行版实测systemd和TLS，进一步拆分非特权API身份/凭据交付。
 
+## 成员分页升级：schema 10 → 11
+
+011 仅增加 `controller_console_users(created_at,id)` 的稳定只读索引，不修改账户、会话、权限或财务库。仍须在升级窗口按现有停写/备份流程执行显式 `migrate` 与 `check`：索引DDL提交和迁移receipt不是同一事务；重入仅承认名称、列顺序、方向、可见性、BTREE及非unique/非prefix/非expression均精确匹配的索引，不覆盖同名冲突，也不偷偷修复已记录后的漂移。
+
+新包的 controller_mysql schema 元数据由源码迁移自动得到11；不修改旧001–010，也不放宽迁移数量/SHA校验。**即使这次只是索引，旧binary仍拒绝11库**。回滚需匹配的完整主控库备份和一致journals/应用版本；不要删11 receipt、直接drop索引或单换旧binary。不要恢复财务库来代替主控回滚。
+
+新成员前端需要新返回字段 `next_cursor`，请以同一包部署前后端。既有机器管理 `/v1/*` 的最多100条投影不因此变成完整分页；本次只改变会话管理面 `/console/v1/users`。实库/浏览器验收状态见[成员分页](../docs/MEMBERS_PAGINATION.md)。
+
 ## 根策略字段
 
 配置包括schema=1、controller_id、listen、tls_cert_file、tls_key_file、dsn_file、billing_token_file、admin_read_token_file、admin_write_token_file、heartbeat_ttl_seconds(10–300)、nodes数组、presets数组。

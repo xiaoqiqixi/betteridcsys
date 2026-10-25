@@ -132,7 +132,8 @@ export interface OperationInput {
 }
 export interface UsersResult {
   items: User[];
-  limit: number;
+  next_cursor: string | null;
+  limit: 100;
   truncated_possible: boolean;
 }
 export interface UserInput {

@@ -206,11 +206,17 @@ func (s *Service) Handler() http.Handler {
 		if !s.secure(w, r) {
 			return
 		}
-		// Identity routes currently have no query contract. This restriction is
-		// intentionally local rather than imposed on resource middleware users.
-		if r.URL.RawQuery != "" {
+		// Only the exact members GET route accepts its bounded cursor query.
+		// All identity writes and other reads retain their no-query contract.
+		if (r.URL.RawQuery != "" || r.URL.ForceQuery) && !(r.Method == "GET" && r.URL.Path == "/console/v1/users") {
 			failure(w, 400, "INVALID_QUERY")
 			return
+		}
+		if r.Method == "GET" && r.URL.Path == "/console/v1/users" {
+			if _, err := parseUsersQuery(r.URL); err != nil {
+				failure(w, 400, "INVALID_QUERY")
+				return
+			}
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
@@ -327,12 +333,17 @@ func (s *Service) Handler() http.Handler {
 }
 func (s *Service) users(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		items, err := s.listUsers(r.Context())
+		position, err := parseUsersQuery(r.URL)
+		if err != nil {
+			failure(w, 400, "INVALID_QUERY")
+			return
+		}
+		page, err := s.listUsers(r.Context(), position)
 		if err != nil {
 			identityError(w, err)
 			return
 		}
-		output(w, 200, map[string]any{"items": items, "limit": 100, "truncated_possible": true})
+		output(w, 200, page)
 		return
 	}
 	var in CreateUser

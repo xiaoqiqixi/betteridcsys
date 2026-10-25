@@ -17,10 +17,11 @@ const userColumns = "id,email,name,role,enabled,permissions"
 
 type scanner interface{ Scan(...any) error }
 
-func scanUser(row scanner) (User, error) {
+func scanUser(row scanner, extra ...any) (User, error) {
 	var u User
 	var raw []byte
-	if err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Enabled, &raw); err != nil {
+	fields := append([]any{&u.ID, &u.Email, &u.Name, &u.Role, &u.Enabled, &raw}, extra...)
+	if err := row.Scan(fields...); err != nil {
 		return User{}, err
 	}
 	var stored []string
@@ -282,22 +283,6 @@ func (s *Service) updateUser(ctx context.Context, actorID, target string, in Upd
 		return User{}, err
 	}
 	return u, tx.Commit()
-}
-func (s *Service) listUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+userColumns+" FROM controller_console_users ORDER BY created_at,id LIMIT 100")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []User{}
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, u)
-	}
-	return items, rows.Err()
 }
 
 type session struct {

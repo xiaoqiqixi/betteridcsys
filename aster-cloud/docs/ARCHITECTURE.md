@@ -44,7 +44,7 @@
 
 | 状态域 | 当前版本与兼容边界 |
 | --- | --- |
-| 主控 MySQL | 当前 schema **10**：007 全局 VPC/epoch，008 公网库存/租约，009 VM 公网资源，010 实例入站策略；001–009 历史迁移保持不可变。绑定、地址占用、策略版本、epoch、操作和审计须一致备份。旧 binary 拒绝新数据库，不能只换程序回滚。 |
+| 主控 MySQL | 当前 schema **11**：007 全局 VPC/epoch，008 公网库存/租约，009 VM 公网资源，010 实例入站策略，011 成员分页只读索引；001–010 历史迁移保持不可变。绑定、地址占用、策略版本、epoch、操作和审计须一致备份。旧 binary 拒绝新数据库，不能只换程序回滚。 |
 | 节点 journal | 兼容既有 schema 1/2；node/2 绑定使用 **3**，显式网络恢复 completion 使用 **4**，托管公网绑定与永久退役墓碑使用 **5**。旧节点不能忽略新绑定继续执行；OVS 存储/迁移及旧 reconcile 明确拒绝。 |
 | fabric journal | 兼容此前 schema-1 CLI；首次启停门禁写 schema **2**，增加持久 preparing/completed/uncertain 围栏。归档/overlay 使用 schema **3**，NAT owner 与 `nat_profile_ids` 保留所有权墓碑；旧 binary 不得忽略新字段降级。pending/unknown 不允许借历史 applied 回执放行。 |
 

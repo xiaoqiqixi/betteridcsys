@@ -290,9 +290,18 @@ export const validRoles = (x: unknown): x is { items: Role[] } =>
 export const validUsers = (x: unknown): x is UsersResult =>
   record(x) &&
   Array.isArray(x.items) &&
+  x.items.length <= 100 &&
   x.items.every(validUser) &&
-  finite(x.limit) &&
-  typeof x.truncated_possible === "boolean";
+  new Set(x.items.map((item) => item.id)).size === x.items.length &&
+  x.limit === 100 &&
+  typeof x.truncated_possible === "boolean" &&
+  (x.next_cursor === null
+    ? !x.truncated_possible
+    : typeof x.next_cursor === "string" &&
+      x.next_cursor.length <= 512 &&
+      /^u1\.[A-Za-z0-9_-]+$/.test(x.next_cursor) &&
+      x.items.length === 100 &&
+      x.truncated_possible);
 export function key32(): string {
   const b = new Uint8Array(16);
   crypto.getRandomValues(b);

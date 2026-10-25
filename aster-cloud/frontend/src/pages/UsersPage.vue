@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue";
+import { computed, nextTick, shallowRef, useTemplateRef, watch } from "vue";
 import { Plus, RefreshCw, Users } from "@lucide/vue";
 import { useConsole } from "../context";
 import { useQuery } from "../composables/query";
-import { validRoles, validUsers } from "../api/client";
+import { useUsersPage } from "../composables/users-page";
+import { validRoles } from "../api/client";
 import type { User } from "../api/types";
 import UiButton from "../components/UiButton.vue";
 import StateBlock from "../components/StateBlock.vue";
@@ -13,8 +14,9 @@ const {
   prefs: { tr },
   session,
 } = useConsole();
-const list = useQuery(() => "/users", validUsers),
+const list = useUsersPage(),
   roles = useQuery(() => "/roles", validRoles);
+const heading = useTemplateRef<HTMLHeadingElement>("membersHeading");
 const editorOpen = shallowRef(false),
   selected = shallowRef<User | null>(null);
 const roleNames: Record<string, [string, string]> = {
@@ -24,7 +26,13 @@ const roleNames: Record<string, [string, string]> = {
   custom: ["自定义", "Custom"],
 };
 const canEdit = computed(
-  () => session.can("users.manage") && !!roles.data.value,
+  () =>
+    session.can("users.manage") &&
+    !list.denied.value &&
+    !list.loading.value &&
+    !list.error.value &&
+    !!list.data.value &&
+    !!roles.data.value,
 );
 function canEditUser(user: User) {
   return (
@@ -34,19 +42,47 @@ function canEditUser(user: User) {
   );
 }
 function edit(user: User | null) {
+  if (!canEdit.value || (user && !canEditUser(user))) return;
   selected.value = user;
   editorOpen.value = true;
 }
+watch(
+  [() => session.epoch.value, () => list.denied.value],
+  () => {
+    editorOpen.value = false;
+    selected.value = null;
+  },
+  { flush: "sync" },
+);
+async function navigate(direction: "previous" | "next") {
+  if (editorOpen.value) return;
+  const page = list.page.value,
+    identity = session.epoch.value;
+  await list[direction]();
+  if (
+    identity !== session.epoch.value ||
+    list.error.value ||
+    list.page.value === page
+  )
+    return;
+  await nextTick();
+  heading.value?.focus({ preventScroll: true });
+  heading.value?.scrollIntoView?.({ block: "start", behavior: "auto" });
+}
 async function saved() {
+  const created = selected.value === null;
   await session.refresh();
-  await list.reload();
+  if (created) await list.refreshFirst();
+  else await list.reload();
 }
 </script>
 <template>
   <section class="page">
     <header class="page-heading">
       <div>
-        <h1>{{ tr("成员与权限", "Members & access") }}</h1>
+        <h1 ref="membersHeading" tabindex="-1">
+          {{ tr("成员与权限", "Members & access") }}
+        </h1>
         <p>
           {{
             tr(
@@ -59,8 +95,9 @@ async function saved() {
       <div class="heading-actions">
         <UiButton
           :busy="list.loading.value || roles.loading.value"
+          :disabled="editorOpen"
           @click="
-            list.reload();
+            list.refreshFirst();
             roles.reload();
           "
           ><RefreshCw :size="16" aria-hidden="true" />{{
@@ -74,15 +111,40 @@ async function saved() {
       </div>
     </header>
     <StateBlock
-      :loading="list.loading.value || roles.loading.value"
-      :error="list.error.value || roles.error.value"
+      :loading="(!list.data.value && list.loading.value) || roles.loading.value"
+      :error="(!list.data.value && list.error.value) || roles.error.value"
       :empty="!list.data.value?.items.length"
       :title="tr('暂无成员', 'No members yet')"
       @reload="
         list.reload();
         roles.reload();
       "
-      ><div class="resource-list">
+      ><div
+        v-if="list.data.value && list.loading.value"
+        class="members-progress"
+        role="status"
+        :aria-label="tr('正在加载', 'Loading')"
+      >
+        {{ tr("正在加载成员…", "Loading members…") }}
+      </div>
+      <div
+        v-if="list.data.value && list.error.value"
+        class="members-retry"
+        role="alert"
+      >
+        <p>
+          {{
+            tr(
+              "未能加载，请重试。当前仍显示上次读取的内容。",
+              "Could not load members. The last loaded page is still shown.",
+            )
+          }}
+        </p>
+        <UiButton @click="list.reload()">{{
+          tr("重新加载", "Reload")
+        }}</UiButton>
+      </div>
+      <div class="resource-list" :aria-busy="list.loading.value || undefined">
         <article
           v-for="user in list.data.value?.items"
           :key="user.id"
@@ -114,10 +176,32 @@ async function saved() {
         </article>
       </div></StateBlock
     >
-    <p v-if="list.data.value?.truncated_possible" class="list-note">
-      {{ tr("最多显示", "Showing up to") }} {{ list.data.value.limit }}
-      {{ tr("位成员。", "members.") }}
-    </p>
+    <nav
+      v-if="list.data.value && !list.denied.value"
+      class="members-pagination"
+      :aria-label="tr('成员列表分页', 'Member list pagination')"
+    >
+      <p role="status" aria-live="polite">
+        {{
+          tr(
+            `第 ${list.page.value} 页 · ${list.data.value.items.length} 位成员`,
+            `Page ${list.page.value} · ${list.data.value.items.length} members`,
+          )
+        }}
+      </p>
+      <div class="pagination-actions">
+        <UiButton
+          :disabled="!list.canPrevious.value || editorOpen"
+          @click="navigate('previous')"
+          >{{ tr("上一页", "Previous") }}</UiButton
+        >
+        <UiButton
+          :disabled="!list.canNext.value || editorOpen"
+          @click="navigate('next')"
+          >{{ tr("下一页", "Next") }}</UiButton
+        >
+      </div>
+    </nav>
     <aside class="access-note">
       <Users :size="18" aria-hidden="true" />
       <p>
@@ -209,7 +293,35 @@ async function saved() {
   line-height: 1.7;
   margin: 0;
 }
-.list-note {
+.members-progress,
+.members-retry {
+  padding: 12px 0;
+  font-size: 14px;
+  color: var(--secondary);
+}
+.members-retry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  color: var(--danger);
+}
+.members-retry p {
+  margin: 0;
+  flex: 1 1 220px;
+}
+.members-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pagination-actions {
+  display: flex;
+  gap: 8px;
+}
+.members-pagination p {
   font-size: 12px;
   color: var(--secondary);
   margin-top: 16px;

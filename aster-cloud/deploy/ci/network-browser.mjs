@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { sidebarBrowserAcceptance } from './sidebar-browser.mjs';
+import { membersBrowserAcceptance } from './members-browser.mjs';
 
 function required(name) {
   const value = process.env[name];
@@ -29,7 +30,7 @@ const report = {
   checks: [], screenshots: [], console_errors: [], requests: [], public_ingress_write_attempts: [], public_ip_write_attempts: [], public_ip_failed_writes: [],
 };
 let phase = 'launch', context, page, signedIn = false;
-const sensitive = new Set([credentials.password]);
+const sensitive = new Set([credentials.password, credentials.members_page?.viewer_password]);
 // Do not output a Playwright stack/call log: fill() diagnostics can contain secrets.
 function safeMessage(error) {
   let value = String(error instanceof Error ? error.message : error).split('\n')[0].slice(0,500);
@@ -1279,6 +1280,9 @@ try {
   await page.setViewportSize({width:320,height:844}); await noOverflow('320px English dark instance tabs keep horizontal scrolling within their own strip');
   await page.setViewportSize({width:1440,height:1000}); await noOverflow('desktop English dark direct resource has no overflow');
   check('direct and floating management retain custom controls across mobile/desktop and Chinese/light/English/dark');
+
+  phase = 'real-mysql-members-pagination';
+  await membersBrowserAcceptance({ page, output, report, base, credentials });
 
   assert.deepEqual(report.console_errors, []);
   check('no browser JavaScript errors');

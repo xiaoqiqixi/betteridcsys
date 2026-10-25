@@ -6,7 +6,7 @@ or implicit tenant binding. `viewer` can read controller infrastructure but cann
 mutate it. Tenant self-service needs a separate, explicit ownership mapping.
 
 Construct `New(db, Config{Origin: "https://fixed-console-origin"})` after applying
-`002_console_identity.sql`. Mount `Handler()` for the identity endpoints and use
+the complete current controller migrations (identity tables from `002`, members index from `011`). Mount `Handler()` for the identity endpoints and use
 `Require(permission, handler)` for every other console endpoint. Read `Actor(ctx)`
 inside the handler and enforce operation-specific ownership and dangerous/restore
 permissions there too. This middleware is not a substitute for those checks.
@@ -14,9 +14,7 @@ permissions there too. This middleware is not a substitute for those checks.
 Only real TLS requests are accepted; `X-Forwarded-*` is not trusted. Behind a proxy,
 use a separately authenticated TLS upstream rather than bypassing this check.
 All mutations, including login, require the exact configured `Origin` and
-`X-CSRF-Token`. No cross-origin CORS is enabled. Current identity APIs accept no
-query parameters; resource GET handlers wrapped by `Require` may validate their
-own pagination/filter queries. Unsafe methods reject queries. Bodies require JSON, reject unknown/duplicate top-level keys,
+`X-CSRF-Token`. No cross-origin CORS is enabled. Only `GET /console/v1/users` accepts the bounded `cursor` query documented below; all other identity endpoints still reject queries. Resource GET handlers wrapped by `Require` may validate their own pagination/filter queries. Unsafe methods reject queries. Bodies require JSON, reject unknown/duplicate top-level keys,
 and are capped at 16 KiB.
 
 Login flow: `GET /console/v1/auth/csrf`, retain the Secure/HttpOnly/SameSite=Lax
@@ -61,7 +59,7 @@ node configuration rights. Roles are included by `GET /console/v1/roles`.
 Identity audit records are append-only through this package and contain actor,
 target, action and UTC time, never password/session/CSRF material. Credential
 failures use a SHA-256 email target rather than raw supplied text. External log
-retention/export, MFA, password reset, full user pagination, identity-provider
+retention/export, MFA, self-service password recovery, identity-provider
 federation and tenant accounts are separate work, not claimed complete here.
 
 ## Tests
@@ -71,7 +69,21 @@ are absent. Prefer `ASTER_CLOUD_TEST_DSN` whose database name **must contain
 `_test`**, or the existing native CI `ASTER_MYSQL_TEST_DSN` whose database must be
 exactly `aster_ci_test`. In either case the fixture principal needs CREATE/DROP
 DATABASE on the isolated test server: the test creates a random
-`aster_cloud_test_identity_<hex>` database, applies only migration 002, and drops
+`aster_cloud_test_identity_<hex>` database, applies identity migrations 002 and 011, and drops
 that database on cleanup. It never reuses customer/controller tables or prints
 DSNs. Do not provide any production DSN. A skipped local test is not MySQL
 acceptance; CI must run with the real fixture and zero skips.
+
+## Complete members pagination (W07-A, schema 11)
+
+`GET /console/v1/users` requires the same current `users.manage` permission as before. Its optional single `cursor` is an untrusted seek position, not a signed-in identity or a grant; changing it never bypasses the current session, enabled state, or permissions. All existing create/update/delegation and last-administrator contracts remain unchanged.
+
+Response: `{items,limit:100,next_cursor:string|null,truncated_possible:boolean}`. The compatibility boolean now means **an actual 101st row exists**, not a fixed truncation warning. A page may contain 0–100 users; a non-null next cursor requires exactly 100 returned users. There is no total count, offset, search, role filter, or arbitrary page jump in this slice.
+
+Rows are ordered by `created_at ASC,id ASC`. `LIMIT 101` supplies only the has-more lookahead; next position is the **100th returned** row, not the lookahead row. The UTC microsecond timestamp and ID preserve ties without client-side time conversion. Static traversal does not duplicate or omit rows. This is not a long-running snapshot across concurrent account creation, rename, or disable operations; returning to an earlier page reloads current data.
+
+Only `?cursor=u1.<canonical-unpadded-base64url>` is supported. Its exact compact JSON is `{"at":"2026-10-25T00:00:00.123456Z","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}` with fixed field order, six UTC fractional digits and 32 lowercase hexadecimal ID bytes. Values are bounded to 512 characters, the query to 600 bytes; duplicate/unknown keys, empty cursor/query, wrong version, noncanonical encoding, aliases, extra/duplicate JSON fields, nulls and invalid MySQL-range UTC times return `400 INVALID_QUERY`. The position is passed as parameterized SQL values. Other identity queries and every write query remain rejected.
+
+The console uses previous/next navigation with an in-memory, identity-bound page stack. Page/count advance only after a validated response; a failed next request retries that intended page. A 401/403 clears rows and cursors; identity/permission changes close the old editor and discard late responses. No account writes occur while navigating. The new frontend deliberately refuses legacy responses without `next_cursor`, rather than calling their truncated list complete; deploy matching frontend/backend assets.
+
+Index migration, rollback and acceptance boundaries: [members pagination](../../docs/MEMBERS_PAGINATION.md).

@@ -33,7 +33,8 @@ BROWSER_PHASES = {
     "language-open", "language-select", "language-close", "language-assert",
     "currency-open", "currency-select", "currency-assert", "screenshot",
     "audit-navigation", "audit-assert", "read-fault-baseline", "read-fault-inject",
-    "read-fault-assert", "read-fault-recover", "logout-open", "logout-submit",
+    "read-fault-assert", "read-fault-delivery", "read-fault-locale", "read-fault-message",
+    "read-fault-no-write-warning", "read-fault-retry", "read-fault-no-empty", "read-fault-recover", "logout-open", "logout-submit",
     "logout-session", "report-assert", "report-write",
 }
 
@@ -133,9 +134,22 @@ def read_browser_progress(scratch):
         "role": {"none", "customer", "admin"}, "size": {"none", "desktop", "mobile"},
         "locale": {"none", "zh-CN", "en"},
     }
-    if not isinstance(value, dict) or set(value) != set(allowed) or any(type(value[key]) is not str or value[key] not in choices for key, choices in allowed.items()):
+    counts = {"fault_hits", "fault_http_200", "fault_fulfilled", "fault_failed"}
+    if not isinstance(value, dict) or set(value) != set(allowed) | counts or any(type(value[key]) is not str or value[key] not in choices for key, choices in allowed.items()) or any(type(value[key]) is not int or not 0 <= value[key] <= 32 for key in counts):
         raise Failure("Browser progress fields must use the exact bounded vocabulary")
     return value
+
+
+def acceptance_environment(base, scratch):
+    # Firefox NSS trust does not cover Playwright's Node-side route.fetch.
+    # Trust only this invocation's generated localhost-constrained CA and only
+    # in the acceptance child, never in the negative TLS probe or the host.
+    if "NODE_EXTRA_CA_CERTS" in base or "NODE_TLS_REJECT_UNAUTHORIZED" in base:
+        raise Failure("Inherited Node trust overrides are forbidden")
+    ca = regular(scratch / "ca.pem", 16384)
+    if ca.stat().st_uid != os.geteuid() or stat.S_IMODE(ca.stat().st_mode) != 0o600:
+        raise Failure("Only the owned private generated CA may be used")
+    return {**base, "NODE_EXTRA_CA_CERTS": str(ca)}
 
 
 def clean_environment(source, scratch, billing):
@@ -223,10 +237,10 @@ def main():
         signal.signal(signal.SIGTERM, interrupted)
         env = clean_environment(os.environ, scratch, billing)
         serial = 0
-        def run(arguments, timeout=120, required=()):
+        def run(arguments, timeout=120, required=(), child_env=None):
             nonlocal serial
             serial += 1
-            child = supervisor.start(arguments, billing / "backend", env, scratch / f"stage-{serial}.log")
+            child = supervisor.start(arguments, billing / "backend", env if child_env is None else child_env, scratch / f"stage-{serial}.log")
             if supervisor.wait(child, timeout, required) != 0:
                 raise Failure("Owned acceptance stage failed; private diagnostics withheld")
         stage = "private-localhost-certificate"
@@ -257,7 +271,7 @@ def main():
         run(["certutil", "-A", "-d", profile, "-n", "Aster disposable financial localhost", "-t", "C,,", "-i", str(scratch / "ca.pem")], required=(fixture,))
         run(["node", script, "trusted"], timeout=90, required=(fixture,))
         stage = "real-api-ui-acceptance"
-        run(["node", script, "acceptance"], timeout=600, required=(fixture,))
+        run(["node", script, "acceptance"], timeout=600, required=(fixture,), child_env=acceptance_environment(env, scratch))
         stage = "historical-rows-and-owned-database-cleanup"
         (scratch / "stop").touch(mode=0o600)
         if supervisor.wait(fixture, 35) != 0 or (scratch / "fixture-passed").read_text() != "real-mysql-history-and-cleanup-verified\n":

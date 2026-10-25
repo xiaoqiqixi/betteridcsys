@@ -10,6 +10,7 @@ import {
   assertCurrencyScope,
   assertAuditCopy,
   assertReadFailureCopy,
+  malformedReadReply,
 } from "./ui-copy-boundaries.mjs";
 
 const { firefox } = await import(
@@ -33,6 +34,10 @@ const progressState = {
   role: "none",
   size: "none",
   locale: "none",
+  fault_hits: 0,
+  fault_http_200: 0,
+  fault_fulfilled: 0,
+  fault_failed: 0,
 };
 async function progress(phase, labels = {}) {
   Object.assign(progressState, labels, { phase });
@@ -268,21 +273,59 @@ try {
             await goto("/home");
             await expect(page.locator(".gh-workspace")).toBeVisible();
             const pattern = `${origin}/api/v1/overview*`;
-            await progress("read-fault-inject");
+            const faults = {
+              fault_hits: 0,
+              fault_http_200: 0,
+              fault_fulfilled: 0,
+              fault_failed: 0,
+            };
+            const pending = new Set();
+            await progress("read-fault-inject", faults);
             await page.route(pattern, async (route) => {
-              assert.equal(route.request().method(), "GET");
-              const actual = await route.fetch();
-              assert.equal(actual.status(), 200);
-              await route.fulfill({
-                response: actual,
-                body: JSON.stringify({ malformed_read: true }),
-              });
+              const injection = (async () => {
+                faults.fault_hits++;
+                try {
+                  assert.equal(route.request().method(), "GET");
+                  const actual = await route.fetch({ maxRedirects: 0 });
+                  assert.equal(actual.status(), 200);
+                  faults.fault_http_200++;
+                  const payload = await actual.json();
+                  assert.ok(
+                    payload &&
+                      typeof payload.data === "object" &&
+                      payload.data !== null,
+                  );
+                  await route.fulfill(malformedReadReply(actual));
+                  faults.fault_fulfilled++;
+                } catch {
+                  faults.fault_failed++;
+                  await route.abort("failed").catch(() => {});
+                }
+              })();
+              pending.add(injection);
+              try {
+                await injection;
+              } finally {
+                pending.delete(injection);
+              }
             });
             await page.reload({ waitUntil: "domcontentloaded" });
-            await progress("read-fault-assert");
-            await assertReadFailureCopy(page);
-            await progress("read-fault-recover");
+            await progress("read-fault-delivery", faults);
+            await expect
+              .poll(() => faults.fault_fulfilled + faults.fault_failed)
+              .toBeGreaterThan(0);
+            await progress("read-fault-assert", faults);
+            assert.equal(faults.fault_failed, 0);
+            assert.ok(faults.fault_http_200 > 0 && faults.fault_fulfilled > 0);
+            await assertReadFailureCopy(page, async (phase) =>
+              progress(phase, faults),
+            );
+            await progress("read-fault-recover", faults);
             await page.unroute(pattern);
+            await Promise.all([...pending]);
+            await progress("read-fault-recover", faults);
+            assert.equal(faults.fault_failed, 0);
+            assert.equal(faults.fault_hits, faults.fault_fulfilled);
             await page
               .getByRole("alert")
               .getByRole("button", {

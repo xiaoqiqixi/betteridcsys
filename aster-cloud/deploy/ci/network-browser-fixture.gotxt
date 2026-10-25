@@ -143,6 +143,19 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	worker := f.worker(rpc)
 	phase("INITIAL_EPOCH_RELEASE")
 	advanceOverlayFixture(t, worker, epoch.ID)
+	const origin = "https://localhost:5447"
+	phase("IDENTITY_SETUP")
+	auth, err := identity.New(f.store.DB, identity.Config{Origin: origin})
+	if err != nil {
+		t.Fatal("fixture identity unavailable")
+	}
+	password, email := "Browser-NAT-"+id()+"!", "network-admin@example.invalid"
+	browserActor, err := auth.Bootstrap(ctx, email, "网络验收管理员", []byte(password))
+	if err != nil {
+		t.Fatal("fixture bootstrap failed")
+	}
+	memberPage := seedOwnedBrowserMembers(t, ctx, f.store, auth, browserActor, password)
+	memberBaseline := auditDataDigest(t, f.store, map[string]string{"controller_console_users": "id"})
 	phase("INITIAL_HISTORY_CAPTURE")
 	initialTasks, err := f.store.OverlayTasks(ctx, epoch.ID)
 	if err != nil {
@@ -158,17 +171,6 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 	}
 	worker.Now = func() time.Time { return time.Now().UTC() }
 	rpc.lose = "program" // One lost ACK: receipt exists; GET reconcile must not re-POST.
-	const origin = "https://localhost:5447"
-	phase("IDENTITY_SETUP")
-	auth, err := identity.New(f.store.DB, identity.Config{Origin: origin})
-	if err != nil {
-		t.Fatal("fixture identity unavailable")
-	}
-	password, email := "Browser-NAT-"+id()+"!", "network-admin@example.invalid"
-	browserActor, err := auth.Bootstrap(ctx, email, "网络验收管理员", []byte(password))
-	if err != nil {
-		t.Fatal("fixture bootstrap failed")
-	}
 	runner := NewOverlayRunner(worker)
 	defer runner.Close()
 	mux := http.NewServeMux()
@@ -195,7 +197,7 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 		serverDone <- server.ServeTLS(listener, filepath.Join(caseDir, "server.pem"), filepath.Join(caseDir, "server.key"))
 	}()
 	phase("CREDENTIAL_HANDOFF")
-	credentials, err := json.Marshal(map[string]any{"email": email, "password": password, "origin": origin, "actor_id": browserActor.ID, "owner_ref": f.vpc.OwnerRef, "vpc_id": f.vpc.ID, "epoch_id": epoch.ID, "members": f.members, "gateway": gateway, "direct_node_id": directNode.ID, "direct_pool_id": directPool.ID})
+	credentials, err := json.Marshal(map[string]any{"email": email, "password": password, "origin": origin, "actor_id": browserActor.ID, "owner_ref": f.vpc.OwnerRef, "vpc_id": f.vpc.ID, "epoch_id": epoch.ID, "members": f.members, "gateway": gateway, "direct_node_id": directNode.ID, "direct_pool_id": directPool.ID, "members_page": memberPage})
 	if err != nil || os.WriteFile(filepath.Join(caseDir, "browser-credentials.json"), credentials, 0600) != nil {
 		t.Fatal("private fixture credentials unavailable")
 	}
@@ -383,8 +385,11 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 			if err := publicVMBrowserProof(t, ctx, f, directRPC, directPool, browserActor.ID); err != nil {
 				t.Fatal("VM public resource browser proof failed", err)
 			}
+			if !reflect.DeepEqual(memberBaseline, auditDataDigest(t, f.store, map[string]string{"controller_console_users": "id"})) {
+				t.Fatal("member browser changed seeded account or authorization data")
+			}
 			// Fixed schema: no emails, IDs, credentials, DSNs, cookies, SQL or logs.
-			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts, "public_egress_enabled": true, "public_egress_disabled": true, "pure_internet_reenabled": true, "original_node_post_prefix_count": 30, "original_nat_node_post_prefix_count": 42, "public_pool_created": true, "public_pool_extended": true, "public_pool_state_managed": true, "public_ip_bound": true, "public_ip_unbound_after_all_release_receipts": true, "public_ip_reclaimed_and_reallocated": true, "public_ip_lease_history_retained": true, "public_ip_post_commit_ack_lost": publicAllocationACKLost.Load(), "public_ip_fault_headers_flushed": publicAllocationHeadersFlushed.Load(), "public_ip_operations": natOperationCount, "total_pool_and_nat_operations": operationCount, "vm_public_resource_operations": 9, "vm_public_resource_history_count": 3, "direct_node_post_count": 3, "floating_bound_moved_unbound": true, "floating_reclaimed_reallocated": true, "direct_created_dispatched_detached_reclaimed": true, "direct_node3_exact_requests_and_results": true, "global_inventory_exclusive": true, "first_seven_epochs_retained": true, "public_ingress_operations": 3, "public_ingress_version_history": 3, "public_ingress_default_deny_move_revoke": true, "public_ingress_immutable_operations": true, "public_ip_lease_count": len(leases)})
+			result, err := json.Marshal(map[string]any{"passed": true, "real_mysql": true, "simulated_node_rpc": true, "epochs": epochs, "vpcs": vpcs, "audit_count_increased": true, "financial_and_node_snapshots_unchanged": true, "initial_network_snapshot_and_receipts_unchanged": true, "lost_ack_reconciled": true, "node_posts_unique": true, "node_post_count": posts, "public_egress_enabled": true, "public_egress_disabled": true, "pure_internet_reenabled": true, "original_node_post_prefix_count": 30, "original_nat_node_post_prefix_count": 42, "public_pool_created": true, "public_pool_extended": true, "public_pool_state_managed": true, "public_ip_bound": true, "public_ip_unbound_after_all_release_receipts": true, "public_ip_reclaimed_and_reallocated": true, "public_ip_lease_history_retained": true, "public_ip_post_commit_ack_lost": publicAllocationACKLost.Load(), "public_ip_fault_headers_flushed": publicAllocationHeadersFlushed.Load(), "public_ip_operations": natOperationCount, "total_pool_and_nat_operations": operationCount, "vm_public_resource_operations": 9, "vm_public_resource_history_count": 3, "direct_node_post_count": 3, "floating_bound_moved_unbound": true, "floating_reclaimed_reallocated": true, "direct_created_dispatched_detached_reclaimed": true, "direct_node3_exact_requests_and_results": true, "global_inventory_exclusive": true, "first_seven_epochs_retained": true, "public_ingress_operations": 3, "public_ingress_version_history": 3, "public_ingress_default_deny_move_revoke": true, "public_ingress_immutable_operations": true, "public_ip_lease_count": len(leases), "members_total": 205, "members_unchanged": true})
 			if err != nil || os.WriteFile(filepath.Join(caseDir, "fixture.json"), result, 0600) != nil {
 				t.Fatal("sanitized durable result unavailable")
 			}
@@ -392,6 +397,115 @@ func TestOwnedNATBrowserFixture(t *testing.T) {
 			return
 		}
 	}
+}
+
+// Owned fixture data only. Browser member acceptance is read-only after this
+// seed and its full account-row baseline; existing resource writes stay unchanged.
+type ownedBrowserMembers struct {
+	Count          int      `json:"count"`
+	IDs            []string `json:"ids"`
+	ViewerEmail    string   `json:"viewer_email"`
+	ViewerPassword string   `json:"viewer_password"`
+}
+
+func seedOwnedBrowserMembers(t *testing.T, ctx context.Context, store *SQLStore, auth *identity.Service, admin identity.User, adminPassword string) ownedBrowserMembers {
+	t.Helper()
+	const origin = "https://localhost:5447"
+	request := func(method, path string, body any, cookie *http.Cookie, csrf string, want int) *httptest.ResponseRecorder {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal("member seed request invalid")
+		}
+		r := httptest.NewRequest(method, origin+"/console/v1"+path, bytes.NewReader(raw))
+		r.RemoteAddr = "127.0.0.1:45455"
+		if method != "GET" {
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Origin", origin)
+			r.Header.Set("X-CSRF-Token", csrf)
+		}
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		auth.Handler().ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatal("member seed production identity request rejected")
+		}
+		return w
+	}
+	csrfResponse := request("GET", "/auth/csrf", nil, nil, "", 200)
+	var csrf struct {
+		Token string `json:"csrf_token"`
+	}
+	cookies := csrfResponse.Result().Cookies()
+	if json.Unmarshal(csrfResponse.Body.Bytes(), &csrf) != nil || len(cookies) != 1 || csrf.Token == "" {
+		t.Fatal("member seed anonymous identity unavailable")
+	}
+	login := request("POST", "/auth/login", map[string]string{"email": admin.Email, "password": adminPassword}, cookies[0], csrf.Token, 200)
+	var session struct {
+		User identity.User `json:"user"`
+		CSRF string        `json:"csrf_token"`
+	}
+	cookies = login.Result().Cookies()
+	if json.Unmarshal(login.Body.Bytes(), &session) != nil || len(cookies) != 1 || session.User.ID != admin.ID || session.CSRF == "" {
+		t.Fatal("member seed administrator authentication unavailable")
+	}
+	out := ownedBrowserMembers{Count: 205, IDs: []string{}, ViewerEmail: "members-viewer@example.invalid", ViewerPassword: "Browser-Members-" + id() + "!"}
+	created := request("POST", "/users", identity.CreateUser{Email: out.ViewerEmail, Name: "只读成员验收", Password: out.ViewerPassword, Role: "viewer"}, cookies[0], session.CSRF, 201)
+	var viewer struct {
+		User identity.User `json:"user"`
+	}
+	if json.Unmarshal(created.Body.Bytes(), &viewer) != nil || viewer.User.Role != "viewer" || viewer.User.ID == "" || viewer.User.Can("users.manage") {
+		t.Fatal("member seed viewer invalid")
+	}
+	request("POST", "/auth/logout", map[string]any{}, cookies[0], session.CSRF, 204)
+	tx, err := store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal("member seed transaction unavailable")
+	}
+	defer tx.Rollback()
+	var before int
+	if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_console_users").Scan(&before); err != nil || before != 2 {
+		t.Fatal("member seed requires its two owned accounts only")
+	}
+	at := time.Date(2025, 1, 2, 3, 4, 5, 123456000, time.UTC)
+	if _, err = tx.ExecContext(ctx, "UPDATE controller_console_users SET created_at=? WHERE id IN (?,?)", at, admin.ID, viewer.User.ID); err != nil {
+		t.Fatal("member seed equal chronology unavailable")
+	}
+	for i := 0; i < 203; i++ {
+		name := "分页成员 " + strconv.Itoa(i+1)
+		email := "member-" + strconv.Itoa(i+1) + "@example.invalid"
+		if i == 202 {
+			name = "LongMember" + strings.Repeat("x", 70)
+			email = strings.Repeat("l", 63) + "@" + strings.Repeat("d", 63) + ".example.invalid"
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO controller_console_users(id,email,name,password_hash,role,enabled,permissions,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", id(), email, name, "fixture-list-only-unverifiable-hash", "viewer", true, `["instances.read","nodes.read","storage.read"]`, at, at); err != nil {
+			t.Fatal("member seed row unavailable")
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal("member seed commit unavailable")
+	}
+	rows, err := store.DB.QueryContext(ctx, "SELECT id FROM controller_console_users ORDER BY created_at,id")
+	if err != nil {
+		t.Fatal("member seed ordering unavailable")
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var memberID string
+		if rows.Scan(&memberID) != nil {
+			t.Fatal("member seed identity unavailable")
+		}
+		out.IDs = append(out.IDs, memberID)
+	}
+	if rows.Err() != nil || len(out.IDs) != 205 {
+		t.Fatal("member seed must contain exactly 205 identities")
+	}
+	var timestamps int
+	if store.DB.QueryRowContext(ctx, "SELECT COUNT(DISTINCT created_at) FROM controller_console_users").Scan(&timestamps) != nil || timestamps != 1 {
+		t.Fatal("member seed timestamps must tie exactly")
+	}
+	return out
 }
 
 // The normal public release guard verifies every exact phase request/receipt.

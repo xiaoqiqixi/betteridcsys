@@ -1,6 +1,6 @@
 # KVM 加强版功能对照与开发验收规格
 
-2026-10-25。本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。当前主控数据库为 schema **10**；历史增量段落中的版本号仅表示各次模型引入版本。
+2026-10-25。本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。当前主控数据库为 schema **11**；历史增量段落中的版本号仅表示各次模型引入版本。
 
 ## 1. 对标范围与不变边界
 
@@ -177,7 +177,7 @@ Migration 005 新增 `controller_network_vpcs`、`controller_network_pools`、`c
 
 管理对象状态仍为 `planned` / `reserved`，没有 delete/free/自动到期回收，不改历史资源或财务快照。Migration 006 的 `controller_instance_networks` 和 `ReserveTaskTx` 将显式 VPC create 的 IP 预留、不可变网络绑定、精确任务 SHA 与审计纳入同一个事务；提交后才派发 node/2。旧管理 API/实库证据不能替代新 gate 或包转发验收；本轮实测与跳过项见 [OVS_VM_GATE_VALIDATION.md](OVS_VM_GATE_VALIDATION.md)。完整 API 见 [NETWORK_API.md](NETWORK_API.md)。
 
-**升级/回滚：当前主控数据库为 schema 10；001–009 历史 SQL 不改，旧二进制不能只换程序回滚。** 007 引入全局 VPC/epoch，008/009/010 分别引入公网库存、VM 公网资源和实例入站策略。必须停写、备份，采用兼容应用或已演练的完整一致恢复路径。没有自动删除网络表/租约/策略版本的降级迁移；任何恢复都必须保留已占地址和未知任务，不能当作清理重试。详见 [主控运维](../deploy/controller-OPERATIONS.md)。
+**升级/回滚：当前主控数据库为 schema 11；001–010 历史 SQL 不改，旧二进制不能只换程序回滚。** 007 引入全局 VPC/epoch，008/009/010 分别引入公网库存、VM 公网资源和实例入站策略，011 仅新增成员分页索引。必须停写、备份，采用兼容应用或已演练的完整一致恢复路径。没有自动删除网络表/租约/策略版本的降级迁移；任何恢复都必须保留已占地址和未知任务，不能当作清理重试。详见 [主控运维](../deploy/controller-OPERATIONS.md)。
 
 ### 7.2 从独立 OVS 核心到显式 VM 门禁，仍不是完整路由 VPC
 
@@ -217,3 +217,7 @@ Status 和同 revision replay 是历史回执；VerifyLive 只读最后 applied 
 用户将第 3 项延期时，可交付开发代码和第 1/2 项结果，但状态仍保留 `realhost-required`。不能将“main 已推送/CI 绿/页面有按钮/命令退出 0”写为完整 KVM 加强版已上线。现财务 Release 不因主控功能盘点被覆盖；主控正式发行需单独列明版本、能力、验收与未支持项。
 
 当前实现/协议边界同时参见 [ARCHITECTURE.md](ARCHITECTURE.md)、[CONSOLE_API.md](CONSOLE_API.md)、[NODE_README.md](../NODE_README.md)、[VALIDATION.md](VALIDATION.md)、[OVS_VM_GATE_VALIDATION.md](OVS_VM_GATE_VALIDATION.md) 及财务 [RESOURCE_PLUGINS.md](../../vps-billing/docs/RESOURCE_PLUGINS.md)。
+
+### W07-A：成员列表完整分页
+
+主控成员页从固定最早100人补为稳定游标上一页/下一页，原users.manage、admin与有界委派不变；不代表MFA、客户SSO或可配置财务权限组已完成。完整测试与未验边界见[成员分页](MEMBERS_PAGINATION.md)。

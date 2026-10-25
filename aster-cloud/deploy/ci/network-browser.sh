@@ -14,6 +14,8 @@ for tool in go node python3 openssl certutil curl; do command -v "$tool" >/dev/n
 node -e 'if(require(process.env.PLAYWRIGHT_MODULE_DIR+"/playwright/package.json").version!=="1.64.0")process.exit(1)' || fail 'Playwright must be exactly 1.64.0.'
 cloud=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 ci="$cloud/deploy/ci"
+python3 -B "$ci/test_members_browser_contract.py"
+node --test "$ci/members-browser.test.mjs"
 [[ -f $cloud/frontend/dist/index.html ]] || fail 'Build the real frontend before browser acceptance.'
 [[ -f $ci/network-browser.mjs ]] || fail 'The required UI acceptance script is missing.'
 scratch=$(mktemp -d "$RUNNER_TEMP/aster-network-browser.XXXXXXXX")
@@ -198,11 +200,15 @@ fi
 [[ $fixture_status == 0 ]] || fail 'Backend durable-history acceptance failed; private fixture logs withheld.'
 grep -q '^--- PASS: TestOwnedNATBrowserFixture ' "$scratch/fixture.log" || fail 'Required browser fixture did not pass.'
 if grep -qE -- '--- (SKIP|FAIL):' "$scratch/fixture.log"; then fail 'Required browser fixture must never skip or fail.'; fi
-python3 - "$scratch/fixture.json" "$BROWSER_ARTIFACT_DIR" <<'PY'
+python3 - "$scratch/fixture.json" "$BROWSER_ARTIFACT_DIR" "$ci" <<'PY'
 import json, pathlib, shutil, sys
 source, output = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+sys.path.insert(0, sys.argv[3])
+from members_browser_contract import validate_members_browser_report
 value = json.loads(source.read_text())
 assert value.get('passed') is True
+assert type(value.get('members_total')) is int and value['members_total'] == 205
+assert value.get('members_unchanged') is True
 assert value.get('financial_and_node_snapshots_unchanged') is True
 assert value.get('initial_network_snapshot_and_receipts_unchanged') is True
 assert value.get('lost_ack_reconciled') is True
@@ -261,7 +267,9 @@ required_sidebar = {
 sidebar_screenshots = report.get('sidebar_screenshots', [])
 assert len(sidebar_screenshots) == 12 and set(sidebar_screenshots) == required_sidebar, 'All 12 responsive sidebar screenshots are mandatory'
 assert not set(business_screenshots) & required_sidebar, 'Sidebar evidence cannot replace original business screenshots'
-assert {p.name for p in output.glob('*.png')} == set(business_screenshots) | required_sidebar, 'Exact 64 actual PNG files must match the two disjoint report lists'
+required_members = validate_members_browser_report(report, output)
+assert not required_members & (set(business_screenshots) | required_sidebar), 'Members evidence must not replace the original 64 PNG files'
+assert {p.name for p in output.glob('*.png')} == set(business_screenshots) | required_sidebar | required_members, 'Exact 70 actual PNG files must match three disjoint report lists'
 assert len(report.get('checks', [])) >= 163, 'Original business coverage and the new mobile public-pool layout proof must not be reduced'
 pool_heading = [c for c in report.get('checks', []) if c.get('name') == '390px and 320px public pool heading actions fill a row with single-line 44px buttons']
 assert len(pool_heading) == 1, 'The actual two-viewport public-pool heading proof is mandatory'

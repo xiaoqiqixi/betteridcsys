@@ -76,8 +76,8 @@ func mysqlIdentity(t *testing.T) (*Service, *sql.DB) {
 	t.Cleanup(func() { db.Close() })
 	var b []byte
 	for _, migration := range migrations.All() {
-		if migration.Version == 2 {
-			b = []byte(migration.SQL)
+		if migration.Version == 2 || migration.Version == 11 {
+			b = append(b, []byte(migration.SQL)...)
 		}
 	}
 	if len(b) == 0 {
