@@ -148,6 +148,12 @@ func TestOwnedBrowserMySQLFixture(t *testing.T) {
 	if m.Migrate(ctx) != nil {
 		t.Fatal("isolated browser database migration failed")
 	}
+	// Preserve the migrated CNY quote. USD is an independently configured test
+	// price, never an exchange-rate conversion or a new production default.
+	var originalCNY int64
+	if m.DB.QueryRowContext(ctx, "SELECT amount_minor FROM plan_prices WHERE plan_id='starter' AND currency='CNY'").Scan(&originalCNY) != nil || originalCNY <= 0 {
+		t.Fatal("migrated CNY fixture quote is missing")
+	}
 	credentials := map[string]any{}
 	for _, role := range []string{"customer", "admin"} {
 		password := "AsterBrowser-" + ID()
@@ -164,12 +170,51 @@ func TestOwnedBrowserMySQLFixture(t *testing.T) {
 			if _, err = m.DB.ExecContext(ctx, "UPDATE plans SET available=TRUE WHERE id='starter'"); err != nil {
 				t.Fatal("cannot enable isolated product")
 			}
-			if _, err = m.DB.ExecContext(ctx, "UPDATE plan_prices SET available=TRUE WHERE plan_id='starter' AND currency IN ('CNY','USD')"); err != nil {
+			if _, err = m.DB.ExecContext(ctx, "UPDATE plan_prices SET available=TRUE WHERE plan_id='starter' AND currency='CNY'"); err != nil {
 				t.Fatal("cannot enable isolated prices")
 			}
 			if _, _, err = m.CreateOrder(ctx, user, "starter", "browser-fixture", "browser-"+ID(), "CNY"); err != nil {
 				t.Fatal("cannot create isolated pending order and audit history")
 			}
+		} else {
+			// AddUser persists revision 1; do not use the stale in-memory revision
+			// zero identity for subsequent audited production Store operations.
+			persistedAdmin, e := m.UserByID(ctx, user.ID)
+			if e != nil || persistedAdmin.Role != "admin" || persistedAdmin.Revision < 1 {
+				t.Fatal("cannot reload isolated administrator revision")
+			}
+			configureTestCurrency(t, m, persistedAdmin, "USD", 2, "6.00")
+		}
+	}
+	registry, err := m.Currencies(ctx, true)
+	if err != nil || registry.DefaultCurrency != "CNY" {
+		t.Fatal("isolated browser fixture must retain the CNY default")
+	}
+	for _, code := range []string{"CNY", "USD"} {
+		currency, ok := registry.find(code)
+		if !ok || !currency.Enabled || currency.DecimalPlaces != 2 {
+			t.Fatal("isolated browser fixture requires enabled CNY and USD with precision two")
+		}
+		plans, e := m.Plans(ctx, code)
+		if e != nil {
+			t.Fatal("cannot reread isolated sellable quotes")
+		}
+		found := false
+		for _, plan := range plans {
+			if plan.ID != "starter" {
+				continue
+			}
+			wanted := originalCNY
+			if code == "USD" {
+				wanted = 600
+			}
+			if !plan.Available || plan.Currency != code || plan.CurrencyFormat.Code != code || plan.PriceMinor != wanted {
+				t.Fatal("isolated quotes must preserve CNY and independently price USD at six")
+			}
+			found = true
+		}
+		if !found {
+			t.Fatal("required isolated starter quote is missing")
 		}
 	}
 	before := browserMySQLHistory(t, ctx, m)
