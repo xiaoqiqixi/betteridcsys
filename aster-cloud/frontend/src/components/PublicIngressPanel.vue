@@ -270,21 +270,22 @@ const ports = (r: PublicIngressPolicy["rules"][number]) =>
 <style scoped>
 .public-ingress-panel {
   margin: 0 0 28px;
-  padding: 24px;
+  padding: 20px 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0;
   min-width: 0;
+  border-block: 1px solid var(--border);
 }
 .ingress-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 .ingress-heading h2 {
-  font-size: 18px;
+  font-size: 17px;
   margin: 0 0 8px;
   line-height: 1.5;
 }
@@ -328,7 +329,7 @@ const ports = (r: PublicIngressPolicy["rules"][number]) =>
   flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
   padding: 12px 0;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
@@ -363,6 +364,11 @@ const ports = (r: PublicIngressPolicy["rules"][number]) =>
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+  }
+}
+@media (max-width: 600px) {
+  .public-ingress-panel {
+    padding: 18px 0;
   }
 }
 </style>

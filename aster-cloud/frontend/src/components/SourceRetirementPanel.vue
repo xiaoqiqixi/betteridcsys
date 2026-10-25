@@ -265,11 +265,12 @@ async function submit() {
 <style scoped>
 .retirement-panel {
   margin-top: 24px;
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  padding: 20px 0;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   min-width: 0;
+  border-block: 1px solid var(--border);
 }
 .retirement-panel header {
   display: flex;
@@ -279,7 +280,7 @@ async function submit() {
   align-items: center;
 }
 .retirement-panel h2 {
-  font-size: 18px;
+  font-size: 17px;
   margin: 0;
 }
 .retirement-panel header span,
@@ -292,7 +293,7 @@ async function submit() {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
-  margin: 24px 0;
+  margin: 18px 0;
 }
 .retirement-panel dt {
   font-size: 13px;
@@ -300,7 +301,7 @@ async function submit() {
   margin-bottom: 8px;
 }
 .retirement-panel dd {
-  font-size: 13px;
+  font-size: 14px;
   overflow-wrap: anywhere;
   margin: 0;
 }
@@ -360,6 +361,11 @@ async function submit() {
   }
   .retirement-panel dl {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .retirement-panel {
+    padding: 18px 0;
   }
 }
 </style>

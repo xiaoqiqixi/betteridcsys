@@ -494,9 +494,9 @@ async function inspect() {
   width: 100%;
   resize: vertical;
   border: 1px solid var(--control-border);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 12px;
-  background: var(--control);
+  background: var(--surface);
   color: var(--text);
 }
 .network-form .secondary {

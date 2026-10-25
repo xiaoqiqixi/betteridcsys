@@ -8,6 +8,9 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd "$repo"
 scratch=$(mktemp -d "${RUNNER_TEMP:-/tmp}/aster-cloud-check.XXXXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
+# Independent installer SQL/grants contract. This script rejects missing or
+# mismatched native fixture paths; there is deliberately no host-DB fallback.
+python3 -B "$repo/deploy/ci/test_cloud_mysql_grants.py" | tee "$scratch/mysql-grants.json"
 # No credential is echoed. SQL fixtures accept only explicitly named test DBs.
 # The protected-policy connector case genuinely requires root ownership. Run it
 # separately below, rather than adding an owner bypass or tolerating a skipped

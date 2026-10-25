@@ -186,55 +186,62 @@ creation, explicit continuation and read-only receipt reconciliation. Each
 continuation uses at most one POST followed by bounded GET observation; no write
 retry loop hides uncertainty.
 
-### Responsive navigation shell
+### Responsive command rail (legacy sidebar artifact identifiers)
 
-`sidebar-browser.mjs` adds a read-only shell phase on the **actual persisted
-epoch-five network overview**, not an injected tall DOM or mocked response. The
-original business workflow/checks, POST counts and thirteen-epoch proof remain
-unchanged. Shell geometry and interaction evidence is stored independently in
-`report.sidebar_checks`; it does not replace the original business checks.
+`sidebar-browser.mjs` now validates the **actual 52px command rail**, not the
+retired 216–232px sidebar. Its exported function, `report.sidebar_checks`,
+`report.sidebar_screenshots` and twelve `sidebar-*.png` filenames remain legacy
+compatibility identifiers for the artifact gate. New geometry
+records carry `shell_contract: "command-rail-v1"`; old sidebar results are not
+new-rail acceptance evidence. No business workflow, POST count, thirteen-epoch
+history proof or original business screenshot is replaced.
 
-- At **320, 390, 768, 1024, 1025 and 1440 CSS pixels**, scroll the real document
-  to its top, middle and bottom. Verify a genuinely long page, reachable sticky
-  topbar, main/rail non-overlap, document footer and horizontal bounds. At
-  `<=1024px` only the navigation trigger is present and the workspace uses the
-  full width. Above it, the document-height grid sidebar track is distinct from
-  its **viewport-height sticky `.sidebar-panel`**; track/background height must
-  not be confused with the actual visible navigation panel.
-- At **1440x360 and 1025x360**, the real six-link administrator navigation must
-  overflow. Wheel input scrolls `.sidebar-navigation`, not the page or panel;
-  brand and account remain visible. Tab through every link and sign-out without
-  activating sign-out, checking actual focus, clipping and pointer hit targets.
-  Each target's fixed geometry is retained in `keyboard_targets`; every keyboard
-  step must keep the business document's scroll position unchanged.
-- **720x450 and 512x384 CSS viewports** test the reflow equivalents of 200% zoom
-  at 1440x900 and 1024x768. They are explicitly *equivalent CSS viewport* tests,
-  not a claim to have changed browser zoom or tested a physical phone. Changing
-  device pixel ratio is not used as fake zoom evidence.
-- Open the real drawer at the bottom of the long page, verify focus wrap,
-  background `inert` and scroll locking, and close by Escape, backdrop and
-  browser Back. Visible link navigation must reach its actual route and close
-  the drawer. The **1024→1025** transition must consume its overlay history
-  entry, clear scroll/inert state and focus main; focusing a desktop sidebar
-  link then moving **1025→1024** must restore focus to the compact menu trigger.
-  Focus and actually click the visible skip-to-content link in each language;
-  it must focus the main landmark without replacing the hash-router URL.
-- Repeat the breakpoint geometry, short-screen keyboard/scroll and transition
-  gates in English/dark without replacing the Chinese/light evidence. Every
-  shell phase compares business POST/attempt counts before and after: layout
-  testing cannot create an order, network epoch, rule or other resource.
+The new shell phase requires **53 records across the two modes** (37 Chinese /
+light and 16 English / dark), including two new semantic-anchor checks. This is
+the required new matrix, not a claim that the new bundle has already passed it.
+The outer gate requires these new 53/37/16 minimums and both semantic-anchor
+proofs, plus actual 44px keyboard targets for navigation, appearance and logout.
 
-The desktop navigation scrollport explicitly uses `tabindex="-1"`: its real
-links provide the keyboard stops and auto-scroll into view. This avoids relying
-on browser-dependent implicit scroller focus. [Mozilla's scroller-focus
-report](https://bugzilla.mozilla.org/show_bug.cgi?id=1069739) documents the
-behavior difference; it is background, not a replacement for the real Firefox
-Tab assertions above. A failed assertion exports only fixed focus identities
-(tag, known shell elements and link index), never text, DOM or credentials.
+- At **320, 390, 768, 1024, 1025 and 1440 CSS pixels**, scroll the real persisted
+  epoch-five business document to top/middle/bottom. Verify genuine long content,
+  one sticky **52px** rail, full-width workspace, document footer and no body
+  horizontal overflow. At `<=1024px` the desktop links are hidden and the actual
+  menu trigger is visible; above the boundary six semantic route anchors own a
+  horizontal scrollport separate from the brand/account utilities. There is no
+  old sidebar or duplicate topbar.
+- At **1440x360 and 1025x360**, wheel the real navigation horizontally. When
+  its real labels overflow, the navigation must reach its end; when all six fit,
+  the evidence explicitly records that scrolling was unnecessary rather than
+  inserting fake content. In either case business scroll and brand/utilities
+  remain fixed. Starting at the actual brand anchor, Tab through all six links,
+  appearance and logout without activating logout. Each target must be focused,
+  fully inside its clip/viewport, at least **44x44px**, and pointer-hittable.
+  The legacy seven-target array retains six links plus logout; appearance has
+  its own additional keyboard geometry receipt. No keyboard step moves the
+  business document.
+- **720x450 and 512x384 CSS viewports** are reflow equivalents of 200% zoom at
+  1440x900 and 1024x768, not actual browser zoom or physical-phone evidence.
+  The real six-link drawer must overflow at these short heights; wheel input
+  scrolls its body independently while header/footer remain usable and the
+  background document remains locked.
+- Open navigation at the bottom of the long page; check focus wrap, background
+  `inert`, scroll lock, Escape/backdrop/Back and successful visible-link routing.
+  **1024→1025** consumes the overlay entry and focuses main; **1025→1024** moves
+  focused desktop navigation to the compact menu even when CSS blurs first.
+  The skip link must focus main without changing the hash URL. Permission
+  filtering and native modified-link behavior have separate Vue regressions;
+  no view component invents grants or bypasses the existing deep-link gate.
+- Repeat boundary geometry, short-screen keyboard/scroll and transitions in
+  English/dark. Compare business POST and attempted-write counts before/after
+  both complete phases: navigation/layout tests cannot create resources.
 
-Twelve new **viewport** screenshots are recorded in the separate fixed
-`report.sidebar_screenshots` manifest; the original `report.screenshots` retains
-all fifty-two business PNGs. The complete artifact therefore has **64 PNGs**:
+The horizontal scrollport uses `tabindex="-1"`; its actual anchors provide Tab
+stops and focus-reveal behavior. No DOM/CSS injection, response replacement,
+clock mocking or hidden control substitutes for the measured UI. A failure
+exports bounded element identities and geometry, never raw DOM or credentials.
+
+The twelve fixed legacy **viewport** screenshot names remain disjoint from all
+fifty-two original business PNGs, so the bundle still contains **64 PNGs**:
 
 ```
 sidebar-320-top.png                 sidebar-320-drawer.png
@@ -245,11 +252,9 @@ sidebar-1440-short-nav-bottom.png   sidebar-1025-short-nav-bottom.png
 sidebar-zoom-720-drawer.png         sidebar-zoom-512-drawer.png
 ```
 
-Before/after reproduction uses the same signed-in business route and CSS
-viewports. `sidebarLayout(page)` is an exported read-only measurement helper for
-the old bundle; it cannot produce a passing acceptance result. Preserve the
-before failure/viewport images separately from the final run. No baseline mode
-or optional skip disables the mandatory assertions above.
+The exported `sidebarLayout(page)` is a read-only measurement helper with its
+legacy name; current measurements describe the rail. Merely calling it cannot
+produce passing acceptance. Keep before failures separate from the final run.
 
 The original fourteen screenshots remain, including the two
 `*-public-egress-editor.png` images showing the Internet-only editor. Eighteen

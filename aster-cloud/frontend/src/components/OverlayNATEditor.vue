@@ -552,14 +552,15 @@ const missing = computed(() =>
   background: var(--subtle);
   color: var(--secondary);
   padding: 18px;
-  border-radius: 10px;
+  border-radius: 6px;
 }
 .nat-profile {
-  border: 1px solid var(--border);
-  padding: 18px;
-  border-radius: 12px;
+  border: 0;
+  padding: 16px 0;
+  border-radius: 0;
   margin-top: 12px;
   min-width: 0;
+  border-block: 1px solid var(--border);
 }
 .nat-profile.is-selected {
   border-color: var(--accent);
@@ -594,7 +595,7 @@ const missing = computed(() =>
 }
 .egress-unavailable {
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--subtle);
 }
 .selection-note {
@@ -625,7 +626,7 @@ const missing = computed(() =>
   font-size: 13px;
   background: var(--warning-bg);
   color: var(--warning);
-  border-radius: 10px;
+  border-radius: 6px;
 }
 .nat-warning code {
   display: block;
@@ -646,6 +647,11 @@ const missing = computed(() =>
   }
   .nat-profile {
     padding: 14px;
+  }
+}
+@media (max-width: 420px) {
+  .nat-profile {
+    padding: 14px 0;
   }
 }
 </style>

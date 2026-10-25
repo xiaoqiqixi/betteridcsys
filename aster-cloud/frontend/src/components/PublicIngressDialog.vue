@@ -335,7 +335,7 @@ const ports = (r: PublicIngressRule) =>
   padding: 16px;
   background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
 }
 .ingress-explanation strong {
   font-size: 14px;

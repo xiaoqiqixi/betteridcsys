@@ -71,7 +71,7 @@ describe("custom controls", () => {
       global: { ...options(context).global, plugins: [router] },
     });
     wrappers.push(wrapper);
-    expect(wrapper.classes()).toContain("tone-surface");
+    expect(wrapper.get("nav").classes()).toContain("tone-surface");
     expect(wrapper.findAll("a")).toHaveLength(6);
     expect(wrapper.get('a[href="/networks/overlays"]').text()).toBe(
       "网络与 IP",
@@ -82,7 +82,7 @@ describe("custom controls", () => {
     expect(router.currentRoute.value.path).toBe("/nodes");
     expect(wrapper.emitted("navigate")).toHaveLength(1);
     await wrapper.setProps({ tone: "sidebar" });
-    expect(wrapper.classes()).toContain("tone-sidebar");
+    expect(wrapper.get("nav").classes()).toContain("tone-sidebar");
     context.session.user.value = {
       ...context.session.user.value!,
       role: "custom",

@@ -532,7 +532,7 @@ function submit() {
   display: grid;
   gap: 8px;
   padding: 16px;
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--subtle);
   overflow-wrap: anywhere;
 }
@@ -570,7 +570,7 @@ function submit() {
   align-items: flex-start;
   padding: 16px;
   border: 1px solid var(--control-border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--subtle);
 }
 .floating-consent > span {

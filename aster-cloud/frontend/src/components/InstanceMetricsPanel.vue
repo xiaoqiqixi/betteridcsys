@@ -263,12 +263,13 @@ const errorText = computed(() => {
 
 <style scoped>
 .metrics-panel {
-  padding: 24px;
+  padding: 20px 0;
   margin-bottom: 24px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0;
   min-width: 0;
+  border-block: 1px solid var(--border);
 }
 .metrics-header,
 .metrics-heading,
@@ -315,8 +316,8 @@ const errorText = computed(() => {
 .metrics-skeleton {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 24px 32px;
-  margin-top: 24px;
+  gap: 20px 28px;
+  margin-top: 20px;
 }
 .metric-group {
   min-width: 0;
@@ -325,7 +326,7 @@ const errorText = computed(() => {
 }
 .metric-group h3 {
   margin: 0 0 14px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 .metric-group dl {
@@ -337,7 +338,7 @@ const errorText = computed(() => {
   justify-content: space-between;
   gap: 12px;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.7;
 }
 .metric-group dt {
@@ -364,7 +365,7 @@ const errorText = computed(() => {
   color: var(--warning);
   background: var(--warning-bg);
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 6px;
   font-size: 13px;
   line-height: 1.7;
   margin: 20px 0 0;
@@ -389,6 +390,11 @@ const errorText = computed(() => {
   }
   .metric-group dl > div {
     flex-wrap: wrap;
+  }
+}
+@media (max-width: 600px) {
+  .metrics-panel {
+    padding: 18px 0;
   }
 }
 </style>

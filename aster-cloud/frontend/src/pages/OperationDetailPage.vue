@@ -45,10 +45,11 @@ const valid = computed(() => /^[a-f0-9]{32}$/.test(id.value));
 <style scoped>
 .invalid-task {
   margin-top: 24px;
-  padding: 24px;
-  border: 1px solid var(--border);
+  padding: 20px 0;
+  border: 0;
   background: var(--surface);
-  border-radius: 16px;
+  border-radius: 0;
+  border-block: 1px solid var(--border);
 }
 .invalid-task h1 {
   font-size: 24px;

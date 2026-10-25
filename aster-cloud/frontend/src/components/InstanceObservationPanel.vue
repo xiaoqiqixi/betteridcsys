@@ -151,12 +151,13 @@ async function read() {
 </template>
 <style scoped>
 .observation-panel {
-  padding: 24px;
+  padding: 20px 0;
   margin: 0 0 28px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0;
   min-width: 0;
+  border-block: 1px solid var(--border);
 }
 .observation-panel > header {
   display: flex;
@@ -197,7 +198,7 @@ async function read() {
   color: var(--warning);
   background: var(--warning-bg);
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 6px;
   font-size: 13px;
   line-height: 1.7;
   margin: 20px 0 0;
@@ -205,8 +206,8 @@ async function read() {
 .observation-data {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 24px;
-  margin: 24px 0 0;
+  gap: 18px;
+  margin: 20px 0 0;
 }
 .observation-data dt {
   font-size: 12px;
@@ -214,7 +215,7 @@ async function read() {
   margin-bottom: 8px;
 }
 .observation-data dd {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
   overflow-wrap: anywhere;
   margin: 0;
@@ -227,7 +228,7 @@ async function read() {
   margin-top: 20px;
   color: var(--warning);
   background: var(--warning-bg);
-  border-radius: 10px;
+  border-radius: 6px;
 }
 .fence-notice > svg {
   margin-top: 3px;
@@ -254,6 +255,11 @@ async function read() {
   }
   .observation-panel > header > .ui-button {
     font-size: 13px;
+  }
+}
+@media (max-width: 600px) {
+  .observation-panel {
+    padding: 18px 0;
   }
 }
 </style>

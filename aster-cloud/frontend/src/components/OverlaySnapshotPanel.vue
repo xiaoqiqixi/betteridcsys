@@ -167,8 +167,8 @@ const egressIPv4 = (policy: NATPolicy) =>
 <style scoped>
 .snapshot-panel {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 28px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
 }
 .snapshot-panel > section {
   min-width: 0;
@@ -184,10 +184,11 @@ const egressIPv4 = (policy: NATPolicy) =>
   font-size: 13px;
   line-height: 1.7;
   color: var(--secondary);
-  padding: 18px;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
+  padding: 16px 0;
+  border: 0;
+  border-radius: 0;
   margin: 0;
+  border-block: 1px solid var(--border);
 }
 .snapshot-row {
   display: flex;
@@ -216,10 +217,11 @@ const egressIPv4 = (policy: NATPolicy) =>
 }
 .route-row,
 .nat-summary {
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  margin-top: 12px;
+  padding: 16px 0;
+  border: 0;
+  border-radius: 0;
+  margin-top: 0;
+  border-top: 1px solid var(--border);
 }
 .route-row > div,
 .nat-summary header > div {
@@ -241,10 +243,10 @@ const egressIPv4 = (policy: NATPolicy) =>
   margin: 16px 0 0;
 }
 .prefix-list li {
-  font-size: 12px;
+  font-size: 13px;
   background: var(--subtle);
-  padding: 7px 10px;
-  border-radius: 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
   overflow-wrap: anywhere;
 }
 .nat-summary header {

@@ -498,19 +498,20 @@ function timeText(raw: string) {
 </template>
 <style scoped>
 .audit-filters {
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   overflow: hidden;
+  border-block: 1px solid var(--border);
 }
 .filter-toggle {
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 76px;
-  padding: 18px 20px;
+  min-height: 60px;
+  padding: 12px 0;
   border: 0;
   background: transparent;
   color: var(--text);
@@ -543,13 +544,13 @@ function timeText(raw: string) {
 }
 .filter-form {
   border-top: 1px solid var(--border);
-  padding: 20px;
+  padding: 16px 0;
 }
 .filter-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
-  margin: 20px 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 16px 0;
 }
 .filter-note {
   margin: 0;
@@ -561,7 +562,7 @@ function timeText(raw: string) {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: 16px;
 }
 .filter-error {
   font-size: 13px;
@@ -570,9 +571,9 @@ function timeText(raw: string) {
   margin: 16px 0 0;
 }
 .query-error {
-  padding: 24px;
+  padding: 18px;
   border: 1px solid var(--danger-border);
-  border-radius: 14px;
+  border-radius: 6px;
   background: var(--danger-bg);
   color: var(--danger);
 }
@@ -586,9 +587,9 @@ function timeText(raw: string) {
   margin: 0;
 }
 .audit-row {
-  padding: 24px;
+  padding: 18px 0;
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 160px minmax(0, 1fr);
   gap: 20px;
   border-bottom: 1px solid var(--border);
 }
@@ -597,10 +598,10 @@ function timeText(raw: string) {
 }
 .audit-time {
   color: var(--secondary);
-  font-size: 12px;
+  font-size: 13px;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
   padding-top: 4px;
   line-height: 1.5;
 }
@@ -620,29 +621,38 @@ function timeText(raw: string) {
 .audit-category {
   display: block;
   color: var(--secondary);
-  font-size: 11px;
-  margin-bottom: 7px;
+  font-size: 12px;
+  margin-bottom: 0;
+  grid-column: 1;
+  grid-row: 1;
 }
 .audit-content h2 {
-  font-size: 14px;
-  margin: 0 0 7px;
+  font-size: 15px;
+  margin: 0;
   overflow-wrap: anywhere;
+  grid-column: 1;
+  grid-row: 2;
 }
 .audit-action {
   display: block;
   color: var(--secondary);
   font-size: 12px;
   overflow-wrap: anywhere;
-  margin-bottom: 18px;
+  margin-bottom: 0;
+  grid-column: 1;
+  grid-row: 3;
 }
 .audit-content dl {
-  display: flex;
+  display: grid;
   flex-wrap: wrap;
-  gap: 20px;
+  gap: 18px;
   margin: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-column: 2;
+  grid-row: 1 / 4;
 }
 .audit-content dl > div {
-  min-width: 100px;
+  min-width: 0;
   max-width: 100%;
 }
 .audit-content dt {
@@ -652,22 +662,8 @@ function timeText(raw: string) {
 }
 .audit-content dd {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   overflow-wrap: anywhere;
-}
-@media (max-width: 700px) {
-  .audit-row {
-    grid-template-columns: 1fr;
-    gap: 14px;
-    padding: 20px;
-  }
-  .audit-content {
-    padding-left: 19px;
-  }
-  .audit-content dl {
-    flex-direction: column;
-    gap: 12px;
-  }
 }
 @media (max-width: 560px) {
   .filter-grid {
@@ -681,6 +677,62 @@ function timeText(raw: string) {
 @media (prefers-reduced-motion: reduce) {
   .filter-toggle > svg:last-child {
     transition: none;
+  }
+}
+.audit-content {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(0, 2fr);
+  gap: 6px 22px;
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .audit-row {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+  .audit-content {
+    display: block;
+  }
+  .audit-content h2 {
+    margin-top: 4px;
+  }
+  .audit-action {
+    margin-top: 5px;
+  }
+  .audit-content dl {
+    margin-top: 12px;
+  }
+}
+@media (max-width: 700px) {
+  .audit-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 18px 0;
+  }
+  .audit-time {
+    padding-top: 0;
+  }
+  .audit-time > div {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .utc-label {
+    margin-top: 0;
+  }
+  .audit-content {
+    padding-left: 0;
+  }
+  .audit-content dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+}
+@media (max-width: 560px) {
+  .filter-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

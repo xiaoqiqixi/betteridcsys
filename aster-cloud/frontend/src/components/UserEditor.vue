@@ -234,7 +234,7 @@ async function submit() {
 .permission-group {
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--subtle);
 }
 .permission-group h3 {

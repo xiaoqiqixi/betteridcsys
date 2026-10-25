@@ -418,8 +418,8 @@ function page(value: number | null) {
 .cluster-toolbar {
   display: flex;
   align-items: flex-end;
-  gap: 32px;
-  margin: 0 0 32px;
+  gap: 24px;
+  margin: 0 0 24px;
 }
 .cluster-field {
   width: 280px;
@@ -449,7 +449,7 @@ function page(value: number | null) {
   min-width: 0;
 }
 .section-heading h2 {
-  font-size: 19px;
+  font-size: 17px;
   margin: 0;
 }
 .section-heading p {
@@ -459,22 +459,29 @@ function page(value: number | null) {
   color: var(--secondary);
 }
 .vpc-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  display: block;
+  border-top: 1px solid var(--border);
 }
 .vpc-card {
-  border: 1px solid var(--border);
+  border: 0;
   background: var(--surface);
-  padding: 22px;
-  border-radius: 14px;
+  padding: 18px 0;
+  border-radius: 0;
   min-width: 0;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(150px, 1fr) minmax(0, 2fr);
+  gap: 12px 24px;
+  align-items: start;
 }
 .vpc-card header {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  align-items: center;
+  gap: 6px;
+  align-items: flex-start;
+  flex-direction: column;
+  grid-column: 1;
+  grid-row: 1;
 }
 .vpc-card h3 {
   font-size: 15px;
@@ -488,30 +495,38 @@ function page(value: number | null) {
 }
 .vpc-cidr {
   display: block;
-  margin-top: 20px;
-  font-size: 21px;
-  font-weight: 550;
+  margin-top: 0;
+  font-size: 17px;
+  font-weight: 600;
   letter-spacing: -0.02em;
   overflow-wrap: anywhere;
+  grid-column: 2;
+  grid-row: 1;
+  font-variant-numeric: tabular-nums;
 }
 .unmapped-vpc {
   font-size: 12px;
   color: var(--warning);
   background: var(--warning-bg);
-  border-radius: 7px;
+  border-radius: 4px;
   padding: 8px 10px;
   line-height: 1.6;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: 0;
 }
 .vpc-card dl {
   display: grid;
   gap: 10px;
-  margin: 20px 0 0;
+  margin: 0;
+  grid-column: 3;
+  grid-row: 1;
 }
 .vpc-card dl > div {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
+  grid-template-columns: 76px minmax(0, 1fr);
   gap: 12px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.6;
 }
 .vpc-card dt {
@@ -523,8 +538,8 @@ function page(value: number | null) {
 }
 .current-config {
   border-top: 1px solid var(--border);
-  padding-top: 32px;
-  margin-top: 32px;
+  padding-top: 24px;
+  margin-top: 24px;
 }
 .config-actions {
   display: flex;
@@ -543,29 +558,30 @@ function page(value: number | null) {
 .config-notice {
   font-size: 13px;
   line-height: 1.7;
-  padding: 16px;
+  padding: 12px;
   background: var(--warning-bg);
   color: var(--warning);
-  border-radius: 10px;
-  margin: 0 0 24px;
+  border-radius: 6px;
+  margin: 0 0 20px;
 }
 .history-section {
-  margin-top: 36px;
-  padding-top: 30px;
+  margin-top: 28px;
+  padding-top: 24px;
   border-top: 1px solid var(--border);
 }
 .epoch-list {
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   overflow: clip;
+  border-block: 1px solid var(--border);
 }
 .epoch-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  padding: 20px;
+  padding: 16px 0;
   text-decoration: none;
   color: var(--text);
 }
@@ -577,7 +593,7 @@ function page(value: number | null) {
 }
 .epoch-row > div {
   display: grid;
-  gap: 9px;
+  gap: 6px;
   min-width: 0;
 }
 .epoch-row strong {
@@ -602,18 +618,16 @@ function page(value: number | null) {
   margin-top: 18px;
 }
 .no-vpcs {
-  padding: 24px;
+  padding: 20px 0;
   background: var(--surface);
-  border: 1px dashed var(--border);
-  border-radius: 12px;
+  border: 0;
+  border-radius: 0;
   color: var(--secondary);
   font-size: 14px;
   line-height: 1.7;
+  border-block: 1px solid var(--border);
 }
 @media (max-width: 800px) {
-  .vpc-list {
-    grid-template-columns: 1fr;
-  }
   .section-heading {
     align-items: flex-start;
     flex-direction: column;
@@ -632,9 +646,6 @@ function page(value: number | null) {
     align-items: flex-start;
     flex-direction: column;
   }
-  .vpc-card {
-    padding: 18px;
-  }
   .vpc-card header {
     align-items: flex-start;
     flex-direction: column;
@@ -642,6 +653,31 @@ function page(value: number | null) {
   .config-actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+@media (max-width: 900px) {
+  .vpc-card {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .vpc-card dl {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .unmapped-vpc {
+    grid-row: 3;
+  }
+}
+@media (max-width: 600px) {
+  .vpc-card {
+    padding: 18px 0;
+    gap: 14px;
+  }
+  .vpc-card dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .vpc-card dl > div {
+    grid-template-columns: 80px minmax(0, 1fr);
   }
 }
 </style>

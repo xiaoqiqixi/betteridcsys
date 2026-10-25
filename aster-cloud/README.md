@@ -4,7 +4,40 @@
 
 财务销售商品、确认付款；主控接纳意图、预留资源并派发任务；被控安装在计算宿主机，通过 libvirt / QEMU / KVM 管理客户虚拟机。客户虚拟机不需要安装被控服务。三个系统使用独立进程与权限，财务和主控使用独立数据库；主控不能改账单、确认支付或读取财务数据库。
 
-使用 Go、MySQL、Vue 3 / TypeScript 与原生 systemd。目标宿主为 Ubuntu 22.04 及以上的 amd64；各发行版须单独验收。不对接 IDCsmart API，也不由安装器自动修改宿主机桥接、防火墙、存储或上联。
+使用 Go、MySQL、Vue 3 / TypeScript 与原生 systemd。目标宿主为 Ubuntu 22.04 及以上的 amd64；各发行版须单独验收。不对接 IDCsmart API；安装器不自动修改宿主机桥接、防火墙、已有 VM/镜像数据或物理上联。
+
+## 原生安装入口：仅本地开发包
+
+**独立 Cloud 正式 Release / 官方下载通道尚未发布。** 财务 `v0.5.9` 不是主控或被控安装包，
+这里不提供假 `curl | sh` 地址，也不把开发包校验当成部署完成。
+
+在审核过的本地仓库根目录，每台目标主机只执行对应角色的一条命令：
+
+```sh
+sudo bash aster-cloud/deploy/install/controller.sh
+```
+
+```sh
+sudo bash aster-cloud/deploy/install/node.sh
+```
+
+两条命令进入交互向导，**默认只读 plan**；向导要求本地开发包路径、独立可信来源的完整
+SHA256、显式开发版批准、真实配置与最终 apply/start 批准。不是复制命令后无条件上线。
+本轮实际核验过的本地包、真实 SHA 与可复跑的只读单命令见[当前验证记录](docs/VALIDATION.md#当前工作区开发安装器安全测试)。
+详细参数、配置审批和恢复见[安装器说明](deploy/install/README.md)、[开发包合同](docs/INSTALL_PACKAGES.md)
+与[安装器安全测试](docs/INSTALL_VALIDATION.md)。
+
+- **主控**：可沿用独立 MySQL / 真实 TLS，也可明确选装固定 Ubuntu 依赖和新专用 MySQL。
+  新 DB 的 runtime DML 与 migration DDL 账号分离，不复用财务库/账号；只对新建专用服务配置
+  Unix-socket-only MySQL。管理员口令私密输入；只有数据库检查、管理员引导、活跃服务和严格
+  HTTPS 健康检查完成才报告 `service-ready` 并输出访问入口。
+- **KVM 被控**：可选装固定 qemu / virsh-client / cloud-localds 工具，**没有开放完整 libvirt
+  daemon 与默认网络的自动安装**。仍须真实 KVM、已批准的 libvirt 服务、证书、镜像与预算；
+  默认维护开启、网络和删除关闭，不改物理上联/桥接/防火墙。即使本机检查与服务启动完成，也只报告
+  `node_started_pending_controller`，真实 mTLS 注册须从主控执行，不能把 controller 私钥放到节点。
+- **未完成项**：干净 KVM 节点端到端“一键就绪”尚未完成；本轮未执行真实 APT、MySQL provisioning、
+  systemd 安装或 KVM 部署验收。Ubuntu 22.04 / 24.04 / 26.04 amd64 是安装器目标检查，不是三个发行版已实测的承诺。
+  新 UI 的实库、浏览器和截图门禁独立执行；安装器安全测试与旧 UI 的结果不能代替它们。
 
 ## 当前能力与限制
 
@@ -13,7 +46,7 @@
 | 范围 | 已有实现 | 重要限制 |
 | --- | --- | --- |
 | 独立管理台 | staff 登录/RBAC、实例/节点/任务/审计/用户管理，中英、浅深色 | 不是财务客户 SSO；没有 MFA 或受控 VNC |
-| 响应式导航 | `<=1024px` 抽屉，较宽屏幕弹性侧栏；长页固定面板、短屏菜单独立滚动、键盘焦点与跳转 | 已验证 CSS 视口及 Firefox；不等于物理手机或实际浏览器缩放验收 |
+| 管理工作台 | 52px 一体导航；`<=1024px` 紧凑入口与抽屉，桌面资源表、手机连续清单；中文/英文、浅/深主题 | 当前视图与会话/API 分离；完整同提交实库与浏览器结果以 GitHub Actions 为准，不继承旧侧栏证据 |
 | 实例与监控 | 审批 preset 创建、电源/删除、持久任务、只读实时样本 | 采样不是历史监控、来宾健康证明或计费账本；真实 libvirt/KVM 待验 |
 | 快照/备份/迁移 | 旧普通网络实例的停止态系统盘快照/备份、四阶段冷迁移 | OVS 实例拒绝旧存储/迁移合同；没有热迁移、HA、定时异地备份 |
 | VPC 与网络 | MySQL IPAM、不可变实例绑定、OVS 启停门禁、固定 VXLAN peer、全节点 epoch、批准路由和显式恢复 | 专用桥、underlay 与 root profile 须预备；没有完整子网/DHCP/IPv6/租户安全组 |
@@ -32,7 +65,7 @@
 - **接入财务**：[财务资源 worker](../vps-billing/docs/RESOURCE_PLUGINS.md) · [独立适配 CLI](plugins/billingconnector/README.md) · [财务产品配置合同](../vps-billing/docs/PRODUCT_CONFIGURATION.md)
 - **执行器细节**：[OVS 核心](internal/fabric/README.md) · [NAT 审批](internal/fabric/NAT.md) · [overlay 控制合同](docs/OVERLAY_CONTROL.md)
 
-财务仍使用公开 `aster.controller/1`；普通网络为 `aster.node/1`，显式 OVS VPC 为 `aster.node/2`，托管直绑公网为 `aster.node/3`。不同合同不自动互相升级，协议通过也不表示虚拟机已创建。开发环境通过 `go.mod` 的本地 replace 使用相邻财务源码的公开 `controllerapi`，不导入其内部数据库。独立主控发行前还须锁定公共合同来源并制作可复现安装包。
+财务仍使用公开 `aster.controller/1`；普通网络为 `aster.node/1`，显式 OVS VPC 为 `aster.node/2`，托管直绑公网为 `aster.node/3`。不同合同不自动互相升级，协议通过也不表示虚拟机已创建。开发环境通过 `go.mod` 的本地 replace 使用相邻财务源码的公开 `controllerapi`，不导入其内部数据库。现有打包工具可制作本地开发包；独立发行前仍须锁定公共合同来源、建立正式发布通道并完成原生安装验收。
 
 ## 状态与升级边界
 
@@ -62,6 +95,6 @@ npm run build
 
 CI 使用 Go 1.27.3 和 Node 24.19.0。无测试 DSN 的本地 Go 测试会明确跳过实库场景，不能算 MySQL 验收；实库和原生网络门禁必须在隔离 runner 执行，不能指向生产数据库。依赖/语言版本也不等于安全补丁承诺。
 
-已核对的源码基线为 **`66e2d49`（2026-10-25）**：管理台 32 文件 / 845 tests，真实 MySQL 483 顶层 / 2006 子测试、0 skip；严格 TLS 的 Firefox / MySQL 浏览器共 213 检查、64 PNG，同 SHA 的 12 项 CI 通过。节点 RPC 为测试替身，六张代表截图经过人工查看，不声称逐张检查全部图片。详见[验证记录](docs/VALIDATION.md)。后续源码或文档提交不能自动沿用该 SHA 的通过结论。
+以下是**历史**已核对源码基线 `66e2d49`（2026-10-25）的结果，不代表本轮安装器或新 UI 已通过实库/浏览器验收：管理台 32 文件 / 845 tests，真实 MySQL 483 顶层 / 2006 子测试、0 skip；严格 TLS 的 Firefox / MySQL 浏览器共 213 检查、64 PNG，同 SHA 的 12 项 CI 通过。节点 RPC 为测试替身，六张代表截图经过人工查看，不声称逐张检查全部图片。详见[验证记录](docs/VALIDATION.md)。后续源码或文档提交不能自动沿用该 SHA 的通过结论。
 
 真实 KVM/OVS 隔离与限速、跨物理节点包流、公网上联、宿主故障恢复和生产部署仍须单独验收；当前不应据此承诺真实客户资源可用。

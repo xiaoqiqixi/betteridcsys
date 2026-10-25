@@ -439,11 +439,12 @@ function tabKey(event: KeyboardEvent) {
   font-size: 13px;
   line-height: 1.7;
   color: var(--secondary);
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  padding: 14px 0;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   margin: 0 0 24px;
+  border-block: 1px solid var(--border);
 }
 .detail-heading {
   margin-top: 20px;
@@ -470,13 +471,13 @@ function tabKey(event: KeyboardEvent) {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  margin: 24px 0 32px;
+  margin: 20px 0 24px;
 }
 .detail-tabs {
   display: flex;
   gap: 24px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 28px;
+  margin-bottom: 22px;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
@@ -521,10 +522,10 @@ function tabKey(event: KeyboardEvent) {
   line-height: 1.6;
 }
 .artifact-row {
-  padding: 20px 24px;
+  padding: 16px 0;
   border-bottom: 1px solid var(--border);
   display: flex;
-  gap: 20px;
+  gap: 16px;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -551,8 +552,9 @@ function tabKey(event: KeyboardEvent) {
 }
 .artifact-list {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
+  border-block: 1px solid var(--border);
 }
 .tab-content {
   min-width: 0;
@@ -579,6 +581,11 @@ function tabKey(event: KeyboardEvent) {
   }
   .action-toolbar .ui-button {
     padding: 0 12px;
+  }
+}
+@media (max-width: 760px) {
+  .artifact-row {
+    padding: 16px 0;
   }
 }
 </style>

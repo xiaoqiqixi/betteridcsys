@@ -88,15 +88,99 @@ async function save() {
         )
       "
       @reload="list.reload"
-      ><div class="node-grid">
+      ><div class="node-ledger-desktop">
+        <table class="node-table">
+          <caption class="sr-only">
+            {{
+              tr("节点资源与维护状态", "Node resources and maintenance state")
+            }}
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">{{ tr("节点 / 机房", "Node / datacenter") }}</th>
+              <th scope="col">{{ tr("状态", "State") }}</th>
+              <th scope="col" class="number-column">
+                {{ tr("可用 / 已预留 CPU", "Available / reserved CPU")
+                }}<span>vCPU</span>
+              </th>
+              <th scope="col" class="number-column">
+                {{ tr("可用 / 已预留内存", "Available / reserved memory") }}
+              </th>
+              <th scope="col" class="number-column">
+                {{ tr("可用 / 已预留磁盘", "Available / reserved disk")
+                }}<span>GiB</span>
+              </th>
+              <th scope="col">{{ tr("最近心跳", "Last heartbeat") }}</th>
+              <th scope="col" class="action-column">
+                {{ tr("操作", "Actions") }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="node in list.data.value?.items" :key="node.id">
+              <th scope="row" class="node-identity">
+                <strong>{{ node.id }}</strong>
+                <span>{{ node.datacenter_id }}</span>
+              </th>
+              <td>
+                <StatusBadge
+                  :state="
+                    node.maintenance
+                      ? 'maintenance'
+                      : node.online
+                        ? 'online'
+                        : 'offline'
+                  "
+                />
+              </td>
+              <td class="number-column">
+                <strong class="available-value">{{ node.free_cpu }}</strong
+                ><span class="capacity-divider"> / </span
+                ><span class="reserved-value">{{ node.reserved_cpu }}</span>
+              </td>
+              <td class="number-column">
+                <strong class="available-value">{{
+                  sizeMiB(node.free_memory_mib)
+                }}</strong
+                ><span class="capacity-divider"> / </span
+                ><span class="reserved-value">{{
+                  sizeMiB(node.reserved_memory_mib)
+                }}</span>
+              </td>
+              <td class="number-column">
+                <strong class="available-value">{{ node.free_disk_gib }}</strong
+                ><span class="capacity-divider"> / </span
+                ><span class="reserved-value">{{
+                  node.reserved_disk_gib
+                }}</span>
+              </td>
+              <td class="heartbeat-value">
+                {{ dateText(node.heartbeat_at, locale) }}
+              </td>
+              <td class="action-column">
+                <UiButton
+                  variant="quiet"
+                  :disabled="!session.can('nodes.manage')"
+                  @click="open(node)"
+                >
+                  <Wrench :size="16" aria-hidden="true" />{{
+                    tr("维护", "Maintenance")
+                  }}
+                </UiButton>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="node-ledger-mobile">
         <article
           v-for="node in list.data.value?.items"
           :key="node.id"
-          class="node-panel"
+          class="node-entry"
         >
-          <header>
-            <div class="node-name">
-              <Server :size="20" aria-hidden="true" />
+          <header class="node-entry-heading">
+            <div class="node-entry-identity">
+              <Server :size="18" aria-hidden="true" />
               <div>
                 <h2>{{ node.id }}</h2>
                 <p>{{ node.datacenter_id }}</p>
@@ -112,26 +196,47 @@ async function save() {
               "
             />
           </header>
-          <dl class="node-capacity">
+          <div class="capacity-column-labels" aria-hidden="true">
+            <span>{{ tr("资源", "Resource") }}</span
+            ><span>{{ tr("可用", "Available") }}</span
+            ><span>{{ tr("已预留", "Reserved") }}</span>
+          </div>
+          <dl class="node-budget">
             <div>
-              <dt>{{ tr("可用 CPU", "Available CPU") }}</dt>
-              <dd>{{ node.free_cpu }} <span>vCPU</span></dd>
+              <dt>CPU <span>vCPU</span></dt>
+              <dd class="available-value">
+                <span class="sr-only">{{ tr("可用", "Available") }}</span
+                >{{ node.free_cpu }}
+              </dd>
+              <dd class="reserved-value">
+                <span class="sr-only">{{ tr("已预留", "Reserved") }}</span
+                >{{ node.reserved_cpu }}
+              </dd>
             </div>
             <div>
-              <dt>{{ tr("可用内存", "Available memory") }}</dt>
-              <dd>{{ sizeMiB(node.free_memory_mib) }}</dd>
+              <dt>{{ tr("内存", "Memory") }}</dt>
+              <dd class="available-value">
+                <span class="sr-only">{{ tr("可用", "Available") }}</span
+                >{{ sizeMiB(node.free_memory_mib) }}
+              </dd>
+              <dd class="reserved-value">
+                <span class="sr-only">{{ tr("已预留", "Reserved") }}</span
+                >{{ sizeMiB(node.reserved_memory_mib) }}
+              </dd>
             </div>
             <div>
-              <dt>{{ tr("可用磁盘", "Available disk") }}</dt>
-              <dd>{{ node.free_disk_gib }} <span>GiB</span></dd>
+              <dt>{{ tr("磁盘", "Disk") }} <span>GiB</span></dt>
+              <dd class="available-value">
+                <span class="sr-only">{{ tr("可用", "Available") }}</span
+                >{{ node.free_disk_gib }}
+              </dd>
+              <dd class="reserved-value">
+                <span class="sr-only">{{ tr("已预留", "Reserved") }}</span
+                >{{ node.reserved_disk_gib }}
+              </dd>
             </div>
           </dl>
-          <div class="node-reserved">
-            {{ tr("已预留", "Reserved") }} {{ node.reserved_cpu }} vCPU ·
-            {{ sizeMiB(node.reserved_memory_mib) }} ·
-            {{ node.reserved_disk_gib }} GiB
-          </div>
-          <footer>
+          <footer class="node-entry-footer">
             <div>
               <span>{{ tr("最近心跳", "Last heartbeat") }}</span>
               <p>{{ dateText(node.heartbeat_at, locale) }}</p>
@@ -140,10 +245,11 @@ async function save() {
               variant="quiet"
               :disabled="!session.can('nodes.manage')"
               @click="open(node)"
-              ><Wrench :size="16" aria-hidden="true" />{{
-                tr("维护", "Maintenance")
-              }}</UiButton
             >
+              <Wrench :size="16" aria-hidden="true" />{{
+                tr("维护", "Maintenance")
+              }}
+            </UiButton>
           </footer>
         </article>
       </div></StateBlock
@@ -195,111 +301,201 @@ async function save() {
   </section>
 </template>
 <style scoped>
-.node-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+.page-heading {
+  align-items: flex-start;
+  flex-wrap: nowrap;
 }
-.node-panel {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--surface);
-  padding: 24px;
-  min-width: 0;
+.page-heading > div {
+  flex: 1;
 }
-.node-panel > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.node-name {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-.node-name svg {
+.page-heading > .ui-button {
   flex-shrink: 0;
-  color: var(--secondary);
 }
-.node-name h2 {
-  font-size: 16px;
-  overflow-wrap: anywhere;
-  margin: 0 0 6px;
-}
-.node-name p {
-  font-size: 12px;
-  margin: 0;
-  color: var(--secondary);
-  overflow-wrap: anywhere;
-}
-.node-capacity {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin: 28px 0 20px;
-}
-.node-capacity dt {
-  color: var(--secondary);
-  font-size: 12px;
-  line-height: 1.6;
-  margin-bottom: 8px;
-}
-.node-capacity dd {
-  font-size: 20px;
-  font-weight: 550;
-  margin: 0;
-  overflow-wrap: anywhere;
-  letter-spacing: -0.025em;
-}
-.node-capacity dd span {
-  font-size: 12px;
-  color: var(--secondary);
-}
-.node-reserved {
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--secondary);
-  padding: 12px 0 20px;
-}
-.node-panel > footer {
+.node-ledger-desktop {
   border-top: 1px solid var(--border);
-  padding-top: 16px;
+}
+.node-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.node-table thead th {
+  padding: 12px 14px;
+  background: var(--subtle);
+  border-bottom: 1px solid var(--border);
+  color: var(--secondary);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+}
+.node-table thead th > span {
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.node-table tbody th,
+.node-table tbody td {
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.node-table tbody tr:hover {
+  background: var(--subtle);
+}
+.node-table .number-column,
+.node-table .action-column {
+  text-align: right;
+}
+.node-identity {
+  max-width: 200px;
+  text-align: left;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.node-identity strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+.node-identity > span {
+  display: block;
+  color: var(--secondary);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.number-column {
+  font-variant-numeric: tabular-nums;
+}
+.available-value {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.capacity-divider,
+.reserved-value {
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.heartbeat-value {
+  max-width: 168px;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.node-ledger-mobile {
+  display: none;
+}
+.node-entry {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+.node-entry-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.node-entry-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+}
+.node-entry-identity > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--secondary);
+}
+.node-entry-identity > div {
+  min-width: 0;
+}
+.node-entry-identity h2 {
+  font-size: 15px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.node-entry-identity p {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+.node-entry-heading > .status-badge {
+  flex-shrink: 0;
+}
+.capacity-column-labels,
+.node-budget > div {
+  display: grid;
+  grid-template-columns: minmax(74px, 1fr) minmax(0, 1.1fr) minmax(0, 1.1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.capacity-column-labels {
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 20px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.capacity-column-labels > span:not(:first-child),
+.node-budget dd {
+  text-align: right;
+}
+.node-budget {
+  margin: 0;
+}
+.node-budget > div {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.node-budget > div:last-child {
+  border-bottom: 0;
+}
+.node-budget dt {
+  color: var(--secondary);
+}
+.node-budget dt span {
+  font-size: 11px;
+}
+.node-budget dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+.node-entry-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding-top: 8px;
 }
-.node-panel > footer span {
+.node-entry-footer > div {
+  min-width: 0;
+}
+.node-entry-footer span {
   font-size: 11px;
   color: var(--secondary);
 }
-.node-panel > footer p {
+.node-entry-footer p {
   font-size: 12px;
-  margin: 6px 0 0;
+  line-height: 1.55;
+  color: var(--secondary);
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
 }
 .field {
   margin-top: 24px;
 }
-@media (max-width: 1000px) {
-  .node-grid {
-    grid-template-columns: 1fr;
+@media (max-width: 1100px) {
+  .node-ledger-desktop {
+    display: none;
   }
-}
-@media (max-width: 400px) {
-  .node-panel {
-    padding: 20px;
-  }
-  .node-capacity {
-    gap: 10px;
-  }
-  .node-capacity dd {
-    font-size: 18px;
-  }
-  .node-panel > footer {
-    align-items: flex-start;
-    flex-direction: column;
+  .node-ledger-mobile {
+    display: block;
+    border-top: 1px solid var(--border);
   }
 }
 </style>

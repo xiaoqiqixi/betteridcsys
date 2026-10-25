@@ -43,6 +43,13 @@ jobs:
           CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false ./cmd/aster-controller ./cmd/aster-node ./cmd/aster-network ./cmd/aster-billing-plugin
       - name: Workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/cloud.yml
+      - name: Cloud installer and package safety contracts (no host apply)
+        run: |
+          set -euo pipefail
+          bash -n aster-cloud/deploy/install/controller.sh aster-cloud/deploy/install/node.sh
+          python3 -B aster-cloud/deploy/install/test_install.py
+          python3 -B aster-cloud/deploy/ci/test_cloud_installer.py
+          python3 -B aster-cloud/deploy/scripts/test_cloud_package.py
 
   native-ovs-parser:
     name: Native OVS parser and encoder (${{ matrix.os }})

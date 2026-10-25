@@ -124,9 +124,9 @@ const ports = (r: PublicIngressPolicy["rules"][number]) =>
 </template>
 <style scoped>
 .binding-ingress {
-  padding: 16px;
+  padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--surface-raised);
   min-width: 0;
 }

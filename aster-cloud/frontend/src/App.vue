@@ -10,13 +10,14 @@ import {
   watch,
 } from "vue";
 import { RouterView, useRoute } from "vue-router";
-import { Server, Menu, SlidersHorizontal, LogOut } from "@lucide/vue";
+import { Server, SlidersHorizontal, LogOut } from "@lucide/vue";
 import { createApiClient } from "./api/client";
 import { useSession } from "./composables/session";
 import { usePreferences } from "./composables/preferences";
 import { consoleKey } from "./context";
 import { useNotices } from "./composables/notices";
 import NavLinks from "./components/NavLinks.vue";
+import WorkbenchHeader from "./components/WorkbenchHeader.vue";
 import UiOverlay from "./components/UiOverlay.vue";
 import UiSelect from "./components/UiSelect.vue";
 import UiButton from "./components/UiButton.vue";
@@ -35,25 +36,25 @@ const { notices, notify, dismiss, pause, resume } = useNotices(
 );
 const mobileOpen = shallowRef(false),
   preferencesOpen = shallowRef(false);
-const sidebar = useTemplateRef<HTMLElement>("sidebar"),
-  navigationTrigger = useTemplateRef<HTMLButtonElement>("navigationTrigger"),
+const commandRail =
+    useTemplateRef<InstanceType<typeof WorkbenchHeader>>("commandRail"),
   mainContent = useTemplateRef<HTMLElement>("mainContent");
 let navigationMedia: MediaQueryList | undefined,
   lastNavigationFocus: HTMLElement | null = null;
 provide(consoleKey, { api, session, prefs, notify });
-const pageTitle = computed(() =>
-  route.path.startsWith("/nodes")
-    ? tr("节点", "Nodes")
-    : route.path.startsWith("/networks")
-      ? tr("网络与 IP", "Networks & IP")
-      : route.path.startsWith("/operations")
-        ? tr("操作任务", "Tasks")
-        : route.path.startsWith("/audit")
-          ? tr("审计记录", "Audit log")
-          : route.path.startsWith("/users")
-            ? tr("成员与权限", "Members & access")
-            : tr("实例", "Instances"),
-);
+const pageTitle = computed(() => {
+  const section = [
+    ["/instances", tr("实例", "Instances")],
+    ["/nodes", tr("节点", "Nodes")],
+    ["/networks", tr("网络与 IP", "Networks & IP")],
+    ["/operations", tr("操作任务", "Tasks")],
+    ["/audit", tr("审计记录", "Audit log")],
+    ["/users", tr("成员与权限", "Members & access")],
+  ].find(([path]) => route.path === path || route.path.startsWith(`${path}/`));
+  return section?.[1] || tr("管理控制台", "Console");
+});
+const navigationElement = () => commandRail.value?.navigationElement();
+const navigationTrigger = () => commandRail.value?.menuElement();
 const permission = computed(() => route.meta.permission as string | undefined);
 const authorized = computed(
   () => !permission.value || session.can(permission.value),
@@ -90,7 +91,7 @@ function skipToContent() {
   mainContent.value?.focus();
 }
 function revealNavigationLink(target: HTMLElement) {
-  if (!target.matches(".sidebar-navigation a[href]")) return;
+  if (!target.matches(".aw-rail-nav a[href]")) return;
   void nextTick(() => {
     if (
       !target.isConnected ||
@@ -98,25 +99,25 @@ function revealNavigationLink(target: HTMLElement) {
       !target.matches(":focus-visible")
     )
       return;
-    const navigation = target.closest<HTMLElement>(".sidebar-navigation");
-    if (!navigation || !sidebar.value?.contains(navigation)) return;
+    const navigation = target.closest<HTMLElement>(".aw-rail-nav");
+    if (!navigation || navigationElement() !== navigation) return;
     const row = target.getBoundingClientRect();
     const region = navigation.getBoundingClientRect();
     if (!row.height || !region.height) return;
     const style = getComputedStyle(navigation);
-    const top = region.top + (parseFloat(style.paddingTop) || 0);
-    const bottom = region.bottom - (parseFloat(style.paddingBottom) || 0);
+    const left = region.left + (parseFloat(style.paddingLeft) || 0);
+    const right = region.right - (parseFloat(style.paddingRight) || 0);
     // Some browsers reveal only a link's text on focus. Reveal its entire hit
     // area and focus gutter, scrolling this navigation only, never the page.
-    if (row.top < top) navigation.scrollTop += Math.floor(row.top - top);
-    else if (row.bottom > bottom)
-      navigation.scrollTop += Math.ceil(row.bottom - bottom);
+    if (row.left < left) navigation.scrollLeft += Math.floor(row.left - left);
+    else if (row.right > right)
+      navigation.scrollLeft += Math.ceil(row.right - right);
   });
 }
 function rememberNavigationFocus(event: FocusEvent) {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  if (sidebar.value?.contains(target) || target === navigationTrigger.value) {
+  if (navigationElement()?.contains(target) || target === navigationTrigger()) {
     lastNavigationFocus = target;
     revealNavigationLink(target);
   } else if (target !== document.body && target !== document.documentElement)
@@ -126,8 +127,8 @@ function clearNavigationPointerFocus(event: PointerEvent) {
   const target = event.target;
   if (
     target instanceof Node &&
-    !sidebar.value?.contains(target) &&
-    !navigationTrigger.value?.contains(target)
+    !navigationElement()?.contains(target) &&
+    !navigationTrigger()?.contains(target)
   )
     lastNavigationFocus = null;
 }
@@ -143,16 +144,16 @@ function navigationViewportChanged(
       ? lastNavigationFocus
       : current;
   if (event.matches) {
-    if (active instanceof Node && sidebar.value?.contains(active))
+    if (active instanceof Node && navigationElement()?.contains(active))
       void nextTick(() => {
-        if (navigationMedia?.matches) navigationTrigger.value?.focus();
+        if (navigationMedia?.matches) navigationTrigger()?.focus();
       });
     return;
   }
   // Consume the drawer's own history/scroll lock through UiOverlay cleanup.
   // Never leave an open modal over the desktop or restore focus to a hidden
   // mobile trigger after crossing the navigation breakpoint.
-  if (mobileOpen.value || active === navigationTrigger.value) {
+  if (mobileOpen.value || active === navigationTrigger()) {
     mobileOpen.value = false;
     void nextTick(() => {
       if (navigationMedia && !navigationMedia.matches)
@@ -216,70 +217,29 @@ onBeforeUnmount(() => {
     <LoginPage
   /></template>
   <div v-else class="console-shell">
-    <aside ref="sidebar" class="sidebar">
-      <div class="sidebar-panel">
-        <a class="brand" href="#/instances"
-          ><span class="brand-symbol"
-            ><Server :size="21" aria-hidden="true" /></span
-          ><span
-            >Aster<span class="brand-subtitle">{{
-              tr("云管理", "Cloud console")
-            }}</span></span
-          ></a
-        ><NavLinks tone="sidebar" class="sidebar-navigation" tabindex="-1" />
-        <div class="sidebar-account">
-          <div class="account-avatar">
-            {{
-              (session.user.value.name || session.user.value.email)
-                .slice(0, 1)
-                .toLocaleUpperCase()
-            }}
-          </div>
-          <div class="account-info">
-            <strong>{{ session.user.value.name }}</strong
-            ><span>{{ roleText }}</span>
-          </div>
-          <button
-            type="button"
-            class="sidebar-logout"
-            :disabled="session.busy.value"
-            :aria-label="tr('退出登录', 'Sign out')"
-            @click="session.logout"
-          >
-            <LogOut :size="18" aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-    </aside>
     <div class="console-workspace">
-      <header class="topbar">
-        <div class="topbar-leading">
-          <button
-            ref="navigationTrigger"
-            class="icon-button mobile-menu"
-            type="button"
-            :aria-expanded="mobileOpen"
-            aria-haspopup="dialog"
-            :aria-label="tr('打开导航', 'Open navigation')"
-            @click="mobileOpen = true"
-          >
-            <Menu :size="21" aria-hidden="true" /></button
-          ><span class="topbar-context">{{ tr("管理控制台", "Console") }}</span
-          ><span class="topbar-separator" aria-hidden="true">/</span
-          ><span class="topbar-page">{{ pageTitle }}</span>
-        </div>
-        <button
-          class="appearance-trigger"
-          type="button"
-          :aria-label="tr('语言与外观', 'Language & appearance')"
-          :title="tr('语言与外观', 'Language & appearance')"
-          @click="preferencesOpen = true"
-        >
-          <SlidersHorizontal :size="16" aria-hidden="true" /><span>{{
-            prefs.locale.value === "zh-CN" ? "中文" : "EN"
-          }}</span>
-        </button>
-      </header>
+      <NavLinks v-slot="{ items }">
+        <WorkbenchHeader
+          ref="commandRail"
+          :items="items"
+          :active-path="route.path"
+          :current-page-label="pageTitle"
+          :display-name="session.user.value.name || session.user.value.email"
+          :role-label="roleText"
+          :locale-label="prefs.locale.value === 'zh-CN' ? '中文' : 'EN'"
+          :busy="session.busy.value || !!session.pendingAuth.value"
+          :navigation-open="mobileOpen"
+          :brand-label="tr('Aster 云', 'Aster Cloud')"
+          :nav-aria-label="tr('主导航', 'Main navigation')"
+          :preferences-label="tr('语言与外观', 'Language & appearance')"
+          :logout-label="tr('退出登录', 'Sign out')"
+          :menu-label="tr('打开导航', 'Open navigation')"
+          :busy-label="tr('正在处理会话', 'Session request in progress')"
+          @open-navigation="mobileOpen = true"
+          @open-preferences="preferencesOpen = true"
+          @logout="session.logout"
+        />
+      </NavLinks>
       <main
         ref="mainContent"
         id="main-content"
@@ -309,8 +269,14 @@ onBeforeUnmount(() => {
     @close="mobileOpen = false"
     ><NavLinks tone="surface" @navigate="mobileOpen = false" />
     <template #footer
-      ><UiButton
-        :busy="session.busy.value"
+      ><div v-if="session.user.value" class="navigation-account">
+        <strong :title="session.user.value.name || session.user.value.email">{{
+          session.user.value.name || session.user.value.email
+        }}</strong>
+        <span>{{ roleText }}</span>
+      </div>
+      <UiButton
+        :busy="session.busy.value || !!session.pendingAuth.value"
         @click="
           session.logout();
           mobileOpen = false;
@@ -380,166 +346,14 @@ onBeforeUnmount(() => {
   z-index: 20;
 }
 .console-shell {
-  --sidebar-width: clamp(216px, 18vw, 232px);
-  display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100dvh;
-}
-.sidebar {
   min-width: 0;
-  background: var(--sidebar-bg);
-  color: var(--sidebar-text);
-}
-.sidebar-panel {
-  position: sticky;
-  top: 0;
-  height: 100dvh;
-  min-height: 0;
-  padding: clamp(16px, 3dvh, 30px) 18px 18px;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-}
-.sidebar-navigation {
-  flex: 1;
-  min-height: 0;
-  padding: 8px;
-  margin-inline: -8px;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--sidebar-border) var(--sidebar-bg);
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--sidebar-text);
-  text-decoration: none;
-  padding: 0 12px;
-  margin-bottom: clamp(12px, 4dvh, 42px);
-  flex-shrink: 0;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-.brand-symbol {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--sidebar-border);
-  border-radius: 10px;
-  flex-shrink: 0;
-}
-.brand-subtitle {
-  display: block;
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--sidebar-secondary);
-  margin-top: 4px;
-  letter-spacing: 0.02em;
-}
-.sidebar-account {
-  margin-top: 16px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 20px 8px 0;
-  border-top: 1px solid var(--sidebar-border);
-}
-.account-avatar {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  background: var(--sidebar-selected);
-  border: 1px solid var(--sidebar-border);
-  border-radius: 50%;
-  flex-shrink: 0;
-  font-size: 13px;
-}
-.account-info {
-  flex: 1;
-  min-width: 0;
-}
-.account-info strong {
-  display: block;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.account-info > span {
-  display: block;
-  font-size: 10px;
-  color: var(--sidebar-secondary);
-  margin-top: 5px;
-}
-.sidebar-logout {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  background: none;
-  border: 0;
-  color: var(--sidebar-secondary);
-  border-radius: 8px;
-}
-.sidebar-logout:hover {
-  background: var(--sidebar-hover);
 }
 .console-workspace {
   min-width: 0;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
-}
-.topbar {
-  height: 76px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 40px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-.topbar-leading {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-.topbar-context {
-  font-size: 12px;
-  color: var(--secondary);
-}
-.topbar-separator {
-  color: var(--muted);
-  font-size: 12px;
-}
-.topbar-page {
-  font-size: 12px;
-  font-weight: 500;
-}
-.appearance-trigger {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 40px;
-  padding: 0 12px;
-  color: var(--secondary);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.appearance-trigger:hover {
-  background: var(--hover);
 }
 .main-content {
   flex: 1;
@@ -559,57 +373,37 @@ onBeforeUnmount(() => {
 .workspace-footer span {
   overflow-wrap: anywhere;
 }
-.mobile-menu {
-  display: none;
-}
 .preferences-fields {
   display: flex;
   flex-direction: column;
   gap: 24px;
   min-height: 200px;
 }
+.navigation-account {
+  flex: 1;
+  min-width: 0;
+  align-self: center;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.navigation-account strong,
+.navigation-account span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.navigation-account span {
+  color: var(--secondary);
+  font-size: 12px;
+}
 @media (max-width: 1024px) {
-  .console-shell {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .sidebar {
-    display: none;
-  }
-  .topbar {
-    height: 64px;
-    padding: 0 20px;
-  }
-  .mobile-menu {
-    display: grid;
-    margin-left: -8px;
-  }
-  .topbar-leading {
-    gap: 10px;
-  }
-  .topbar-context,
-  .topbar-separator {
-    display: none;
-  }
   .workspace-footer {
     padding: 20px;
-  }
-  .appearance-trigger {
-    min-height: 40px;
-  }
-  .topbar-page {
-    font-size: 14px;
   }
   .login-utilities {
     right: 12px;
     top: 12px;
-  }
-}
-@media (max-width: 360px) {
-  .topbar {
-    padding-inline: 16px;
-  }
-  .appearance-trigger {
-    padding-inline: 9px;
   }
 }
 </style>

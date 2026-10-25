@@ -305,10 +305,11 @@ const reason = (value: string) =>
   color: var(--accent-text);
 }
 .gateway-choice {
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  padding: 16px 0;
+  border: 0;
+  border-radius: 0;
   margin-top: 12px;
+  border-block: 1px solid var(--border);
 }
 .gateway-choice.is-selected {
   border-color: var(--accent);
@@ -338,7 +339,7 @@ const reason = (value: string) =>
 .editor-empty {
   background: var(--subtle);
   padding: 18px;
-  border-radius: 10px;
+  border-radius: 6px;
   font-size: 13px;
   line-height: 1.7;
   color: var(--secondary);
@@ -346,7 +347,7 @@ const reason = (value: string) =>
 .missing-member {
   margin-top: 14px;
   padding: 14px;
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--warning-bg);
   color: var(--warning);
   font-size: 13px;
@@ -367,6 +368,11 @@ const reason = (value: string) =>
   }
   .gateway-choice {
     padding: 14px;
+  }
+}
+@media (max-width: 420px) {
+  .gateway-choice {
+    padding: 14px 0;
   }
 }
 </style>

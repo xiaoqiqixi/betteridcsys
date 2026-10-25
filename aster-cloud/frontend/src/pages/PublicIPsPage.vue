@@ -460,8 +460,8 @@ const bindingLabel = (v: string) =>
   display: flex;
   align-items: end;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 .ip-cluster {
   width: min(100%, 320px);
@@ -469,17 +469,18 @@ const bindingLabel = (v: string) =>
 .ip-views {
   display: flex;
   gap: 4px;
-  padding: 4px;
-  background: var(--subtle);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
 }
 .ip-views button {
   min-height: 44px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 4px;
   background: transparent;
-  padding: 8px 16px;
+  padding: 8px 14px;
   color: var(--secondary);
   font: inherit;
   font-size: 14px;
@@ -491,15 +492,16 @@ const bindingLabel = (v: string) =>
   font-weight: 600;
 }
 .ip-records {
-  display: grid;
-  gap: 16px;
+  display: block;
+  border-top: 1px solid var(--border);
 }
 .ip-record {
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  padding: 18px 0;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   min-width: 0;
+  border-bottom: 1px solid var(--border);
 }
 .ip-record-heading,
 .ip-record-actions {
@@ -507,14 +509,16 @@ const bindingLabel = (v: string) =>
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding-top: 12px;
+  margin-top: 12px;
 }
 .ip-record-heading > div {
   min-width: 0;
 }
 .ip-record h2 {
-  font-size: 19px;
+  font-size: 17px;
   line-height: 1.4;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   overflow-wrap: anywhere;
 }
 .ip-record code {
@@ -525,8 +529,8 @@ const bindingLabel = (v: string) =>
 .ip-status {
   font-size: 12px;
   background: var(--subtle);
-  padding: 7px 10px;
-  border-radius: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
   white-space: nowrap;
 }
 .ip-meta {
@@ -537,13 +541,14 @@ const bindingLabel = (v: string) =>
 .ip-addresses {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 16px 0;
+  gap: 6px;
+  margin: 12px 0;
 }
 .ip-addresses code {
-  padding: 7px 10px;
+  padding: 5px 8px;
   background: var(--subtle);
-  border-radius: 6px;
+  border-radius: 4px;
+  font-size: 13px;
 }
 .ip-record-actions {
   border-top: 1px solid var(--border);
@@ -555,14 +560,16 @@ const bindingLabel = (v: string) =>
 }
 .ip-details {
   display: grid;
-  gap: 12px;
-  margin: 20px 0;
+  gap: 12px 24px;
+  margin: 16px 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .ip-details > div {
   display: grid;
-  grid-template-columns: 100px 1fr;
-  gap: 12px;
-  font-size: 13px;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.6;
 }
 .ip-details dt {
   color: var(--secondary);
@@ -581,11 +588,11 @@ const bindingLabel = (v: string) =>
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
   margin-bottom: 20px;
-  padding: 18px;
+  padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--subtle);
 }
 .ip-pending p,
@@ -605,9 +612,6 @@ const bindingLabel = (v: string) =>
     align-items: stretch;
     flex-direction: column;
   }
-  .ip-record {
-    padding: 18px;
-  }
   .ip-status {
     align-self: flex-start;
   }
@@ -622,6 +626,26 @@ const bindingLabel = (v: string) =>
   }
   .ip-cluster {
     width: 100%;
+  }
+}
+@media (max-width: 760px) {
+  .ip-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .ip-record {
+    padding: 18px 0;
+  }
+  .ip-views {
+    width: 100%;
+  }
+  .ip-views button {
+    flex: 1;
+    padding-inline: 10px;
+  }
+  .ip-details > div {
+    grid-template-columns: 86px minmax(0, 1fr);
   }
 }
 </style>

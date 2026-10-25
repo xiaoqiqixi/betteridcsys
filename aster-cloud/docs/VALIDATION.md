@@ -1,6 +1,65 @@
 # 开发验证入口与历史记录
 
-验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列最新已核对基线；后续日期段落保留原轮次的数量、工具链和限制，不是当前完整测试数量。独立主控没有正式 Release，财务 v0.5.9 发行包不因这些开发记录而改变。
+验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列当前本地安装器安全测试，再列精确历史源码；历史日期段落保留原轮次的数量、工具链和限制，不是当前完整测试数量。独立主控没有正式 Release，财务 v0.5.9 发行包不因这些开发记录而改变。
+
+## 当前工作区：新管理工作台
+
+- Gemini 原稿只提供视觉设计；生产使用独立 `WorkbenchHeader` / `InstanceLedger` 视图，仍接原有 API、session、RBAC 与持久化操作意图，不引入演示数据源或计时成功。
+- 本地完整执行 format、typecheck、**37 文件 / 891 tests** 和生产构建；`npm audit` 当前报告 0 vulnerabilities。已移除侧栏/重复顶栏，手机不再隐藏实例节点，详情、浮层与控件统一语义色和轻边界。
+- 本地实际浏览器的合成 DTO 视图用于检查手机/桌面布局、中英文、长名称、完整 ID、44px 目标与浅深主题；这些不是实库、真节点或生产部署证明，原型和截图不打进生产 bundle。
+- 同提交的真实 MySQL / 严格 TLS 浏览器及不变性门禁必须独立执行。新的导航门禁要求 53 项（中文浅色37 / 英文深色16），保留原162项业务、13个网络版本、原请求/财务/网络快照和64张互不替代的截图要求。当前源码不能继承旧51项侧栏报告。
+- 新增 `deploy/ci/test_cloud_mysql_grants.py`，只接受原生 CI 私有 MySQL fixture：实际 RANDOM PASSWORD / ATTRIBUTE / SHOW GRANTS、全部10份迁移 SQL 与外键、runtime 四项 DML 和拒绝 DDL/越库授权。仅临时替换测试传输，不绕过生产 root/文件属主保护；非 fixture 拒绝退出而不是跳过。完整安装器、Ubuntu包脚本和 KVM 真机验收另行进行。
+- 当前 main 精确源码的 CI 运行见 [Controller development checks](https://github.com/xiaoqiqixi/betteridcsys/actions/workflows/cloud.yml)；必须核对运行所指向的 SHA 与结果，不把本地通过或旧运行当新完整验收。
+
+## 当前工作区：开发安装器安全测试
+
+本段记录已实际运行的本地开发检查，**不把未提交工作区或旧源码 SHA 写作新部署/发行验收终点**。
+独立 Cloud 正式 Release 与官方安装下载通道尚未发布，财务 `v0.5.9` 不能替代主控或被控开发包。
+
+| 检查 | 当前结果 | 明确边界 |
+| --- | --- | --- |
+| `deploy/ci/test_cloud_installer.py` | 87 tests 通过、0 skip | 合成归档、私有测试文件系统及 APT/MySQL/systemd/网络替身；含 legacy receipt 禁止 resume 新增宿主副作用 |
+| `deploy/install/test_install.py` | 10 tests 通过、0 skip | TLS pair/SAN/有效期分支、固定命令/来源边界、文件模式/回执恢复及真实 migration SQL 的 FK/REFERENCES 权限对照；不替代原生安装 |
+| `deploy/scripts/test_cloud_package.py` | 23 tests 通过、0 skip | 开发包合同、安全成员/权限与可复现规则；不证明发布者身份或生产升级兼容 |
+| 静态入口 | shell 语法、Python 语法/AST、diff 检查通过 | 未执行目标机 apply；三组测试不相加宣传为独立真实业务验收场景 |
+| 真实开发制品只读检查 | 两角色真实编译包通过外部 SHA、manifest 与 plan/dry-run | 是本地候选包，不是正式下载资产；其旧 UI 不能用于本轮新 UI 最终截图/API 验收 |
+
+打包验证时的已提交源码为 `be617c8`，候选包版本为 `0.1.0-dev` / `linux-amd64`。这个来源说明
+只绑定候选制品，不表示当前安装器、新 UI 或当前工作区获得了该旧源码的全部 CI 结论。
+本机临时目录为 `/private/tmp/aster-cloud-package-real.frhGdh1n/candidate-two/`；它不是下载地址，
+文件也不会自动出现在另一台 Ubuntu 主机。
+
+| 已核验本地制品 | 完整外部 SHA256 |
+| --- | --- |
+| `aster-cloud-controller-0.1.0-dev-linux-amd64.tar.gz` | `a3e1e5365205a5e77799d5c847bc717fa2836dfdd0f92b3b9177409955f9a8e6` |
+| `aster-cloud-node-0.1.0-dev-linux-amd64.tar.gz` | `85a1b2c14865776be968875499adc60f8fadcfbc17ccb81fe2268ee5ced85c68` |
+
+以下是**本机已有制品**实际运行过的单命令只读入口，从仓库根目录执行；不是可复制到任意服务器直接上线的命令，
+也不能将旧包 hash 用于新构建：
+
+```sh
+python3 aster-cloud/deploy/install/install.py controller --plan --allow-development --bundle /private/tmp/aster-cloud-package-real.frhGdh1n/candidate-two/aster-cloud-controller-0.1.0-dev-linux-amd64.tar.gz --sha256 a3e1e5365205a5e77799d5c847bc717fa2836dfdd0f92b3b9177409955f9a8e6
+```
+
+```sh
+python3 aster-cloud/deploy/install/install.py node --dry-run --allow-development --bundle /private/tmp/aster-cloud-package-real.frhGdh1n/candidate-two/aster-cloud-node-0.1.0-dev-linux-amd64.tar.gz --sha256 85a1b2c14865776be968875499adc60f8fadcfbc17ccb81fe2268ee5ced85c68
+```
+
+目标机的单命令交互入口是本地审核后的 `deploy/install/controller.sh` 或 `node.sh`，向导默认 plan；
+只有真实本地包、可信 SHA、环境/配置审批与明确 apply/start 才会执行安装。主控可显式选择固定 Ubuntu
+依赖和新专用 DB，runtime DML 与迁移 DDL 身份分离；节点仅自动化工具依赖，**完整 libvirt daemon / 默认网络
+安装没有开放，干净节点端到端一键就绪未完成**。详情见[安装器](../deploy/install/README.md)、
+[包合同](INSTALL_PACKAGES.md)与[安全测试细则](INSTALL_VALIDATION.md)。
+
+**本轮没有执行真实 APT 事务、MySQL provisioning、systemd 安装/重启、KVM/VM 或物理网络验收。**
+包 maintainer scripts、socket-only 服务策略、MySQL 8.0/8.4 实际返回/权限与迁移、断电恢复仍须在隔离
+Ubuntu 22.04/24.04/26.04 宿主单独验收。节点本机最多报告 `node_started_pending_controller`，须由主控
+使用其本地私钥完成真实 pinned mTLS 心跳；不导入 controller 私钥到节点，不拿本地 TCP 监听冒充准入。
+
+新 DB/账号的跨系统 DDL 与本地回执/口令落盘并非一个原子事务。CREATE 已提交但 marker、一次性密码回包或
+私密文件落盘丢失时，程序保留对象并停步，由操作者核对；不 reset/drop/adopt 制造“恢复成功”。
+新 UI 的真实 API 流程、严格 TLS 浏览器与最终截图有独立门禁，**本节安装器安全测试不代表这些门禁已通过**。下方 `66e2d49` 等历史结果必须
+保持原来源与替身边界，不能直接沿用于当前 UI/安装工作区。
 
 ## 2026-10-25 · 已核对源码 `66e2d49`
 

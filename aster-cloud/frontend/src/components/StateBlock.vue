@@ -59,11 +59,12 @@ const {
   text-align: center;
   gap: 12px;
   min-height: 260px;
-  padding: 40px 20px;
+  padding: 32px 20px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0;
   color: var(--secondary);
+  border-block: 1px solid var(--border);
 }
 .state-block h2 {
   font-size: 17px;

@@ -265,8 +265,8 @@ assert {p.name for p in output.glob('*.png')} == set(business_screenshots) | req
 assert len(report.get('checks', [])) >= 162, 'Original business coverage must not be reduced'
 assert report.get('console_errors') == [], 'The real browser must not have JavaScript errors'
 sidebar_checks = report.get('sidebar_checks', [])
-assert len(sidebar_checks) >= 51, 'Responsive geometry and real navigation lifecycle must both execute'
-for mode, count in (('chinese-light', 36), ('english-dark', 15)):
+assert len(sidebar_checks) >= 53, 'New command-rail geometry, semantics and navigation lifecycle must all execute'
+for mode, count in (('chinese-light', 37), ('english-dark', 16)):
     entries = [c for c in sidebar_checks if c.get('mode') == mode]
     assert len(entries) >= count, 'Both language/theme sidebar matrices must execute'
     for name in ('1024 to 1025 closes drawer, clears inert/history and focuses main',
@@ -274,7 +274,8 @@ for mode, count in (('chinese-light', 36), ('english-dark', 15)):
                  'visible drawer navigation closes the overlay and reaches the actual route',
                  '1440px 360px short-screen independent scroll and keyboard access',
                  '1025px 360px short-screen independent scroll and keyboard access',
-                 'visible skip-link click focuses main without changing the hash route or making a write'):
+                 'visible skip-link click focuses main without changing the hash route or making a write',
+                 'single command rail has six real semantic route anchors and controlled compact disclosure'):
         assert any(c.get('name') == name for c in entries), 'A required sidebar geometry/lifecycle proof is missing'
     for width in (1440, 1025):
         proof = next(c for c in entries if c.get('name') == str(width) + 'px 360px short-screen independent scroll and keyboard access')
@@ -282,8 +283,9 @@ for mode, count in (('chinese-light', 36), ('english-dark', 15)):
         assert len(targets) == 7, 'Every actual sidebar link and sign-out must retain exact keyboard geometry proof'
         assert [t.get('link_index') for t in targets[:6]] == list(range(6)) and targets[-1].get('logout') is True
         for target in targets:
-            assert all(target.get('checks', {}).get(k) is True for k in ('focused', 'visible', 'in_viewport', 'in_clip', 'hit'))
+            assert all(target.get('checks', {}).get(k) is True for k in ('focused', 'visible', 'target_size', 'in_viewport', 'in_clip', 'hit'))
             assert abs(target['document_scroll_y'] - proof['keyboard_document_scroll_y']) <= 1, 'Keyboard sidebar navigation must not move the document'
+        assert all(proof.get('preferences_keyboard_target', {}).get('checks', {}).get(k) is True for k in ('focused', 'visible', 'target_size', 'in_viewport', 'in_clip', 'hit')), 'Appearance must also have a real reachable 44px keyboard target'
 assert report.get('public_ip_failed_writes') == [{'method': 'POST', 'path': '/console/v1/public-ips/leases'}], 'Only the single original allocation transport fault is permitted'
 
 for path in output.iterdir():

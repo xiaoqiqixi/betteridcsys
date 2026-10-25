@@ -109,32 +109,41 @@ describe("design contracts (static tokens, not browser computed)", () => {
     expect(surface).toContain("--nav-current-bg: var(--accent-bg)");
     expect(app).not.toContain("mobile-nav-surface");
     expect(app).toContain('<NavLinks tone="surface"');
-    expect(app).toContain('<NavLinks tone="sidebar"');
-    const trigger = app.match(
-      /<button\s+class="appearance-trigger"[\s\S]+?<\/button>/,
+    expect(app).toContain('<NavLinks v-slot="{ items }">');
+    const header = readFileSync(
+      resolve(root, "components/WorkbenchHeader.vue"),
+      "utf8",
+    );
+    expect(app).toContain(
+      `:preferences-label="tr('语言与外观', 'Language & appearance')"`,
+    );
+    const trigger = header.match(
+      /<button[\s\S]*?class="aw-rail-action aw-pref-trigger"[\s\S]+?<\/button>/,
     )?.[0];
-    expect(trigger).toContain(
-      ":aria-label=\"tr('语言与外观', 'Language & appearance')\"",
-    );
-    expect(trigger).toContain(
-      ":title=\"tr('语言与外观', 'Language & appearance')\"",
-    );
+    expect(trigger).toContain("preferencesLabel");
+    expect(trigger).toContain(":aria-label");
+    expect(trigger).toContain(":title");
   });
-  it("separates the full-page sidebar track from its independently scrolling viewport panel", () => {
+  it("uses one sticky 52px command rail with a separately scrolling horizontal nav and compact disclosure", () => {
     const app = readFileSync(resolve(root, "App.vue"), "utf8");
-    const shell = app.match(/\.console-shell\s*\{([^}]+)\}/)?.[1];
-    expect(shell).toContain("display: grid");
-    expect(shell).toContain("minmax(0, 1fr)");
-    const track = app.match(/\.sidebar\s*\{([^}]+)\}/)?.[1];
-    expect(track).toContain("background: var(--sidebar-bg)");
-    expect(track).not.toContain("position: fixed");
-    const panel = app.match(/\.sidebar-panel\s*\{([^}]+)\}/)?.[1];
-    expect(panel).toContain("position: sticky");
-    expect(panel).toContain("height: 100dvh");
-    const nav = app.match(/\.sidebar-navigation\s*\{([^}]+)\}/)?.[1];
-    expect(nav).toContain("min-height: 0");
-    expect(nav).toContain("overflow-y: auto");
-    expect(app).toContain("@media (max-width: 1024px)");
+    const header = readFileSync(
+      resolve(root, "components/WorkbenchHeader.vue"),
+      "utf8",
+    );
+    expect(app).not.toContain("<aside");
+    expect(app).not.toContain('class="topbar"');
+    expect(app).toContain("<WorkbenchHeader");
+    const rail = header.match(/\.aw-command-rail\s*\{([^}]+)\}/)?.[1];
+    expect(rail).toContain("position: sticky");
+    expect(rail).toContain("height: 52px");
+    expect(rail).toContain("--aw-rail-text: var(--text)");
+    const nav = header.match(/\.aw-rail-nav\s*\{([^}]+)\}/)?.[1];
+    expect(nav).toContain("min-width: 0");
+    expect(nav).toContain("overflow-x: auto");
+    expect(nav).toContain("overscroll-behavior-x: contain");
+    expect(header).toContain("@media (max-width: 1024px)");
+    expect(header).toContain('aria-haspopup="dialog"');
+    expect(header).toContain(':aria-expanded="navigationOpen"');
     expect(app).not.toContain("margin-left: 232px");
   });
   it("lets drawer content fill remaining height and lets closing surfaces stop intercepting new input", () => {

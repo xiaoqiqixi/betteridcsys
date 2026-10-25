@@ -354,10 +354,10 @@ const stageComplete = (phase: string) =>
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 12px 18px;
-  padding: 20px 0 24px;
-  margin-bottom: 24px;
+  padding: 16px 0 20px;
+  margin-bottom: 20px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--secondary);
 }
 .change-identity code {
@@ -369,14 +369,15 @@ const stageComplete = (phase: string) =>
 }
 .phase-track {
   list-style: none;
-  margin: 32px 0;
-  padding: 20px;
+  margin: 24px 0;
+  padding: 16px 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
+  gap: 16px;
+  border-block: 1px solid var(--border);
 }
 .phase-track li {
   display: grid;
@@ -387,7 +388,7 @@ const stageComplete = (phase: string) =>
 }
 .phase-track small {
   grid-column: 2;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 .phase-track .current {
@@ -408,15 +409,16 @@ const stageComplete = (phase: string) =>
   margin: 0 0 20px;
 }
 .node-task {
-  padding: 22px;
+  padding: 18px 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  margin-top: 16px;
+  border: 0;
+  border-radius: 0;
+  margin-top: 12px;
   min-width: 0;
+  border-bottom: 1px solid var(--border);
 }
 .node-task h3 {
-  margin: 0 0 20px;
+  margin: 0 0 16px;
   font-size: 15px;
   overflow-wrap: anywhere;
 }
@@ -432,6 +434,9 @@ const stageComplete = (phase: string) =>
   align-items: flex-start;
   gap: 12px;
   font-size: 13px;
+}
+.node-phase > .status-badge {
+  justify-self: start;
 }
 .node-phase details {
   width: 100%;
@@ -460,19 +465,19 @@ const stageComplete = (phase: string) =>
   margin: 0;
 }
 .node-phase dt {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--secondary);
   margin-bottom: 6px;
 }
 .node-phase dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
 }
 .version-config {
-  margin-top: 36px;
-  padding-top: 28px;
+  margin-top: 28px;
+  padding-top: 24px;
   border-top: 1px solid var(--border);
 }
 .version-config > h2 {
@@ -505,7 +510,7 @@ const stageComplete = (phase: string) =>
   font-size: 13px;
   line-height: 1.7;
   padding: 18px;
-  border-radius: 10px;
+  border-radius: 6px;
   margin-bottom: 24px;
 }
 .change-notice a {
@@ -556,6 +561,11 @@ const stageComplete = (phase: string) =>
   .epoch-heading .heading-actions {
     width: 100%;
     justify-content: space-between;
+  }
+}
+@media (max-width: 420px) {
+  .node-task {
+    padding: 18px 0;
   }
 }
 </style>

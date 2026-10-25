@@ -20,7 +20,7 @@ const {
   background: var(--danger-bg);
   color: var(--danger);
   border: 1px solid var(--danger-border);
-  border-radius: 10px;
+  border-radius: 6px;
   margin: 16px 0;
 }
 .inline-error p {

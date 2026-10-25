@@ -449,7 +449,7 @@ function submit() {
   gap: 8px;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--subtle);
   overflow-wrap: anywhere;
 }
@@ -462,7 +462,7 @@ function submit() {
   line-height: 1.7;
   color: var(--warning);
   padding: 12px;
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--warning-bg);
   margin: 0;
 }

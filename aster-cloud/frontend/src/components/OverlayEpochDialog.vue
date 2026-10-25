@@ -382,7 +382,7 @@ async function inspect() {
   gap: 16px;
   flex-wrap: wrap;
   padding: 14px 16px;
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--subtle);
   font-size: 13px;
   overflow-wrap: anywhere;
@@ -405,7 +405,7 @@ async function inspect() {
   padding: 16px;
   margin-top: 24px;
   border: 1px solid var(--control-border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--subtle);
   cursor: pointer;
   min-height: 44px;
@@ -462,7 +462,7 @@ async function inspect() {
   gap: 14px;
   padding: 20px;
   background: var(--subtle);
-  border-radius: 12px;
+  border-radius: 6px;
 }
 .recovery-summary > div {
   display: flex;

@@ -239,34 +239,40 @@ function page(value: string | null) {
   color: var(--secondary);
   font-size: 13px;
   line-height: 1.7;
-  margin: 18px 0 24px;
+  margin: 14px 0 20px;
 }
 .network-records {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+  display: block;
+  border-top: 1px solid var(--border);
 }
 .network-record {
   min-width: 0;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 24px;
+  border: 0;
+  border-radius: 0;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(0, 3fr);
+  gap: 16px 28px;
 }
 .network-record header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   align-items: flex-start;
+  flex-direction: column;
+  grid-column: 1;
+  grid-row: 1;
 }
 .network-record h2 {
   font-size: 16px;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   overflow-wrap: anywhere;
 }
 .network-record code {
   color: var(--secondary);
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 .network-state {
@@ -274,19 +280,22 @@ function page(value: string | null) {
   background: var(--subtle);
   color: var(--secondary);
   font-size: 12px;
-  border-radius: 7px;
+  border-radius: 4px;
   padding: 5px 8px;
 }
 .network-record dl {
   display: grid;
-  gap: 12px;
-  margin: 24px 0 0;
-  font-size: 13px;
+  gap: 12px 22px;
+  margin: 0;
+  font-size: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-column: 2;
+  grid-row: 1;
 }
 .network-record dl > div {
   display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 10px;
   line-height: 1.6;
 }
 .network-record dt {
@@ -298,14 +307,15 @@ function page(value: string | null) {
 }
 .mono {
   font:
-    11px/1.7 ui-monospace,
+    12px/1.65 ui-monospace,
     monospace;
 }
 .network-record details {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  font-size: 13px;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+  font-size: 14px;
+  grid-column: 2;
 }
 .network-record summary {
   cursor: pointer;
@@ -323,20 +333,35 @@ function page(value: string | null) {
   gap: 10px;
   margin-top: 24px;
 }
-@media (max-width: 900px) {
-  .network-records {
-    grid-template-columns: 1fr;
-  }
-}
 @media (max-width: 420px) {
-  .network-record {
-    padding: 20px;
-  }
-  .network-record dl > div {
-    grid-template-columns: 78px minmax(0, 1fr);
-  }
   .network-tabs a {
     padding-inline: 12px;
+  }
+}
+@media (max-width: 900px) {
+  .network-record {
+    display: block;
+    padding: 18px 0;
+  }
+  .network-record header {
+    flex-direction: row;
+  }
+  .network-record dl {
+    margin-top: 16px;
+  }
+  .network-record details {
+    margin-top: 16px;
+  }
+}
+@media (max-width: 600px) {
+  .network-record dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .network-record dl > div {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+  .network-record {
+    padding: 18px 0;
   }
 }
 </style>

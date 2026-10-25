@@ -178,11 +178,12 @@ function updated(value: Operation) {
   font-variant-numeric: tabular-nums;
 }
 .task-record {
-  padding: 28px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  padding: 20px 0;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   min-width: 0;
+  border-block: 1px solid var(--border);
 }
 .task-summary {
   display: flex;
@@ -191,7 +192,7 @@ function updated(value: Operation) {
   gap: 16px;
 }
 .task-summary h2 {
-  font-size: 19px;
+  font-size: 18px;
   line-height: 1.5;
   margin: 0;
   overflow-wrap: anywhere;
@@ -199,20 +200,21 @@ function updated(value: Operation) {
 .task-explanation {
   color: var(--secondary);
   line-height: 1.7;
-  margin: 20px 0 28px;
+  margin: 16px 0 22px;
+  font-size: 14px;
 }
 .needs-review {
   color: var(--warning);
   background: var(--warning-bg);
   padding: 14px 16px;
-  border-radius: 10px;
+  border-radius: 6px;
 }
 .task-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 28px;
+  gap: 20px 28px;
   margin: 0;
-  padding-bottom: 28px;
+  padding-bottom: 20px;
   border-bottom: 1px solid var(--border);
 }
 .task-fields dt {
@@ -242,7 +244,7 @@ function updated(value: Operation) {
   line-height: 1.7;
   padding: 16px;
   background: var(--warning-bg);
-  border-radius: 10px;
+  border-radius: 6px;
 }
 @media (max-width: 600px) {
   .task-record {
@@ -251,6 +253,11 @@ function updated(value: Operation) {
   .task-fields {
     grid-template-columns: minmax(0, 1fr);
     gap: 22px;
+  }
+}
+@media (max-width: 600px) {
+  .task-record {
+    padding: 18px 0;
   }
 }
 </style>

@@ -12,7 +12,7 @@ const darkQuery = "(prefers-color-scheme: dark)";
 const detailPath = `/instances/${"a".repeat(32)}`;
 const cleanups: Array<() => void> = [];
 
-// This models media-query change events, not CSS layout. Real sidebar geometry,
+// This models media-query change events, not CSS layout. Real command-rail geometry,
 // reachability and zoom behavior belong to the mandatory browser acceptance.
 function controlledMedia(media: string, initial: boolean) {
   let matches = initial;
@@ -110,6 +110,16 @@ async function shellFixture(compact = true) {
       "/users",
     ].map((path) => ({
       path,
+      meta: {
+        permission:
+          path === "/users"
+            ? "users.manage"
+            : path === "/audit"
+              ? "audit.read"
+              : path === "/nodes" || path.startsWith("/networks/")
+                ? "nodes.read"
+                : "instances.read",
+      },
       component: {
         template:
           '<div><h1>Synthetic read-only page</h1><label>Read-only filter<input aria-label="Synthetic read-only filter"></label></div>',
@@ -130,7 +140,7 @@ async function shellFixture(compact = true) {
   }
   cleanups.push(unmount);
   await flushPromises();
-  const menu = () => wrapper.get<HTMLButtonElement>("button.mobile-menu");
+  const menu = () => wrapper.get<HTMLButtonElement>("button.aw-menu-trigger");
   const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
   async function openNavigation() {
     menu().element.focus();
@@ -167,15 +177,13 @@ async function shellFixture(compact = true) {
 // lifecycle cancellation. They are not evidence of real CSS visibility or scroll.
 function clippedNavigation(
   f: Awaited<ReturnType<typeof shellFixture>>,
-  rowTop: number,
-  scrollTop: number,
+  rowLeft: number,
+  scrollLeft: number,
   focusVisible = true,
 ) {
-  const navigation = f.wrapper.get<HTMLElement>(
-    "nav.sidebar-navigation",
-  ).element;
+  const navigation = f.wrapper.get<HTMLElement>("nav.aw-rail-nav").element;
   const link = f.wrapper.get<HTMLAnchorElement>(
-    '.sidebar-navigation a[href="#/operations"]',
+    '.aw-rail-nav a[href="#/operations"]',
   ).element;
   // Explicitly control keyboard-focus intent as well as rects. This is not
   // a claim that jsdom reproduces the browser's :focus-visible heuristics.
@@ -185,28 +193,28 @@ function clippedNavigation(
     .mockImplementation((selector) =>
       selector === ":focus-visible" ? focusVisible : nativeMatches(selector),
     );
-  navigation.style.paddingTop = "8px";
-  navigation.style.paddingBottom = "8px";
-  navigation.scrollTop = scrollTop;
+  navigation.style.paddingLeft = "8px";
+  navigation.style.paddingRight = "8px";
+  navigation.scrollLeft = scrollLeft;
   const region = vi
     .spyOn(navigation, "getBoundingClientRect")
-    .mockReturnValue(new DOMRect(18, 100, 196, 161));
+    .mockReturnValue(new DOMRect(100, 4, 161, 44));
   const row = vi
     .spyOn(link, "getBoundingClientRect")
-    .mockReturnValue(new DOMRect(18, rowTop, 196, 46));
-  const oldBodyScroll = document.body.scrollTop;
-  const oldRootScroll = document.documentElement.scrollTop;
-  document.body.scrollTop = 210;
-  document.documentElement.scrollTop = 210;
+    .mockReturnValue(new DOMRect(rowLeft, 4, 46, 44));
+  const oldBodyScroll = document.body.scrollLeft;
+  const oldRootScroll = document.documentElement.scrollLeft;
+  document.body.scrollLeft = 210;
+  document.documentElement.scrollLeft = 210;
   cleanups.push(() => {
-    document.body.scrollTop = oldBodyScroll;
-    document.documentElement.scrollTop = oldRootScroll;
+    document.body.scrollLeft = oldBodyScroll;
+    document.documentElement.scrollLeft = oldRootScroll;
   });
   const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   const scrollBy = vi.spyOn(window, "scrollBy").mockImplementation(() => {});
   function onlyNavigationScrolled() {
-    expect(document.body.scrollTop).toBe(210);
-    expect(document.documentElement.scrollTop).toBe(210);
+    expect(document.body.scrollLeft).toBe(210);
+    expect(document.documentElement.scrollLeft).toBe(210);
     expect(scrollTo).not.toHaveBeenCalled();
     expect(scrollBy).not.toHaveBeenCalled();
     expect(f.writes).toEqual([]);
@@ -232,6 +240,25 @@ async function actualBack() {
 }
 
 describe("real app responsive navigation lifecycle", () => {
+  it("preserves the real deep-link permission gate without inventing an allowed current destination", async () => {
+    const f = await shellFixture();
+    await f.router.push("/users");
+    await flushPromises();
+    expect(f.router.currentRoute.value.path).toBe("/users");
+    expect(f.wrapper.get(".aw-mobile-current-label").text()).toBe(
+      "Members & access",
+    );
+    expect(f.wrapper.find('nav.aw-rail-nav a[href="#/users"]').exists()).toBe(
+      false,
+    );
+    expect(
+      f.wrapper.findAll('nav.aw-rail-nav a[aria-current="page"]'),
+    ).toHaveLength(0);
+    expect(f.wrapper.get("#main-content").text()).not.toContain(
+      "Synthetic read-only page",
+    );
+    expect(f.writes).toEqual([]);
+  });
   it("uses the compact media query and exposes a modal disclosure with background and scroll isolation", async () => {
     const f = await shellFixture();
     expect(f.matchMedia).toHaveBeenCalledWith(compactQuery);
@@ -254,7 +281,7 @@ describe("real app responsive navigation lifecycle", () => {
 
   it("keeps only the desktop scrollport out of sequential focus while its real links remain keyboard destinations", async () => {
     const f = await shellFixture(false);
-    const desktopNav = f.wrapper.get<HTMLElement>("nav.sidebar-navigation");
+    const desktopNav = f.wrapper.get<HTMLElement>("nav.aw-rail-nav");
     expect(desktopNav.attributes("tabindex")).toBe("-1");
     expect(desktopNav.element.tabIndex).toBe(-1);
     const desktopLinks = desktopNav.findAll<HTMLAnchorElement>("a[href]");
@@ -277,7 +304,7 @@ describe("real app responsive navigation lifecycle", () => {
       ?.querySelector<HTMLElement>("nav.tone-surface");
     expect(surfaceNav).toBeInstanceOf(HTMLElement);
     expect(surfaceNav!.hasAttribute("tabindex")).toBe(false);
-    expect(surfaceNav!.classList.contains("sidebar-navigation")).toBe(false);
+    expect(surfaceNav!.classList.contains("aw-rail-nav")).toBe(false);
     const surfaceLinks = [
       ...surfaceNav!.querySelectorAll<HTMLAnchorElement>("a[href]"),
     ];
@@ -291,19 +318,19 @@ describe("real app responsive navigation lifecycle", () => {
   });
 
   it.each([
-    { direction: "down", rowTop: 230.4, initial: 35, delta: 24 },
-    { direction: "up", rowTop: 83.7, initial: 70, delta: -25 },
+    { direction: "right", rowLeft: 230.4, initial: 35, delta: 24 },
+    { direction: "left", rowLeft: 83.7, initial: 70, delta: -25 },
   ])(
     "reveals a $direction-clipped focused link using integer padding-aware navigation-only scroll",
-    async ({ rowTop, initial, delta }) => {
+    async ({ rowLeft, initial, delta }) => {
       const f = await shellFixture(false);
-      const proof = clippedNavigation(f, rowTop, initial);
+      const proof = clippedNavigation(f, rowLeft, initial);
       proof.link.focus();
       expect(document.activeElement).toBe(proof.link);
       await flushPromises();
-      // Down: ceil(276.4 - (261 - 8)) = 24.
-      // Up: floor(83.7 - (100 + 8)) = -25.
-      expect(proof.navigation.scrollTop).toBe(initial + delta);
+      // Right: ceil(276.4 - (261 - 8)) = 24.
+      // Left: floor(83.7 - (100 + 8)) = -25.
+      expect(proof.navigation.scrollLeft).toBe(initial + delta);
       expect(proof.row).toHaveBeenCalledTimes(1);
       expect(proof.region).toHaveBeenCalledTimes(1);
       proof.onlyNavigationScrolled();
@@ -317,7 +344,7 @@ describe("real app responsive navigation lifecycle", () => {
     await flushPromises();
     expect(document.activeElement).toBe(proof.link);
     expect(proof.matches).toHaveBeenCalledWith(":focus-visible");
-    expect(proof.navigation.scrollTop).toBe(35);
+    expect(proof.navigation.scrollLeft).toBe(35);
     expect(proof.row).not.toHaveBeenCalled();
     expect(proof.region).not.toHaveBeenCalled();
     proof.onlyNavigationScrolled();
@@ -334,7 +361,7 @@ describe("real app responsive navigation lifecycle", () => {
       .element.focus();
     await flushPromises();
     expect(document.activeElement).not.toBe(proof.link);
-    expect(proof.navigation.scrollTop).toBe(35);
+    expect(proof.navigation.scrollLeft).toBe(35);
     expect(proof.row).not.toHaveBeenCalled();
     expect(proof.region).not.toHaveBeenCalled();
     proof.onlyNavigationScrolled();
@@ -347,7 +374,7 @@ describe("real app responsive navigation lifecycle", () => {
     f.unmount();
     expect(proof.link.isConnected).toBe(false);
     await flushPromises();
-    expect(proof.navigation.scrollTop).toBe(35);
+    expect(proof.navigation.scrollLeft).toBe(35);
     expect(proof.row).not.toHaveBeenCalled();
     expect(proof.region).not.toHaveBeenCalled();
     proof.onlyNavigationScrolled();
@@ -372,10 +399,10 @@ describe("real app responsive navigation lifecycle", () => {
     expect(f.writes).toEqual([]);
   });
 
-  it("moves focus from a desktop sidebar link to the compact menu without opening navigation", async () => {
+  it("moves focus from a desktop rail link to the compact menu without opening navigation", async () => {
     const f = await shellFixture(false);
     const link = f.wrapper.get<HTMLAnchorElement>(
-      '.sidebar a[href="#/nodes"]',
+      '.aw-rail-nav a[href="#/nodes"]',
     ).element;
     link.focus();
     expect(document.activeElement).toBe(link);
@@ -388,10 +415,10 @@ describe("real app responsive navigation lifecycle", () => {
     expect(document.body.style.overflow).toBe("auto");
   });
 
-  it("restores compact menu focus when CSS has already blurred the sidebar link to BODY", async () => {
+  it("restores compact menu focus when CSS has already blurred the rail link to BODY", async () => {
     const f = await shellFixture(false);
     const link = f.wrapper.get<HTMLAnchorElement>(
-      '.sidebar a[href="#/nodes"]',
+      '.aw-rail-nav a[href="#/nodes"]',
     ).element;
     link.focus();
     expect(document.activeElement).toBe(link);
@@ -423,10 +450,10 @@ describe("real app responsive navigation lifecycle", () => {
     expect(f.writes).toEqual([]);
   });
 
-  it("does not steal focus from a main-content input after the user leaves the sidebar", async () => {
+  it("does not steal focus from a main-content input after the user leaves the desktop rail", async () => {
     const f = await shellFixture(false);
     const link = f.wrapper.get<HTMLAnchorElement>(
-      '.sidebar a[href="#/nodes"]',
+      '.aw-rail-nav a[href="#/nodes"]',
     ).element;
     const input = f.wrapper.get<HTMLInputElement>(
       'main input[aria-label="Synthetic read-only filter"]',
@@ -444,10 +471,10 @@ describe("real app responsive navigation lifecycle", () => {
     expect(f.writes).toEqual([]);
   });
 
-  it("does not revive old sidebar focus after an outside pointer interaction followed by blur", async () => {
+  it("does not revive old rail focus after an outside pointer interaction followed by blur", async () => {
     const f = await shellFixture(false);
     const link = f.wrapper.get<HTMLAnchorElement>(
-      '.sidebar a[href="#/nodes"]',
+      '.aw-rail-nav a[href="#/nodes"]',
     ).element;
     link.focus();
     expect(document.activeElement).toBe(link);

@@ -210,7 +210,7 @@ async function submit() {
   color: var(--warning);
   background: var(--warning-bg);
   padding: 14px;
-  border-radius: 10px;
+  border-radius: 6px;
   margin: 16px 0 0;
 }
 </style>

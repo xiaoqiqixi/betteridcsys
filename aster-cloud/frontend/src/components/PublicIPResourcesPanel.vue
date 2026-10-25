@@ -475,7 +475,7 @@ const bindingLabel = (r: PublicIPResource) =>
 <style scoped>
 .vm-public-panel {
   display: grid;
-  gap: 24px;
+  gap: 20px;
   min-width: 0;
 }
 .resource-heading,
@@ -491,7 +491,7 @@ const bindingLabel = (r: PublicIPResource) =>
 }
 .resource-heading h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
   letter-spacing: -0.02em;
 }
 .resource-heading p,
@@ -513,19 +513,23 @@ const bindingLabel = (r: PublicIPResource) =>
   max-width: 560px;
 }
 .resource-list {
-  display: grid;
-  gap: 16px;
+  display: block;
+  gap: 0;
 }
 .vm-public-resource {
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  padding: 18px 0;
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+.vm-public-resource:last-child {
+  border-bottom: 0;
 }
 .vm-public-resource h3 {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
@@ -540,8 +544,8 @@ const bindingLabel = (r: PublicIPResource) =>
 .resource-details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 24px;
-  margin: 24px 0;
+  gap: 14px 24px;
+  margin: 18px 0;
 }
 .resource-details > div {
   min-width: 0;
@@ -549,17 +553,17 @@ const bindingLabel = (r: PublicIPResource) =>
 .resource-details dt {
   color: var(--secondary);
   font-size: 13px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .resource-details dd {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 .vm-public-resource > footer {
   border-top: 1px solid var(--border);
-  margin-top: 24px;
-  padding-top: 16px;
+  margin-top: 18px;
+  padding-top: 12px;
   flex-wrap: wrap;
 }
 .vm-public-resource code,
@@ -588,7 +592,7 @@ const bindingLabel = (r: PublicIPResource) =>
   padding: 16px;
   background: var(--subtle);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 6px;
   font-size: 13px;
   line-height: 1.7;
 }
@@ -622,6 +626,11 @@ const bindingLabel = (r: PublicIPResource) =>
   .resource-actions > * {
     flex: 1 1 auto;
     justify-content: center;
+  }
+}
+@media (max-width: 600px) {
+  .vm-public-resource {
+    padding: 18px 0;
   }
 }
 </style>

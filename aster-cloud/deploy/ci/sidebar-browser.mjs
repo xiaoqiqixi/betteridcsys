@@ -1,3 +1,5 @@
+// Read-only command-rail acceptance. Export/report/screenshot sidebar names are
+// legacy compatibility identifiers, not evidence that a sidebar still exists.
 // Read-only shell acceptance. No application state, DOM, API response or CSS is
 // replaced here: only real viewport, scroll, focus and visible navigation input.
 import assert from 'node:assert/strict';
@@ -33,19 +35,20 @@ export async function sidebarLayout(page) {
         width: b.width, height: b.height, display: s.display, position: s.position,
         client_height: el.clientHeight, scroll_height: el.scrollHeight,
         client_width: el.clientWidth, scroll_width: el.scrollWidth,
-        scroll_top: el.scrollTop, overflow_y: s.overflowY };
+        scroll_top: el.scrollTop, scroll_left: el.scrollLeft,
+        overflow_y: s.overflowY, overflow_x: s.overflowX };
     };
     const visible = el => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
-    const sidebar = document.querySelector('.sidebar'), panel = sidebar?.querySelector('.sidebar-panel');
-    return { width: innerWidth, height: innerHeight, scroll_y: scrollY,
-      document_height: document.documentElement.scrollHeight,
-      document_width: document.documentElement.scrollWidth,
-      sidebar_visible: visible(sidebar), menu_visible: visible(document.querySelector('.mobile-menu')),
-      shell: rect(document.querySelector('.console-shell')), track: rect(sidebar), panel: rect(panel),
-      navigation: rect(sidebar?.querySelector('.sidebar-navigation')),
-      brand: rect(sidebar?.querySelector('.brand')), account: rect(sidebar?.querySelector('.sidebar-account')),
-      workspace: rect(document.querySelector('.console-workspace')),
-      main: rect(document.querySelector('#main-content')), topbar: rect(document.querySelector('.topbar')),
+    return { shell_contract: 'command-rail-v1', width: innerWidth, height: innerHeight, scroll_y: scrollY,
+      document_height: document.documentElement.scrollHeight, document_width: document.documentElement.scrollWidth,
+      legacy_sidebar_present: !!document.querySelector('.sidebar'),
+      navigation_visible: visible(document.querySelector('.aw-rail-nav')),
+      menu_visible: visible(document.querySelector('.aw-menu-trigger')),
+      shell: rect(document.querySelector('.console-shell')), rail: rect(document.querySelector('.aw-command-rail')),
+      navigation: rect(document.querySelector('.aw-rail-nav')),
+      brand: rect(document.querySelector('.aw-brand')), account: rect(document.querySelector('.aw-account-pill')),
+      utilities: rect(document.querySelector('.aw-rail-right')),
+      workspace: rect(document.querySelector('.console-workspace')), main: rect(document.querySelector('#main-content')),
       footer: rect(document.querySelector('.workspace-footer')) };
   });
 }
@@ -58,15 +61,16 @@ async function hitAndFocus(page, locator, bounds, onFailure) {
     const x = r.left + r.width / 2, y = r.top + r.height / 2;
     const top = document.elementFromPoint(x, y);
     const checks = { focused: document.activeElement === el, visible: r.width > 0 && r.height > 0,
+      target_size: r.width >= 44 && r.height >= 44,
       in_viewport: r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1,
       in_clip: !clip || r.top >= clip.top - 1 && r.bottom <= clip.bottom + 1 && r.left >= clip.left - 1 && r.right <= clip.right + 1,
       hit: !!top && (top === el || el.contains(top)) };
     const box = rect => rect ? Object.fromEntries(['left','top','right','bottom'].map(key => [key,Math.round(rect[key] * 100) / 100])) : null;
     const region = bounds ? document.querySelector(bounds) : null;
     return { checks, width: innerWidth, height: innerHeight, tag: el.tagName,
-      link_index: [...document.querySelectorAll('.sidebar-navigation a')].indexOf(el),
-      logout: el === document.querySelector('.sidebar-logout'), bounds: bounds || '',
-      target_rect: box(r), clip_rect: box(clip), clip_scroll_top: region?.scrollTop ?? null };
+      link_index: [...document.querySelectorAll('.aw-rail-nav a')].indexOf(el),
+      logout: el === document.querySelector('.aw-logout-trigger'), bounds: bounds || '',
+      target_rect: box(r), clip_rect: box(clip), clip_scroll_top: region?.scrollTop ?? null, clip_scroll_left: region?.scrollLeft ?? null };
   }, bounds);
   if (!Object.values(result.checks).every(Boolean)) {
     onFailure?.(result);
@@ -84,8 +88,8 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
   report.sidebar_checks ??= [];
   report.sidebar_screenshots ??= [];
   function passed(name, evidence = {}) {
-    report.sidebar_checks.push({ name, mode: english ? 'english-dark' : 'chinese-light', ...evidence });
-    console.log(`PASS sidebar ${name}`);
+    report.sidebar_checks.push({ name, shell_contract: 'command-rail-v1', mode: english ? 'english-dark' : 'chinese-light', ...evidence });
+    console.log(`PASS command-rail ${name}`);
   }
   async function image(name) {
     if (!capture) return;
@@ -102,7 +106,7 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
   async function closed({ menuFocus = true } = {}) {
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
     await page.waitForFunction(() => !history.state?.asterOverlay && !document.querySelector('#app')?.inert && document.body.style.overflow !== 'hidden');
-    if (menuFocus) assert.equal(await page.locator('.mobile-menu').evaluate(el => document.activeElement === el), true, 'Closing navigation restores its visible menu trigger');
+    if (menuFocus) assert.equal(await page.locator('.aw-menu-trigger').evaluate(el => document.activeElement === el), true, 'Closing navigation restores its visible menu trigger');
   }
   async function geometry(width, position) {
     await scrollPage(page, position);
@@ -111,34 +115,35 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     assert(m.document_height - m.height >= 250, 'Use the real long business page, not a DOM spacer or a viewport-only page');
     if (position !== 'top') assert(m.scroll_y > 0, 'The long-page scroll must actually happen');
     assert(m.document_width <= m.width, 'Shell must not create document horizontal scrolling');
-    assert(m.main && m.workspace && m.topbar && m.footer);
-    assert(m.main.left >= m.workspace.left - tolerance && m.main.right <= m.workspace.right + tolerance);
-    assert(Math.abs(m.topbar.top) <= tolerance, 'The actual menu/header must remain reachable at mid/end of a long page');
+    assert(m.main && m.workspace && m.rail && m.footer && m.brand && m.utilities);
+    assert.equal(m.legacy_sidebar_present, false, 'There must be no old sidebar beside the new rail');
+    assert(Math.abs(m.workspace.left) <= tolerance && Math.abs(m.main.left) <= tolerance, 'Main workspace keeps the full viewport width');
+    assert(m.main.right <= m.workspace.right + tolerance && m.workspace.right <= m.width + tolerance);
+    assert.equal(m.rail.position, 'sticky');
+    assert(Math.abs(m.rail.top) <= tolerance, 'The actual rail remains reachable at the middle/end of a long page');
+    assert(Math.abs(m.rail.height - 52) <= tolerance, 'There is one real 52px command rail, not a duplicate topbar');
+    assert(m.rail.left >= -tolerance && m.rail.right <= m.width + tolerance);
+    if (position === 'top') assert(m.main.top >= m.rail.bottom - tolerance, 'At the document top the rail participates in normal flow');
+    assert(m.brand.height > 0 && m.brand.width > 0 && m.brand.left >= m.rail.left - tolerance);
+    assert(m.utilities.right <= m.rail.right + tolerance);
     if (width <= 1024) {
-      assert.equal(m.sidebar_visible, false, 'Compact width must not keep a fixed rail consuming the workspace');
+      assert.equal(m.navigation_visible, false);
       assert.equal(m.menu_visible, true);
-      assert(Math.abs(m.workspace.left) <= tolerance);
+      assert(m.brand.right <= m.utilities.left + tolerance, 'Compact brand/context and utilities cannot overlap');
     } else {
-      assert.equal(m.sidebar_visible, true);
+      assert.equal(m.navigation_visible, true);
       assert.equal(m.menu_visible, false);
-      assert(m.track && m.panel && m.navigation && m.brand && m.account);
-      assert(m.brand.height > 0 && m.brand.width > 0 && m.account.height > 0 && m.account.width > 0, 'The brand and account must actually render');
-      assert.equal(m.track.position, 'static', 'The background track belongs to the document grid, not a fixed overlay');
-      assert.equal(m.panel.position, 'sticky');
-      assert(Math.abs(m.track.width - Math.min(232, Math.max(216, width * .18))) <= tolerance);
-      assert(Math.abs(m.track.height - m.shell.height) <= tolerance, 'Sidebar backdrop must fill the entire document-height shell');
-      assert(Math.abs(m.panel.top) <= tolerance && Math.abs(m.panel.height - m.height) <= tolerance, 'The sticky navigation panel must remain viewport-height, not document-height');
-      assert(m.workspace.left >= m.track.right - tolerance && m.main.left >= m.track.right - tolerance, 'The rail must have its own grid column and never cover the main content');
-      assert(m.brand.top >= m.panel.top - tolerance && m.account.bottom <= m.panel.bottom + tolerance);
-      assert(m.navigation.top >= m.brand.bottom - tolerance && m.navigation.bottom <= m.account.top + tolerance, 'Brand, navigation and account may not overlap');
-      assert(m.navigation.scroll_width <= m.navigation.client_width + tolerance);
+      assert(m.navigation && m.account && m.account.height > 0 && m.account.width > 0);
+      assert(m.navigation.left >= m.brand.right - tolerance && m.navigation.right <= m.utilities.left + tolerance, 'Navigation owns its horizontal region and never overlays account controls');
+      assert(m.navigation.top >= m.rail.top - tolerance && m.navigation.bottom <= m.rail.bottom + tolerance);
+      assert(['auto','scroll'].includes(m.navigation.overflow_x), 'Long navigation must scroll within its own region');
     }
     if (position === 'bottom') assert(Math.abs(m.footer.bottom - m.height) <= tolerance, 'The actual document footer must be visible at page bottom');
     passed(`${english ? 'English dark ' : ''}${width}px ${position} shell geometry`, m);
     return m;
   }
   async function drawer(name, closeBy = 'escape') {
-    const menu = page.locator('.mobile-menu');
+    const menu = page.locator('.aw-menu-trigger');
     await menu.click();
     const dialog = page.getByRole('dialog');
     await dialog.waitFor();
@@ -158,6 +163,16 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     assert.equal(await dialog.evaluate(el => el.contains(document.activeElement) && document.activeElement?.closest('.overlay-footer') !== null), true, 'Reverse tab wraps to the real navigation footer, not the background');
     await page.keyboard.press('Tab');
     assert.equal(await dialog.locator('.overlay-header button').evaluate(el => document.activeElement === el), true);
+    if (evidence.height <= 450) {
+      const body = dialog.locator('.overlay-body');
+      const before = await body.evaluate(el => ({ height: el.clientHeight, scroll_height: el.scrollHeight, scroll_top: el.scrollTop }));
+      assert(before.scroll_height > before.height + 1, 'The real six-link compact drawer must independently overflow at a short/zoom-equivalent viewport');
+      await body.hover();
+      await page.mouse.wheel(0, 10000);
+      await page.waitForFunction(() => { const el = document.querySelector('[role="dialog"] .overlay-body'); return !!el && el.scrollTop >= el.scrollHeight - el.clientHeight - 2; });
+      assert(Math.abs(await page.evaluate(() => scrollY) - evidence.scroll_y) <= 1, 'Scrolling the short drawer navigation may not move business content');
+      evidence.short_navigation_scroll = { before, after: await body.evaluate(el => ({ scroll_top: el.scrollTop, client_height: el.clientHeight, scroll_height: el.scrollHeight })) };
+    }
     await page.mouse.move(2, Math.round(evidence.height / 2));
     await page.mouse.wheel(0, 320);
     await settle(page);
@@ -173,25 +188,26 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     await size(width, 360);
     await geometry(width, 'middle');
     const before = await sidebarLayout(page);
-    assert(before.navigation.scroll_height > before.navigation.client_height + 1, 'The short-screen fixture must really overflow navigation');
-    assert(before.panel.scroll_height <= before.panel.client_height + tolerance, 'At 360px only navigation should scroll; brand and account stay pinned');
-    const nav = page.locator('.sidebar-navigation'), box = await nav.boundingBox();
-    assert(box && box.height > 0);
+    assert(before.rail.height <= 56 && before.navigation.client_height >= 44, 'Short desktop retains the real 44px navigation targets in one compact rail');
+    const nav = page.locator('.aw-rail-nav'), box = await nav.boundingBox();
+    assert(box && box.height >= 44);
+    const max = Math.max(0, before.navigation.scroll_width - before.navigation.client_width);
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.wheel(0, 10000);
-    await page.waitForFunction(() => { const el = document.querySelector('.sidebar-navigation'); return !!el && el.scrollTop >= el.scrollHeight - el.clientHeight - 2; });
+    await page.mouse.wheel(10000, 0);
+    await settle(page);
+    if (max > tolerance) await page.waitForFunction(() => { const el = document.querySelector('.aw-rail-nav'); return !!el && el.scrollLeft >= el.scrollWidth - el.clientWidth - 2; });
     const after = await sidebarLayout(page);
-    assert(Math.abs(after.scroll_y - before.scroll_y) <= 1, 'Scrolling sidebar navigation must not scroll the business document');
-    assert(Math.abs(after.brand.top - before.brand.top) <= 1 && Math.abs(after.account.bottom - before.account.bottom) <= 1);
-    await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel', evidence => { report.sidebar_control_failure = evidence; });
+    assert(Math.abs(after.scroll_y - before.scroll_y) <= 1, 'Horizontal rail scrolling must not move the business document');
+    assert(Math.abs(after.brand.left - before.brand.left) <= 1 && Math.abs(after.utilities.right - before.utilities.right) <= 1, 'Brand/account stay outside the independently scrolling nav');
+    await hitAndFocus(page, page.locator('.aw-logout-trigger'), '.aw-command-rail', evidence => { report.sidebar_control_failure = evidence; });
     await image(name);
     const keyboardDocumentY = await page.evaluate(() => scrollY), keyboardTargets = [];
-    await page.locator('.sidebar .brand').focus();
+    await page.locator('.aw-brand').focus();
     await settle(page);
-    assert(Math.abs(await page.evaluate(() => scrollY) - keyboardDocumentY) <= 1, 'Focusing the sidebar brand must not move the business document');
-    const links = page.locator('.sidebar-navigation a');
+    assert(Math.abs(await page.evaluate(() => scrollY) - keyboardDocumentY) <= 1, 'Focusing the rail brand must not move the business document');
+    const links = page.locator('.aw-rail-nav a');
     const count = await links.count();
-    assert(count >= 6, 'Use the signed-in administrator navigation, not a reduced test menu');
+    assert.equal(count, 6, 'Use all six signed-in administrator destinations, never a reduced test menu');
     for (let i = 0; i < count; i++) {
       await page.keyboard.press('Tab');
       const link = links.nth(i);
@@ -199,31 +215,49 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
       if (!focused) {
         const identity = await page.evaluate(() => {
           const active = document.activeElement;
-          return { tag: active?.tagName || '', navigation: active === document.querySelector('.sidebar-navigation'),
-            panel: active === document.querySelector('.sidebar-panel'), body: active === document.body,
+          return { tag: active?.tagName || '', navigation: active === document.querySelector('.aw-rail-nav'),
+            rail: active === document.querySelector('.aw-command-rail'), body: active === document.body,
             main: active === document.querySelector('#main-content'), skip: active === document.querySelector('.skip-link'),
-            brand: active === document.querySelector('.sidebar .brand'), logout: active === document.querySelector('.sidebar-logout'),
-            link_index: [...document.querySelectorAll('.sidebar-navigation a')].indexOf(active) };
+            brand: active === document.querySelector('.aw-brand'), logout: active === document.querySelector('.aw-logout-trigger'),
+            link_index: [...document.querySelectorAll('.aw-rail-nav a')].indexOf(active) };
         });
         report.sidebar_focus_failure = { width, expected_link_index: i, ...identity };
-        assert.fail(`Tab must follow every real sidebar link: expected=${i}, actual=${JSON.stringify(identity)}`);
+        assert.fail(`Tab must follow every real rail link: expected=${i}, actual=${JSON.stringify(identity)}`);
       }
-      const target = await hitAndFocus(page, link, '.sidebar-navigation', evidence => { report.sidebar_control_failure = evidence; });
+      const target = await hitAndFocus(page, link, '.aw-rail-nav', evidence => { report.sidebar_control_failure = evidence; });
       const documentY = await page.evaluate(() => scrollY);
-      assert(Math.abs(documentY - keyboardDocumentY) <= 1, 'Tabbing each sidebar link must not move the business document');
+      assert(Math.abs(documentY - keyboardDocumentY) <= 1, 'Tabbing each rail link must not move the business document');
       keyboardTargets.push({ ...target, document_scroll_y: documentY });
     }
+    // The new single rail puts appearance before logout. Traverse it for real;
+    // keep the six-link + logout legacy seven-target receipt independently.
     await page.keyboard.press('Tab');
-    assert.equal(await page.locator('.sidebar-logout').evaluate(el => document.activeElement === el),true, 'The real tab sequence must reach sign-out without activating it');
-    const accountTarget = await hitAndFocus(page, page.locator('.sidebar-logout'), '.sidebar-panel', evidence => { report.sidebar_control_failure = evidence; });
+    assert.equal(await page.locator('.aw-pref-trigger').evaluate(el => document.activeElement === el), true);
+    const preferencesTarget = await hitAndFocus(page, page.locator('.aw-pref-trigger'), '.aw-command-rail', evidence => { report.sidebar_control_failure = evidence; });
+    await page.keyboard.press('Tab');
+    assert.equal(await page.locator('.aw-logout-trigger').evaluate(el => document.activeElement === el), true, 'Tab reaches sign-out without activating it');
+    const accountTarget = await hitAndFocus(page, page.locator('.aw-logout-trigger'), '.aw-command-rail', evidence => { report.sidebar_control_failure = evidence; });
     const accountDocumentY = await page.evaluate(() => scrollY);
-    assert(Math.abs(accountDocumentY - keyboardDocumentY) <= 1, 'Tabbing to sign-out must not move the business document');
+    assert(Math.abs(accountDocumentY - keyboardDocumentY) <= 1, 'Tabbing utilities must not move the business document');
     keyboardTargets.push({ ...accountTarget, document_scroll_y: accountDocumentY });
+    // This name remains a report-schema compatibility identifier checked by the
+    // unchanged outer gate. Evidence explicitly identifies command-rail-v1.
     passed(`${width}px 360px short-screen independent scroll and keyboard access`, { links: count, before, after,
-      keyboard_document_scroll_y: keyboardDocumentY, keyboard_targets: keyboardTargets });
+      horizontal_scroll_required: max > tolerance, keyboard_document_scroll_y: keyboardDocumentY,
+      keyboard_targets: keyboardTargets, preferences_keyboard_target: preferencesTarget });
   }
 
   try {
+    await size(1440, 900);
+    await scrollPage(page, 'top');
+    assert.equal(await page.locator('.aw-command-rail').count(), 1);
+    assert.equal(await page.locator('.topbar,.sidebar').count(), 0);
+    assert.equal(await page.locator('.aw-rail-nav button').count(), 0);
+    const destinations = await page.locator('.aw-rail-nav a').evaluateAll(links => links.map(el => el.getAttribute('href')));
+    assert.deepEqual(destinations, ['#/instances','#/nodes','#/networks/overlays','#/operations','#/audit','#/users']);
+    assert.equal(await page.locator('.aw-menu-trigger').getAttribute('aria-haspopup'), 'dialog');
+    assert.equal(await page.locator('.aw-menu-trigger').getAttribute('aria-expanded'), 'false');
+    passed('single command rail has six real semantic route anchors and controlled compact disclosure', { destinations });
     const matrix = english ? [[1024,768],[1025,768]] : [[320,740],[390,844],[768,900],[1024,768],[1025,768],[1440,1000]];
     for (const [width,height] of matrix) {
       await size(width,height);
@@ -249,22 +283,22 @@ export async function sidebarBrowserAcceptance({ page, output, report, capture =
     }
     await size(1025,768);
     await scrollPage(page,'middle');
-    await page.locator('.sidebar-navigation a').last().focus();
+    await page.locator('.aw-rail-nav a').last().focus();
     await size(1024,768);
-    await page.waitForFunction(() => document.activeElement === document.querySelector('.mobile-menu')).catch(() => {
+    await page.waitForFunction(() => document.activeElement === document.querySelector('.aw-menu-trigger')).catch(() => {
       throw new Error('1025 to 1024 must transfer the focused sidebar link to the visible compact menu; CSS hiding must not strand focus on body');
     });
     assert.equal(await page.getByRole('dialog').count(),0);
     assert.equal(await page.evaluate(() => document.querySelector('#app')?.inert),false);
     passed('focused desktop sidebar becomes a reachable compact menu at 1024px');
-    await page.locator('.mobile-menu').click();
+    await page.locator('.aw-menu-trigger').click();
     await page.getByRole('dialog').waitFor();
     await size(1025,768);
     await closed({ menuFocus: false });
     assert.equal(await page.locator('#main-content').evaluate(el => document.activeElement === el),true, 'Crossing to desktop must not leave focus on the now-hidden menu or removed drawer');
     passed('1024 to 1025 closes drawer, clears inert/history and focuses main');
     await size(390,844);
-    await page.locator('.mobile-menu').click();
+    await page.locator('.aw-menu-trigger').click();
     await page.getByRole('dialog').locator('.nav-links a[href="#/instances"]').click();
     await page.waitForURL(/#\/instances(?:\?|$)/);
     await closed();

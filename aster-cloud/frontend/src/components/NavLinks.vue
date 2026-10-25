@@ -38,6 +38,7 @@ const links = computed(() =>
     },
     {
       path: "/networks/overlays",
+      matchPath: "/networks",
       label: tr("网络与 IP", "Networks & IP"),
       icon: Waypoints,
       permission: "nodes.read",
@@ -62,6 +63,13 @@ const links = computed(() =>
     },
   ].filter((item) => session.can(item.permission)),
 );
+function active(item: { path: string; matchPath?: string }) {
+  const section = item.matchPath || item.path;
+  return (
+    router.currentRoute.value.path === section ||
+    router.currentRoute.value.path.startsWith(`${section}/`)
+  );
+}
 async function follow(
   event: MouseEvent,
   navigate: (event: MouseEvent) => Promise<unknown>,
@@ -79,34 +87,31 @@ async function follow(
 }
 </script>
 <template>
-  <nav
-    class="nav-links"
-    :class="`tone-${tone}`"
-    :aria-label="tr('主导航', 'Main navigation')"
-  >
-    <RouterLink
-      v-for="link in links"
-      :key="link.path"
-      :to="link.path"
-      :replace="tone === 'surface'"
-      custom
-      v-slot="{ href, navigate, isActive, isExactActive, route }"
-      ><a
-        :href="href"
-        :class="{
-          'is-current':
-            isActive ||
-            (link.path === '/networks/overlays' &&
-              router.currentRoute.value.path.startsWith('/networks/')),
-        }"
-        :aria-current="isExactActive ? 'page' : undefined"
-        @click="follow($event, navigate, route.fullPath)"
-        ><component :is="link.icon" :size="19" aria-hidden="true" /><span>{{
-          link.label
-        }}</span></a
-      ></RouterLink
+  <slot :items="links">
+    <nav
+      class="nav-links"
+      :class="`tone-${tone}`"
+      :aria-label="tr('主导航', 'Main navigation')"
     >
-  </nav>
+      <RouterLink
+        v-for="link in links"
+        :key="link.path"
+        :to="link.path"
+        :replace="tone === 'surface'"
+        custom
+        v-slot="{ href, navigate, route }"
+        ><a
+          :href="href"
+          :class="{ 'is-current': active(link) }"
+          :aria-current="active(link) ? 'page' : undefined"
+          @click="follow($event, navigate, route.fullPath)"
+          ><component :is="link.icon" :size="19" aria-hidden="true" /><span>{{
+            link.label
+          }}</span></a
+        ></RouterLink
+      >
+    </nav>
+  </slot>
 </template>
 <style scoped>
 .nav-links {

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, shallowRef } from "vue";
-import { ChevronRight, Search, RefreshCw, Server, Plus } from "@lucide/vue";
-import { RouterLink } from "vue-router";
+import { Search, RefreshCw, Plus } from "@lucide/vue";
 import { useConsole } from "../context";
 import { useQuery } from "../composables/query";
 import { validInstance, validPage } from "../api/client";
@@ -9,11 +8,15 @@ import type { Instance, Page } from "../api/types";
 import { sizeMiB } from "../format";
 import CreateInstanceDialog from "../components/CreateInstanceDialog.vue";
 import StateBlock from "../components/StateBlock.vue";
-import StatusBadge from "../components/StatusBadge.vue";
+import InstanceLedger, {
+  type InstanceLedgerItem,
+} from "../components/InstanceLedger.vue";
+import { statusPresentation } from "../presentation";
 import UiButton from "../components/UiButton.vue";
 const {
   prefs: { tr },
   session,
+  notify,
 } = useConsole();
 const createOpen = shallowRef(false);
 const cursor = shallowRef(""),
@@ -31,6 +34,51 @@ const visible = computed(
       ),
     ) || [],
 );
+const ledgerItems = computed<InstanceLedgerItem[]>(() =>
+  visible.value.map((instance) => {
+    const status = statusPresentation(instance.state, tr);
+    return {
+      id: instance.id,
+      href: `#/instances/${encodeURIComponent(instance.id)}`,
+      hostname: instance.hostname || instance.id,
+      stateLabel: status.label,
+      stateTone: status.tone === "good" ? "success" : status.tone,
+      cpuLabel: `${instance.resources.cpu_cores} vCPU`,
+      memoryLabel: sizeMiB(instance.resources.memory_mib),
+      diskLabel: `${instance.resources.system_disk_gib} GiB`,
+      nodeLabel: instance.node_id,
+    };
+  }),
+);
+const ledgerLabels = computed(() => ({
+  colInstance: tr("实例", "Instance"),
+  colState: tr("状态", "State"),
+  colSpec: tr("CPU / 内存 / 系统盘", "CPU / memory / system disk"),
+  colNode: tr("节点", "Node"),
+  viewDetails: tr("查看详情", "View details"),
+  fullId: tr("实例 ID", "Instance ID"),
+  copyId: tr("复制实例 ID", "Copy instance ID"),
+  expandId: tr("展开完整 ID", "Show full ID"),
+  collapseId: tr("收起完整 ID", "Collapse full ID"),
+  emptyText: tr("暂无实例", "No instances yet"),
+}));
+async function copyInstanceID(id: string) {
+  const epoch = session.epoch.value;
+  try {
+    await navigator.clipboard.writeText(id);
+    if (session.epoch.value === epoch)
+      notify(tr("实例 ID 已复制。", "Instance ID copied."));
+  } catch {
+    if (session.epoch.value === epoch)
+      notify(
+        tr(
+          "未能复制，请展开完整 ID 后手动复制。",
+          "Could not copy. Expand the full ID and copy it manually.",
+        ),
+        "error",
+      );
+  }
+}
 </script>
 <template>
   <section class="page">
@@ -92,42 +140,13 @@ const visible = computed(
             )
       "
       @reload="list.reload"
-      ><div class="resource-list">
-        <div class="list-labels">
-          <span>{{ tr("实例", "Instance") }}</span
-          ><span>{{ tr("规格", "Configuration") }}</span
-          ><span>{{ tr("节点", "Node") }}</span
-          ><span>{{ tr("状态", "State") }}</span
-          ><span />
-        </div>
-        <RouterLink
-          v-for="instance in visible"
-          :key="instance.id"
-          :to="`/instances/${encodeURIComponent(instance.id)}`"
-          class="instance-row"
-          ><div class="instance-identity">
-            <span class="resource-icon"
-              ><Server :size="20" aria-hidden="true"
-            /></span>
-            <div>
-              <strong>{{ instance.hostname || instance.id }}</strong
-              ><span class="identifier">{{ instance.id }}</span>
-            </div>
-          </div>
-          <div class="instance-specs">
-            <span>{{ instance.resources.cpu_cores }} vCPU</span
-            ><span
-              >{{ sizeMiB(instance.resources.memory_mib) }} ·
-              {{ instance.resources.system_disk_gib }} GiB</span
-            >
-          </div>
-          <span class="instance-node">{{ instance.node_id }}</span
-          ><StatusBadge :state="instance.state" /><ChevronRight
-            :size="18"
-            class="row-chevron"
-            aria-hidden="true"
-        /></RouterLink></div
-    ></StateBlock>
+    >
+      <InstanceLedger
+        :items="ledgerItems"
+        :labels="ledgerLabels"
+        @copy-id="copyInstanceID"
+      />
+    </StateBlock>
     <div v-if="list.data.value" class="pagination">
       <UiButton
         v-if="cursor"
@@ -141,134 +160,10 @@ const visible = computed(
         >{{ tr("下一页", "Next page") }}</UiButton
       >
     </div>
-    <CreateInstanceDialog :open="createOpen" @close="createOpen = false" />
+    <CreateInstanceDialog
+      v-if="session.can('instances.manage')"
+      :open="createOpen"
+      @close="createOpen = false"
+    />
   </section>
 </template>
-<style scoped>
-.list-labels,
-.instance-row {
-  display: grid;
-  grid-template-columns:
-    minmax(180px, 2fr) minmax(140px, 1.3fr) minmax(100px, 1fr)
-    100px 20px;
-  align-items: center;
-  gap: 20px;
-}
-.list-labels {
-  font-size: 12px;
-  color: var(--secondary);
-  padding: 14px 24px;
-  background: var(--subtle);
-}
-.instance-row {
-  padding: 22px 24px;
-  color: var(--text);
-  text-decoration: none;
-  border-top: 1px solid var(--border);
-  transition: background 0.12s;
-}
-.instance-row:focus-visible {
-  outline-offset: -3px;
-}
-.instance-row:hover {
-  background: var(--hover);
-}
-.instance-identity {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-.instance-identity > div {
-  min-width: 0;
-}
-.instance-identity strong {
-  display: block;
-  font-size: 15px;
-  overflow-wrap: anywhere;
-  font-weight: 600;
-}
-.identifier {
-  font-size: 12px;
-  color: var(--secondary);
-  display: block;
-  overflow-wrap: anywhere;
-  margin-top: 5px;
-}
-.resource-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  flex-shrink: 0;
-  background: var(--subtle);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--secondary);
-}
-.instance-specs {
-  font-size: 13px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.instance-specs span + span {
-  color: var(--secondary);
-}
-.instance-node {
-  font-size: 13px;
-  color: var(--secondary);
-  overflow-wrap: anywhere;
-}
-.row-chevron {
-  color: var(--muted);
-}
-@media (max-width: 1000px) {
-  .list-labels,
-  .instance-row {
-    grid-template-columns: minmax(160px, 2fr) minmax(130px, 1fr) 95px 18px;
-  }
-  .list-labels > span:nth-child(3),
-  .instance-node {
-    display: none;
-  }
-}
-@media (max-width: 600px) {
-  .list-labels {
-    display: none;
-  }
-  .instance-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 14px;
-    padding: 20px;
-  }
-  .instance-identity {
-    grid-column: 1;
-    gap: 12px;
-  }
-  .instance-specs {
-    grid-column: 1;
-    margin-left: 54px;
-    flex-direction: row;
-    flex-wrap: wrap;
-    font-size: 12px;
-  }
-  .instance-row > .status-badge {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  .row-chevron {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: end;
-  }
-  .identifier {
-    font-size: 11px;
-  }
-  .resource-icon {
-    width: 40px;
-    height: 40px;
-  }
-}
-</style>

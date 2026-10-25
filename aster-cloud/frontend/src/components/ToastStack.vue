@@ -73,7 +73,7 @@ function blur(id: number, event: FocusEvent) {
   padding: 12px 12px 12px 16px;
   background: var(--surface-raised);
   border: 1px solid var(--control-border);
-  border-radius: 14px;
+  border-radius: 8px;
   box-shadow: var(--shadow-popover);
   pointer-events: auto;
 }

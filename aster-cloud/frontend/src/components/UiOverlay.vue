@@ -225,7 +225,7 @@ onBeforeUnmount(cleanup);
   flex-direction: column;
   background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: 8px;
   box-shadow: var(--shadow-dialog);
   outline: none;
   min-width: 0;
@@ -286,7 +286,7 @@ onBeforeUnmount(cleanup);
   padding: 16px;
   background: var(--warning-bg);
   color: var(--warning);
-  border-radius: 12px;
+  border-radius: 6px;
   margin-bottom: 20px;
 }
 .discard-box p {

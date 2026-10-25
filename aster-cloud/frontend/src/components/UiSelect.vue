@@ -190,7 +190,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--control-border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--text);
   text-align: left;
@@ -218,7 +218,7 @@ onBeforeUnmount(() => {
   list-style: none;
   background: var(--surface-raised);
   border: 1px solid var(--control-border);
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: var(--shadow-popover);
   margin: 0;
 }

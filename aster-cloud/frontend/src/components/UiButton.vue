@@ -29,7 +29,7 @@ withDefaults(
   min-height: 44px;
   padding: 0 16px;
   border: 1px solid var(--control-border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--text);
   font-weight: 600;

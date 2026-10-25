@@ -140,24 +140,30 @@ async function saved() {
 </template>
 <style scoped>
 .member-row {
-  display: flex;
+  display: grid;
   align-items: center;
-  gap: 20px;
-  padding: 22px 24px;
+  gap: 16px;
+  padding: 16px 0;
   border-bottom: 1px solid var(--border);
+  grid-template-columns:
+    36px minmax(180px, 1.6fr) minmax(100px, 1fr)
+    100px 70px;
+}
+.member-row > .status-badge {
+  justify-self: start;
 }
 .member-row:last-child {
   border-bottom: 0;
 }
 .member-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
   background: var(--subtle);
   border: 1px solid var(--border);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   flex-shrink: 0;
 }
@@ -183,13 +189,13 @@ async function saved() {
   overflow-wrap: anywhere;
 }
 .member-role {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--secondary);
 }
 .access-note {
   display: flex;
   gap: 12px;
-  margin-top: 28px;
+  margin-top: 22px;
   color: var(--secondary);
   align-items: flex-start;
   max-width: 740px;
@@ -208,15 +214,14 @@ async function saved() {
   color: var(--secondary);
   margin-top: 16px;
 }
-@media (max-width: 650px) {
+@media (max-width: 760px) {
   .member-row {
-    display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) auto;
-    gap: 12px;
-    padding: 20px;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 10px 12px;
+    padding: 16px 0;
   }
   .member-name {
-    grid-column: 2/4;
+    grid-column: 2 / 4;
   }
   .member-row > .status-badge {
     grid-column: 2;
@@ -229,10 +234,10 @@ async function saved() {
   }
   .member-row > .ui-button {
     grid-column: 3;
-    grid-row: 2/4;
+    grid-row: 2 / 4;
   }
   .member-avatar {
-    grid-row: 1/3;
+    grid-row: 1 / 3;
   }
 }
 </style>

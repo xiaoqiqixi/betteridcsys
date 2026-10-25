@@ -156,10 +156,10 @@ function updated(operation: Operation) {
 </template>
 <style scoped>
 .operation-row {
-  padding: 24px;
+  padding: 16px 0;
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 20px;
   border-bottom: 1px solid var(--border);
 }
 .operation-row:last-child {
@@ -168,11 +168,14 @@ function updated(operation: Operation) {
 .operation-main {
   min-width: 0;
   flex: 1;
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.4fr);
+  gap: 8px 20px;
 }
 .operation-name {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 .operation-name strong {
@@ -181,19 +184,23 @@ function updated(operation: Operation) {
 .operation-reference {
   display: block;
   color: var(--secondary);
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
-  margin-top: 12px;
+  margin-top: 0;
   text-decoration: none;
+  align-self: center;
+  grid-column: 2;
+  grid-row: 1;
 }
 .operation-context {
   display: flex;
-  gap: 18px;
+  gap: 16px;
   align-items: center;
   flex-wrap: wrap;
-  margin-top: 10px;
-  font-size: 12px;
+  margin-top: 0;
+  font-size: 13px;
   color: var(--secondary);
+  grid-column: 1 / -1;
 }
 .operation-context a {
   display: flex;
@@ -210,13 +217,13 @@ function updated(operation: Operation) {
   align-items: flex-end;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 .lookup-field {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
+  gap: 7px;
+  font-size: 14px;
   color: var(--secondary);
   flex: 1;
   min-width: min(100%, 240px);
@@ -228,7 +235,7 @@ function updated(operation: Operation) {
   gap: 10px;
   padding-left: 12px;
   border: 1px solid var(--control-border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--surface);
 }
 .lookup-input svg {
@@ -240,8 +247,9 @@ function updated(operation: Operation) {
   min-height: 44px;
   padding: 10px 12px 10px 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: 6px;
   background: transparent;
+  font-size: 14px;
 }
 .lookup-error {
   flex-basis: 100%;
@@ -270,6 +278,25 @@ function updated(operation: Operation) {
   }
   .operation-context {
     gap: 8px;
+  }
+}
+@media (max-width: 760px) {
+  .operation-row {
+    padding: 16px 0;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .operation-main {
+    display: block;
+    width: 100%;
+  }
+  .operation-reference {
+    margin-top: 8px;
+  }
+  .operation-context {
+    margin-top: 8px;
+    gap: 8px 14px;
   }
 }
 </style>
