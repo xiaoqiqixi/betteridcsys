@@ -85,10 +85,17 @@ class PaymentNativeGuards(unittest.TestCase):
 
     def test_new_payment_policy_preserves_exact_published_executor_inventory(self):
         self.assertEqual(UPDATER.trusted_paths_for_core("0.5.2"), UPDATER.EXECUTOR_TRUSTED_PATHS)
-        self.assertEqual(UPDATER.trusted_paths_for_core("0.5.3"), UPDATER.TRUSTED_PATHS)
-        self.assertEqual(UPDATER.TRUSTED_PATHS - UPDATER.EXECUTOR_TRUSTED_PATHS, {
+        self.assertEqual(UPDATER.trusted_paths_for_core("0.5.3"), UPDATER.PAYMENT_TRUSTED_PATHS)
+        self.assertEqual(UPDATER.trusted_paths_for_core("0.5.9"), UPDATER.PAYMENT_TRUSTED_PATHS)
+        self.assertEqual(UPDATER.PAYMENT_TRUSTED_PATHS - UPDATER.EXECUTOR_TRUSTED_PATHS, {
             "vps-billing/deploy/ci/payment-native.sh", "vps-billing/deploy/ci/payment-native.py",
             "vps-billing/deploy/ci/test_payment_native.py", "vps-billing/deploy/systemd/aster-payment.service"})
+        self.assertEqual(UPDATER.trusted_paths_for_core("0.5.10"), UPDATER.TRUSTED_PATHS)
+        self.assertEqual(UPDATER.TRUSTED_PATHS - UPDATER.PAYMENT_TRUSTED_PATHS, {
+            "vps-billing/deploy/ci/browser-mysql.sh", "vps-billing/deploy/ci/browser-mysql.py",
+            "vps-billing/deploy/ci/browser-mysql-fixture.gotxt",
+            "vps-billing/frontend/tests/browser-mysql.mjs",
+            "vps-billing/frontend/tests/ui-copy-boundaries.mjs"})
 
     def test_source_built_fixture_raw_binary_and_resources_match_installer_contract(self):
         source = HERE.parents[2]

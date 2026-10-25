@@ -26,6 +26,18 @@ Failure = OWNER.Failure
 SHOTS = sorted([f"scope-{role}-{size}-{locale}.png"
                 for role in ("customer", "admin") for size in ("desktop", "mobile") for locale in ("zh-CN", "en")]
                + [f"audit-{size}-{locale}.png" for size in ("desktop", "mobile") for locale in ("zh-CN", "en")])
+BROWSER_PHASES = {
+    "browser-start", "tls-untrusted-navigation", "tls-trusted-navigation",
+    "reset-preferences", "reset-reload", "default-preferences",
+    "login-open", "login-fill", "login-submit", "login-session", "login-cookie",
+    "language-open", "language-select", "language-close", "language-assert",
+    "currency-open", "currency-select", "currency-assert", "screenshot",
+    "audit-navigation", "audit-assert", "read-fault-baseline", "read-fault-inject",
+    "read-fault-assert", "read-fault-recover", "logout-open", "logout-submit",
+    "logout-session", "report-assert", "report-write",
+}
+
+
 CA_CONFIG = """[req]
 prompt=no
 distinguished_name=subject
@@ -103,6 +115,29 @@ def validate(args):
     return root, billing, temp, output
 
 
+def read_browser_progress(scratch):
+    """Export only a small fixed diagnostic vocabulary, never errors or page data."""
+    path = scratch / "progress.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise Failure("Duplicate browser progress field")
+            value[key] = item
+        return value
+    value = json.loads(regular(path, 1024).read_text(), object_pairs_hook=unique_object)
+    allowed = {
+        "schema": {"aster-billing-browser-progress-v1"}, "phase": BROWSER_PHASES,
+        "role": {"none", "customer", "admin"}, "size": {"none", "desktop", "mobile"},
+        "locale": {"none", "zh-CN", "en"},
+    }
+    if not isinstance(value, dict) or set(value) != set(allowed) or any(type(value[key]) is not str or value[key] not in choices for key, choices in allowed.items()):
+        raise Failure("Browser progress fields must use the exact bounded vocabulary")
+    return value
+
+
 def clean_environment(source, scratch, billing):
     # An allowlist keeps repository/provider tokens, proxies, runtime injections,
     # inherited browser sandbox overrides and user trust settings out of children.
@@ -173,6 +208,7 @@ def main():
     os.umask(0o077)
     stage, supervisor, fixture, scratch, output = "input-validation", None, None, None, None
     passed, cleanup_ok, output_owned = False, True, False
+    browser_progress, progress_rejected = None, False
     try:
         root, billing, temp, output = validate(args)
         output.mkdir(mode=0o700)
@@ -255,6 +291,11 @@ def main():
                 cleanup_ok = False
         if scratch is not None:
             try:
+                browser_progress = read_browser_progress(scratch)
+            except (Failure, OSError, ValueError, KeyError, TypeError):
+                progress_rejected = True
+                passed = False
+            try:
                 shutil.rmtree(scratch)
             except Exception:
                 cleanup_ok = False
@@ -263,7 +304,8 @@ def main():
             summary = {"schema": "aster-billing-browser-mysql-summary-v1", "passed": passed, "stage": "complete" if passed else stage,
                        "owned_process_cleanup": cleanup_ok, "host_trust_modified": False,
                        "actual_mysql_history_verified": passed, "owned_database_removed": passed,
-                       "screenshots": SHOTS if passed else [], "financial_business_writes": 0 if passed else None}
+                       "screenshots": SHOTS if passed else [], "financial_business_writes": 0 if passed else None,
+                       "browser_progress": browser_progress, "browser_progress_rejected": progress_rejected}
             try:
                 (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
             except Exception:

@@ -270,5 +270,67 @@ class BrowserMySQLEvidence(unittest.TestCase):
         self.rejected()
 
 
+class BrowserMySQLProgress(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="billing-progress-")
+        self.addCleanup(self.temporary.cleanup)
+        self.scratch = Path(self.temporary.name).resolve()
+        self.path = self.scratch / "progress.json"
+        self.value = {"schema": "aster-billing-browser-progress-v1", "phase": "currency-assert",
+                      "role": "admin", "size": "mobile", "locale": "en"}
+        self.write()
+
+    def write(self):
+        self.path.write_text(json.dumps(self.value))
+
+    def rejected(self):
+        with self.assertRaises((runner.Failure, OSError, ValueError, TypeError)):
+            runner.read_browser_progress(self.scratch)
+
+    def test_exact_progress_returned(self):
+        self.assertEqual(runner.read_browser_progress(self.scratch), self.value)
+
+    def test_missing_progress_is_unknown_not_success(self):
+        self.path.unlink()
+        self.assertIsNone(runner.read_browser_progress(self.scratch))
+
+    def test_every_source_phase_has_an_allowlisted_diagnostic(self):
+        import re
+        script = SCRIPT.parents[2] / "frontend/tests/browser-mysql.mjs"
+        phases = set(re.findall(r'progress\("([a-z-]+)"', script.read_text()))
+        self.assertEqual(phases, runner.BROWSER_PHASES)
+
+    def test_unrecognized_field_rejected(self):
+        self.value["error"] = "credential-bearing message"
+        self.write(); self.rejected()
+
+    def test_unrecognized_labels_rejected(self):
+        for key in ("schema", "phase", "role", "size", "locale"):
+            previous = self.value[key]
+            for value in ("private", None, [], 1, True):
+                self.value[key] = value
+                self.write(); self.rejected()
+            self.value[key] = previous
+
+    def test_non_object_rejected(self):
+        for value in (None, [], "private"):
+            self.path.write_text(json.dumps(value)); self.rejected()
+
+    def test_duplicate_key_rejected(self):
+        text = json.dumps(self.value)
+        self.path.write_text(text[:-1] + ',"role":"customer"}')
+        self.rejected()
+
+    def test_oversized_diagnostic_rejected(self):
+        self.path.write_text(" " * 2048 + json.dumps(self.value))
+        self.rejected()
+
+    def test_symlink_diagnostic_rejected(self):
+        self.path.rename(self.scratch / "private")
+        self.path.symlink_to(self.scratch / "private")
+        self.rejected()
+
+
+
 if __name__ == "__main__":
     unittest.main()

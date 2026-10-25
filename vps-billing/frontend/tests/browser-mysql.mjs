@@ -27,6 +27,20 @@ const mode = process.argv[2];
 assert.ok(["untrusted", "trusted", "acceptance"].includes(mode));
 const profile = path.join(scratch, "firefox-profile");
 const output = path.join(scratch, "public");
+const progressState = {
+  schema: "aster-billing-browser-progress-v1",
+  phase: "browser-start",
+  role: "none",
+  size: "none",
+  locale: "none",
+};
+async function progress(phase, labels = {}) {
+  Object.assign(progressState, labels, { phase });
+  const pending = path.join(scratch, "progress.pending");
+  await fs.writeFile(pending, JSON.stringify(progressState), { mode: 0o600 });
+  await fs.rename(pending, path.join(scratch, "progress.json"));
+}
+await progress("browser-start");
 const context = await firefox.launchPersistentContext(profile, {
   headless: true,
   ignoreHTTPSErrors: false,
@@ -63,6 +77,7 @@ await context.route("**/*", async (route) => {
 
 try {
   if (mode === "untrusted") {
+    await progress("tls-untrusted-navigation");
     let rejected = false;
     try {
       await page.goto(origin, { waitUntil: "domcontentloaded" });
@@ -83,6 +98,7 @@ try {
       { mode: 0o600 },
     );
   } else if (mode === "trusted") {
+    await progress("tls-trusted-navigation");
     const response = await page.goto(origin, {
       waitUntil: "domcontentloaded",
     });
@@ -111,7 +127,9 @@ try {
     }
     async function language(locale) {
       if ((await page.locator("html").getAttribute("lang")) === locale) return;
+      await progress("language-open", { locale });
       await page.locator(".locale-trigger").click();
+      await progress("language-select");
       await dialog()
         .getByRole("combobox", { name: /^(语言|Language)$/ })
         .click();
@@ -121,11 +139,15 @@ try {
           exact: true,
         })
         .click();
+      await progress("language-close");
       await close();
+      await progress("language-assert");
       await expect(page.locator("html")).toHaveAttribute("lang", locale);
     }
     async function currency(code, reporting) {
+      await progress("currency-open");
       await page.locator(".locale-trigger").click();
+      await progress("currency-select");
       await dialog()
         .getByRole("combobox", {
           name: reporting
@@ -134,9 +156,11 @@ try {
         })
         .click();
       await page.getByRole("option", { name: new RegExp(code + "$") }).click();
+      await progress("currency-assert");
       await assertCurrencyScope(page, reporting, code);
     }
     async function shot(name) {
+      await progress("screenshot");
       const dimensions = await page.evaluate(() => ({
         client: document.documentElement.clientWidth,
         scroll: document.documentElement.scrollWidth,
@@ -163,30 +187,43 @@ try {
     ]) {
       await page.setViewportSize({ width, height });
       for (const role of ["customer", "admin"]) {
+        await progress("reset-preferences", { role, size, locale: "zh-CN" });
         await context.clearCookies();
         await page.goto(origin);
         await page.evaluate(() => {
           localStorage.clear();
           sessionStorage.clear();
         });
+        // Hash navigation does not reconstruct the module-level workspace.
+        // Reload after clearing preferences so one role cannot inherit the
+        // previous role's in-memory language/purchase currency.
+        await progress("reset-reload");
+        await page.reload({ waitUntil: "domcontentloaded" });
         await goto("/catalog");
+        await progress("default-preferences");
+        await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
         await expect(page.locator(".locale-currency")).toHaveText("CNY");
+        await progress("login-open");
         await page.locator(".header-login").click();
         await assertLocalizedClose(page);
+        await progress("login-fill");
         await dialog()
           .locator("input[type=email]")
           .fill(credentials[role].email);
         await dialog()
           .locator("input[autocomplete=current-password]")
           .fill(credentials[role].password);
+        await progress("login-submit");
         await dialog()
           .getByRole("button", { name: /^(登录|Sign in)$/, exact: true })
           .click();
         await expect(page.getByRole("dialog")).toHaveCount(0);
         await expect(page.locator(".header-login")).toHaveCount(0);
+        await progress("login-session");
         const authenticated = await session();
         assert.equal(authenticated.demo_mode, false);
         assert.equal(authenticated.user?.role, role);
+        await progress("login-cookie");
         const cookies = await context.cookies(origin);
         const secure = cookies.find(
           (cookie) => cookie.name === "__Host-aster_session",
@@ -199,6 +236,7 @@ try {
           false,
         );
         for (const locale of ["zh-CN", "en"]) {
+          await progress("language-open", { locale });
           await language(locale);
           await goto(role === "admin" ? "/admin/finance" : "/catalog");
           // Scope description must remain correct even for default CNY reports.
@@ -211,11 +249,13 @@ try {
             id: `currency-${role}-${size}-${locale}`,
             passed: true,
           });
+          await progress("audit-navigation");
           if (role === "admin") {
             await goto("/catalog");
             await expect(page.locator(".locale-currency")).toHaveText("CNY");
             await goto("/admin/audit");
           } else await goto("/audit");
+          await progress("audit-assert");
           await assertAuditCopy(
             page,
             "order.created",
@@ -224,9 +264,11 @@ try {
           if (role === "admin") await shot(`audit-${size}-${locale}.png`);
           cases.push({ id: `audit-${role}-${size}-${locale}`, passed: true });
           if (role === "customer") {
+            await progress("read-fault-baseline");
             await goto("/home");
             await expect(page.locator(".gh-workspace")).toBeVisible();
             const pattern = `${origin}/api/v1/overview*`;
+            await progress("read-fault-inject");
             await page.route(pattern, async (route) => {
               assert.equal(route.request().method(), "GET");
               const actual = await route.fetch();
@@ -237,7 +279,9 @@ try {
               });
             });
             await page.reload({ waitUntil: "domcontentloaded" });
+            await progress("read-fault-assert");
             await assertReadFailureCopy(page);
+            await progress("read-fault-recover");
             await page.unroute(pattern);
             await page
               .getByRole("alert")
@@ -253,6 +297,7 @@ try {
             });
           }
         }
+        await progress("logout-open");
         // Open the actual responsive account menu and revoke the real DB session.
         if (await page.locator(".idc-sidebar .account-trigger").isVisible())
           await page.locator(".idc-sidebar .account-trigger").click();
@@ -265,18 +310,22 @@ try {
             .click();
         }
         await assertLocalizedClose(page);
+        await progress("logout-submit");
         await dialog()
           .getByRole("button", { name: /^(退出登录|Sign out)$/ })
           .click();
         await expect(page.locator(".header-login")).toBeVisible();
+        await progress("logout-session");
         assert.equal((await session()).user, null);
       }
     }
+    await progress("report-assert");
     assert.deepEqual(violations, []);
     assert.equal(writes.filter((value) => value.endsWith("/login")).length, 4);
     assert.equal(writes.filter((value) => value.endsWith("/logout")).length, 4);
     assert.equal(cases.length, 20);
     assert.equal(screenshots.length, 12);
+    await progress("report-write");
     await fs.writeFile(
       path.join(output, "report.json"),
       JSON.stringify(
