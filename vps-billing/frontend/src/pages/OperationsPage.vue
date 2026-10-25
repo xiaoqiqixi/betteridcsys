@@ -7,6 +7,7 @@ import GeminiFinanceOverview from "../components/GeminiFinanceOverview.vue";
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import OverlayPanel from "../components/OverlayPanel.vue";
 import { useWorkspace } from "../composables/useWorkspace";
+import { auditActionLabel } from "../services/audit-presentation";
 import { formatMoney, validateCheckout } from "../types/idc";
 import type { AdminOverview } from "../types/idc";
 
@@ -1533,11 +1534,24 @@ onBeforeUnmount(() => {
       <p class="list-scope">
         {{
           t(
-            "业务审计，不是主机日志。动作码不是HTTP状态；事件ID不是请求编号。每页最多50条，按UTC时间和事件ID倒序。",
-            "Business audit, not host logs. Action codes are not HTTP statuses; event IDs are not request IDs. Up to 50 per page, newest UTC time and event ID first.",
+            "每页最多50条，按时间由近到远排列。时间均为 UTC。",
+            "Up to 50 records per page, newest first. All times are UTC.",
           )
         }}
       </p>
+      <details class="audit-help">
+        <summary>
+          {{ t("如何查看操作记录", "Understanding activity records") }}
+        </summary>
+        <p>
+          {{
+            t(
+              "这里记录账户与业务操作，不包含主机运行日志。动作码用于识别操作类型，不是 HTTP 状态码；事件 ID 用于定位这条记录，不是请求编号。同一时间的记录按事件 ID 倒序排列。",
+              "These records track account and business activity, not host logs. An action code identifies the operation, not an HTTP status. An event ID identifies this record, not a request. Records with the same timestamp are ordered by descending event ID.",
+            )
+          }}
+        </p>
+      </details>
       <div class="record-list">
         <article
           v-for="a in audits"
@@ -1545,7 +1559,10 @@ onBeforeUnmount(() => {
           class="surface-card audit-card"
         >
           <div class="record-title">
-            <h2 class="font-mono">{{ a.action }}</h2>
+            <div class="audit-heading">
+              <h2>{{ auditActionLabel(a.action, locale) }}</h2>
+              <p class="record-id audit-action-code">{{ a.action }}</p>
+            </div>
             <time class="subtle">{{ utc(a.created_at) }}</time>
           </div>
           <dl class="detail-grid">
@@ -1673,6 +1690,7 @@ onBeforeUnmount(() => {
     </nav>
 
     <OverlayPanel
+      :close-label="t('关闭', 'Close')"
       :open="!!panel"
       :busy="busy || unresolved"
       :title="panelTitle"
@@ -1857,7 +1875,8 @@ onBeforeUnmount(() => {
           <section class="panel-section">
             <h3>{{ t("本单操作记录", "Order activity") }}</h3>
             <article v-for="a in detail.audit" :key="a.id" class="mini-event">
-              <strong class="font-mono">{{ a.action }}</strong>
+              <strong>{{ auditActionLabel(a.action, locale) }}</strong>
+              <p class="record-id audit-action-code">{{ a.action }}</p>
               <p>{{ a.actor_email }} · {{ utc(a.created_at) }}</p>
               <p class="record-id">{{ a.id }}</p>
               <p>{{ a.detail }}</p>
@@ -2521,6 +2540,25 @@ onBeforeUnmount(() => {
 .audit-card {
   display: grid;
   gap: 17px;
+}
+.audit-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.audit-help {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.audit-help summary {
+  cursor: pointer;
+  color: var(--accent-primary);
+  padding-block: 8px;
+}
+.audit-help p {
+  margin-block: 4px 8px;
+  overflow-wrap: anywhere;
 }
 .audit-card details {
   padding-top: 12px;

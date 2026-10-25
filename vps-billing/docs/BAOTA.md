@@ -1,8 +1,10 @@
 # 宝塔面板原生部署与更新
 
+> **候选未发布。** 旧 v0.5.6–v0.5.9 的新 prepare/stage 因主线来源分叉仍受阻；下文仅为 0.5.10 发布并公共核验完成后的目标流程。现有旧目录须保留真实收据，不能伪造。见[历史影响](../../docs/HISTORY_REWRITE.md)与[候选说明](RELEASE-v0.5.10.md)。
+
 本指南用于已安装宝塔 Linux 面板的单服务器：复用面板管理的 Nginx 和 MySQL，静态前端由 Nginx 提供，Go API 由 systemd 独立管理。应用验证基线为 Ubuntu 24.04 / amd64、MySQL 8.4 LTS；宝塔面板本身及其版本组合未在本项目 CI 安装验收。实际工程结果见 [原生验证记录](VALIDATION.md)。
 
-本页按目标 Core 0.5.9 准备示例，发行状态与门禁结果须查对应正常 Release 及构建；本轮开发对照基线为正式 0.5.8。以下带版本号的操作须待 0.5.9 正常 Release 发布并核验后使用。
+本页按目标 Core 0.5.10 准备示例，发行状态与门禁结果须查对应正常 Release 及构建；当前仅为未发布候选，不能用历史版本的绿灯代替本版验收。以下带版本号的操作须待 0.5.10 正常 Release 发布并核验后使用。
 
 宝塔官方公开说明提供网站、文件管理、SSL、数据库和反向代理能力；具体入口以已安装版本为准。以下 Nginx/systemd 配置是本项目的适配方案，不要求安装付费插件。没有面板的主机应先按 [宝塔官方安装说明](https://www.bt.cn/bbs/thread-19376-1-1.html) 单独规划面板安装；已有网站或数据库的服务器不能直接运行新装面板/重装环境脚本。
 
@@ -23,16 +25,16 @@ MySQL 必须确认为 8.4 LTS；软件列表可选版本不等于现有实例已
 
 ## 2. 准备同版本程序与网页
 
-目标 Core 0.5.9 的同版本正常 Release 应包含六项资产：原始 API、插件宿主、资源归档及 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`。资源包含编译好的网页和主机工具，服务器无需 Go/Node.js。按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对官方来源、资产摘要、构建提交/run，并将已核验且审查过的 `core-manager.py`、`core-operation.py`、`update-manager.py`、`plugin-manager.py` 引导到 root 保护目录。旧正式工具不会自动认识后续的完整策略清单，不能直接代替此次引导。
+目标 Core 0.5.10 的同版本正常 Release 应包含六项资产：原始 API、插件宿主、资源归档及 `BUILD.json`、`PROVENANCE.json`、`SHA256SUMS`。资源包含编译好的网页和主机工具，服务器无需 Go/Node.js。按 [安装手册第 1 节](INSTALL.md#1-核对来源与归档)核对官方来源、资产摘要、构建提交/run，并将已核验且审查过的 `core-manager.py`、`core-operation.py`、`update-manager.py`、`plugin-manager.py` 引导到 root 保护目录。旧正式工具不会自动认识后续的完整策略清单，不能直接代替此次引导。
 
 使用普通受控上传途径时，把六资产放在网站目录以外，再由管理员核对为 root 所有、不可共享写入、无链接的独立输入目录；不要让面板 Web 身份执行 root 工具。以下 socket 是宿主机实际路径，须替换：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-manager.py doctor \
-  --release-directory /opt/aster/releases/0.5.9 \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-manager.py doctor \
+  --release-directory /opt/aster/releases/0.5.10 \
   --socket /actual/mysql.sock --listen-address 127.0.0.1:18080
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-manager.py prepare \
-  --version 0.5.9 --assets-directory /var/lib/aster-install/core-0.5.9
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-manager.py prepare \
+  --version 0.5.10 --assets-directory /var/lib/aster-install/core-0.5.10
 ```
 
 省略 `--assets-directory` 时工具自行从固定官方来源下载六资产；两种方式都独立校验当前官方 Release、源码/构建来源和完整文件树，再自动组装为新的完整版本目录，不需要手工复制 API、插件宿主或前端。`doctor` 只读主机事实；面板工具不在标准 PATH 时可能提示缺失，须独立核对其真实路径。它不运行 Nginx/MySQL、不连接数据库、不验证面板兼容性。
@@ -175,16 +177,16 @@ curl --fail --show-error --head https://billing.example.com/
 新安装按 [INSTALL.md](INSTALL.md)创建 `action=install` 私密规格；已有实例按 [UPGRADE.md](UPGRADE.md)使用 `action=upgrade`，提供独立迁移 DSN、备份 client 文件并明确承认备份/恢复限制。两者均使用 external 配置并先审查计划，确认实际摘要后执行：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py plan \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-operation.py plan \
   --spec /root/aster-operation/spec.json
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py apply \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-operation.py apply \
   --spec /root/aster-operation/spec.json \
   --confirm-plan-sha256 REVIEWED_PLAN_SHA256
 ```
 
 在明确维护窗口内，升级先启用并检查本站门禁、停止 API，创建并验证与旧版本匹配的新私密备份，然后检查/迁移、同提交 Core/网页切换、服务/HTTPS/静态入口核验。不在线覆盖 `current/web` 或正在运行的程序，不手写 BACKUP metadata。工具不证明公共证书续期或实际面板组合已验收，成功后仍需管理员登录和业务检查。
 
-失败先保留私密 journal/备份、读实际 `status`，仅以原规格、ID、确认摘要执行 `resume`。实际旧 schema 兼容且旧程序就绪通过才允许程序回退，维护状态保留；不兼容或不明确时停止。自 Core 0.5.3 引入支付数据库结构后，Core 0.5.2 不能直接接回运行；0.5.4 和目标 0.5.9 均保留这一边界，应保持维护并按已核实的故障向前修复。没有自动数据库回滚，必要恢复须在隔离空库验证后单独批准停写/DSN 切换，不能只切旧二进制、手改迁移记录或向运行库导入 SQL。面板“网站备份”不能代替本库一致性、账号/秘密恢复与隔离演练。
+失败先保留私密 journal/备份、读实际 `status`，仅以原规格、ID、确认摘要执行 `resume`。实际旧 schema 兼容且旧程序就绪通过才允许程序回退，维护状态保留；不兼容或不明确时停止。自 Core 0.5.3 引入支付数据库结构后，Core 0.5.2 不能直接接回运行；0.5.4 和目标 0.5.10 均保留这一边界，应保持维护并按已核实的故障向前修复。没有自动数据库回滚，必要恢复须在隔离空库验证后单独批准停写/DSN 切换，不能只切旧二进制、手改迁移记录或向运行库导入 SQL。面板“网站备份”不能代替本库一致性、账号/秘密恢复与隔离演练。
 
 SMTP 单独更新不上传新前端、不切换 `/opt/aster/current`，只安装独立兼容版本、按 revision 更新策略并重启 SMTP 服务，Core 文件和进程保持原样。失败按 [插件回退](PLUGINS.md#3-独立更新与回退)选择已有旧版本；不要删除凭据、重生成密钥或打开插件原始日志排障。
 

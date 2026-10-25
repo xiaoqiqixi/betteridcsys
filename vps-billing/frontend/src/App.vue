@@ -558,6 +558,7 @@ onMounted(async () => {
     @sign-out="signOut"
   />
   <OverlayPanel
+    :close-label="t('关闭', 'Close')"
     :open="navigation"
     :title="t('导航', 'Navigation')"
     :description="

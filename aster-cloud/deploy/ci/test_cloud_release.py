@@ -161,18 +161,57 @@ class CloudReleaseContract(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
 
-    def test_all_fifteen_exact_sha_jobs_are_required_including_real_26_guest(self):
+    def test_all_fifteen_exact_sha_jobs_require_both_supported_native_guests_and_financial_browser(self):
         api = Gates()
         result = C.prepare_build(api, environment(), {"inputs": {"tag": V.TAG}})
         self.assertEqual(sum(len(proof["jobs"]) for proof in result["prechecks"]), 15)
-        self.assertIn("Native libvirt preparation (ubuntu-26.04)", result["prechecks"][0]["jobs"])
+        for version in ("22.04", "24.04"):
+            self.assertIn("Native libvirt preparation (ubuntu-" + version + ")", result["prechecks"][0]["jobs"])
+        self.assertNotIn("Native libvirt preparation (ubuntu-26.04)", result["prechecks"][0]["jobs"])
+        self.assertIn("Real MySQL financial browser acceptance", result["prechecks"][1]["jobs"])
         self.assertTrue(all(method == "GET" for method, _, _ in api.calls))
 
-    def test_missing_26_native_gate_fails_instead_of_inheriting_old_twelve(self):
-        api = Gates()
-        api.jobs["cloud.yml"].remove("Native libvirt preparation (ubuntu-26.04)")
-        with self.assertRaises(C.PolicyError):
-            C.green_checks(api, SOURCE)
+    def test_each_supported_native_gate_is_required_at_exact_source(self):
+        for version in ("22.04", "24.04"):
+            with self.subTest(version=version):
+                api = Gates()
+                api.jobs["cloud.yml"].remove("Native libvirt preparation (ubuntu-" + version + ")")
+                with self.assertRaises(C.PolicyError):
+                    C.green_checks(api, SOURCE)
+
+    def test_real_financial_browser_gate_is_required_and_not_substitutable(self):
+        browser = "Real MySQL financial browser acceptance"
+        self.assertIn(browser, C.FINANCE_JOBS)
+        for replacement in (None, "checks", "Demo financial browser acceptance"):
+            with self.subTest(replacement=replacement):
+                api = Gates()
+                api.jobs["ci.yml"].remove(browser)
+                if replacement:
+                    api.jobs["ci.yml"].add(replacement)
+                with self.assertRaises(C.PolicyError):
+                    C.green_checks(api, SOURCE)
+
+    def test_only_financial_browser_non_success_refuses_release(self):
+        browser = "Real MySQL financial browser acceptance"
+        self.assertIn(browser, C.FINANCE_JOBS)
+        for status, conclusion in (("completed", "skipped"), ("completed", "failure"),
+                                   ("completed", "cancelled"), ("in_progress", None)):
+            with self.subTest(status=status, conclusion=conclusion):
+                api = Gates()
+                original = api.request
+
+                def request(method, suffix, value=None):
+                    result = original(method, suffix, value)
+                    if suffix == "/actions/runs/200/attempts/1/jobs?per_page=100":
+                        for job in result["jobs"]:
+                            if job["name"] == browser:
+                                job["status"] = status
+                                job["conclusion"] = conclusion
+                    return result
+
+                api.request = request
+                with self.assertRaises(C.PolicyError):
+                    C.green_checks(api, SOURCE)
 
     def test_skipped_or_failed_required_job_or_latest_run_refused(self):
         for field in ("job_conclusion", "run_conclusion"):
@@ -294,7 +333,8 @@ class CloudReleaseContract(unittest.TestCase):
         self.assertIn("初始脚本是操作者审核并信任的固定源码入口", body)
         self.assertIn("不能在执行前自证可信", body)
         self.assertIn("匿名 Sigstore 验签通过后才执行", body)
-        self.assertIn("Ubuntu 22.04 / 24.04 / 26.04 amd64", body)
+        self.assertIn("Ubuntu 22.04 / 24.04 amd64", body)
+        self.assertIn("Ubuntu 26.04 暂不支持", body)
         self.assertIn("Python 3.10+", body)
         self.assertIn("默认不安装", body)
         self.assertIn("真实 KVM、物理网络和生产部署尚未验收", body)

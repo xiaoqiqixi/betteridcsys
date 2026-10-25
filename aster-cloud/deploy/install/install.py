@@ -388,13 +388,17 @@ def target_info():
             "distribution": fields.get("ID", "unknown"), "version": fields.get("VERSION_ID", "unknown")}
 
 
+def supported_target(info):
+    return (info["system"] == "Linux" and info["architecture"] in ("x86_64", "amd64") and
+            info["distribution"] == "ubuntu" and info["version"] in ("22.04", "24.04"))
+
+
 def check_target():
     info = target_info()
     if os.geteuid() != 0:
         fail("Apply requires root; plan works without root")
-    if (info["system"] != "Linux" or info["architecture"] not in ("x86_64", "amd64") or
-            info["distribution"] != "ubuntu" or info["version"] not in ("22.04", "24.04", "26.04")):
-        fail("Apply targets native Ubuntu 22.04, 24.04 or 26.04 amd64 only; not a tested-host claim")
+    if not supported_target(info):
+        fail("Apply targets native Ubuntu 22.04 or 24.04 amd64 only; Ubuntu 26.04 and unknown releases are unsupported")
     protected_path(SYSTEMCTL)
     if not Path("/run/systemd/system").is_dir():
         fail("Native booted systemd host required")
@@ -464,13 +468,14 @@ def make_plan(args):
     target = target_info()
     codename = None
     if options["prepare_libvirt"]:
-        if (target["system"] != "Linux" or target["architecture"] not in ("x86_64", "amd64") or
-                target["distribution"] != "ubuntu" or target["version"] not in provisioning_module().CODENAMES):
-            fail("Libvirt preparation plan requires a verified Ubuntu 22.04, 24.04 or 26.04 amd64 target")
+        if not supported_target(target):
+            fail("Libvirt preparation plan requires a verified Ubuntu 22.04 or 24.04 amd64 target; Ubuntu 26.04 and unknown releases are unsupported")
         codename = provisioning_module().CODENAMES[target["version"]]
     return {"mode": "plan", "component": args.component, "release_kind": bundle.manifest["release_kind"],
             "version": bundle.manifest["version"], "source_commit": bundle.manifest["source_commit"],
             "bundle_sha256": args.sha256, "target": target,
+            "target_support": "supported-target-not-accepted" if supported_target(target) else "unsupported-no-apply",
+            "supported_ubuntu": ["22.04", "24.04"],
             "software": "not-installed-by-plan", "configuration": "approval-required",
             "service": "not-started-by-plan", "approval_supplied": bool(args.approval),
             "start_requested": args.start,

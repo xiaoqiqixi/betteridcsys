@@ -44,6 +44,11 @@ TRUSTED_PATHS = (
     "vps-billing/deploy/ci/smtp-loopback-fixture.py",
     "vps-billing/deploy/ci/test_plugin_native.py",
     "vps-billing/deploy/ci/browser-demo.py",
+    "vps-billing/deploy/ci/browser-mysql.sh",
+    "vps-billing/deploy/ci/browser-mysql.py",
+    "vps-billing/deploy/ci/browser-mysql-fixture.gotxt",
+    "vps-billing/frontend/tests/browser-mysql.mjs",
+    "vps-billing/frontend/tests/ui-copy-boundaries.mjs",
     "vps-billing/deploy/ci/mysql-native.sh",
     "vps-billing/deploy/ci/mysql-distribution.json",
     "vps-billing/deploy/scripts/package-release.sh",
@@ -1253,6 +1258,37 @@ def publish(api, policy, archive_bytes):
                 f"[产品配置与主机命令]({source_docs}PRODUCT_CONFIGURATION.md) · [验证记录]({source_docs}VALIDATION.md) · "
                 f"[安装]({source_docs}INSTALL.md) · [升级恢复]({source_docs}UPGRADE.md) · "
                 f"[宝塔]({source_docs}BAOTA.md) · [插件]({source_docs}PLUGINS.md)。"
+            )
+        if kind == "core" and provenance["version"] == "0.5.10":
+            fields["body"] = (
+                "## Core 0.5.10\n\n"
+                "本版从历史作者归属调整后的主线构建；prepare/stage 继续要求源码与构建策略信任点为当前 main 祖先，"
+                "没有旧新 SHA 白名单或来源校验例外。旧 v0.5.6–v0.5.9 标签和附件不覆盖，"
+                "这些旧版本的新 prepare/stage 仍会因来源分叉被拒绝。"
+                "已有受保护旧目录仅在真实 PREPARED.json、完整文件摘要、版本与迁移校验和通过时，"
+                "才可用本版工具审查升级计划；缺失收据不得伪造、补签或跳过。\n\n"
+                "没有新增数据库迁移，仍为 schema 13；001–013 原文与校验和保持不变。"
+                "金额、支付幂等和历史快照不变，CNY 默认及独立币种报价不变。"
+                "升级仍须停写、停止旧 API、验证备份和隔离恢复，再切换匹配前后端。"
+                "不自动降低 schema 或导入数据库；同 schema 也不等于可以省略备份与兼容检查。\n\n"
+                "独立资源插件 resource.aster-cloud 0.1.1 使用 aster.resource/1，要求 Core >=0.5.10,<0.6.0；"
+                "旧正式 0.5.9 不支持此协议。插件需单独构建、核验、安装批准和启用，Core 六资产不包含资源插件包。"
+                "保留已有显式任务派发与只读核对边界，不增加自动开通 worker，不把主控 accepted 当作虚拟机运行成功。"
+                "SMTP 1.1.0 仍独立分发、默认关闭，aster.smtp/1、Core >=0.4.0,<0.6.0；"
+                "支付协议仍为 aster.payment/1，不新增真实支付渠道。\n\n"
+                "部署目标为 Ubuntu 22.04 / Ubuntu 24.04 amd64，Ubuntu 24.04 是完整原生 CI 基线；"
+                "Ubuntu 22.04 完整原生验收未完成，Ubuntu 26.04 与其他发行版暂不支持。"
+                "doctor 区分支持目标与验收基线，不代表所有非目标系统都被安装器硬拒绝。"
+                "原生 Go + Vue/TypeScript + MySQL，不用 Docker。发行共六资产："
+                "裸 API、裸插件宿主、配套资源包、BUILD.json、PROVENANCE.json、SHA256SUMS。\n\n"
+                f"[源码提交](https://github.com/{REPOSITORY}/commit/{provenance['source_sha']}) · "
+                f"[构建与验收运行 {policy['run_id']}](https://github.com/{REPOSITORY}/actions/runs/{policy['run_id']})，尝试 {policy['run_attempt']}。"
+                "实际结果绑定该提交与运行；离线来源/升级夹具不等于公开下载验收，"
+                "正式附件发布后仍须独立完成公共六资产下载、摘要及 prepare 检查。"
+                "真实 KVM、跨节点、公网上联、生产容量与真实支付渠道不在本版合成验收声明内。\n\n"
+                f"[发布说明]({source_docs}RELEASE-v0.5.10.md) · [升级恢复]({source_docs}UPGRADE.md) · "
+                f"[安装]({source_docs}INSTALL.md) · [资源插件]({source_docs}RESOURCE_PLUGINS.md) · "
+                f"[验证记录]({source_docs}VALIDATION.md)。"
             )
     release_id = None
     try:

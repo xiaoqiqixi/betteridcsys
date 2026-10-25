@@ -237,8 +237,7 @@ static int validate_qemu(int argc, char **argv, const char *work)
     drive(overlay, sizeof(overlay), overlay_path, "if=none,id=root,format=qcow2");
     drive(seed, sizeof(seed), seed_path, "if=none,id=seed,format=raw,readonly=on");
     static const char *const images[] = {
-        "ubuntu-22.04-server-cloudimg-amd64.img", "ubuntu-24.04-server-cloudimg-amd64.img",
-        "ubuntu-26.04-server-cloudimg-amd64.img"
+        "ubuntu-22.04-server-cloudimg-amd64.img", "ubuntu-24.04-server-cloudimg-amd64.img"
     };
     bool image_found = false;
     for (size_t i = 0; i < ARRAY_LEN(images); ++i) {

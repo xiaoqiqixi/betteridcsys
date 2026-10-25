@@ -64,34 +64,45 @@ interface Intent {
   body: unknown;
 }
 const storageKey = "aster.cloud.overlay-intents.v1";
+const maximumStoredBytes = 1024 * 1024;
+function validIntent(value: unknown): value is Intent {
+  return (
+    record(value) &&
+    networkID(value.owner) &&
+    typeof value.scope === "string" &&
+    value.scope.length <= 200 &&
+    typeof value.path === "string" &&
+    /^\/overlays\/[a-z0-9/]+$/.test(value.path) &&
+    networkID(value.key) &&
+    record(value.body) &&
+    validPayload(value.path, value.scope, value.key, value.body)
+  );
+}
+function withinStorageBudget(raw: string) {
+  // Bound the raw input before parsing. The UTF-8 byte budget does not replace
+  // the browser's storage quota: setItem must still succeed before any POST.
+  return (
+    raw.length <= maximumStoredBytes &&
+    new TextEncoder().encode(raw).byteLength <= maximumStoredBytes
+  );
+}
 // Persist the complete non-secret intent before sending. A cluster/version lock
 // survives closing, navigation and reload, even if the user edits the selection.
 // Never erase malformed storage: that could erase an unresolved operation.
 function read(): Intent[] {
-  const raw = JSON.parse(sessionStorage.getItem(storageKey) || "[]") as unknown;
-  if (
-    !Array.isArray(raw) ||
-    raw.length > 128 ||
-    !raw.every(
-      (v) =>
-        record(v) &&
-        networkID(v.owner) &&
-        typeof v.scope === "string" &&
-        v.scope.length <= 200 &&
-        typeof v.path === "string" &&
-        /^\/overlays\/[a-z0-9/]+$/.test(v.path) &&
-        networkID(v.key) &&
-        record(v.body) &&
-        validPayload(v.path, v.scope, v.key, v.body),
-    )
-  )
+  const stored = sessionStorage.getItem(storageKey) ?? "[]";
+  if (!withinStorageBudget(stored)) throw new ApiError("unavailable");
+  const raw: unknown = JSON.parse(stored);
+  if (!Array.isArray(raw) || raw.length > 128 || !raw.every(validIntent))
     throw new ApiError("unavailable");
   if (new Set(raw.map((v) => `${v.owner}:${v.scope}`)).size !== raw.length)
     throw new ApiError("unavailable");
-  return raw as Intent[];
+  return raw;
 }
 function save(items: Intent[]) {
-  sessionStorage.setItem(storageKey, JSON.stringify(items));
+  const raw = JSON.stringify(items);
+  if (!withinStorageBudget(raw)) throw new ApiError("unavailable");
+  sessionStorage.setItem(storageKey, raw);
 }
 export function useOverlayMutation(scope: () => string) {
   const { api, session } = useConsole(),
@@ -157,17 +168,19 @@ export function useOverlayMutation(scope: () => string) {
         owner,
         scope: target,
         path,
-        key: options.key || key32(),
+        key: options.key ?? key32(),
         body: structuredClone(body),
       };
-      if (!networkID(intent.key)) throw new ApiError("invalid");
+      // A new intent must satisfy the same contract that reload will enforce.
+      // Otherwise a rejected POST could leave a ledger that cannot be read.
+      if (!validIntent(intent)) throw new ApiError("invalid");
       save([...all, intent]);
       pending.value = intent;
       try {
         const value = await api.write(
           "POST",
-          path,
-          body,
+          intent.path,
+          intent.body,
           intent.key,
           (v): v is T => guard(v, intent.key),
           options.status,

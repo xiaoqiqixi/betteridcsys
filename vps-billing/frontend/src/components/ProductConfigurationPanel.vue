@@ -529,6 +529,7 @@ onBeforeUnmount(() => {
 
 <template>
   <OverlayPanel
+    :close-label="t('关闭', 'Close')"
     :open="open"
     :busy="busy"
     :title="t('产品配置', 'Product configuration')"

@@ -14,8 +14,8 @@ python3 -I aster-cloud/deploy/ci/libvirt-native.py \
 python3 -I aster-cloud/deploy/ci/test_libvirt_native.py
 ```
 
-`--ubuntu` accepts `22.04`, `24.04`, `26.04`. Ubuntu 26.04 runs on an Ubuntu
-24.04 host runner. The host must be non-root Linux amd64, with Go **1.27.3**,
+`--ubuntu` accepts only `22.04` and `24.04`; `26.04` and unknown versions are
+rejected before fixture execution. Both supported guests run on Ubuntu 24.04 host runners. The host must be non-root Linux amd64, with Go **1.27.3**,
 Python 3.10+, `qemu-system-x86_64`, `qemu-img`, `cloud-localds`, `gpg`, `gpgv`,
 `ip`, and an existing read-only firewall inspection tool (`nft`, otherwise both
 `iptables-save`/`ip6tables-save`). Only the read-only firewall dump uses `sudo -n`.
@@ -24,8 +24,8 @@ packages, modifies host NICs/routes, or stops host services. No Node/npm is need
 
 ## Image and execution trust
 
-- Images use **dated** Canonical cloud-image directories: Jammy `20261020`, Noble
-  `20261017`, Resolute `20261016`; full image SHA256 values are pinned in code.
+- Images use **dated** Canonical cloud-image directories: Jammy `20261020` and Noble
+  `20261017`; full image SHA256 values are pinned in code.
   Neither `current`, `release`, nor `latest` is used for image resolution.
 - The vendored **public** UEC image key is independently pinned by complete-file
   SHA256 and primary fingerprint
@@ -107,9 +107,11 @@ QEMU input pipe closes rather than lingering on a remote HTTP keep-alive.
 - [QEMU 8.2 TCG CPU feature implementation](https://raw.githubusercontent.com/qemu/qemu/v8.2.0/target/i386/cpu.c)
 - [Ubuntu architecture variants](https://documentation.ubuntu.com/project/how-ubuntu-is-made/concepts/supported-architectures/)
 
-QEMU 8.2 source includes TCG AVX/F16C/FMA and AVX2/BMI support, making the 26.04
-`max` CPU choice source-supported. This is **not a successful 26.04 boot record**;
-the actual required native job must pass before claiming that guest accepted.
+Historical 26.04 work used QEMU 8.2 TCG AVX/F16C/FMA and AVX2/BMI support
+with the `max` CPU. That source assessment was **not a successful 26.04 acceptance
+record**. Ubuntu26 is now deferred: its image/CLI/sandbox allowlist and required
+job are removed from the current executable scope, not declared passing. A future
+26 reintroduction needs separate review and full verification.
 None of these tests establishes real KVM creation, physical guest networking,
 controller admission, provider ownership, or production-host installation.
 
@@ -158,7 +160,7 @@ Seccomp=2、filter 数至少宿主基线+2、四个 UID/GID 保持原非 root �
 CapInh/CapPrm/CapEff/CapAmb=0；不冒称无权限清空的 CapBnd 也为零。
 
 仿真宿主固定 Ubuntu 24.04 + 官方 libslirp 4.7.x，避免旧 4.6 的临时 helper socket 使用
-INADDR_ANY；**guest 仍分别是验签的 Ubuntu 22.04、24.04、26.04**，不能将宿主版本偷换成 guest 兼容证据。
+INADDR_ANY；**当前 guest 分别是验签的 Ubuntu 22.04、24.04**，不能将宿主版本偷换成 guest 兼容证据。
 relay 记录本次 nonce、PID 和 starttime 的 private ownership；QEMU 退出后不按泛进程名杀，
 对精确身份和命令复核后使用 pidfd 终止并等待退出，再确认无本次 relay 命令存活。
 单连接 DNS/连接/传输总限时 300 秒、写侧 EOF 后 drain 最多60秒。成功 summary 必须含实际

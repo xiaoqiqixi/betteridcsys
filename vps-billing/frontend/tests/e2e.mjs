@@ -6,6 +6,7 @@ import path from "node:path";
 import { chromium, expect } from "@playwright/test";
 import { probeResponsiveBoundaries } from "./responsive-boundaries.mjs";
 import { probeProductConfiguration } from "./product-configuration-boundaries.mjs";
+import { assertAuditCopy } from "./ui-copy-boundaries.mjs";
 import {
   accessiblePanel,
   apiData,
@@ -24,6 +25,7 @@ import {
   permit,
   probeHistoricalCheckout,
   probePreferencePersistence,
+  probeReadFailurePresentation,
   selectedCoreVersion,
   settle,
   strictBase,
@@ -378,6 +380,10 @@ try {
   await shot("customer-invoices-desktop");
   await route("/audit");
   await expect(page.locator(".cursor-pagination")).toBeVisible();
+  await assertAuditCopy(page, "order.created", "订单已创建");
+  await locale(page, "en");
+  await assertAuditCopy(page, "order.created", "Order created");
+  await locale(page, "zh-CN");
   await shot("customer-audit-desktop");
   await route("/services");
   await shot("customer-services-desktop");
@@ -518,6 +524,8 @@ try {
   await route("/admin/finance");
   await expect(page.locator(".gfo-root")).toBeVisible();
   await shot("admin-finance-desktop");
+  await route("/admin/audit");
+  await assertAuditCopy(page, "order.created", "订单已创建");
   await route("/admin/settings");
   await expect(page.locator(".settings-form")).toBeVisible();
   await shot("admin-site-settings");
@@ -593,6 +601,11 @@ try {
   }
   stage = "preference-persistence-and-account-scopes";
   assert.equal(await probePreferencePersistence(browser, base), true);
+  stage = "read-failure-copy-boundaries";
+  assert.equal(
+    await probeReadFailurePresentation(browser, base, customerStorage),
+    2,
+  );
   stage = "historical-invoice-boundaries";
   const historicalCases = await probeHistoricalCheckout(
     browser,

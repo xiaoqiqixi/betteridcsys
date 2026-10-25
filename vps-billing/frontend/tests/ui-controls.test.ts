@@ -53,6 +53,17 @@ describe("overlay history opening-lifecycle identity", () => {
     history.replaceState(state, "", location.href);
     window.dispatchEvent(new PopStateEvent("popstate", { state }));
   }
+  it("uses a reactive localized close name without changing its opening lifecycle", async () => {
+    const wrapper = overlay();
+    await nextTick();
+    const token = history.state.idcOverlay;
+    expect(document.querySelector('[aria-label="关闭"]')).not.toBeNull();
+    await wrapper.setProps({ closeLabel: "Close" });
+    expect(document.querySelector('[aria-label="Close"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="关闭 / Close"]')).toBeNull();
+    expect(history.state.idcOverlay).toBe(token);
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
   it("closes on the first click after a remount reuses useId while history retains the previous opening marker", async () => {
     const first = overlay();
     await nextTick();
@@ -73,7 +84,7 @@ describe("overlay history opening-lifecycle identity", () => {
     const currentToken = history.state.idcOverlay;
     vi.spyOn(history, "back").mockImplementation(() => backTo(stale));
     (
-      document.querySelector('[aria-label="关闭 / Close"]') as HTMLButtonElement
+      document.querySelector('[aria-label="关闭"]') as HTMLButtonElement
     ).click();
     expect(next.emitted("close")).toEqual([[]]);
     expect(currentToken).not.toBe(stale.idcOverlay);
@@ -105,11 +116,8 @@ describe("overlay history opening-lifecycle identity", () => {
     expect(history.state.idcOverlay).toBe(token);
     expect(wrapper.emitted("close")).toBeUndefined();
     expect(
-      (
-        document.querySelector(
-          '[aria-label="关闭 / Close"]',
-        ) as HTMLButtonElement
-      ).disabled,
+      (document.querySelector('[aria-label="关闭"]') as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
   });
   it("preserves the existing back/dirty-decline contract when the parent keeps the panel open", async () => {

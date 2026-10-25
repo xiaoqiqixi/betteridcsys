@@ -261,6 +261,23 @@ def prepare(version, release_directory, assets_directory=None, api=None, trust=u
         os.close(parent)
 
 
+def operating_system_support(distribution, version):
+    """Report support scope, not permission to install or host acceptance."""
+    baseline = (distribution, version) == ("ubuntu", "24.04")
+    pending = (distribution, version) == ("ubuntu", "22.04")
+    return {
+        "status": "ok" if baseline else "warning",
+        "distribution": distribution, "version": version,
+        "supported_baseline": "ubuntu 24.04",
+        "deployment_targets": ["ubuntu 22.04", "ubuntu 24.04"],
+        "native_ci_baseline": "ubuntu 24.04",
+        "support_status": "native_ci_baseline" if baseline else
+                          "target_pending_full_native_validation" if pending else "unsupported",
+        "this_host_validated": False,
+        "notice": "Ubuntu 22.04 full native validation is pending. Ubuntu 26.04 and other distributions are not supported targets. This report does not change installer host guards or verify this host.",
+    }
+
+
 def doctor(release_directory, socket_path=None, listen_address="127.0.0.1:18080", trust=updater._Trust()):
     """Read host facts only: no execution, network connection, bind or SQL."""
     parent_path, name = target_path(release_directory)
@@ -271,7 +288,8 @@ def doctor(release_directory, socket_path=None, listen_address="127.0.0.1:18080"
     try:
         values = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
         distro, release = values.get("ID", "").strip('"'), values.get("VERSION_ID", "").strip('"')
-        check("operating_system", "ok" if (distro, release) == ("ubuntu", "24.04") else "warning", distribution=distro, version=release, supported_baseline="ubuntu 24.04")
+        facts = operating_system_support(distro, release)
+        check("operating_system", facts.pop("status"), **facts)
     except (OSError, ValueError):
         check("operating_system", "warning", reason="OS release metadata could not be read.")
     available = {name: shutil.which(name, path=os.defpath + ":/usr/sbin:/sbin") is not None for name in ("python3", "systemctl", "systemd-analyze", "nginx", "mysql", "mysqldump", "openssl", "curl")}

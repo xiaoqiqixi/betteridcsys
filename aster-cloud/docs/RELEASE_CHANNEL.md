@@ -12,7 +12,7 @@ Release 正文提供 controller 和 node 各一条命令，HTTPS URL 固定到**
 不是可变的 `/main`、`latest` 或任意输入 URL。初始 Python 脚本是操作者审核并信任的入口；
 第一次取得它依赖 GitHub HTTPS 与所批准的精确提交，不声称它能自证自身。
 
-运行要求：Ubuntu 22.04 / 24.04 / 26.04 amd64，Python 3.10+、curl、系统 CA、sudo 与真实 systemd。
+运行要求：Ubuntu 22.04 / 24.04 amd64，Python 3.10+、curl、系统 CA、sudo 与真实 systemd。Ubuntu 26.04 暂不支持，未知版本同样拒绝。
 脚本向导重新打开 `/dev/tty`，不会把管道 EOF 当成用户批准；无 TTY 的自动下载验签使用单独
 `--download-only`，它只运行只读 plan，不能混用 `--apply` / `--start`。
 首次命令默认显示计划；依赖安装、数据库 / libvirt 准备和最终应用 / 启动均需明确选择。
@@ -47,8 +47,10 @@ bootstrap 首次下载会创建 root 私有缓存，这不等于安装软件 / �
 ## 构建、签名、发布分权
 
 - 只在 main 手动发起独立 build workflow；指定 Cloud tag 必须指向当前 workflow 的精确源码 SHA。
-- 要求同 SHA 的既有财务与 Cloud 回归，加上三套 Ubuntu native libvirt 门禁，共 15 项发布前检查。
+- 要求同 SHA 的既有财务与 Cloud 回归，加上 Ubuntu22/24 两套 native libvirt 门禁，共 15 项发布前检查（Cloud 11 + 财务 4）。
+  财务新增独立 `Real MySQL financial browser acceptance`，必须实际成功，演示数据浏览器检查不可替代。
   后续发布 / 下载 job 不混入这 15 项，不能用旧提交或只有 workflow 总结替代每项结论。
+  这是用户批准的支持范围收敛，不是降低 22/24 的门槛；历史 14/15 失败结果保持原样，必须重跑新精确提交。
 - 从同一 Git commit 快照构建两次实际静态 Go 二进制与 Vue UI，并比较完整归档字节。无 prebuilt / fake-build 发布入口。
 - build 不持有 write / OIDC 权限；独立 attest job 只为通过固定策略的数据签名；publisher 使用受信 main 策略验证
   精确来源、签名与资产后才获得发布写入。不能先执行下载候选中的 installer 来“验证”自己。

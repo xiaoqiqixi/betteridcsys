@@ -1002,6 +1002,7 @@ onBeforeUnmount(() => {
     </div>
 
     <OverlayPanel
+      :close-label="t('关闭', 'Close')"
       :open="editorOpen"
       :busy="saving"
       :title="editorTitle"

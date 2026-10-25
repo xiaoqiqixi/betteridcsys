@@ -4,6 +4,11 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
+import {
+  assertLocalizedClose,
+  assertCurrencyScope,
+  assertReadFailureCopy,
+} from "./ui-copy-boundaries.mjs";
 
 export const syntheticAccounts = {
   customer: { email: "demo@aster.local", password: "DemoCustomer!2026" },
@@ -268,6 +273,7 @@ export async function settle(page) {
   });
 }
 export async function closePanel(page) {
+  await assertLocalizedClose(page);
   const panel = dialog(page);
   await panel.locator(".panel-header button[aria-label]").click();
   await expect(panel).toBeHidden();
@@ -358,6 +364,7 @@ export async function noOverflow(page) {
   );
 }
 export async function accessiblePanel(page) {
+  await assertLocalizedClose(page);
   const panel = dialog(page);
   await expect(panel).toHaveAttribute("aria-modal", "true");
   await expect(page.locator("#workspace-shell")).toHaveAttribute("inert", "");
@@ -623,6 +630,7 @@ export async function probePreferencePersistence(browser, base) {
       if (!reporting)
         await expect(page.getByRole("option", { name: /JPY$/ })).toHaveCount(0);
       await page.getByRole("option", { name: new RegExp(code + "$") }).click();
+      await assertCurrencyScope(page, reporting, code);
       await closePanel(page);
       await expect(page.locator(".locale-currency")).toHaveText(code);
     }
@@ -631,6 +639,7 @@ export async function probePreferencePersistence(browser, base) {
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await expect(page.locator(".locale-currency")).toHaveText("USD");
     await expect(page.locator(".gpc-currency-tag").first()).toHaveText("USD");
+    await chooseCurrency("USD", false);
     await locale(page, "zh-CN");
     await chooseCurrency("CNY", false);
     await appearance(page, "light");
@@ -650,6 +659,9 @@ export async function probePreferencePersistence(browser, base) {
     await goto(page, base, "/admin/finance");
     await loaded();
     await chooseCurrency("USD", true);
+    await locale(page, "en");
+    await chooseCurrency("USD", true);
+    await locale(page, "zh-CN");
     await page.reload();
     await loaded();
     await expect(page.locator(".locale-currency")).toHaveText("USD");
@@ -692,5 +704,45 @@ export async function probePreferencePersistence(browser, base) {
     return true;
   } finally {
     await context.close();
+  }
+}
+
+// Explicit malformed-read fault injection against the existing isolated browser
+// fixture. This is a UI failure boundary, not evidence that the live API returned
+// malformed data and not a substitute for MySQL-backed acceptance.
+export async function probeReadFailurePresentation(
+  browser,
+  base,
+  storageState,
+) {
+  const screen = await createScreen(browser, base, storageState),
+    { page, state } = screen;
+  try {
+    for (const language of ["zh-CN", "en"]) {
+      await goto(page, base, "/home");
+      await expect(page.locator(".gh-workspace")).toBeVisible();
+      await locale(page, language);
+      const remove = fixture(state, "GET", "/overview", {
+        malformed_read: true,
+      });
+      try {
+        await goto(page, base, "/home");
+        await assertReadFailureCopy(page);
+      } finally {
+        remove();
+      }
+      await page.getByRole("alert").getByRole("button").click();
+      await expect(page.getByRole("alert")).toHaveCount(0);
+      await expect(page.locator(".gh-workspace")).toBeVisible();
+    }
+    assert.equal(
+      state.writes.length,
+      0,
+      "Read-failure and reload checks must never submit writes",
+    );
+    assertScreenSafe(screen);
+    return 2;
+  } finally {
+    await screen.context.close();
   }
 }

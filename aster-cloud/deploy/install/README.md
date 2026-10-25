@@ -59,9 +59,10 @@ answer enters guided configuration rather than requiring hand-written JSON.
 Passwords use `getpass` and the existing `bootstrap-admin -password-stdin` API;
 passwords, DSNs, tokens, and private keys are never printed or passed as arguments.
 
-Native apply targets Ubuntu **22.04 / 24.04 / 26.04 amd64**, root and booted
+Native apply targets Ubuntu **22.04 / 24.04 amd64**, root and booted
 systemd. Those are target checks, **not claims these OS/KVM hosts were tested**.
-Python 3.10+ must already exist. There is no Docker dependency or installation.
+Ubuntu 26.04 and unknown releases are explicitly unsupported. Python 3.10+ must already exist. There is no Docker dependency or installation.
+Plain offline bundle plans remain available on other systems, but report `target_support=unsupported-no-apply`; this never authorizes host apply. Libvirt preparation plans require a supported target.
 
 ### Existing controller prerequisites and guided path
 
@@ -153,7 +154,7 @@ secrets. They are **implemented and mock-tested, not real-host accepted**.
 
 ### Libvirt preparation is deliberately narrower than node readiness
 
-- Fresh dedicated Ubuntu 22.04/24.04/26.04 amd64 only, at least 2GiB `MemTotal`;
+- Fresh dedicated Ubuntu 22.04/24.04 amd64 only, at least 2GiB `MemTotal`;
   existing database/finance/virt configuration, foreign units/overrides/masks and
   existing `policy-rc.d` are refused. Preparation does not fabricate or require
   `/dev/kvm`; **starting the node still requires the unchanged real KVM preflight,
@@ -162,10 +163,10 @@ secrets. They are **implemented and mock-tested, not real-host accepted**.
   users, AppArmor policy and package configuration. Vendor default-network XML
   may be created on a **fresh** disk by package maintainer scripts; this is not
   permission to activate it or edit an existing host's configuration.
-- Ubuntu 26 additionally selects the fixed `libvirt-daemon-lock` package for
-  `virtlockd`; Ubuntu 22/24 already include that executable in `libvirt-daemon`.
-  Recommends remain disabled. Preview and apply bind the same verified Ubuntu
-  target and package list; resuming an older, different 26 plan is refused.
+- Ubuntu 22/24 include `virtlockd` in `libvirt-daemon`. Recommends remain
+  disabled. Preview and apply bind the same verified Ubuntu target and package
+  list. Ubuntu 26 preparation is deferred; historical 26 receipts cannot be
+  resumed on supported 22/24 hosts or authorize a new package transaction.
 - Before APT, every enumerated vendor monolithic/modular service and socket,
   including TCP/TLS/network activation paths, receives an exclusively created,
   inode-bound **persistent `/dev/null` mask**. The nonce-owned temporary service
@@ -196,7 +197,8 @@ secrets. They are **implemented and mock-tested, not real-host accepted**.
   `--resume` must retain the exact plan; legacy receipts cannot gain new side
   effects. Nothing deletes domains, disks, journals or network data.
 
-The Ubuntu **22.04/24.04/26.04 TCG CI gate is pending execution/result review**.
+The current Ubuntu **22.04/24.04 TCG CI gate must be rerun for the exact new source**.
+Historical 22/24 results and the failed 26 gate remain historical evidence; changing the supported matrix does not turn an old 14/15 run green.
 It is designed to boot a fresh signed Ubuntu VM, exercise real APT/PID-1 systemd
 and namespace/virsh evidence, and require the real node doctor to fail **only the
 missing-KVM checks**. TCG cannot establish hardware KVM or VM/network admission.
@@ -205,7 +207,7 @@ asserted by the offline tests or this document.
 
 Package rules:
 
-- Fixed Ubuntu release mapping: 22.04/jammy, 24.04/noble, 26.04/resolute, amd64.
+- Fixed Ubuntu release mapping: 22.04/jammy and 24.04/noble, amd64. Deferred/unknown releases are rejected.
   Only HTTPS `archive.ubuntu.com` and `security.ubuntu.com` suites are used, with
   the preinstalled root-owned Ubuntu archive keyring. A private `APT_CONFIG`
   redirects apt.conf parts/main, sources, preferences and trust before system

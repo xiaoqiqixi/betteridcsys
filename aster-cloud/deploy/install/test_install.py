@@ -24,23 +24,59 @@ p = i.provisioning_module()
 
 
 class InstallerUnits(unittest.TestCase):
+    def test_apply_target_rejects_26_unknown_and_other_platforms_before_host_access(self):
+        base = {"system": "Linux", "architecture": "x86_64", "distribution": "ubuntu", "version": "24.04"}
+        for change in ({"version": "26.04"}, {"version": "unknown"}, {"version": "24.10"},
+                       {"version": "20.04"}, {"distribution": "debian"},
+                       {"architecture": "aarch64"}, {"system": "Darwin"}):
+            with self.subTest(change=change), mock.patch.object(i, "target_info", return_value={**base, **change}), \
+                    mock.patch.object(i.os, "geteuid", return_value=0), mock.patch.object(i, "protected_path") as path:
+                with self.assertRaisesRegex(i.InstallerError, "Ubuntu 22.04 or 24.04"):
+                    i.check_target()
+                path.assert_not_called()
+        for version in ("22.04", "24.04"):
+            with self.subTest(version=version), mock.patch.object(i, "target_info", return_value={**base, "version": version}), \
+                    mock.patch.object(i.os, "geteuid", return_value=0), mock.patch.object(i, "protected_path"), \
+                    mock.patch.object(Path, "is_dir", return_value=True):
+                i.check_target()
+
+    def test_dependency_target_allows_only_22_24_and_rejects_before_commands(self):
+        for version, expected in (("22.04", "jammy"), ("24.04", "noble"),
+                                  ("26.04", None), ("unknown", None), ("24.10", None)):
+            with self.subTest(version=version), mock.patch.object(p.os, "geteuid", return_value=0), \
+                    mock.patch.object(p.platform, "system", return_value="Linux"), \
+                    mock.patch.object(p.platform, "machine", return_value="x86_64"), \
+                    mock.patch.object(Path, "read_text", return_value='ID=ubuntu\nVERSION_ID="' + version + '"\n'), \
+                    mock.patch.object(p, "run_fixed") as run:
+                if expected:
+                    self.assertEqual(p.root_target(), expected)
+                else:
+                    with self.assertRaisesRegex(p.ProvisionError, "Ubuntu 22.04 or 24.04"):
+                        p.root_target()
+                run.assert_not_called()
+
     def test_libvirt_package_plan_is_fixed_for_each_verified_ubuntu_target(self):
         base = list(p.PACKAGES["node"]) + ["libvirt-daemon-system"]
-        for codename in ("jammy", "noble", "resolute"):
+        for codename in ("jammy", "noble"):
             with self.subTest(codename=codename):
-                expected = base + (["libvirt-daemon-lock"] if codename == "resolute" else [])
+                expected = base
                 plan = p.dependency_plan("node", with_libvirt=True, codename=codename)
                 self.assertEqual(plan["packages"], expected)
                 self.assertTrue(plan["node_daemon_included"])
                 self.assertEqual(p.dependency_plan("node", codename=codename)["packages"], list(p.PACKAGES["node"]))
                 self.assertEqual(p.dependency_plan("controller", codename=codename)["packages"], list(p.PACKAGES["controller"]))
-        for codename in (None, "", "bionic", "resolute; arbitrary"):
+        for codename in (None, "", "bionic", "resolute", "unknown", "resolute; arbitrary"):
             with self.subTest(codename=codename), self.assertRaises(p.ProvisionError):
                 p.dependency_plan("node", with_libvirt=True, codename=codename)
 
-    def test_libvirt_plan_digest_preserves_22_24_and_binds_26_split_package(self):
+    def test_libvirt_plan_digest_preserves_22_24_and_rejects_deferred_releases(self):
         self.assertEqual(p.libvirt_plan_digest("jammy"), p.libvirt_plan_digest("noble"))
-        self.assertNotEqual(p.libvirt_plan_digest("noble"), p.libvirt_plan_digest("resolute"))
+        with self.assertRaises(p.ProvisionError):
+            p.libvirt_plan_digest("resolute")
+        for component in ("node", "controller"):
+            for codename in ("resolute", "unknown", ""):
+                with self.subTest(component=component, codename=codename), self.assertRaises(p.ProvisionError):
+                    p.dependency_plan(component, codename=codename)
 
     def test_apt_failures_report_only_fixed_categories_without_replaying_commands(self):
         cases = (

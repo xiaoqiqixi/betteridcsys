@@ -23,6 +23,7 @@ const t = (zh: string, en: string) => (props.locale === "zh-CN" ? zh : en);
 </script>
 <template>
   <OverlayPanel
+    :close-label="t('关闭', 'Close')"
     :open="open"
     :title="t('账户', 'Account')"
     kind="popover"

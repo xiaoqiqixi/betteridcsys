@@ -169,6 +169,9 @@ func TestResponseMustExplicitlyDeclareOutcome(t *testing.T) {
 }
 
 func TestResourceManifestCannotBorrowPaymentOrLegacyCompatibility(t *testing.T) {
+	if CoreVersion != "0.5.10" || ResourceMinCoreVersion != "0.5.10" {
+		t.Fatal("resource protocol must begin at its first Core release, 0.5.10")
+	}
 	m := Manifest{Schema: 1, ID: "resource.aster-cloud", Version: "0.1.0", Protocol: ResourceProtocol, CoreMin: ResourceMinCoreVersion, CoreMaxExclusive: "0.6.0", Capabilities: ResourceCapabilities(), Executable: "plugin", SHA256: strings.Repeat("a", 64)}
 	if e := m.Validate(CoreVersion); e != nil {
 		t.Fatal(e)
@@ -179,9 +182,9 @@ func TestResourceManifestCannotBorrowPaymentOrLegacyCompatibility(t *testing.T) 
 			core := CoreVersion
 			switch mode {
 			case "old_core":
-				core = "0.5.8"
+				core = "0.5.9"
 			case "old_min":
-				copy.CoreMin = "0.5.0"
+				copy.CoreMin = "0.5.9"
 			case "smtp_id":
 				copy.ID = "email.smtp"
 			case "payment_capability":

@@ -240,6 +240,7 @@ onBeforeUnmount(() => {
 
 <template>
   <OverlayPanel
+    :close-label="t('关闭', 'Close')"
     :open="open"
     :busy="saving"
     :title="t('类型、地区与节点', 'Types, regions and nodes')"

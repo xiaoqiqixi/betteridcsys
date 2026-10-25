@@ -651,7 +651,7 @@ describe("immutable task recovery belongs to the current operator, not its creat
     },
   );
   it.each(["node_id", "actor_id", "id"] as const)(
-    "treats incomplete or corrupt stored %s binding as legacy, not recovery evidence",
+    "fails closed on an incomplete or corrupt stored %s binding without rewriting it",
     async (field) => {
       const path = `/operations/${operation.id}/reconcile`;
       const binding: Record<string, unknown> = operationBinding(operation);
@@ -679,9 +679,8 @@ describe("immutable task recovery belongs to the current operator, not its creat
           allowUncertainReconcile: true,
         });
         expect(fixture.calls).toHaveLength(0);
-        expect(fixture.entries()).toHaveLength(1);
-        expect(fixture.entries()[0]?.key).toBe(operation.id);
-        expect(fixture.mutation.error.value).toBe("unknown");
+        expect(fixture.entries()).toEqual(stored);
+        expect(fixture.mutation.error.value).toBe("unavailable");
       } finally {
         fixture.wrapper.unmount();
       }
@@ -772,14 +771,16 @@ describe("immutable task recovery belongs to the current operator, not its creat
       fixture.wrapper.unmount();
     }
   });
-  it("preserves the 64-entry bound and never sends or evicts to make room", async () => {
+  it("permits a 65th unresolved write without evicting earlier intents", async () => {
     const stored = Array.from({ length: 64 }, (_, index) => ({
       owner: operatorID,
       fingerprint: index.toString(16).padStart(64, "0"),
       key: index.toString(16).padStart(32, "0"),
       purpose: "dispatch",
     }));
-    const fixture = await pendingFixture(() => ({ operation }), stored);
+    const fixture = await pendingFixture(() => {
+      throw new ApiError("unknown");
+    }, stored);
     try {
       await fixture.mutation.execute(
         "POST",
@@ -788,9 +789,11 @@ describe("immutable task recovery belongs to the current operator, not its creat
         operationResponse,
         boundOptions(operation),
       );
-      expect(fixture.calls).toHaveLength(0);
-      expect(fixture.entries()).toEqual(stored);
-      expect(fixture.mutation.error.value).toBe("unavailable");
+      expect(fixture.calls).toHaveLength(1);
+      expect(fixture.entries()).toHaveLength(65);
+      expect(fixture.entries().slice(0, 64)).toEqual(stored);
+      expect(fixture.entries()[64]?.key).toBe(operation.id);
+      expect(fixture.mutation.error.value).toBe("unknown");
     } finally {
       fixture.wrapper.unmount();
     }
@@ -1232,4 +1235,228 @@ describe("pending intent persistence must succeed before a write", () => {
       fixture.wrapper.unmount();
     }
   });
+});
+
+describe("pending recovery retains the whole durable ledger", () => {
+  it("recovers a bound intent beyond entry 64 without reissuing or truncating its neighbors", async () => {
+    const path = `/operations/${operation.id}/dispatch`;
+    const neighbors = Array.from({ length: 95 }, (_, index) => ({
+      owner: operatorID,
+      fingerprint: index.toString(16).padStart(64, "0"),
+      key: index.toString(16).padStart(32, "0"),
+      purpose: "dispatch",
+    }));
+    const tail = {
+      owner: operatorID,
+      fingerprint: await fingerprint(path, {}),
+      key: operation.id,
+      purpose: "dispatch",
+      binding: operationBinding(operation),
+    };
+    const fixture = await pendingFixture(
+      () => ({ operation }),
+      [...neighbors, tail],
+    );
+    try {
+      await fixture.mutation.execute(
+        "POST",
+        path,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(0);
+      expect(fixture.mutation.error.value).toBe("unknown");
+      expect(fixture.mutation.pendingKey.value).toBe(operation.id);
+      expect(fixture.entries()).toEqual([...neighbors, tail]);
+      fixture.acknowledgeOperations(operatorID, [
+        { ...operation, state: "dispatched" },
+      ]);
+      expect(fixture.entries()).toEqual(neighbors);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+});
+
+describe("pending ledger is bounded and restored atomically", () => {
+  const entry = {
+    owner: operatorID,
+    fingerprint: "0".repeat(64),
+    key: "0".repeat(32),
+    purpose: "other",
+  };
+  it.each([
+    ["empty string", ""],
+    ["non-array object", "{}"],
+    ["null", "null"],
+    ["broken JSON", "["],
+    ["invalid tail", JSON.stringify([entry, null])],
+    ["unknown purpose", JSON.stringify([{ ...entry, purpose: "future" }])],
+    ["invalid key", JSON.stringify([{ ...entry, key: "bad" }])],
+    ["missing owner", JSON.stringify([{ ...entry, owner: "" }])],
+    [
+      "duplicate slot",
+      JSON.stringify([entry, { ...entry, key: "1".repeat(32) }]),
+    ],
+    ["oversized raw JSON", " ".repeat(1024 * 1024) + "[]"],
+    [
+      "UTF-8 exceeds byte budget",
+      JSON.stringify([{ ...entry, owner: "界".repeat(400000) }]),
+    ],
+  ])(
+    "refuses %s before HTTP and leaves all original bytes intact",
+    async (_name, raw) => {
+      const fixture = await pendingFixture(
+        () => ({ operation }),
+        [],
+        () => {
+          sessionStorage.setItem(pendingStorage, raw);
+        },
+      );
+      try {
+        await fixture.mutation.execute(
+          "POST",
+          `/operations/${operation.id}/dispatch`,
+          {},
+          operationResponse,
+          boundOptions(operation),
+        );
+        fixture.acknowledgeOperations(operatorID, [
+          { ...operation, state: "succeeded" },
+        ]);
+        expect(fixture.calls).toHaveLength(0);
+        expect(fixture.mutation.error.value).toBe("unavailable");
+        expect(sessionStorage.getItem(pendingStorage)).toBe(raw);
+        // Repairing storage later must reload atomically, not use a partial map.
+        sessionStorage.setItem(pendingStorage, "[]");
+        await fixture.mutation.execute(
+          "POST",
+          `/operations/${operation.id}/dispatch`,
+          {},
+          operationResponse,
+          boundOptions(operation),
+        );
+        expect(fixture.calls).toHaveLength(1);
+      } finally {
+        fixture.wrapper.unmount();
+      }
+    },
+  );
+  it("does not commit a valid prefix when a later entry fails validation", async () => {
+    const path = `/operations/${operation.id}/dispatch`;
+    const valid = {
+      ...entry,
+      fingerprint: await fingerprint(path, {}),
+      key: operation.id,
+      purpose: "dispatch",
+      binding: operationBinding(operation),
+    };
+    const fixture = await pendingFixture(() => ({ operation }), [valid, null]);
+    try {
+      await fixture.mutation.execute(
+        "POST",
+        path,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(0);
+      sessionStorage.setItem(pendingStorage, "[]");
+      await fixture.mutation.execute(
+        "POST",
+        path,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(1);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it("refuses a write over the serialized budget instead of evicting unresolved entries", async () => {
+    const stored = [{ ...entry, owner: "x" }];
+    // A near-budget legacy record checks serialized bytes independently of count.
+    stored[0]!.owner += "x".repeat(
+      1024 * 1024 - JSON.stringify(stored).length - 8,
+    );
+    const raw = JSON.stringify(stored);
+    const fixture = await pendingFixture(() => ({ operation }), stored);
+    try {
+      await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(0);
+      expect(fixture.mutation.error.value).toBe("unavailable");
+      expect(sessionStorage.getItem(pendingStorage)).toBe(raw);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+  it("allows an exact read acknowledgement to free capacity without sending a mutation", async () => {
+    const removable = {
+      ...entry,
+      owner: "x",
+      key: operation.id,
+      purpose: "creation",
+    };
+    removable.owner += "x".repeat(
+      1024 * 1024 - JSON.stringify([removable]).length - 8,
+    );
+    const fixture = await pendingFixture(() => ({ operation }), [removable]);
+    try {
+      fixture.acknowledgeOperations(removable.owner, [
+        { ...operation, actor_id: removable.owner, state: "succeeded" },
+      ]);
+      expect(fixture.entries()).toEqual([]);
+      expect(fixture.calls).toHaveLength(0);
+      await fixture.mutation.execute(
+        "POST",
+        `/operations/${operation.id}/dispatch`,
+        {},
+        operationResponse,
+        boundOptions(operation),
+      );
+      expect(fixture.calls).toHaveLength(1);
+    } finally {
+      fixture.wrapper.unmount();
+    }
+  });
+});
+
+describe("caller-provided idempotency keys cannot poison recovery", () => {
+  it.each(["", "short", "g".repeat(32), "A".repeat(32), "a".repeat(33)])(
+    "rejects explicit invalid key %j before persistence or HTTP",
+    async (key) => {
+      const stored = [
+        {
+          owner: operatorID,
+          fingerprint: "1".repeat(64),
+          key: "1".repeat(32),
+          purpose: "other",
+        },
+      ];
+      const fixture = await pendingFixture(() => ({ operation }), stored);
+      try {
+        await fixture.mutation.execute(
+          "POST",
+          "/instances",
+          { hostname: "synthetic" },
+          operationResponse,
+          { key },
+        );
+        expect(fixture.calls).toHaveLength(0);
+        expect(fixture.entries()).toEqual(stored);
+        expect(fixture.mutation.error.value).toBe("invalid");
+        expect(fixture.mutation.pendingKey.value).toBe("");
+      } finally {
+        fixture.wrapper.unmount();
+      }
+    },
+  );
 });

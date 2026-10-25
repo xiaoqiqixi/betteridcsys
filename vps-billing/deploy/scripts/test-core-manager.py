@@ -6,6 +6,7 @@ Python-only trust override permits an ordinary test user to own temporary files;
 the operator CLI must retain its root requirement.
 """
 import contextlib
+import copy
 import fcntl
 import importlib.util
 import io
@@ -136,6 +137,51 @@ class CorePreparationTests(unittest.TestCase):
         downloaded = [item for item in self.fixture.calls if type(item) is int]
         self.assertEqual(set(downloaded), {item["id"] for item in self.fixture.assets})
 
+    def test_0510_new_main_source_prepares_without_history_exception(self):
+        # A successful fixture is not a claim that v0.5.10 public assets exist.
+        self.fixture = fixtures.Fixture("core", raw=True, core_version="0.5.10")
+        self.target = self.releases / self.fixture.version
+        self.fixture.responses["/compare/" + fixtures.SOURCE + "...main"] = {
+            "status": "ahead", "merge_base_commit": {"sha": fixtures.SOURCE}}
+        self.assert_prepared(self.prepare())
+        self.assertIn("/compare/" + fixtures.SOURCE + "...main", self.fixture.calls)
+
+    def test_0510_prepare_rejects_diverged_source_or_policy_before_publication(self):
+        for case in ("diverged_source", "wrong_merge_base", "diverged_policy"):
+            with self.subTest(case=case):
+                self.fixture = fixtures.Fixture("core", raw=True, core_version="0.5.10")
+                self.target = self.releases / self.fixture.version
+                source_key = "/compare/" + fixtures.SOURCE + "...main"
+                if case == "diverged_policy":
+                    policy = "4" * 40
+                    self.fixture.provenance["default_sha"] = policy
+                    self.fixture.responses["/git/trees/" + policy + "?recursive=1"] = copy.deepcopy(
+                        self.fixture.responses["/git/trees/" + fixtures.SOURCE + "?recursive=1"])
+                    self.fixture.responses["/compare/" + policy + "...main"] = {
+                        "status": "diverged", "merge_base_commit": {"sha": "5" * 40}}
+                    self.fixture.reseal()
+                else:
+                    self.fixture.responses[source_key] = {
+                        "status": "diverged" if case == "diverged_source" else "ahead",
+                        "merge_base_commit": {"sha": "5" * 40}}
+                with self.assertRaisesRegex(updater.Rejected, "retained on main"):
+                    self.prepare()
+                self.assert_no_publication()
+
+    def test_operating_system_support_is_not_a_full_host_acceptance_claim(self):
+        for distro, version, state, support in (
+                ("ubuntu", "24.04", "ok", "native_ci_baseline"),
+                ("ubuntu", "22.04", "warning", "target_pending_full_native_validation"),
+                ("ubuntu", "26.04", "warning", "unsupported"),
+                ("debian", "12", "warning", "unsupported")):
+            with self.subTest(distro=distro, version=version):
+                facts = manager.operating_system_support(distro, version)
+                self.assertEqual(facts["status"], state)
+                self.assertEqual(facts["support_status"], support)
+                self.assertEqual(facts["deployment_targets"], ["ubuntu 22.04", "ubuntu 24.04"])
+                self.assertEqual(facts["native_ci_baseline"], "ubuntu 24.04")
+                self.assertFalse(facts["this_host_validated"])
+
     def test_protected_local_assets_avoid_asset_download_but_verify_official_source(self):
         assets = self.local_assets()
         with patch.object(self.fixture, "asset", side_effect=AssertionError("No asset download")):
@@ -235,7 +281,8 @@ class CorePreparationTests(unittest.TestCase):
 
     def test_published_prepare_and_current_executor_inventory_are_version_bound(self):
         for version, expected in (("0.5.1", updater.PREPARE_TRUSTED_PATHS), ("0.5.2", updater.EXECUTOR_TRUSTED_PATHS),
-                                  ("0.5.3", updater.TRUSTED_PATHS)):
+                                  ("0.5.3", updater.PAYMENT_TRUSTED_PATHS), ("0.5.9", updater.PAYMENT_TRUSTED_PATHS),
+                                  ("0.5.10", updater.TRUSTED_PATHS)):
             with self.subTest(version=version):
                 self.fixture = fixtures.Fixture("core", raw=True, core_version=version)
                 self.target = self.releases / version

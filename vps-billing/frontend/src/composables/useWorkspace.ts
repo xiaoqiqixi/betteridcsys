@@ -225,7 +225,10 @@ async function refreshSession(): Promise<Session> {
       sessionError.value =
         cause instanceof ApiError
           ? cause
-          : new ApiError("NETWORK_ERROR", 0, { locale: locale.value });
+          : new ApiError("NETWORK_ERROR", 0, {
+              locale: locale.value,
+              context: "read",
+            });
     }
     throw cause;
   } finally {

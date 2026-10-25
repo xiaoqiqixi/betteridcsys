@@ -5,7 +5,7 @@
 ## 1. 对标范围与不变边界
 
 - 对标**能力和管理流程**，自主设计数据模型、协议、执行器和 UI；不接对方 API，不搬运源码、商标、图片、安装包或 CentOS 安装脚本。
-- 保留 Go + Vue/TypeScript + MySQL、原生 systemd/TLS 部署；被控目标为 x86_64 Ubuntu 22.04 及以上。22.04/24.04 分别验收，较新版本先探测；“能编译”不等于所有发行版兼容。
+- 保留 Go + Vue/TypeScript + MySQL、原生 systemd/TLS 部署；当前被控支持目标为 x86_64 Ubuntu 22.04/24.04。26.04 暂不支持，后续版本另行评审；22/24 分别验收；“能编译”不等于所有发行版兼容。
 - 主控负责权限、租户资源、IPAM、调度、意图/审计；被控负责经审批的 libvirt/QEMU/KVM 与网络资源。财务负责销售和账务，不把付款成功当作虚拟机运行成功。
 - 保持既有 `aster.controller/1`、`aster.resource/1` 和产品快照兼容。**金额、币种、支付幂等及历史快照不改**；本轮监控数据不自动入账，不添加按量扣费。普通 IPAM 管理对象仍只表示计划/预留；本轮新增显式 VPC 的同事务任务绑定与 `aster.node/2` 启停门禁。旧 `normal` 开通链不自动获得 VPC 能力，跨节点与受控路由/NAT 另经明确 `aster.overlay/1` 审批和 epoch，不能由旧 profile 自动获得，也不代表完整 VPC 产品已验收。
 - 所有后续写动作继承稳定操作 ID、冻结参数和目标、写前持久化、重复请求校验、未知结果保留。丢响应后只核对原任务，不自动重发写入。
@@ -60,7 +60,7 @@
 | A12 | `internal/fabric/`、`cmd/aster-network/` | 保留 root CLI 的单宿主 OVS 微分段/双向 meter；本轮新增嵌入式 Activate/Deactivate/Check/Inspect，EX flock 跨隔离、TAP 核验、apply/readback 和 resume。 |
 | A13 | `plugins/billingconnector/`、`cmd/aster-billing-plugin/` | 复用原公开协议和安全 transport 的独立资源适配 CLI；不是支付插件，不由财务 runtime-plugin manager 加载，不替代财务原生持久任务。 |
 | A14 | `migrations/006_instance_network_bindings.sql`、`internal/control/network_tasks.go`、`internal/networking/store.go:ReserveTaskTx`、`internal/nodeproto/network_binding.go`、`internal/hypervisor/ovs.go` | 006 引入的事务内 IPAM/任务绑定、node/2 不可变网络规格、节点 schema-3 所有权及 OVS 生命周期门禁。 |
-| A15 | `../vps-billing/docs/RESOURCE_PLUGINS.md`、财务 runtime resource worker/manager | 新增 manager 管理的 `resource.aster-cloud` transport，接原持久开通任务；与 A13 CLI 是不同交付物，不绕过原 job claim/幂等或付款边界。 |
+| A15 | `../vps-billing/docs/RESOURCE_PLUGINS.md`、财务 runtime resource worker/manager | 新增 manager 管理的 `resource.aster-cloud` 0.1.1 transport（`aster.resource/1`；最低Core **0.5.10**，当前未发布候选；旧正式0.5.9不支持），接原持久开通任务；与 A13 CLI 是不同交付物，不绕过原 job claim/幂等或付款边界。 |
 | A16 | `internal/overlayproto/`、`internal/control/overlay_*`、`internal/fabric/overlay_*`、`internal/hypervisor/overlay*` | schema-7 全局 VPC/epoch、固定 VXLAN peer、受控路由、reserved 成员创建屏障、显式恢复；不是实际跨宿主连通性验收。 |
 | A17 | `internal/fabric/nat_*`、`internal/overlayproto/nat.go`、`frontend/src/pages/OverlayNetworksPage.vue`、`OverlayEpochPage.vue` | root 批准 namespace SNAT/TCP/UDP DNAT、后台完整成员/路由/NAT 及恢复；限制与权限见 [NETWORK_MANAGEMENT.md](NETWORK_MANAGEMENT.md) 和 [NAT.md](../internal/fabric/NAT.md)。 |
 
@@ -119,7 +119,7 @@ R1/R4/R5/R6/R7/R10 是功能依据；具体执行器选型须再查 Ubuntu/libvi
 
 | 功能域 | 当前状态/锚点 | 距离完整目标与验收 |
 | --- | --- | --- |
-| 原生 Ubuntu22+ 安装/doctor | `implemented-partial` A4 | Ubuntu22/24 单独验证 libvirt/QEMU、权限、AppArmor、systemd、TLS、干净安装/升级/卸载保留数据；当前没有实机完整认证。`realhost-required`。 |
+| 原生 Ubuntu22/24 安装/doctor | `implemented-partial` A4 | Ubuntu22/24 单独验证 libvirt/QEMU、权限、AppArmor、systemd、TLS、干净安装/升级/卸载保留数据；当前没有实机完整认证。`realhost-required`。 |
 | 区域/节点组/节点、容量、维护、排空 | `implemented-partial` A1/A4/A8 | 网页区域/节点组 CRUD、受控纳管/证书轮换、版本兼容、排空流程待补；心跳过期不调度、容量并发无超卖、维护不删除实例。 |
 | 实例创建/电源/删除 | `implemented-partial` A1/A2/A8 | 真实引导/SSH/关机/强停/删除/重启不确定恢复待实机。启动成功不得推断客户应用就绪。批量操作须逐个稳定 ID/状态，不全批冒充成功。 |
 | 暂停/恢复、锁定、回收/恢复 | `missing` | 与真实 libvirt 状态分开，锁定有明确权限，回收保留磁盘/地址及保留期；清理任务未知不自动删资源。 |

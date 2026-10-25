@@ -159,6 +159,73 @@ async function chooseAdmin(form: { find(selector: string): any }) {
 }
 
 describe("real-contract operation pages", () => {
+  it("presents localized audit titles while keeping raw codes and technical help separately", async () => {
+    mocks.read.mockImplementation(async (path: string) =>
+      path === "/session"
+        ? admin
+        : {
+            items: [
+              { ...audit("known"), action: "order.cancelled" },
+              { ...audit("unknown"), action: "future.action" },
+            ],
+            has_more: false,
+            limit: 50,
+          },
+    );
+    const w = render("audit");
+    await flushPromises();
+    expect(
+      w.findAll(".audit-card h2").map((heading) => heading.text()),
+    ).toEqual(["订单已取消", "其他操作"]);
+    expect(w.findAll(".audit-action-code").map((code) => code.text())).toEqual([
+      "order.cancelled",
+      "future.action",
+    ]);
+    expect(w.get(".list-scope").text()).toContain("时间均为 UTC");
+    expect(w.get(".list-scope").text()).not.toContain("HTTP");
+    expect(
+      (w.get("details.audit-help").element as HTMLDetailsElement).open,
+    ).toBe(false);
+    expect(w.get("details.audit-help").text()).toContain("不是请求编号");
+    await w.setProps({ locale: "en" });
+    await flushPromises();
+    expect(
+      w.findAll(".audit-card h2").map((heading) => heading.text()),
+    ).toEqual(["Order cancelled", "Other activity"]);
+    expect(w.findAll(".audit-action-code").map((code) => code.text())).toEqual([
+      "order.cancelled",
+      "future.action",
+    ]);
+    expect(w.get("details.audit-help summary").text()).toBe(
+      "Understanding activity records",
+    );
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+  it("uses the same action labels in order activity without changing audit details", async () => {
+    const value = {
+      ...audit("nested"),
+      action: "payment.settled",
+      detail: "原始审计说明",
+    };
+    mocks.read.mockImplementation(async (path: string) =>
+      path === "/session"
+        ? admin
+        : path.endsWith(`/orders/${order().id}`)
+          ? { ...details(), audit: [value] }
+          : [order()],
+    );
+    const w = render("orders");
+    await flushPromises();
+    await button(w, "订单详情").trigger("click");
+    await flushPromises();
+    expect(w.get(".mini-event strong").text()).toBe("付款已入账");
+    expect(w.get(".mini-event .audit-action-code").text()).toBe(
+      "payment.settled",
+    );
+    expect(w.get(".mini-event").text()).toContain(value.detail);
+    expect(w.get(".mini-event").text()).toContain(value.id);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
   it("uses branded UTC text fields while preserving inclusive from and exclusive until query values", async () => {
     const w = render("audit");
     await flushPromises();

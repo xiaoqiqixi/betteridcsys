@@ -1,14 +1,16 @@
 # 后台版本更新与主机确认执行
 
+> **候选未发布。** 旧 v0.5.6–v0.5.9 的新 prepare/stage 因主线来源分叉仍受阻；下文仅为 0.5.10 发布并公共核验完成后的目标流程。现有旧目录须保留真实收据，不能伪造。见[历史影响](../../docs/HISTORY_REWRITE.md)与[候选说明](RELEASE-v0.5.10.md)。
+
 管理员版本页面查询固定官方 `xiaoqiqixi/betteridcsys` 正常 Release、说明和兼容条件，并可明确生成有审计的运维交接。网页继续使用 `manual_host_handoff`：不会获得 root、sudo、运行目录写权限或服务控制能力。Core 0.5.2 增加由获准主机管理员单独启动的安装/升级执行器；管理员审查私密规格和计划，确认精确 SHA-256 后才实际操作。网页可读取单独导出的脱敏状态，交接、暂存、应用和业务验收是不同事实。
 
-本页按目标 Core 0.5.9 准备更新示例，发行状态与门禁结果须查对应正常 Release 及构建；本轮开发对照基线为正式 0.5.8。Core 与 SMTP 1.1.0 分别构建和核验，本次不准备新的 SMTP 版本。以下目标 0.5.9 的交接与主机操作须待其正常 Release 实际可用并核验后进行。支付运行时插槽 `aster.payment/1` 自 Core 0.5.3 起提供，默认关闭，实际渠道由开发者另行实现、构建和验收；没有官方真实渠道，也未提供渠道交易查询、撤销、退款及特定渠道要求的回调应答（ACK），详见[支付插件接入指南](PAYMENT_PLUGINS.md)。全新安装默认使用 CNY，升级保留既有默认币种、独立报价与历史金额，不自动换汇。当前 SMTP 版本来自批准策略，不证明 worker 实际在运行；兼容判断也不证明数据库、恢复或运营验收完成。没有查询结果时显示未检查/不可用，不把缓存当作最新发布。资产布局与兼容范围见 [本次发布准备](RELEASE-v0.5.9.md)、[PLUGINS.md](PLUGINS.md)。
+本页按目标 Core 0.5.10 准备更新示例，发行状态与门禁结果须查对应正常 Release 及构建；当前仅为未发布候选，不能用历史版本的绿灯代替本版验收。Core 与 SMTP 1.1.0 分别构建和核验，本次不准备新的 SMTP 版本。以下目标 0.5.10 的交接与主机操作须待其正常 Release 实际可用并核验后进行。支付运行时插槽 `aster.payment/1` 自 Core 0.5.3 起提供，默认关闭，实际渠道由开发者另行实现、构建和验收；没有官方真实渠道，也未提供渠道交易查询、撤销、退款及特定渠道要求的回调应答（ACK），详见[支付插件接入指南](PAYMENT_PLUGINS.md)。全新安装默认使用 CNY，升级保留既有默认币种、独立报价与历史金额，不自动换汇。当前 SMTP 版本来自批准策略，不证明 worker 实际在运行；兼容判断也不证明数据库、恢复或运营验收完成。没有查询结果时显示未检查/不可用，不把缓存当作最新发布。资产布局与兼容范围见 [本次发布准备](RELEASE-v0.5.10.md)、[PLUGINS.md](PLUGINS.md)。
 
 ## 版本格式与引导边界
 
 raw 拆分分发从 Core 0.5.0 引入。已发布 0.4.0 网页/工具只理解旧四资产归档；0.5.0 虽理解 raw，其固定策略不含 0.5.1 新工具；0.5.1 校验器也不会自行更新为后续执行器的完整策略。旧正式附件保持原样，不删减策略、伪造版本或手改交接绕过。
 
-首次使用 0.5.4 时要求核对并引导目标资源中的完整工具；这一历史边界继续适用于 0.5.9。待新版本发布后，按 [安装手册](INSTALL.md#1-核对来源与归档)核对 0.5.9 明确 Release 的六资产、源码/构建来源，审查并引导 `core-manager.py`、`core-operation.py`、`update-manager.py`、`plugin-manager.py` 到本次 root 保护目录。`prepare` 独立核验官方来源并组装新目录，不要求制造旧网页尚不支持的交接。已有 0.5.8、0.5.7、0.5.6、0.5.4、0.5.3、0.5.2 或受支持的 0.5.1 实例只有满足真实回执、unit、配置、权限和 schema 检查时才可接纳；本候选的实际验证范围见 [UPGRADE.md](UPGRADE.md) 与 [VALIDATION.md](VALIDATION.md)。
+首次使用 0.5.4 时要求核对并引导目标资源中的完整工具；这一历史边界继续适用于 0.5.10。待新版本发布后，按 [安装手册](INSTALL.md#1-核对来源与归档)核对 0.5.10 明确 Release 的六资产、源码/构建来源，审查并引导 `core-manager.py`、`core-operation.py`、`update-manager.py`、`plugin-manager.py` 到本次 root 保护目录。`prepare` 独立核验官方来源并组装新目录，不要求制造旧网页尚不支持的交接。已有 0.5.9、0.5.8、0.5.7、0.5.6、0.5.4、0.5.3、0.5.2 或受支持的 0.5.1 实例只有满足真实回执、unit、配置、权限和 schema 检查时才可接纳；本候选的实际验证范围见 [UPGRADE.md](UPGRADE.md) 与 [VALIDATION.md](VALIDATION.md)。
 
 ## 管理员网页操作
 
@@ -25,16 +27,16 @@ raw 拆分分发从 Core 0.5.0 引入。已发布 0.4.0 网页/工具只理解�
 
 ```sh
 sudo install -d -o root -g root -m 0700 /var/lib/aster-updates
-sudo python3 /var/lib/aster-bootstrap/0.5.9/update-manager.py stage \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/update-manager.py stage \
   --handoff /root/aster-update-REQUEST_ID.json \
   --state-directory /var/lib/aster-updates \
   --current-core-version 0.5.7 \
   --current-plugin-version 1.1.0
-sudo python3 /var/lib/aster-bootstrap/0.5.9/update-manager.py status \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/update-manager.py status \
   --state-directory /var/lib/aster-updates --request-id REQUEST_ID
 ```
 
-这是从运行中的 Core 0.5.8、已选 SMTP 1.1.0 升级到 Core 0.5.9 的模板；执行时须已有目标版本的真实有效交接，所有路径、版本、ID 须匹配现场，不能预造交接。交接文件 root 所有、0600、无链接，状态目录 0700、所有祖先受保护；首次建立前检查没有复用其他应用目录。已有请求不可覆盖，不删除 journal 后重试。`status` 重核已验证资产，输出始终说明尚未应用。
+这是从运行中的 Core 0.5.8、已选 SMTP 1.1.0 升级到 Core 0.5.10 的模板；执行时须已有目标版本的真实有效交接，所有路径、版本、ID 须匹配现场，不能预造交接。交接文件 root 所有、0600、无链接，状态目录 0700、所有祖先受保护；首次建立前检查没有复用其他应用目录。已有请求不可覆盖，不删除 journal 后重试。`status` 重核已验证资产，输出始终说明尚未应用。
 
 Core stage 缺备份时为 `backup_required`。携带既有文件证据时必须同时提供 `--backup`、`--backup-sha256`、`--backup-metadata`，对应已核验当前版本备份的 SQL gzip/实际摘要/自动 `BACKUP.json`。文件检查不证明 SQL 内容或隔离恢复。已配置插件且尚未独立核对时保留 `compatibility_review_required`；不能省略实际插件版本以绕过。`awaiting_host_operator` 仍只是等待主机处理。
 
@@ -45,9 +47,9 @@ stage 的请求目录含额外 journal，不能直接作为 `prepare --assets-di
 `core-manager.py prepare` 只负责来源核验/目录准备；`core-operation.py` 负责确认后的实际操作。新安装见 [INSTALL.md](INSTALL.md)，已有实例见 [UPGRADE.md](UPGRADE.md)。先准备系统依赖、真实 TLS、私密输入和恢复计划，创建规范规格，再执行：
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py plan \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-operation.py plan \
   --spec /root/aster-upgrade/upgrade.json
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py apply \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-operation.py apply \
   --spec /root/aster-upgrade/upgrade.json \
   --confirm-plan-sha256 REVIEWED_PLAN_SHA256
 ```
@@ -55,14 +57,14 @@ sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py apply \
 管理员逐项审查本次计划，再手工使用实际摘要确认；不把 plan 输出自动传给 apply。精确实例、候选/当前提交、工具、配置/秘密引用、插件与 TLS 摘要受约束。全新安装拒绝已有对象；升级核对当前版本/schema/插件，启用本站维护门禁、停止 API、验证新备份后才迁移与切换。系统依赖、公共证书、其他站点或无关服务不由本次操作接管。
 
 ```sh
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py status \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-operation.py status \
   --state-directory /var/lib/aster-operations --operation-id ACTUAL_OPERATION_ID
-sudo python3 /var/lib/aster-bootstrap/0.5.9/core-operation.py resume \
+sudo python3 /var/lib/aster-bootstrap/0.5.10/core-operation.py resume \
   --spec /root/aster-upgrade/upgrade.json \
   --confirm-plan-sha256 ORIGINAL_REVIEWED_PLAN_SHA256
 ```
 
-主机管理员为每次确认的操作运行一次执行器，不安装持续监听网页请求的 root 服务。锁和 root 私密 journal 记录真实检查点；resume 必须使用原规格/ID/摘要并重新核验输入，不盲目重放不确定动作。公开状态 `needs_manual_recovery`（私密 journal 为 `recovery_required`）要求保留现场；程序回退须证明实际旧 schema 兼容并验证旧服务，维护状态保留供管理员判断。自 Core 0.5.3 引入支付数据库结构后，不能直接切回 0.5.2 程序，0.5.4 和目标 0.5.9 均保留这一回退边界。数据库备份不自动导入，迁移不自动降级，详见 [失败处理](UPGRADE.md#失败后的判断)。
+主机管理员为每次确认的操作运行一次执行器，不安装持续监听网页请求的 root 服务。锁和 root 私密 journal 记录真实检查点；resume 必须使用原规格/ID/摘要并重新核验输入，不盲目重放不确定动作。公开状态 `needs_manual_recovery`（私密 journal 为 `recovery_required`）要求保留现场；程序回退须证明实际旧 schema 兼容并验证旧服务，维护状态保留供管理员判断。自 Core 0.5.3 引入支付数据库结构后，不能直接切回 0.5.2 程序，0.5.4 和目标 0.5.10 均保留这一回退边界。数据库备份不自动导入，迁移不自动降级，详见 [失败处理](UPGRADE.md#失败后的判断)。
 
 ## 网页只读主机状态
 

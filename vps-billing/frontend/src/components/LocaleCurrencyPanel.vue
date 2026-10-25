@@ -18,6 +18,7 @@ const t = (zh: string, en: string) => (props.locale === "zh-CN" ? zh : en);
 </script>
 <template>
   <OverlayPanel
+    :close-label="t('关闭', 'Close')"
     :open="open"
     :title="t('语言与币种', 'Language & currency')"
     kind="popover"
@@ -53,12 +54,17 @@ const t = (zh: string, en: string) => (props.locale === "zh-CN" ? zh : en);
           </option></UiSelect
         ></label
       >
-      <p v-if="currency !== 'CNY'">
+      <p v-if="reporting || currency !== 'CNY'" class="currency-scope">
         {{
-          t(
-            "仅影响新订单的报价，历史账单保留原币种。",
-            "Changes new-order prices only. Existing invoices keep their currency.",
-          )
+          reporting
+            ? t(
+                "仅查看所选币种的报表，不换算金额，也不改变购买币种。",
+                "Shows reports in the selected currency without converting amounts or changing your purchase currency.",
+              )
+            : t(
+                "仅影响新订单的报价，历史账单保留原币种。",
+                "Changes new-order prices only. Existing invoices keep their currency.",
+              )
         }}
       </p>
     </div></OverlayPanel

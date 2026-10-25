@@ -34,7 +34,6 @@ KEY_SHA256 = "690a3d2de5af22d572c204677f2e3e785870fc53d5512abd2a90bf58b55142e2"
 IMAGES = {
     "22.04": ("jammy", "20261020", "2099e63da0b822ef8e05e3d596c1b402eaaae658fc08ab919cb8495bfcdc488b"),
     "24.04": ("noble", "20261017", "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94"),
-    "26.04": ("resolute", "20261016", "5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5"),
 }
 APT_DESTINATIONS = ("archive.ubuntu.com", "security.ubuntu.com")
 HOSTS_BOOT_COMMAND = r"printf '%s\n' '' '10.0.2.100 archive.ubuntu.com' '10.0.2.101 security.ubuntu.com' >> /etc/hosts"

@@ -132,7 +132,7 @@ def main(arguments):
         )
         data = json.loads(result.stdout)
         if (data.get("verified") is not True or data.get("id") != "resource.aster-cloud" or
-                data.get("version") != "0.1.0" or data.get("archive_sha256") != arguments[1] or
+                data.get("version") != "0.1.1" or data.get("archive_sha256") != arguments[1] or
                 data.get("service_action") != "none"):
             reject("Production manager returned an unexpected verification result.")
         print(json.dumps(data, sort_keys=True), flush=True)

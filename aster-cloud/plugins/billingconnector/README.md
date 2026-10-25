@@ -2,6 +2,19 @@
 
 这是独立、显式执行的资源开通适配器，复用现有 `aster.controller/1`。**不是支付渠道，不由当前财务插件管理器加载，不注册新的 runtime-plugin kind。** 不读写账单、金额、支付状态、服务记录或历史快照；不自动入账，也不自动重派。
 
+## 与插件管理器资源 worker 的区别
+
+本目录产物是独立 `aster-billing-plugin` CLI，manifest 的 `runtime_plugin=false`，
+继续使用 `aster.controller/1` 的原商品/请求/六字段结果合同，不添加资源worker的 `core_min` 字段。
+
+另一个产物 `resource.aster-cloud` worker **0.1.1** 位于财务项目，由插件管理器管理，
+使用 `aster.resource/1`；其兼容声明为 **`core_min=0.5.10`、`core_max_exclusive=0.6.0`**。
+Core **0.5.10** 当前只是未发布候选，旧正式 **0.5.9** 二进制没有资源协议。
+不能把旧main版本字符串、CLI能调用HTTP或协议单测通过，当成旧正式包已能加载资源worker。
+Core、plugin-host、plugin-manager 需来自支持协议的同一候选构建；worker候选版本为0.1.1。
+0.1.1区分于旧main本地0.1.0产物，避免修改manifest后同版不同哈希；旧目录不覆盖，包校验不放宽。
+构建/安装和凭据隔离见[财务资源插件文档](../../../vps-billing/docs/RESOURCE_PLUGINS.md)。
+
 ## 优先使用现有财务原生链
 
 当前财务系统已经可以直接对接主控 `/v1/provisioning`。后台商品保存 `disabled / preset / custom` 产品配置，订单保留配置历史快照，财务原生 provisioning 命令从已准备的持久任务读取不可变请求并管理 sending/uncertain 状态。该链无需本适配器即可运行。

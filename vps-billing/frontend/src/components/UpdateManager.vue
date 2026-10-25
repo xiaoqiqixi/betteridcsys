@@ -441,6 +441,7 @@ onBeforeUnmount(() => {
       >
     </section>
     <OverlayPanel
+      :close-label="t('关闭', 'Close')"
       :open="!!selected"
       :title="t('准备主机操作交接', 'Prepare host handoff')"
       kind="modal"

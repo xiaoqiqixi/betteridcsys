@@ -16,13 +16,13 @@ import (
 )
 
 const (
-	CoreVersion               = "0.5.9"
+	CoreVersion               = "0.5.10"
 	SMTPProtocol              = "aster.smtp/1"
 	SMTPCapability            = "smtp.send"
 	PaymentProtocol           = "aster.payment/1"
 	PaymentMinCoreVersion     = "0.5.3"
 	ResourceProtocol          = "aster.resource/1"
-	ResourceMinCoreVersion    = "0.5.9"
+	ResourceMinCoreVersion    = "0.5.10"
 	PaymentCheckoutCapability = "payment.checkout"
 	PaymentVerifyCapability   = "payment.verify_callback"
 	// JSON can expand a valid 64 KiB plain-text message up to sixfold. Include

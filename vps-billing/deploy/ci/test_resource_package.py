@@ -2,11 +2,14 @@
 """No-privilege unit tests for the resource CI gate's bounded root operations."""
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -19,6 +22,25 @@ spec.loader.exec_module(gate)
 
 
 class ResourcePackageGateTest(unittest.TestCase):
+    def test_resource_package_starts_at_first_protocol_core_release(self):
+        specification = importlib.util.spec_from_file_location(
+            "resource_package_builder", DIRECTORY.parent / "scripts/build-resource-plugin.py")
+        builder = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(builder)
+        raw = builder.package(b"synthetic binary, never executed", b"project license", b"readme",
+                              "go license", "go patents", "fixture Go version")
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
+            member = "aster-resource-aster-cloud-0.1.1-linux-amd64/manifest.json"
+            manifest = json.load(archive.extractfile(member))
+        self.assertEqual(manifest["core_min"], "0.5.10")
+        self.assertEqual(manifest["core_max_exclusive"], "0.6.0")
+        self.assertEqual(manifest["version"], "0.1.1")
+        self.assertEqual(manifest["protocol"], "aster.resource/1")
+        worker_source = (DIRECTORY.parents[1] / "backend/plugins/resourcebridge/config.go").read_text()
+        self.assertEqual(re.search(r'const Version = "([^"]+)"', worker_source)[1], manifest["version"])
+        core_source = (DIRECTORY.parents[1] / "backend/pkg/pluginapi/protocol.go").read_text()
+        self.assertEqual(re.search(r'ResourceMinCoreVersion\s*=\s*"([^"]+)"', core_source)[1], manifest["core_min"])
+
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="aster-resource-gate-unit-")
         self.addCleanup(self.scratch.cleanup)
@@ -131,9 +153,11 @@ class ResourcePackageGateTest(unittest.TestCase):
     def test_verify_only_uses_isolated_python_bounded_env_and_always_cleans(self):
         info = self.target.stat()
         root_info = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
-        for invalid in (False, True):
-            output = {"verified": True, "id": "resource.aster-cloud", "version": "0.1.0",
-                      "archive_sha256": self.digest, "service_action": "install" if invalid else "none"}
+        for invalid in (None, "service", "version"):
+            output = {"verified": True, "id": "resource.aster-cloud", "version": "0.1.1",
+                      "archive_sha256": self.digest, "service_action": "install" if invalid == "service" else "none"}
+            if invalid == "version":
+                output["version"] = "0.1.0"
             with self.subTest(invalid=invalid), mock.patch.object(gate.sys, "platform", "linux"), \
                     mock.patch.object(gate.os, "geteuid", return_value=0), \
                     mock.patch.object(gate.os, "lstat", return_value=root_info), \

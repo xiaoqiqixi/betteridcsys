@@ -1,8 +1,10 @@
 # 独立资源插件：主控对接
 
-本轮 main 新增 `resource.aster-cloud` 0.1.0，协议 `aster.resource/1`。它不是支付渠道，也不是旧 `aster-billing-plugin` CLI 的改名。新 worker 由系统插件管理器校验、安装、选择、启用/禁用、回滚，经独立 systemd 服务加载；已有财务主机派发命令可显式选择这个 transport。网页不能安装、执行或配置任意插件路径，也不能从这里直接派发虚拟机。
+Core 0.5.10 未发布候选提供 `resource.aster-cloud` 0.1.1，协议 `aster.resource/1`。它不是支付渠道，也不是旧 `aster-billing-plugin` CLI 的改名。新 worker 由系统插件管理器校验、安装、选择、启用/禁用、回滚，经独立 systemd 服务加载；已有财务主机派发命令可显式选择这个 transport。网页不能安装、执行或配置任意插件路径，也不能从这里直接派发虚拟机。
 
-**需要本轮重新编译的 core、plugin-host 和 plugin-manager。** 清单的最低版本字段是 `0.5.9`，并不表示已发布的旧 v0.5.9 二进制具有新协议；旧二进制会拒绝 resource。此文不是 Release 成功或真机验收声明。
+**最低 Core 明确为 `0.5.10`，最高范围 `<0.6.0`。** Core、plugin-host 和 plugin-manager 必须来自同一经核验版本；旧正式 v0.5.9 没有此协议，旧开发包误声明的 `core_min=0.5.9` 不能作为兼容依据，新管理器和运行时均拒绝。资源包不是 Core 六资产之一，须独立核验与批准；此文不是 Release 成功或真机验收声明。
+
+**旧开发包迁移：** 旧 main 本地曾生成 0.1.0（最低 Core 误写为 0.5.9）。当前候选独立提升为 **0.1.1**，使用新版本目录和新 manifest/程序摘要，不覆盖、重打或复用已批准的 0.1.0。先维护停用旧 worker，保留原包和审批记录；用 0.5.10 工具独立核验/安装 0.1.1，再按实际 revision 重新选择、批准和启用。失败不退回 HTTPS transport、不宣称旧包兼容；回滚旧 Core/插件必须核对其完整兼容组合，不能用新版工具强行接受错误最低版本。
 
 ## 不变的业务边界
 
@@ -11,13 +13,13 @@
 - 不读写金额、币种、付款记录或历史快照，不生成本地已开通/已付款状态。`accepted` 只是主控受理，不是虚拟机已运行。
 - 默认仍是原 HTTPS 路径。选择 resource 后没有 HTTP fallback；worker 缺失/禁用/不匹配会失败，不偷偷绕过插件。
 
-## 安装和选择（Linux amd64，Ubuntu 22+）
+## 安装和选择（Linux amd64，Ubuntu 22.04 / 24.04 目标，22.04 完整原生验收待完成）
 
 先在受信构建环境构建可校验的包，无网络下载/执行包脚本；构建过程不启用服务：
 
 ```sh
 GOTOOLCHAIN=go1.27.3 python3 vps-billing/deploy/scripts/build-resource-plugin.py \
-  --output /tmp/aster-resource-aster-cloud-0.1.0-linux-amd64.tar.gz
+  --output /tmp/aster-resource-aster-cloud-0.1.1-linux-amd64.tar.gz
 # 单独保存上一步的 SHA256，传到服务器后重新计算比较。
 ```
 
@@ -25,9 +27,9 @@ GOTOOLCHAIN=go1.27.3 python3 vps-billing/deploy/scripts/build-resource-plugin.py
 
 ```sh
 python3 /opt/aster/current/deploy/scripts/plugin-manager.py verify \
-  /root/approved/aster-resource-aster-cloud-0.1.0-linux-amd64.tar.gz --sha256 <核对后的摘要>
+  /root/approved/aster-resource-aster-cloud-0.1.1-linux-amd64.tar.gz --sha256 <核对后的摘要>
 python3 /opt/aster/current/deploy/scripts/plugin-manager.py install \
-  /root/approved/aster-resource-aster-cloud-0.1.0-linux-amd64.tar.gz --sha256 <同一摘要>
+  /root/approved/aster-resource-aster-cloud-0.1.1-linux-amd64.tar.gz --sha256 <同一摘要>
 ```
 
 建立专用非登录 `aster-resource` 用户/组，与 API、SMTP、payment 用户隔离，不加入它们的组。根据 `status` 取得当前 revision；下面的 revision 必须按实际递增，不能直接照抄为生产值：
@@ -35,7 +37,7 @@ python3 /opt/aster/current/deploy/scripts/plugin-manager.py install \
 ```sh
 python3 /opt/aster/current/deploy/scripts/plugin-manager.py status
 python3 /opt/aster/current/deploy/scripts/plugin-manager.py select --kind resource \
-  --revision <当前revision> --id resource.aster-cloud --version 0.1.0 \
+  --revision <当前revision> --id resource.aster-cloud --version 0.1.1 \
   --worker-uid "$(id -u aster-resource)" --client-uid 0 \
   --socket /run/aster-resource/plugin.sock --controller-id primary \
   --target controller.example.com:443

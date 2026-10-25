@@ -544,6 +544,7 @@ onBeforeUnmount(() => {
     </section>
   </div>
   <OverlayPanel
+    :close-label="t('关闭', 'Close')"
     :open="confirmLeave"
     :title="t('放弃当前修改？', 'Discard current changes?')"
     kind="modal"

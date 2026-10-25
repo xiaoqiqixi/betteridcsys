@@ -56,43 +56,57 @@ interface Pending {
   binding?: OperationBinding;
 }
 const ledger = new Map<string, Pending>();
+// Bound the serialized uncertainty, not the number of operations performed.
+// Never evict an unresolved intent to make room for another write.
+const ledgerBudget = 1024 * 1024;
+function withinBudget(raw: string) {
+  return (
+    raw.length <= ledgerBudget &&
+    new TextEncoder().encode(raw).byteLength <= ledgerBudget
+  );
+}
 let loaded = false;
 function loadLedger() {
   if (loaded) return true;
   try {
-    const value = JSON.parse(
-      sessionStorage.getItem("aster.cloud.pending.v1") || "[]",
-    );
-    if (Array.isArray(value))
-      for (const p of value.slice(0, 64))
-        if (
-          record(p) &&
-          typeof p.owner === "string" &&
-          typeof p.fingerprint === "string" &&
-          typeof p.key === "string" &&
-          /^[a-f0-9]{64}$/.test(p.fingerprint) &&
-          /^[a-f0-9]{32}$/.test(p.key)
-        ) {
-          const purpose = [
-            "creation",
-            "dispatch",
-            "reconcile",
-            "other",
-          ].includes(p.purpose as string)
-            ? (p.purpose as Pending["purpose"])
-            : undefined;
-          const binding =
-            validBinding(p.binding) && p.binding.id === p.key
-              ? copyBinding(p.binding)
-              : undefined;
-          ledger.set(`${p.owner}:${p.fingerprint}`, {
-            owner: p.owner,
-            fingerprint: p.fingerprint,
-            key: p.key,
-            ...(purpose ? { purpose } : {}),
-            ...(binding ? { binding } : {}),
-          });
-        }
+    const raw = sessionStorage.getItem("aster.cloud.pending.v1");
+    if (raw !== null && !withinBudget(raw)) return false;
+    const value: unknown = raw === null ? [] : JSON.parse(raw);
+    if (!Array.isArray(value)) return false;
+    const next = new Map<string, Pending>();
+    for (const p of value) {
+      if (
+        !record(p) ||
+        typeof p.owner !== "string" ||
+        p.owner.length === 0 ||
+        typeof p.fingerprint !== "string" ||
+        typeof p.key !== "string" ||
+        !/^[a-f0-9]{64}$/.test(p.fingerprint) ||
+        !/^[a-f0-9]{32}$/.test(p.key) ||
+        (Object.hasOwn(p, "purpose") &&
+          !["creation", "dispatch", "reconcile", "other"].includes(
+            p.purpose as string,
+          )) ||
+        (Object.hasOwn(p, "binding") &&
+          (!validBinding(p.binding) || p.binding.id !== p.key))
+      )
+        return false;
+      const slot = `${p.owner}:${p.fingerprint}`;
+      if (next.has(slot)) return false;
+      next.set(slot, {
+        owner: p.owner,
+        fingerprint: p.fingerprint,
+        key: p.key,
+        ...(Object.hasOwn(p, "purpose")
+          ? { purpose: p.purpose as Pending["purpose"] }
+          : {}),
+        ...(validBinding(p.binding) ? { binding: copyBinding(p.binding) } : {}),
+      });
+    }
+    // Restore only after EVERY entry passes. A corrupt tail cannot silently
+    // discard prior uncertainty, nor can a duplicate replace its original key.
+    ledger.clear();
+    for (const [slot, entry] of next) ledger.set(slot, entry);
     loaded = true;
     return true;
   } catch {
@@ -104,10 +118,9 @@ function loadLedger() {
 function saveLedger(next: Map<string, Pending>) {
   if (!loaded) return false;
   try {
-    sessionStorage.setItem(
-      "aster.cloud.pending.v1",
-      JSON.stringify([...next.values()]),
-    );
+    const raw = JSON.stringify([...next.values()]);
+    if (!withinBudget(raw)) return false;
+    sessionStorage.setItem("aster.cloud.pending.v1", raw);
     // Commit memory only after persistence. Failed inserts were never sent;
     // failed removals retain the original uncertainty in both stores.
     ledger.clear();
@@ -265,6 +278,16 @@ export function useMutation() {
         return null;
       }
       if (
+        requestedKey !== undefined &&
+        (typeof requestedKey !== "string" ||
+          !/^[a-f0-9]{32}$/.test(requestedKey))
+      ) {
+        // Do not persist an invalid key and rely on the HTTP client to reject
+        // it later: failed cleanup would make the durable ledger unreadable.
+        error.value = "invalid";
+        return null;
+      }
+      if (
         operationWrite &&
         (method !== "POST" ||
           !binding ||
@@ -292,10 +315,6 @@ export function useMutation() {
       if (prior && !allowReconcile) {
         pendingKey.value = prior.key;
         error.value = "unknown";
-        return null;
-      }
-      if (!prior && ledger.size >= 64) {
-        error.value = "unavailable";
         return null;
       }
       if (

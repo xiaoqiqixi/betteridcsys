@@ -1053,6 +1053,7 @@ onBeforeUnmount(() => {
     </div>
 
     <OverlayPanel
+      :close-label="t('关闭', 'Close')"
       :open="reviewOpen && !!purchasing"
       :busy="submitting"
       :title="

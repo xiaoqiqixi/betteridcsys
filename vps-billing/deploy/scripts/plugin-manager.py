@@ -20,9 +20,9 @@ import struct
 import sys
 import zlib
 
-CORE_VERSION = "0.5.9"
+CORE_VERSION = "0.5.10"
 PAYMENT_MIN_CORE_VERSION = "0.5.3"
-RESOURCE_MIN_CORE_VERSION = "0.5.9"
+RESOURCE_MIN_CORE_VERSION = "0.5.10"
 FILES = frozenset({"plugin", "manifest.json", "LICENSE", "README.md", "THIRD_PARTY_NOTICES.json", "SHA256SUMS"})
 MAX_ARCHIVE = 80 << 20
 MAX_BINARY = 64 << 20
@@ -176,7 +176,7 @@ def validate_manifest(value, core):
         if version_tuple(core) < version_tuple(PAYMENT_MIN_CORE_VERSION) or version_tuple(value["core_min"]) < version_tuple(PAYMENT_MIN_CORE_VERSION):
             raise Rejected("Payment runtime protocol requires Core 0.5.3 or newer.")
     if kind == "resource" and (version_tuple(core) < version_tuple(RESOURCE_MIN_CORE_VERSION) or version_tuple(value["core_min"]) < version_tuple(RESOURCE_MIN_CORE_VERSION)):
-        raise Rejected("Resource runtime protocol requires Core 0.5.9 with resource support or newer.")
+        raise Rejected("Resource runtime protocol requires Core 0.5.10 or newer.")
     version_tuple(value["version"])
     if not version_tuple(value["core_min"]) <= version_tuple(core) < version_tuple(value["core_max_exclusive"]):
         raise Rejected("Plugin is incompatible with the selected core version.")

@@ -12,7 +12,7 @@ import (
 )
 
 const ID = "resource.aster-cloud"
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 type Config struct {
 	Schema       int      `json:"schema"`

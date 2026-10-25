@@ -2,7 +2,113 @@
 
 验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列当前本地安装器安全测试，再列精确历史源码；历史日期段落保留原轮次的数量、工具链和限制，不是当前完整测试数量。Cloud 的独立预发布不等于稳定版或真机验收；财务 v0.5.9 发行包不因这些记录而改变。
 
-## 当前工作区：官方通道与 libvirt 自动准备
+## 当前工作区 · 通用未知操作账本（W05）
+
+2026-10-25，保留原操作ID、完整任务绑定和只读核对合同。取消恢复时 `slice(0,64)` 与64条新增门槛，
+改为最多1MiB序列化UTF-8预算；这限制同时未核实的数据量，不是累计操作次数，也不是无限容量。
+全量解析至临时Map后原子恢复；空串、坏尾部、重复slot、非法purpose/binding或超预算保留原始字节并拒绝写。
+保存必须先于HTTP；不清旧记录腾空间。有效证据仅删除所属账号的匹配意图；旧缺binding条目不自动升级。
+复核另发现显式非法key可能污染账本，已在持久化前拒绝（含空串），不再依赖后置HTTP客户端拒绝。
+
+- RED：第96条绑定恢复用例旧实现失败；非法key的5项旧实现均失败。
+- GREEN：`tests/state.test.ts` **98项通过**；涵盖尾部恢复、65条新增、UTF-8预算、损坏原子性、配额、跨账号/迟到响应与已有全部回归。
+- 合并网络ledger后完整前端 **39文件 / 958项通过**，format/typecheck/build通过；Node24.19.0，Darwinarm64。
+- 完整并行测试发现迁移测试只等待Vue微任务，未等WebCrypto完成；改为等待唯一写边界，保留一次点击/精确一次请求断言，不重复执行业务操作。
+- 最终静态产物 `index-RflN8JNU.js` / `index-Bz-AgFZT.css`；不是正式发行或真实KVM证明。
+- 以上是组件/持久化存储回归，尚无本轮Cloud真实浏览器和MySQL运行结论；其他4个网络ledger仍保留各自128条结构约束，不误称一并取消。
+
+原始RED/GREEN/完整日志在ignored `artifacts/execution-20261025/`，不将临时构建/运行日志纳入发行。
+
+## 当前工作区 · M0：Ubuntu22/24 支持范围收敛
+
+用户明确暂不支持 Ubuntu26，先完成 Ubuntu22.04/24.04 amd64。当前安装 apply、provision、
+libvirt 依赖计划、TCG 镜像/CLI/C sandbox 白名单、CI matrix 和 Release 文案/必需检查已收敛。
+26/未知版本拒绝；普通离线包 plan 可在其他系统检查包，但明确返回 `unsupported-no-apply`，不授权安装。
+安全条件未放宽：禁止升级/移除既有包、保留宿主网络、vendor masks、真实 KVM doctor、TLS/来源验证不变。
+
+本轮新源码的真实 Ubuntu22/24 TCG、GitHub CI、正式下载和真 KVM 验收仍待执行。
+发布前检查现为 15 项（Cloud11 + 财务4，新增独立真实MySQL财务浏览器）；这不是旧源码的 14/15 变绿。
+下方 `9858f1c` 等历史 26 失败和旧运行结论保持原样，不能用于替代本轮同提交验证。
+本轮未提交工作区的本地结果（2026-10-25，基线 `9858f1c`，**不是该旧提交的新CI结果**）：
+
+| 本地命令 | 实际结果 | 边界 |
+| --- | --- | --- |
+| `python3 -B deploy/install/test_install.py` | 19 tests PASS | 26/unknown/其他平台在宿主访问前拒绝，22/24正例；非真实安装 |
+| `python3 -B deploy/ci/test_cloud_installer.py` | 111 tests PASS | 临时目录/模型；旧26 receipt不能授权22/24恢复 |
+| `python3 -B deploy/scripts/test_cloud_package.py` | 25 tests PASS | 打包合同，不是正式资产下载 |
+| `python3 -B deploy/ci/test_cloud_release.py` | 初轮26 tests PASS；新增财务浏览器门禁后28 tests PASS | 当前15项精确SHA门禁模型；不是真实GitHub通过 |
+| `python3 -B deploy/ci/test_cloud_release_verifier.py` | 19 tests PASS | 验签负例/模型，不是新Release真实验签 |
+| `python3 -B deploy/ci/test_libvirt_native.py` | 43 tests PASS | 22/24库存/CLI/C白名单一致，26在fixture执行前拒绝；没有TCG启动 |
+| `actionlint v1.7.7` | 3个Cloud workflow PASS | 语法/表达式，不是workflow已运行 |
+| Python 3.10 AST / `bash -n` / `git diff --check` | PASS | 8个修改Python文件、2个shell入口及本轮差异 |
+
+初轮合计 **243 个离线 tests 通过**；随后新增财务浏览器必需门禁2项测试，发布合同28项重跑通过。先新增26拒绝测试观察失败，再收敛实现并通过回归。
+没有运行真实APT、systemd、TCG、Linux C sandbox执行、MySQL/browser、真实KVM或GitHub CI。
+首次通过Go工具入口运行actionlint遇到默认缓存写保护/离线module lookup，随后使用已有本地
+`/private/tmp/aster-cloud-tools/actionlint`（`-version`确认1.7.7）完成检查；没有放宽业务安全校验。
+
+
+## 当前工作区 · 财务资源 worker 兼容声明
+
+`resource.aster-cloud` worker 候选升为 **0.1.1**，协议仍为 `aster.resource/1`；最低 Core 修正为
+**0.5.10**，上界仍是 `core_max_exclusive=0.6.0`。这是尚未发布的候选版本，不是正式0.5.9
+已具备该协议，也不自动证明0.5.10完整发行验收通过。worker改用0.1.1以区分旧main本地0.1.0产物，不覆盖旧目录
+或放宽同版哈希校验。历史版本验证记录不重写。权威 manifest 构建、协议常量和版本
+负例在财务项目；本目录同步文档，不复制另一份版本常量或修改原协议动作。
+独立 `aster-billing-plugin` CLI 仍为 `runtime_plugin=false`、`aster.controller/1`，
+不是上述 manager 加载的 worker，也不添加 `core_min` 字段。
+
+本轮实际执行（2026-10-25，未提交工作区；Go1.26.4 / Darwin arm64）：
+
+| 命令 | 实际结果 | 验收边界 |
+| --- | --- | --- |
+| `go test -mod=readonly -race -count=1 -json ./plugins/billingconnector ./cmd/aster-billing-plugin` | 10个顶级测试 / 46 PASS事件，0 FAIL，1 SKIP | 严格请求/历史摘要/六字段结果、一次发送、显式CLI合同；SKIP为root私有TLS凭据实测 |
+| `go test -mod=readonly -race -count=1 -json ./internal/control -run '^TestResourceView'` | 4个顶级测试 / 17 PASS事件，0 FAIL / SKIP | 内存HTTP入口与存储替身；验证仅财务访问、owner隔离、只读投影和失败拒绝，不是MySQL实库 |
+| `go vet -mod=readonly ./plugins/billingconnector ./cmd/aster-billing-plugin ./internal/control` | PASS | 静态分析 |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -mod=readonly -trimpath ./cmd/aster-billing-plugin` | PASS | 交叉编译，不是Linux运行或正式下载资产 |
+
+命令统一使用 `GOTOOLCHAIN=local GOPROXY=off GOCACHE=/private/tmp/aster-cloud-go-cache`。
+原始结果为 `/tmp/aster-resource-cli-regression.jsonl`、`/tmp/aster-resource-view-regression.jsonl`。
+CLI编译产物仅在临时目录，SHA256为
+`0afeb0d6c7f537ca2b7da4998c0b4251a080b9be6c0de5e1832f42140f461425`，不发布到安装通道。
+`TestRootTLSConnectorUsesExistingProtectedTransport` 因本机非root明确跳过；需在隔离Linux
+以root私有policy/credential fixture补验，不对本机提权以掩盖跳过。此次未执行完整Linux
+resource worker运行时、真实MySQL、浏览器、GitHub CI或KVM验收，不套用历史绿色结论。
+
+## 当前工作区 · 网络持久意图与新增发行门禁
+
+2026-10-25，本轮只改前端持久意图校验/存储边界与发行门禁，不改变金额、支付、历史财务
+快照、后端网络动作或权限合同。overlay写前复用读回的完整校验，先冻结并验证payload，
+再持久化成功后发送；坏输入不会制造无法读取的账本。overlay及三类公网IP/入站策略账本
+均以1MiB UTF-8原始数据为读写预算，空串不是空账本，超限在parse/setItem前拒绝；保留原
+128条、owner锁、权限与响应匹配合同，不淘汰未知意图。浏览器自身配额失败仍禁止POST。
+
+实际行为回归与检查：
+
+- `overlay-mutation.test.ts`：原实现14失败/8通过，修复后22/22通过；包括坏body/path/scope/key、
+  VPC/NAT/recover/advance/reconcile校验、完整意图写前持久化、未知重挂载、配额失败与1MiB边界。
+- `public-mutation-storage.test.ts`：新增24项，原实现12失败/12通过；其中一项初版测试fixture
+  误用字符数计算含中文预算，已改为UTF-8字节数，最终24/24通过。原始失败日志保留，不把fixture问题冒充产品缺陷。
+  三个既有public mutation测试文件与新文件合计56/56通过，owner/权限/原GET核对行为保持。
+- overlay新旧三个测试文件138/138通过；随后完整前端 **39文件 / 953 tests PASS**，0失败/跳过。
+  typecheck、完整Prettier检查、production build通过。Node为固定24.19.0，使用本地node直接调用
+  `node_modules/vitest/vitest.mjs`、`vue-tsc/bin/vue-tsc.js`、`prettier/bin/prettier.cjs`与`vite/bin/vite.js`。
+- 发行合同新增独立财务 `Real MySQL financial browser acceptance` 必需job，当前为Cloud11+财务4，
+  共15项。同精确SHA的job缺失、被demo替换、跳过、失败、未完成均拒绝；workflow总成功不代替逐项成功。
+  原实现新增断言3失败，修复后 `python3 -B deploy/ci/test_cloud_release.py` **28/28通过**。
+- 三个Cloud workflow经actionlint1.7.7通过；两处发行Python修改通过Python3.10 AST检查；diff检查通过。
+
+日志：`/tmp/aster-overlay-mutation-red.log`、`/tmp/aster-overlay-mutation-green.log`、
+`/tmp/aster-public-mutation-red.log`、`/tmp/aster-public-mutation-green.log`、
+`/tmp/aster-all-ledgers-frontend-test.log`、`/tmp/aster-all-ledgers-production-build.log`、
+`/tmp/aster-cloud-financial-browser-gate-red.log`、`/tmp/aster-cloud-financial-browser-gate-green.log`。
+首次调用另一个残缺临时Node目录的npm时报缺少`../lib/cli.js`，未运行测试；换用完整固定工具链的
+本地CLI后实际执行上述检查，未下载依赖或改lockfile。
+
+上述测试为jsdom与策略模型，不是实际浏览器视觉、MySQL实库、真实财务浏览器job或GitHub CI。
+新的15项门禁须由最终精确提交实际通过；历史14/15失败与旧绿色结果不改写，KVM/TCG真机边界不变。
+
+## 历史工作区：官方通道与 libvirt 自动准备（范围收敛前）
 
 本轮只改 Cloud 安装 / 打包 / 发布 / 测试 / 文档，不改 Cloud Go 业务或迁移，更不改财务源码。
 精确 main 提交、官方 CI 与 Release 的结果须逐层核验，不能由本地模型测试推导真实安装成功。

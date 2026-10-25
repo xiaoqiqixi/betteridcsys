@@ -11,13 +11,13 @@ import subprocess
 import tarfile
 import tempfile
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 ID = "resource.aster-cloud"
 
 
 def package(binary, license_text, readme, go_license, go_patents, go_version):
     manifest = {"schema": 1, "id": ID, "version": VERSION, "protocol": "aster.resource/1",
-                "core_min": "0.5.9", "core_max_exclusive": "0.6.0", "capabilities": ["resource.send", "resource.lookup"],
+                "core_min": "0.5.10", "core_max_exclusive": "0.6.0", "capabilities": ["resource.send", "resource.lookup"],
                 "executable": "plugin", "sha256": hashlib.sha256(binary).hexdigest()}
     files = {"plugin": binary, "manifest.json": (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode(),
              "LICENSE": license_text, "README.md": readme,

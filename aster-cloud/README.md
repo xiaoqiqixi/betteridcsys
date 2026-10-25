@@ -4,7 +4,7 @@
 
 财务销售商品、确认付款；主控接纳意图、预留资源并派发任务；被控安装在计算宿主机，通过 libvirt / QEMU / KVM 管理客户虚拟机。客户虚拟机不需要安装被控服务。三个系统使用独立进程与权限，财务和主控使用独立数据库；主控不能改账单、确认支付或读取财务数据库。
 
-使用 Go、MySQL、Vue 3 / TypeScript 与原生 systemd。目标宿主为 Ubuntu 22.04 及以上的 amd64；各发行版须单独验收。不对接 IDCsmart API；安装器不自动修改宿主机桥接、防火墙、已有 VM/镜像数据或物理上联。
+使用 Go、MySQL、Vue 3 / TypeScript 与原生 systemd。当前支持目标为 Ubuntu 22.04 / 24.04 amd64；Ubuntu 26.04 暂不支持，各受支持发行版须单独验收。不对接 IDCsmart API；安装器不自动修改宿主机桥接、防火墙、已有 VM/镜像数据或物理上联。
 
 ## 原生安装：主控与被控各一条命令
 
@@ -29,8 +29,8 @@ Cloud 使用独立的 `cloud-v0.1.0-rc.1` **预发布通道**，不是财务 Cor
   软件准备不要求假造 `/dev/kvm`，也不把安装成功等同于节点可接单；启动仍要求真实 KVM、证书、已批准镜像与预算。
   维护开启、网络与删除关闭。本机启动状态仅为 `node_started_pending_controller`，真实 pinned mTLS 准入从主控发起，
   不向节点复制主控 client 私钥。现有 1GB 财务测试机不能用作计算节点。
-- **兼容范围**：安装器明确接受 Ubuntu 22.04 / 24.04 / 26.04 amd64、Python 3.10+ 与 booted systemd；
-  CI 分别使用官方验签镜像进行隔离 TCG 安装测试，结果绑定精确提交。TCG 只验证真实 APT/systemd/libvirt 软件准备，
+- **兼容范围**：安装器仅接受 Ubuntu 22.04 / 24.04 amd64、Python 3.10+ 与 booted systemd；
+  Ubuntu 26.04 及未知版本明确拒绝。CI 对 22/24 分别使用官方验签镜像进行隔离 TCG 安装测试，结果绑定精确提交；范围收敛后的新提交仍须重新通过门禁。TCG 只验证真实 APT/systemd/libvirt 软件准备，
   不代表 KVM 客户虚拟机、物理网络、迁移或整机升级恢复验收。真实 KVM 验收仍按计划后置。
 
 已有审核过的本地开发包仍可使用 `deploy/install/controller.sh` / `node.sh`，但必须显式批准 development
@@ -52,6 +52,18 @@ Cloud 使用独立的 `cloud-v0.1.0-rc.1` **预发布通道**，不是财务 Cor
 | 浮动 IP 公网入站 | 实例独立 IPv4 来源/协议/端口规则；新绑定默认拒绝未经允许的新入站 | 仅保护 VPC 浮动 IPv4 入口，不覆盖东西向、直绑或完整安全组；旧 legacy 映射须明确升级 |
 
 所有写任务先持久化意图。丢响应、崩溃或结果不明时保留原操作，只读核对，不自动重发开通、释放地址或清空 journal。节点只执行预定义动作及 root 批准的资源，不接受外部 shell、XML、宿主路径、SSH 命令或任意下载 URL。
+
+## 财务资源插件兼容范围
+
+由插件管理器加载的 `resource.aster-cloud` worker **0.1.1** 使用 `aster.resource/1`，
+最低财务 Core 为 **0.5.10**（当前候选，未发布）；`core_max_exclusive=0.6.0`。
+旧正式 **0.5.9** 二进制没有该资源协议，不能因 `main` 代码曾标作0.5.9而宣称已兼容。
+worker改用0.1.1避免与旧main本地0.1.0产物同版不同哈希；不覆盖旧目录或放宽包校验。
+Core、plugin-host、plugin-manager 必须来自支持该协议的同一候选构建；启用插件不等于资源服务已启动或VM已开通。
+
+独立 `aster-billing-plugin` CLI 仍为 `aster.controller/1` 的显式HTTPS适配器，
+其 `runtime_plugin=false`，不是上述worker；本次最低Core修正不改变CLI动作、财务金额、支付和历史快照。
+具体构建/安装以[财务资源插件文档](../vps-billing/docs/RESOURCE_PLUGINS.md)为准，不把候选版本写成正式发行。
 
 ## 文档入口
 

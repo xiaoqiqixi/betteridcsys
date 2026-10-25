@@ -48,13 +48,16 @@ I = load("cloud_release_trusted_installer", CLOUD / "deploy/install/install.py")
 P = load("cloud_release_trusted_packager", CLOUD / "deploy/scripts/package-cloud.py")
 CLOUD_JOBS = {
     *("Linux unit and build (" + os_name + ")" for os_name in ("ubuntu-22.04", "ubuntu-24.04")),
-    *("Native libvirt preparation (ubuntu-" + version + ")" for version in ("22.04", "24.04", "26.04")),
+    *("Native libvirt preparation (ubuntu-" + version + ")" for version in ("22.04", "24.04")),
     *("Native OVS parser and encoder (" + os_name + ")" for os_name in ("ubuntu-22.04", "ubuntu-24.04")),
     *("Native NAT packet flow and revocation (" + os_name + ")" for os_name in ("ubuntu-22.04", "ubuntu-24.04")),
     "Vue management console checks", "Independent controller MySQL acceptance",
     "Real MySQL network management browser acceptance",
 }
-FINANCE_JOBS = {"checks", "go-vulnerability", "official-release-metadata"}
+FINANCE_JOBS = {
+    "checks", "go-vulnerability", "official-release-metadata",
+    "Real MySQL financial browser acceptance",
+}
 
 
 class PolicyError(Exception):
@@ -196,7 +199,7 @@ def green_checks(api, source):
         jobs = api.request("GET", "/actions/runs/" + str(positive(run["id"])) + "/attempts/" + str(positive(run.get("run_attempt"))) + "/jobs?per_page=100")
         rows = jobs.get("jobs", [])
         require(jobs.get("total_count") == len(expected) and len(rows) == len(expected) and {job.get("name") for job in rows} == expected and
-                all(job.get("status") == "completed" and job.get("conclusion") == "success" for job in rows), "All fifteen required real CI jobs must pass; no skip/substitution")
+                all(job.get("status") == "completed" and job.get("conclusion") == "success" for job in rows), "All required real CI jobs must pass at the exact source; no skip/substitution")
         proofs.append({"workflow": workflow, "run_id": run["id"], "attempt": run["run_attempt"], "jobs": sorted(expected)})
     return proofs
 
@@ -369,7 +372,7 @@ def release_body(source, bootstrap_sha):
         commands.append("```sh\nbash -o pipefail -c 'curl --fail --silent --show-error --proto \"=https\" --tlsv1.2 --connect-timeout 10 --max-time 60 --max-filesize 1048576 " + url + " | sudo /usr/bin/python3 -I - " + role + "'\n```")
     return ("# Aster Cloud " + V.VERSION + " · 官方预发布\n\n"
             "这是 RC 候选版，不是 stable 稳定版；真实 KVM、物理网络和生产部署尚未验收。\n\n"
-            "适用：Ubuntu 22.04 / 24.04 / 26.04 amd64，Python 3.10+、curl、sudo 与已启动的 systemd。"
+            "适用：Ubuntu 22.04 / 24.04 amd64，Python 3.10+、curl、sudo 与已启动的 systemd。Ubuntu 26.04 暂不支持。"
             "主控和被控分别在各自机器执行以下一条命令。交互向导默认不安装；核对真实 TLS、身份和配置后，"
             "需明确输入 install 才应用，Cloud 服务启动还需 start 批准。主控可选新专用 MySQL，被控可选 libvirt 自动准备；"
             "这些准备步骤可安装并启动相应依赖服务。\n\n"

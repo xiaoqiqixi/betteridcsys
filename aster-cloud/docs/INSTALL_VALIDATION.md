@@ -126,7 +126,7 @@ capsule、私有权限和未知邻居。**mock gh stdout 不是密码学验签�
 `--download-only` 本身允许写私有下载/proof，再执行实际已认证 installer 的
 只读 plan；它既不是零写入 bootstrap，也不是 host apply / VM 通过。
 
-## Ubuntu 22.04 / 24.04 / 26.04 TCG gate（待 CI）
+## 当前 Ubuntu 22.04 / 24.04 TCG gate（新提交待 CI）
 
 新增 [native-libvirt contract](../deploy/ci/libvirt-native.md) 规定使用 Canonical
 签名校验且固定 hash 的新 Ubuntu 镜像，在隔离的 TCG guest 内真实执行 APT、
@@ -139,13 +139,13 @@ PID-1 systemd、生产 `prepare_libvirt` 与相同计划 resume。不能删除 r
 镜像、真实临时证书和有效资源限制；doctor 不能任意非零就算过，必须通过
 非 KVM 先决检查并明确拒绝不存在的 `/dev/kvm` / hardware virtualization。
 
-**此处三个 Ubuntu gate 均待 CI 实际执行与结果核对，不记录 PASS。** 即使
+**范围收敛后的两个 Ubuntu gate 须按新提交重新执行，不继承历史 PASS。** Ubuntu26 暂缓；旧 26 失败及旧 14/15 记录不改写。 即使
 随后通过，也仅证明软件准备和 missing-KVM fail-closed；TCG 不是硬件 KVM、
 真实 VM 生命周期、物理上联、controller admission 或生产安装验收。
 
 ## 必须另外执行的验收
 
-正式使用前仍需在专用、可销毁的 Ubuntu 22.04 / 24.04 / 26.04 amd64 主机分别验证：
+正式使用前仍需在专用、可销毁的 Ubuntu 22.04 / 24.04 amd64 主机分别验证；26.04 暂不支持：
 
 1. 实际已发布 sole RC 的匿名完整下载、固定 commit bootstrap、真实 Sigstore
    proof、版本与构建 provenance。外部 SHA 不能单独证明发布者身份；发布链

@@ -17,8 +17,24 @@ interface Intent {
   body: Record<string, unknown>;
 }
 const storage = "aster.cloud.public-ip-intents.v1";
+const maximumStoredBytes = 1024 * 1024;
+function withinStorageBudget(raw: string) {
+  return (
+    raw.length <= maximumStoredBytes &&
+    new TextEncoder().encode(raw).byteLength <= maximumStoredBytes
+  );
+}
+function save(items: Intent[]) {
+  const raw = JSON.stringify(items);
+  if (!withinStorageBudget(raw)) throw new ApiError("unavailable");
+  // Browser quotas vary. A successful size check alone never authorizes POST.
+  sessionStorage.setItem(storage, raw);
+}
 function read(): Intent[] {
-  const v: unknown = JSON.parse(sessionStorage.getItem(storage) || "[]");
+  const raw = sessionStorage.getItem(storage) ?? "[]";
+  // Empty/corrupt/oversized storage is not an empty ledger. Keep it untouched.
+  if (!withinStorageBudget(raw)) throw new ApiError("unavailable");
+  const v: unknown = JSON.parse(raw);
   if (
     !Array.isArray(v) ||
     v.length > 128 ||
@@ -62,11 +78,8 @@ export function usePublicIPMutation() {
     }
   }
   function remove(intent: Intent) {
-    sessionStorage.setItem(
-      storage,
-      JSON.stringify(
-        read().filter((x) => x.owner !== intent.owner || x.key !== intent.key),
-      ),
+    save(
+      read().filter((x) => x.owner !== intent.owner || x.key !== intent.key),
     );
     pending.value = null;
     error.value = "";
@@ -141,7 +154,7 @@ export function usePublicIPMutation() {
         target,
         body: structuredClone(body),
       };
-      sessionStorage.setItem(storage, JSON.stringify([...all, intent]));
+      save([...all, intent]);
       pending.value = intent;
       try {
         const value = await api.write(

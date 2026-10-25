@@ -3,6 +3,7 @@
 import argparse
 import ast
 import copy
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -58,13 +59,31 @@ class NativeFixtureContract(unittest.TestCase):
             ast.parse((HERE / name).read_text(), feature_version=(3, 10))
 
     def test_only_fixed_signed_dated_official_images(self):
-        self.assertEqual(set(h.IMAGES), {"22.04", "24.04", "26.04"})
+        self.assertEqual(set(h.IMAGES), {"22.04", "24.04"})
         for ubuntu, (suite, date, sha) in h.IMAGES.items():
             self.assertRegex(date, r"^[0-9]{8}$")
             self.assertRegex(sha, r"^[0-9a-f]{64}$")
             self.assertNotIn(suite, ("current", "latest", "release"))
             self.assertNotEqual(sha, "0" * 64)
-        self.assertEqual(h.IMAGES["26.04"][0], "resolute")
+        self.assertEqual(h.IMAGES["22.04"][0], "jammy")
+        self.assertEqual(h.IMAGES["24.04"][0], "noble")
+
+    def test_deferred_and_unknown_releases_stop_before_any_fixture_execution(self):
+        for version in ("26.04", "24.10", "unknown"):
+            with self.subTest(version=version), mock.patch.object(h, "execute") as execute, \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                h.main(["--ubuntu", version, "--source-root", "/unused", "--source-sha", "a" * 40, "--output", "/unused"])
+            self.assertEqual(error.exception.code, 2)
+            execute.assert_not_called()
+
+    def test_supported_release_inventory_matches_installer_workflow_and_sandbox(self):
+        repo = HERE.parents[2]
+        provision = load("libvirt_native_supported_provision", "../install/provision.py")
+        self.assertEqual(provision.CODENAMES, {"22.04": "jammy", "24.04": "noble"})
+        workflow = (repo / ".github/workflows/cloud.yml").read_text()
+        self.assertEqual(re.findall(r"ubuntu: '([^']+)'", workflow), ["22.04", "24.04"])
+        sandbox = (HERE / "libvirt-native-sandbox.c").read_text()
+        self.assertEqual(re.findall(r'"ubuntu-([0-9.]+)-server-cloudimg-amd64.img"', sandbox), ["22.04", "24.04"])
 
     def test_public_key_is_independently_code_pinned(self):
         raw = (HERE / "libvirt-native-image-key.asc").read_bytes()

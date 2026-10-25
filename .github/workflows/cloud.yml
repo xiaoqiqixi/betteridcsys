@@ -75,14 +75,13 @@ jobs:
       fail-fast: false
       matrix:
         # All emulator hosts use reviewed libslirp 4.7.x (loopback-only command
-        # socketpair). The independently signed guests still run real 22/24/26.
+        # socketpair). The independently signed guests run supported 22/24.
+        # Ubuntu 26 is deferred, not a failed result reclassified as passing.
         include:
           - os: ubuntu-24.04
             ubuntu: '22.04'
           - os: ubuntu-24.04
             ubuntu: '24.04'
-          - os: ubuntu-24.04
-            ubuntu: '26.04'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:

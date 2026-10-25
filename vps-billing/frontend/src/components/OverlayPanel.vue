@@ -21,8 +21,9 @@ const props = withDefaults(
     kind?: "drawer" | "modal" | "popover";
     anchor?: HTMLElement | null;
     busy?: boolean;
+    closeLabel?: string;
   }>(),
-  { kind: "drawer", busy: false },
+  { kind: "drawer", busy: false, closeLabel: "关闭" },
 );
 const emit = defineEmits<{ close: [] }>();
 const panel = ref<HTMLElement | null>(null);
@@ -233,7 +234,7 @@ onBeforeUnmount(() => release());
               class="icon-button"
               type="button"
               :disabled="busy"
-              aria-label="关闭 / Close"
+              :aria-label="closeLabel"
               @click="close"
             >
               <X :size="20" />

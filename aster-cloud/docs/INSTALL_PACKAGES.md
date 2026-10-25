@@ -195,7 +195,7 @@ exist on fresh disk, but it may not be activated; existing active hosts are only
 inspected read-only. No bridge/uplink/firewall rewrite, controller private-key
 import, dummy image or KVM bypass is permitted.
 
-The Ubuntu 22.04/24.04/26.04 signed-image **TCG gate is pending CI**. It is designed
+The current Ubuntu 22.04/24.04 signed-image **TCG gate requires a fresh exact-source CI run**. Ubuntu 26.04 is deferred and unsupported by the installer/harness; historical failures are not reclassified as success. It is designed
 to test actual APT/systemd/libvirt namespace behavior and an honest missing-KVM
 doctor refusal; it cannot pass hardware KVM acceptance. Preserve this distinction
 even if reproducible packaging and all offline tests pass.

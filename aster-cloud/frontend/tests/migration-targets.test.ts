@@ -92,10 +92,14 @@ describe("complete server-verified migration compatibility", () => {
       .get('[role="option"]:not([aria-disabled="true"])')
       .trigger("pointerdown");
     await submit.trigger("click");
-    await flushPromises();
-    expect(f.calls[0]?.body).toMatchObject({
-      action: "migrate_prepare",
-      target_node_id: "node-c",
+    // WebCrypto completes outside Vue's microtask queue. Wait for the single
+    // write boundary, not a second click/retry that could mask duplicate sends.
+    await vi.waitFor(() => {
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0]?.body).toMatchObject({
+        action: "migrate_prepare",
+        target_node_id: "node-c",
+      });
     });
   });
 });

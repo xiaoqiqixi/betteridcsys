@@ -244,6 +244,38 @@ describe("received Gemini home and minimal contract fixes", () => {
       ),
     ).toBe(true);
   });
+  it.each(["zh-CN", "en"])(
+    "%s: malformed home reads offer reload without implying a pending write",
+    async (locale) => {
+      const fetcher = vi.fn(
+        async (_url: RequestInfo | URL, _options?: RequestInit) =>
+          Response.json({ data: { malformed: true } }),
+      );
+      const client = createApiClient({
+        locale: () => locale as "zh-CN" | "en",
+        onSession: () => {},
+        fetcher,
+      });
+      mocks.read.mockImplementation(client.read);
+      const wrapper = adapter({ locale, mode: "api" });
+      await flushPromises();
+      const alert = wrapper.get('[role="alert"]');
+      expect(alert.text()).toContain(
+        locale === "en"
+          ? "Unable to load this information. Please reload."
+          : "暂时无法加载，请重新加载。",
+      );
+      expect(alert.text()).not.toMatch(
+        /请勿视为成功|核对|重复提交|unconfirmed|submitting/,
+      );
+      expect(wrapper.find(".gh-workspace").exists()).toBe(false);
+      expect(wrapper.find(".gh-empty").exists()).toBe(false);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(
+        fetcher.mock.calls.every(([, options]) => options?.method === "GET"),
+      ).toBe(true);
+    },
+  );
   it("older currency responses cannot overwrite the latest selected scope", async () => {
     let resolveOld!: (value: Overview) => void;
     mocks.read.mockImplementation(

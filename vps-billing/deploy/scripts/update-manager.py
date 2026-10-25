@@ -32,7 +32,16 @@ WORKFLOW = ".github/workflows/release-build.yml"
 LEGACY_TRUSTED_PATHS = {WORKFLOW, "vps-billing/deploy/ci/release_pipeline.py", "vps-billing/deploy/ci/historical-artifacts.json", "vps-billing/deploy/ci/check.sh", "vps-billing/deploy/ci/prepare-native-runner.sh", "vps-billing/deploy/ci/prepare-browser.py", "vps-billing/deploy/ci/accept-native.sh", "vps-billing/deploy/ci/accept-native-http.py", "vps-billing/deploy/ci/plugin-native.sh", "vps-billing/deploy/ci/plugin-native.py", "vps-billing/deploy/ci/smtp-loopback-fixture.py", "vps-billing/deploy/ci/test_plugin_native.py", "vps-billing/deploy/ci/browser-demo.py", "vps-billing/deploy/ci/mysql-native.sh", "vps-billing/deploy/ci/mysql-distribution.json", "vps-billing/deploy/scripts/package-release.sh", "vps-billing/deploy/scripts/release-manifest.py", "vps-billing/deploy/scripts/plugin-manager.py", "vps-billing/deploy/scripts/update-manager.py", "vps-billing/deploy/scripts/test-update-manager.py", "vps-billing/deploy/systemd/aster-api.service", "vps-billing/deploy/systemd/aster-smtp.service"}
 PREPARE_TRUSTED_PATHS = LEGACY_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-manager.py", "vps-billing/deploy/scripts/test-core-manager.py"}
 EXECUTOR_TRUSTED_PATHS = PREPARE_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-operation.py", "vps-billing/deploy/scripts/test-core-operation.py", "vps-billing/deploy/ci/core-native.sh", "vps-billing/deploy/ci/core-native.py"}
-TRUSTED_PATHS = EXECUTOR_TRUSTED_PATHS | {"vps-billing/deploy/ci/payment-native.sh", "vps-billing/deploy/ci/payment-native.py", "vps-billing/deploy/ci/test_payment_native.py", "vps-billing/deploy/systemd/aster-payment.service"}
+PAYMENT_TRUSTED_PATHS = EXECUTOR_TRUSTED_PATHS | {"vps-billing/deploy/ci/payment-native.sh", "vps-billing/deploy/ci/payment-native.py", "vps-billing/deploy/ci/test_payment_native.py", "vps-billing/deploy/systemd/aster-payment.service"}
+# Core 0.5.10 adds a real-MySQL browser gate. Preserve older proof inventories;
+# requiring these new files for historical artifacts would rewrite their contract.
+TRUSTED_PATHS = PAYMENT_TRUSTED_PATHS | {
+    "vps-billing/deploy/ci/browser-mysql.sh",
+    "vps-billing/deploy/ci/browser-mysql.py",
+    "vps-billing/deploy/ci/browser-mysql-fixture.gotxt",
+    "vps-billing/frontend/tests/browser-mysql.mjs",
+    "vps-billing/frontend/tests/ui-copy-boundaries.mjs",
+}
 LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 MAX_JSON = 2 << 20
 MAX_ARCHIVE = 80 << 20
@@ -76,7 +85,7 @@ def stable(value):
 
 def trusted_paths_for_core(version):
     parsed = stable(version)
-    return LEGACY_TRUSTED_PATHS if parsed <= (0, 5, 0) else PREPARE_TRUSTED_PATHS if parsed == (0, 5, 1) else EXECUTOR_TRUSTED_PATHS if parsed == (0, 5, 2) else TRUSTED_PATHS
+    return LEGACY_TRUSTED_PATHS if parsed <= (0, 5, 0) else PREPARE_TRUSTED_PATHS if parsed == (0, 5, 1) else EXECUTOR_TRUSTED_PATHS if parsed == (0, 5, 2) else PAYMENT_TRUSTED_PATHS if parsed < (0, 5, 10) else TRUSTED_PATHS
 
 
 def positive(value):

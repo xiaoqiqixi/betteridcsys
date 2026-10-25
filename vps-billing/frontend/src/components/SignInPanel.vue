@@ -105,7 +105,10 @@ async function verifySession() {
     error.value =
       cause instanceof ApiError
         ? cause
-        : new ApiError("NETWORK_ERROR", 0, { locale: props.locale });
+        : new ApiError("NETWORK_ERROR", 0, {
+            locale: props.locale,
+            context: "read",
+          });
   } finally {
     busy.value = false;
   }
@@ -114,6 +117,7 @@ async function verifySession() {
 
 <template>
   <OverlayPanel
+    :close-label="t('关闭', 'Close')"
     :open="open"
     :title="t('登录账户', 'Sign in')"
     :description="

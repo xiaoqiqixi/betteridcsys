@@ -1,3 +1,48 @@
+## 2026-10-25：Core 0.5.10 / resource 0.1.1 候选（未发布）
+
+以下记录本轮提交前的候选准备检查；主线提交/推送不等于发行，本阶段没有创建 tag/Release。旧记录、旧标签与历史资产不覆盖。远端只读核对时 `v0.5.10` ref 返回 404，8 个 Release 未找到同名项；未来发布前仍须重新核对。当前版本号不是完整验收声明。
+
+Core API/plugin-host、前端 package/lock、插件管理器默认版本为 **0.5.10**；独立资源 worker/builder/gate 为 **0.1.1**，最低 Core **0.5.10**。旧本地 0.1.0 的错误最低版本不能复用，新候选使用新目录/摘要；旧目录不覆盖。SMTP 保持 **1.1.0**。本轮未改财务金额、支付、历史快照或 SQL；001–013 与旧正式 v0.5.9 的 `git diff` 为空，仍为 schema 13。生产来源祖先与本地收据条件未变；0.5.10 的受信文件清单为新增独立真实 MySQL 浏览器门禁按版本扩展，旧版本仍使用其对应清单。
+
+| 本轮实际检查 | 结果与边界 |
+| --- | --- |
+| 发布控制器 / runtime release 离线回归 | **93 PASS**；包括新版本六资产/来源/SMTP/迁移和发行正文一致性，GitHub 全为 fixture，没有发布动作 |
+| 主机 update-manager 离线回归 | **46 PASS**；含 0.5.10 stage 成功及分叉来源拒绝；HTTP 仅回环，不触达业务环境 |
+| release-manifest | **11 PASS**；Core 0.5.10 / SMTP 1.1.0 精确版本检查 |
+| 资源包 gate 单测 | **12 PASS**；包内 0.1.1/minCore 0.5.10 与 Go 常量一致，旧 0.1.0 gate 结果拒绝 |
+| plugin-manager 便携版本/兼容聚焦 | **3 PASS**；当前版本、SMTP 范围、旧 Core/错误资源最低版本拒绝 |
+| doctor / 负向 prepare 聚焦 | **2 PASS**；22/24 目标与验收状态分开，26/其他 unsupported；分叉 source、错误 merge-base、分叉 policy 拒绝且不发布目录 |
+| Go pluginapi + resourcebridge | 两包 **race 与 vet PASS**，实际回环 TLS 测试通过；不是 Linux Unix RPC/真机/真实主控全量验收 |
+| 资源包离线构建 | 生成 Linux amd64 **0.1.1** 静态包，生产 verify 函数在显式普通用户 trust fixture 下核验通过；无安装、审批或服务动作，不是 root 主机验收/正式下载资产 |
+| 全后端受跟踪包检查 | 枚举 **20** 个受跟踪包，排除 ignored artifacts；Darwin race 整体未通过：3 包依赖 Linux-only runtimeplugins 导致 setup failed，另6包被标签排除；其余11包 **181 PASS事件 / 0断言失败 / 0 SKIP事件**。真实MySQL测试未运行，不能称全后端通过 |
+| Linux 静态构建 / vet | 全20包 Linux/amd64、CGO=0 build 与 cross-vet 通过；API/plugin-host 静态ELF构建通过；runtimeplugins Linux测试二进制编译通过，未执行Linux RPC |
+| Darwin portable vet | 11个无Linux依赖包 vet 通过；不以筛选后通过替代前一行的全范围失败事实 |
+| Python 语法 / diff | 修改的 Python `py_compile`、`git diff --check` 通过；未改迁移、生产 ancestry 或执行器 |
+
+上述 Python PASS 是本轮版本候选阶段的实际分组结果；后续增加独立实库浏览器受信入口及按版本分段清单后，受影响的来源/发布测试须再跑，不能直接复用这些数字当最终精确提交绿灯。
+
+**明确未通过/未执行完成的部分：**本机 Darwin 运行完整 plugin-manager 共 **52 项，30 PASS / 22 ERROR**，22 项均因缺 Linux `renameat2` 原子不覆盖安装接口阻断，不能写成全量通过。新增成功 prepare 用例已通过来源/资源检查后，在同一 Linux 接口处阻断。新增 0.5.9→0.5.10 升级与缺 receipt 两用例，在既有测试 setUp 因 Darwin 缺 `os.removexattr` 阻断；不删除测试、不替换内核原子语义来假绿，须由 Linux 门禁跑完。
+
+新增升级 fixture 使用真实 `prepare` 产生本地 PREPARED 收据（不是手写/伪造 receipt），0.5.9 与 0.5.10 保持相同 13 份合成迁移；GitHub、ELF、数据库和服务都明确为离线 fixture。它将验证来源连续性和受保护目录合同，**不能证明旧正式六资产、新公开 prepare、真实 MySQL/systemd 或客户主机升级已验收**。
+
+原始支付 `TestPaymentServerRequiresOneOperationOnHandshakenConnection` 未改未删：checkout/verify 的四种重放、独立固定 Unix 连接、拒绝完整 HTTP409 和处理器仅调用一次的约束均保留。本机只完成 Linux 测试二进制编译，不能宣称该 Linux 测试已运行。
+
+Linux 现有 `deploy/ci/check.sh` 已自动执行这几套测试；可单独复验：
+
+```sh
+cd vps-billing
+python3 deploy/scripts/test-core-manager.py \
+  CorePreparationTests.test_0510_new_main_source_prepares_without_history_exception \
+  CorePreparationTests.test_0510_prepare_rejects_diverged_source_or_policy_before_publication
+python3 deploy/scripts/test-core-operation.py \
+  ExecutorTests.test_real_prepared_059_upgrades_to_0510_without_refetching_old_history \
+  ExecutorTests.test_059_without_prepared_receipt_cannot_upgrade_to_0510
+```
+
+财务部署目标仅 Ubuntu 22.04/24.04 amd64；24.04 是既有完整 native CI 基线，**22.04 完整原生安装、HTTPS、升级、备份恢复和回滚仍未验收**。26.04 与其他发行版暂不支持；doctor 的支持报告没有修改 install/upgrade 宿主执行条件。没有只加 22.04 matrix 假称完成。最终精确提交完整 CI、真实 MySQL、原生全链、浏览器/视觉矩阵、依赖扫描、正式 Runtime build、Release 和匿名六资产/prepare 核验均须分别补齐，历史 0.5.2 public prepare 基线不能替代新版本的公开闭环。真实 KVM 验收仍后置。见 [0.5.10 候选清单](RELEASE-v0.5.10.md)。
+
+---
+
 ## 2026-10-22：Core v0.5.9 正式发行完成
 
 正常公开 [v0.5.9 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.9)，Release ID `420315605`，源码固定 `4252fed37dfb4d4e7f621fbd0495a2cd2171c8b7`，不是后续主控开发提交。默认中文/CNY，Core 0.5.9 / SMTP 1.1.0；旧标签和资产未覆盖，财务发行不附带主控/KVM。

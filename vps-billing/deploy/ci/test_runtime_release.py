@@ -142,6 +142,32 @@ def normal_flow(kind='core', raw=False, protocol_source=None, version=None, migr
 
 
 class RuntimeReleaseTests(unittest.TestCase):
+    def test_0510_candidate_publication_binds_versions_schema_and_history_boundary(self):
+        migrations = tuple(path.name for path in sorted(
+            (Path(__file__).resolve().parents[2] / "backend/migrations").glob("*.sql")))
+        self.assertEqual(len(migrations), 13)
+        api, env, event, files, artifact, _, _ = normal_flow(
+            "core", raw=True, version="0.5.10", migration_names=migrations)
+        build = pipeline.strict_json(files["BUILD.json"])
+        self.assertEqual(build["component_versions"], {"core": "0.5.10", "smtp": "1.1.0"})
+        self.assertEqual(build["smtp_core_compatibility"], {"min": "0.4.0", "max_exclusive": "0.6.0"})
+        self.assertEqual({p for p in build["source_files"] if p.startswith("migrations/")},
+                         {"migrations/" + name for name in migrations})
+        policy = pipeline.prepare_publish(api, env, event)
+        pipeline.verify_provenance(files, policy, api)
+        self.assertFalse(api.mutations)
+        self.assertEqual(pipeline.publish(api, policy, artifact), RELEASE_ID)
+        fields = api.mutations[0][2]
+        self.assertEqual(fields["name"], "Aster Core 0.5.10")
+        for text in ("Core 0.5.10", "当前 main 祖先", "旧 v0.5.6–v0.5.9", "PREPARED.json",
+                     "没有新增数据库迁移", "金额、支付幂等和历史快照不变", "aster.resource/1",
+                     "Core >=0.5.10,<0.6.0", "SMTP 1.1.0", "Ubuntu 22.04", "Ubuntu 24.04",
+                     "Ubuntu 26.04", "完整原生验收未完成", "RELEASE-v0.5.10.md"):
+            self.assertIn(text, fields["body"])
+        self.assertEqual(len(api.uploads), 6)
+        self.assertEqual({name: data for _, name, data in api.uploads}, files)
+        self.assertEqual([call[0] for call in api.mutations], ["POST", "PATCH"])
+
     def test_core_and_smtp_are_independent_binary_only_packages(self):
         for kind in ('core', 'smtp'):
             _, version, files, _, _ = runtime_fixture(kind)
@@ -254,6 +280,18 @@ class RuntimeReleaseTests(unittest.TestCase):
         try:
             spec.loader.exec_module(manager)
             self.assertEqual(manager.TRUSTED_PATHS, set(pipeline.TRUSTED_PATHS))
+            new_gate = {
+                "vps-billing/deploy/ci/browser-mysql.sh",
+                "vps-billing/deploy/ci/browser-mysql.py",
+                "vps-billing/deploy/ci/browser-mysql-fixture.gotxt",
+                "vps-billing/frontend/tests/browser-mysql.mjs",
+                "vps-billing/frontend/tests/ui-copy-boundaries.mjs",
+            }
+            self.assertEqual(manager.trusted_paths_for_core("0.5.10"), set(pipeline.TRUSTED_PATHS))
+            for version in ("0.5.3", "0.5.4", "0.5.9"):
+                self.assertEqual(manager.trusted_paths_for_core(version), manager.PAYMENT_TRUSTED_PATHS)
+                self.assertFalse(manager.trusted_paths_for_core(version) & new_gate)
+            self.assertEqual(manager.TRUSTED_PATHS - manager.PAYMENT_TRUSTED_PATHS, new_gate)
         finally:
             sys.modules.pop(name, None)
 

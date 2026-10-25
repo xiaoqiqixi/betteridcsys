@@ -24,7 +24,7 @@ jobs:
   build:
     if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 80
     permissions:
       contents: read
       actions: read
@@ -77,6 +77,18 @@ jobs:
         run: |
           chrome_path=/opt/google/chrome/chrome
           python3 -I controller/vps-billing/deploy/ci/browser-demo.py --repo-root "$GITHUB_WORKSPACE/source" --output "$RUNNER_TEMP/browser-acceptance" --chromium-path "$chrome_path"
+      - name: Install pinned private browser tools for real database UI acceptance
+        run: |
+          set -euo pipefail
+          umask 077
+          tools_root=$(mktemp -d "$ASTER_NATIVE_FIXTURE_ROOT/browser-tools.XXXXXXXX")
+          npm install --prefix "$tools_root" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.64.0
+          export PLAYWRIGHT_BROWSERS_PATH="$tools_root/browsers"
+          node "$tools_root/node_modules/playwright/cli.js" install --with-deps firefox
+          sudo apt-get install --no-install-recommends -y libnss3-tools
+          printf 'PLAYWRIGHT_MODULE_DIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s\n' "$tools_root/node_modules" "$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+      - name: Strict TLS financial UI against a real isolated MySQL database
+        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash controller/vps-billing/deploy/ci/mysql-native.sh -- bash controller/vps-billing/deploy/ci/browser-mysql.sh --repo-root "$GITHUB_WORKSPACE/source" --output "$ASTER_NATIVE_FIXTURE_ROOT/financial-browser-mysql"
       - name: Reproducible Linux amd64 packages from the validated commit
         env:
           SOURCE_SHA: ${{ steps.policy.outputs.source_sha }}
@@ -145,6 +157,19 @@ jobs:
             ${{ runner.temp }}/browser-acceptance/summary.json
             ${{ runner.temp }}/browser-acceptance/screenshots/*.png
           if-no-files-found: ignore
+          retention-days: 7
+          overwrite: false
+      - name: Retain synthetic real MySQL browser evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: financial-browser-mysql-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.ASTER_NATIVE_FIXTURE_ROOT }}/financial-browser-mysql/summary.json
+            ${{ env.ASTER_NATIVE_FIXTURE_ROOT }}/financial-browser-mysql/report.json
+            ${{ env.ASTER_NATIVE_FIXTURE_ROOT }}/financial-browser-mysql/tls.json
+            ${{ env.ASTER_NATIVE_FIXTURE_ROOT }}/financial-browser-mysql/screenshots/*.png
+          if-no-files-found: warn
           retention-days: 7
           overwrite: false
       - name: Remove owned native runner scratch

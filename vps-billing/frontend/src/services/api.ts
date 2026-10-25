@@ -40,20 +40,20 @@ const SAFE_ERRORS: Record<string, [string, string]> = {
     "The account or mode changed; the old response was discarded.",
   ],
   INVALID_RESPONSE: [
-    "服务器返回了无法确认的数据，请勿视为成功。",
-    "The response could not be verified. Do not treat it as success.",
+    "操作结果尚未确认。请先核对当前记录，不要重复提交。",
+    "The operation result is unconfirmed. Check the current record before submitting again.",
   ],
   SERVICE_UNAVAILABLE: [
-    "服务暂时不可用，请稍后手动重新加载；已提交的操作请先核对结果，勿重复提交。",
-    "The service is temporarily unavailable. Reload manually later. Check any submitted operation before submitting again.",
+    "服务暂时不可用，操作结果尚未确认。请先核对，不要重复提交。",
+    "The service is temporarily unavailable and the operation result is unconfirmed. Check the current record before submitting again.",
   ],
   REQUEST_FAILED: [
     "请求未完成，请稍后核对。",
     "The request did not complete. Check its result before trying again.",
   ],
   NETWORK_ERROR: [
-    "网络请求未完成；写入结果可能不确定，请先核对。",
-    "The network request did not complete; a write may be uncertain. Check first.",
+    "网络连接中断，操作结果尚未确认。请先核对，不要重复提交。",
+    "The connection was interrupted and the operation result is unconfirmed. Check the current record before submitting again.",
   ],
   DEMO_OPERATION_UNAVAILABLE: [
     "演示模式不执行此操作，请连接真实接口后按权限操作。",
@@ -92,6 +92,25 @@ const SAFE_ERRORS: Record<string, [string, string]> = {
     "Check the account name, email, role, password, and reason.",
   ],
 };
+// Display context only: never changes response validation, retry or uncertainty rules.
+const READ_ERRORS: Record<string, [string, string]> = {
+  INVALID_RESPONSE: [
+    "暂时无法加载，请重新加载。",
+    "Unable to load this information. Please reload.",
+  ],
+  SERVICE_UNAVAILABLE: [
+    "服务暂时不可用，请稍后重新加载。",
+    "The service is temporarily unavailable. Please reload later.",
+  ],
+  REQUEST_FAILED: [
+    "暂时无法加载，请重新加载。",
+    "Unable to load this information. Please reload.",
+  ],
+  NETWORK_ERROR: [
+    "暂时无法连接服务器，请检查网络后重新加载。",
+    "Unable to connect to the server. Check your connection, then reload.",
+  ],
+};
 export class ApiError extends Error {
   code: string;
   status: number;
@@ -108,10 +127,13 @@ export class ApiError extends Error {
       details?: unknown;
       uncertain?: boolean;
       retryAfter?: string;
+      context?: "read" | "write";
     } = {},
   ) {
     const locale = options.locale ?? "zh-CN";
-    const known = SAFE_ERRORS[code];
+    const reading = options.context === "read" && !options.uncertain;
+    const known =
+      (reading ? READ_ERRORS[code] : undefined) ?? SAFE_ERRORS[code];
     const conflict =
       code.endsWith("_CONFLICT") ||
       [
@@ -130,9 +152,13 @@ export class ApiError extends Error {
         ? locale === "en"
           ? "The current state conflicts with this operation. Reload and confirm; nothing was automatically retried."
           : "当前状态不允许此操作或版本已变化，请重读并确认；未自动重试。"
-        : locale === "en"
-          ? "The operation could not be confirmed. Check the current record."
-          : "无法确认操作结果，请核对当前记录。");
+        : reading
+          ? locale === "en"
+            ? "Unable to load this information. Please reload."
+            : "暂时无法加载，请重新加载。"
+          : locale === "en"
+            ? "The operation could not be confirmed. Check the current record."
+            : "无法确认操作结果，请核对当前记录。");
     super(message);
     this.name = "ApiError";
     this.code = code;
@@ -530,6 +556,7 @@ export function createApiClient(options: {
     query?: Query,
   ): Promise<T> {
     const url = endpoint(path, query);
+    const context = method === "GET" ? "read" : "write";
     // Cookie rotation must fence already-started session/data reads, not merely hide their results.
     if (
       method === "POST" &&
@@ -578,6 +605,7 @@ export function createApiClient(options: {
             : "INVALID_RESPONSE";
         throw new ApiError(code, response.status, {
           locale: options.locale(),
+          context,
           requestId:
             requestHeader && REQUEST_ID.test(requestHeader)
               ? requestHeader
@@ -603,6 +631,7 @@ export function createApiClient(options: {
             : "REQUEST_FAILED";
         const failure = new ApiError(code, response.status, {
           locale: options.locale(),
+          context,
           requestId,
           details: error.details,
           uncertain:
@@ -633,6 +662,7 @@ export function createApiClient(options: {
       if (!object(data) || !Object.hasOwn(data, "data"))
         throw new ApiError("INVALID_RESPONSE", response.status, {
           locale: options.locale(),
+          context,
           uncertain: method === "POST",
         });
       if (
@@ -649,6 +679,7 @@ export function createApiClient(options: {
         if (!isSession(data.data))
           throw new ApiError("INVALID_RESPONSE", response.status, {
             locale: options.locale(),
+            context,
             uncertain: method === "POST",
           });
         receiveSession(data.data, controller);
@@ -673,12 +704,14 @@ export function createApiClient(options: {
         if (!verified)
           throw new ApiError("INVALID_RESPONSE", response.status, {
             locale: options.locale(),
+            context,
             uncertain: method === "POST",
           });
       }
       if (!validPayload(path, data.data, method))
         throw new ApiError("INVALID_RESPONSE", response.status, {
           locale: options.locale(),
+          context,
           requestId:
             requestHeader && REQUEST_ID.test(requestHeader)
               ? requestHeader
@@ -691,6 +724,7 @@ export function createApiClient(options: {
       if (captured !== epoch) throw staleResponse(method === "POST");
       throw new ApiError("NETWORK_ERROR", 0, {
         locale: options.locale(),
+        context,
         uncertain: method === "POST",
       });
     } finally {

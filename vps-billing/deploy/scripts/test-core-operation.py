@@ -271,8 +271,8 @@ class ExecutorTests(unittest.TestCase):
         path.chmod(mode)
         return path
 
-    def release(self, version):
-        fixture = fixtures.Fixture("core", raw=True)
+    def release(self, version, migration_count=2):
+        fixture = fixtures.Fixture("core", raw=True, core_version=version)
         fixture.version, fixture.tag = version, "v" + version
         protocol = "vps-billing/backend/pkg/pluginapi/protocol.go"
         fixture.source[protocol] = ('package pluginapi\nconst CoreVersion = "' + version + '"\n').encode()
@@ -286,7 +286,7 @@ class ExecutorTests(unittest.TestCase):
                 source = fixture.build["source_files"].pop(path)
                 fixture.source.pop(source, None)
                 fixture.bundle.pop(path)
-        for number in (1, 2):
+        for number in range(1, migration_count + 1):
             path = "migrations/" + str(number).zfill(3) + "_fixture.sql"
             source = "vps-billing/backend/" + path
             fixture.source[source] = ("-- Immutable offline migration " + str(number) + "\n").encode()
@@ -878,6 +878,51 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(self.execute(digest, resume=True)["status"], "succeeded")
         self.assertEqual(self.native.events, before)
         self.assertEqual(stat.S_IMODE(self.journal().stat().st_mode), 0o600)
+
+    def history_upgrade_case(self):
+        # Both receipts are produced by the real prepare path, not fabricated.
+        # The synthetic old source was valid before the modeled main rewrite.
+        with patch.object(fixtures, "SOURCE", "9" * 40):
+            self.old = self.release("0.5.9", migration_count=13)
+        self.target = self.release("0.5.10", migration_count=13)
+        self.current.unlink()
+        self.current.symlink_to(self.old, target_is_directory=True)
+        self.spec["release_directory"] = str(self.target)
+        self.save_spec()
+        self.native = FakeNative(self)
+
+    def test_real_prepared_059_upgrades_to_0510_without_refetching_old_history(self):
+        self.history_upgrade_case()
+        old_before = snapshot(self.old)
+        # This checks only local prepared-directory continuity. New-target
+        # ancestry was verified in prepare; no GitHub access is allowed here.
+        with patch.object(updater, "Official", side_effect=AssertionError("No old-source bypass or refetch")):
+            plan = self.plan()
+            self.assertEqual(plan["inputs"]["previous"]["version"], "0.5.9")
+            self.assertEqual(plan["inputs"]["target"]["version"], "0.5.10")
+            self.assertEqual(plan["inputs"]["previous"]["source_sha"], "9" * 40)
+            self.assertEqual(plan["inputs"]["target"]["source_sha"], fixtures.SOURCE)
+            self.assertEqual(plan["inputs"]["previous"]["migration_checksums"],
+                             plan["inputs"]["target"]["migration_checksums"])
+            self.assertEqual(len(plan["inputs"]["target"]["migration_checksums"]), 13)
+            result = self.execute(plan["plan_sha256"])
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(os.readlink(self.current), str(self.target))
+        self.assertEqual(snapshot(self.old), old_before)
+        self.assertEqual([event[1] for event in self.native.events if event[0] == "api"], ["-migrate"])
+        self.assertEqual(len([event for event in self.native.events if event[0] == "backup"]), 1)
+
+    def test_059_without_prepared_receipt_cannot_upgrade_to_0510(self):
+        self.history_upgrade_case()
+        self.assertEqual(self.plan()["inputs"]["previous"]["version"], "0.5.9")
+        (self.old / "manifests/PREPARED.json").unlink()
+        before = snapshot(self.base)
+        with patch.object(updater, "Official", side_effect=AssertionError("No receipt reconstruction")), \
+                self.assertRaises(updater.Rejected):
+            self.plan()
+        self.assertEqual(snapshot(self.base), before)
+        self.assertEqual(os.readlink(self.current), str(self.old))
+        self.assertFalse(self.native.events)
 
     def install_case(self, enable_at_boot, interrupt_configuration=False, conflicting_configuration=False,
                      partial_revokes=False, change_partial_revokes=False):

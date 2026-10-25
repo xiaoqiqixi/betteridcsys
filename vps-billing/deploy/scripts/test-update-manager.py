@@ -408,6 +408,22 @@ class HandoffTest(unittest.TestCase):
             manager.status(str(self.state), "a" * 32, self.trust)
             shutil.rmtree(self.state / ("a" * 32))
 
+    def test_0510_stage_still_requires_current_main_ancestry(self):
+        self.fixture = Fixture("core", raw=True, core_version="0.5.10")
+        self.save_handoff()
+        journal = self.run_stage()
+        self.assertEqual(journal["status"], "backup_required")
+        self.assertTrue(journal["verification"]["source_and_integrity_verified"])
+        self.assertFalse(journal["installation_changed"])
+        shutil.rmtree(self.state / ("a" * 32))
+        self.fixture.responses["/compare/" + SOURCE + "...main"] = {
+            "status": "diverged", "merge_base_commit": {"sha": "4" * 40}}
+        with self.assertRaisesRegex(manager.Rejected, "retained on main"):
+            self.run_stage()
+        rejected = manager.status(str(self.state), "a" * 32, self.trust)
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertFalse(rejected["installation_changed"])
+
     def test_schema2_format_asset_mixing_and_raw_tampering_rejected(self):
         for component in ("core", "smtp"):
             fixture = Fixture(component, raw=True)

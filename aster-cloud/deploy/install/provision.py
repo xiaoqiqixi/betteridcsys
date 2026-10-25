@@ -30,7 +30,7 @@ MYSQL_CONFIG = Path("/etc/mysql")
 MYSQL_DATA = Path("/var/lib/mysql")
 MYSQL_SOCKET = "/run/mysqld/mysqld.sock"
 MYSQL_DROPIN = Path("/etc/systemd/system/mysql.service.d/aster-cloud-local-only.conf")
-CODENAMES = {"22.04": "jammy", "24.04": "noble", "26.04": "resolute"}
+CODENAMES = {"22.04": "jammy", "24.04": "noble"}
 PACKAGES = {"controller": ("ca-certificates", "openssl"),
             "node": ("ca-certificates", "qemu-utils", "qemu-system-x86", "libvirt-clients", "cloud-image-utils")}
 SYSTEM_SCHEMAS = {"mysql", "sys", "information_schema", "performance_schema"}
@@ -224,7 +224,7 @@ def root_target():
     except OSError:
         fail("Ubuntu release cannot be verified")
     if fields.get("ID") != "ubuntu" or fields.get("VERSION_ID") not in CODENAMES:
-        fail("Native provisioning targets Ubuntu 22.04, 24.04 or 26.04 only")
+        fail("Native provisioning targets Ubuntu 22.04 or 24.04 only; Ubuntu 26.04 and unknown releases are unsupported")
     return CODENAMES[fields["VERSION_ID"]]
 
 
@@ -234,12 +234,11 @@ def dependency_plan(component, with_mysql=False, with_libvirt=False, *, codename
         fail("Invalid fixed dependency role")
     if with_libvirt and codename not in CODENAMES.values():
         fail("Libvirt dependency plan requires a verified Ubuntu target")
+    if codename is not None and codename not in CODENAMES.values():
+        fail("Dependency plan requires Ubuntu 22.04 or 24.04; unsupported codename")
     packages = list(PACKAGES[component]) + (["mysql-server", "mysql-client"] if with_mysql else []) + (["libvirt-daemon-system"] if with_libvirt else [])
-    # Ubuntu 26 split virtlockd out of libvirt-daemon. It is only recommended
-    # by that package, so keep no-recommends and request this one fixed daemon.
-    # Jammy/Noble bundle virtlockd in libvirt-daemon and have no split package.
-    if with_libvirt and codename == "resolute":
-        packages.append("libvirt-daemon-lock")
+    # Both supported releases bundle virtlockd in libvirt-daemon. Unknown or
+    # deferred releases cannot silently gain a different package transaction.
     return {"packages": packages, "source": "Ubuntu signed archive/security HTTPS only", "node_daemon_included": with_libvirt,
             "service_autostart": "blocked during explicit fresh-host package transaction",
             "mysql_transport": "unix-socket-only" if with_mysql else "unchanged",

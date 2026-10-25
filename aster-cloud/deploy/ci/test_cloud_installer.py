@@ -531,7 +531,7 @@ class InstallerContract(unittest.TestCase):
                     preview = installer.execute(args)["dependency_plan"]["packages"]
                 with self.libvirt_host() as h, mock.patch.object(h.p, "root_target", return_value=codename):
                     h.p.prepare_libvirt(h.state)
-                    expected = list(h.p.PACKAGES["node"]) + ["libvirt-daemon-system"] + (["libvirt-daemon-lock"] if codename == "resolute" else [])
+                    expected = list(h.p.PACKAGES["node"]) + ["libvirt-daemon-system"]
                     self.assertEqual(preview, expected)
                     package_commands = [argv for argv, _ in h.commands if argv[0] == h.p.APT_GET and "install" in argv]
                     self.assertEqual(len(package_commands), 2)
@@ -545,27 +545,30 @@ class InstallerContract(unittest.TestCase):
 
     def test_libvirt_plan_rejects_unknown_target_without_blocking_plain_offline_plan(self):
         args = self.args("node", ("--plan", "--prepare-libvirt"))
-        base = {"system": "Linux", "architecture": "x86_64", "distribution": "ubuntu", "version": "26.04"}
+        base = {"system": "Linux", "architecture": "x86_64", "distribution": "ubuntu", "version": "24.04"}
         p = installer.provisioning_module()
-        for change in ({"system": "Darwin"}, {"architecture": "aarch64"}, {"distribution": "debian"}, {"version": "unknown"}):
+        for change in ({"system": "Darwin"}, {"architecture": "aarch64"}, {"distribution": "debian"}, {"version": "unknown"}, {"version": "26.04"}):
             with self.subTest(change=change), mock.patch.object(installer, "target_info", return_value={**base, **change}), mock.patch.object(p, "run_fixed") as run:
                 with self.assertRaisesRegex(installer.InstallerError, "verified Ubuntu"):
                     installer.execute(args)
                 args.prepare_libvirt = False
                 try:
-                    self.assertEqual(installer.execute(args)["mode"], "plan")
+                    plan = installer.execute(args)
+                    self.assertEqual(plan["mode"], "plan")
+                    self.assertEqual(plan["target_support"], "unsupported-no-apply")
+                    self.assertEqual(plan["supported_ubuntu"], ["22.04", "24.04"])
                 finally:
                     args.prepare_libvirt = True
                 run.assert_not_called()
 
-    def test_libvirt_resolute_resume_refuses_pre_split_package_plan_before_host_commands(self):
-        with self.libvirt_host() as h, mock.patch.object(h.p, "root_target", return_value="resolute"):
+    def test_libvirt_resume_refuses_deferred_release_receipt_before_host_commands(self):
+        with self.libvirt_host() as h:
             h.p.prepare_libvirt(h.state)
             path = h.state / "libvirt.json"
             original = json.loads(path.read_text())
-            # Old 26 plans had exactly the current 22/24 package set. Keep the
-            # target intact so rejection proves the actual package hash binds.
-            for change in ({"plan_sha256": h.p.libvirt_plan_digest("noble")}, {"codename": "noble"}):
+            # A historic 26 receipt cannot authorize a supported 22/24 host,
+            # even if someone substitutes the currently approved package hash.
+            for change in ({"codename": "resolute"}, {"codename": "resolute", "plan_sha256": "0" * 64}):
                 with self.subTest(change=change):
                     path.write_text(json.dumps({**original, **change}))
                     before = self.tree()

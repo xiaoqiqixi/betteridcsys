@@ -170,7 +170,8 @@ class ManagerTest(unittest.TestCase):
         self.assertEqual(declared[1], manager.CORE_VERSION)
 
     def test_current_release_version_and_existing_smtp_compatibility_remain_independent(self):
-        self.assertEqual(manager.CORE_VERSION, "0.5.9")
+        self.assertEqual(manager.CORE_VERSION, "0.5.10")
+        self.assertEqual(manager.RESOURCE_MIN_CORE_VERSION, "0.5.10")
         self.assertEqual(manager.PAYMENT_MIN_CORE_VERSION, "0.5.3")
         version = SCRIPT.parents[2] / "backend/plugins/smtp/VERSION"
         self.assertEqual(version.read_text().strip(), "1.1.0")
@@ -182,6 +183,18 @@ class ManagerTest(unittest.TestCase):
         manifest["core_max_exclusive"] = "0.5.7"
         with self.assertRaises(manager.Rejected):
             manager.validate_manifest(manifest, manager.CORE_VERSION)
+
+    def test_resource_first_release_rejects_old_core_and_old_manifest_minimum(self):
+        manifest = json.loads(contents(version="0.1.1")["manifest.json"])
+        manifest.update(id="resource.aster-cloud", protocol="aster.resource/1", core_min="0.5.10",
+                        capabilities=["resource.send", "resource.lookup"])
+        manager.validate_manifest(manifest, "0.5.10")
+        for core in ("0.5.8", "0.5.9", "0.6.0"):
+            with self.subTest(core=core), self.assertRaises(manager.Rejected):
+                manager.validate_manifest(manifest, core)
+        for minimum in ("0.4.0", "0.5.9"):
+            with self.subTest(minimum=minimum), self.assertRaises(manager.Rejected):
+                manager.validate_manifest(manifest | {"core_min": minimum}, "0.5.10")
 
     def test_payment_protocol_rejects_old_core_override_and_inaccurate_minimum(self):
         manifest = json.loads(payment_contents()["manifest.json"])
@@ -711,7 +724,7 @@ class ResourceManagerTest(unittest.TestCase):
     def install_resource(self, version="0.1.0"):
         files = contents(version)
         manifest = json.loads(files["manifest.json"])
-        manifest.update(id="resource.aster-cloud", protocol="aster.resource/1", core_min="0.5.9", capabilities=["resource.send", "resource.lookup"])
+        manifest.update(id="resource.aster-cloud", protocol="aster.resource/1", core_min="0.5.10", capabilities=["resource.send", "resource.lookup"])
         files["manifest.json"] = json.dumps(manifest).encode()
         package = self.verify(files=files, version=version, root="aster-resource-aster-cloud-" + version + "-linux-amd64")
         manager.install_package(str(self.root), package, self.trust)
@@ -766,11 +779,12 @@ class ResourceManagerTest(unittest.TestCase):
 
     def test_resource_capability_and_legacy_core_rejected(self):
         package = self.install_resource()
-        for change in ({"capabilities": ["resource.send", "resource.lookup", "resource.exec"]}, {"protocol": "aster.payment/1"}, {"core_min": "0.5.8"}):
+        for change in ({"capabilities": ["resource.send", "resource.lookup", "resource.exec"]}, {"protocol": "aster.payment/1"}, {"core_min": "0.5.8"}, {"core_min": "0.5.9"}):
             with self.subTest(change=change), self.assertRaises(manager.Rejected):
                 manager.validate_manifest(package.manifest | change, manager.CORE_VERSION)
-        with self.assertRaises(manager.Rejected):
-            manager.validate_manifest(package.manifest, "0.5.8")
+        for core in ("0.5.8", "0.5.9"):
+            with self.subTest(core=core), self.assertRaises(manager.Rejected):
+                manager.validate_manifest(package.manifest, core)
 
 
 if __name__ == "__main__":
