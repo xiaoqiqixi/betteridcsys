@@ -18,7 +18,29 @@ DOCTOR_PROTOCOL = "aster.node/1"
 PHASE = "preflight"
 FAILED_COMMANDS = []
 PROGRESS_NONCE = None
+APT_PLAN_DIAGNOSTICS = None
 APT_CODES = set("APT_DNS_FAILURE APT_TLS_FAILURE APT_SIGNATURE_FAILURE APT_METADATA_FAILURE APT_PACKAGE_UNAVAILABLE APT_DEPENDENCY_CONFLICT APT_LOCKED APT_COMMAND_REJECTED APT_COMMAND_UNAVAILABLE APT_COMMAND_TIMEOUT APT_OUTPUT_OVERSIZED".split())
+APT_PLAN_CATEGORIES = {"remove", "installed-package-version-change", "unapproved-network-daemon"}
+# Fixed public inventory: unknown package tokens are counted, never exported.
+APT_PLAN_PACKAGES = set("""
+ca-certificates openssl libc6 libc-bin libgcc-s1 libstdc++6 libssl3 libssl3t64
+systemd systemd-sysv systemd-resolved libsystemd0 libsystemd-shared libudev1 udev libnss-systemd libpam-systemd
+libpam0g libpam-modules libpam-modules-bin libpam-runtime libcap2 libcap2-bin libcap-ng0
+libglib2.0-0 libglib2.0-0t64 libglib2.0-bin libglib2.0-data libgcrypt20 libgpg-error0
+libgnutls30 libgnutls30t64 libgnutls-dane0t64 libp11-kit0 libtasn1-6 libhogweed6 libhogweed6t64 libnettle8 libnettle8t64
+libxml2 libxml2-16 libxslt1.1 libselinux1 libapparmor1 libseccomp2 libaudit1 libaudit-common libacl1 libattr1
+zlib1g libzstd1 liblzma5 liblz4-1 libbz2-1.0 libpcre2-8-0 libffi8 libuuid1 libblkid1 libmount1
+python3 python3-minimal python3-apt python3.10 python3.10-minimal libpython3.10-minimal libpython3.10-stdlib
+python3.12 python3.12-minimal libpython3.12-minimal libpython3.12-stdlib
+python3.14 python3.14-minimal libpython3.14-minimal libpython3.14-stdlib
+libvirt0 libvirt-clients libvirt-daemon libvirt-daemon-system libvirt-daemon-system-systemd
+libvirt-daemon-common libvirt-daemon-log libvirt-daemon-lock libvirt-daemon-driver-qemu libvirt-daemon-config-network
+qemu-system-x86 qemu-system-common qemu-system-data qemu-utils qemu-block-extra qemu-system-gui seabios ovmf
+libaio1 libaio1t64 liburing2 libnuma1 libfdt1 libslirp0 libpixman-1-0 libepoxy0 libdrm2 libdrm-common
+libcurl4 libcurl4t64 libssh-4 libssh2-1 libssh2-1t64 libyajl2 libtirpc3 libtirpc3t64 libnl-3-200 libnl-route-3-200
+libnftnl11 libnftables1 libmnl0 libxtables12 iptables nftables dnsmasq-base iproute2
+firewalld ufw openvswitch-common openvswitch-switch openvswitch-switch-dpdk
+""".split())
 PROVISION_CODES = {
     "APT plan would upgrade/remove": "APT_PLAN_UNSAFE",
     "Fixed native provisioning command unavailable": "NATIVE_COMMAND_UNAVAILABLE",
@@ -104,14 +126,50 @@ def command_code(argv):
     return "other-fixed-command"
 
 
+def classify_apt_plan(raw):
+    """Inspect only real bounded simulation bytes; never return raw tokens/versions."""
+    if not isinstance(raw, bytes) or len(raw) > 1024 * 1024:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    categories, packages, unknown = set(), set(), set()
+    for line in text.splitlines():
+        reasons = set()
+        if line.startswith("Remv "):
+            reasons.add("remove")
+        if re.match(r"^Inst \S+ \[", line):
+            reasons.add("installed-package-version-change")
+        if re.match(r"^Inst (?:firewalld|ufw|openvswitch\S*)\b", line):
+            reasons.add("unapproved-network-daemon")
+        if not reasons:
+            continue
+        categories.update(reasons)
+        token = line.split(maxsplit=2)[1] if len(line.split(maxsplit=2)) > 1 else ""
+        name = token.split(":", 1)[0]
+        if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,63}(?::(?:amd64|all))?", token) and name in APT_PLAN_PACKAGES:
+            packages.add(name)
+        else:
+            unknown.add(token)
+    return {"categories": sorted(categories), "packages": sorted(packages)[:12],
+            "unknown_package_count": min(len(unknown), 255), "truncated": len(packages) > 12 or len(unknown) > 255}
+
+
 def observe_real_commands(module):
     """Observability only: exact real calls/results/exceptions are preserved."""
     real = module.run_fixed
     def observed(argv, **kwargs):
+        global APT_PLAN_DIAGNOSTICS
         code = command_code(argv)
         progress(code + ":start")
         try:
             result = real(argv, **kwargs)
+            if code == "apt-simulate":
+                try:
+                    APT_PLAN_DIAGNOSTICS = classify_apt_plan(result)
+                except Exception:
+                    APT_PLAN_DIAGNOSTICS = None  # Diagnostics cannot change production execution.
             progress(code + ":done")
             return result
         except Exception:
@@ -124,6 +182,8 @@ def observe_real_commands(module):
 
 def safe_diagnostics():
     output = {"failed_commands": list(FAILED_COMMANDS)}
+    if APT_PLAN_DIAGNOSTICS is not None:
+        output["apt_plan_rejections"] = APT_PLAN_DIAGNOSTICS
     statuses = {"preparing", "package-transaction-pending", "dependencies-installed", "failed-package-transaction-review-required",
                 "own-service-start-attempted", "own-service-enable-attempted", "libvirt-prepared", "failed-review-required"}
     steps = {"policy-created", "packages-installed", "existing-daemon-readonly-verified"}

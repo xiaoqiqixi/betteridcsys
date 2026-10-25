@@ -164,3 +164,9 @@ relay 记录本次 nonce、PID 和 starttime 的 private ownership；QEMU 退出
 单连接 DNS/连接/传输总限时 300 秒、写侧 EOF 后 drain 最多60秒。成功 summary 必须含实际
 `host_process_isolation_verified`、`sandbox_selftests_passed`、`relay_cleanup_verified` 三个真值；
 未完成或超时不能取得这些通过声明。C helper 仅 CI，不进入生产包或改变 libvirt 生产策略。
+
+APT plan 拒绝诊断仅观察生产 `apt-get --simulate` 的实际成功返回，不改 argv、返回值、
+异常或安装门禁。输入最多 1 MiB；输出仅三种固定分类（remove / installed-package-version-change /
+unapproved-network-daemon）、最多12个预先枚举的 Ubuntu 软件包名、未知名数量（上限255）和
+截断标志。版本、来源、地址、路径、原始输出与任意未知包名均不导出；宿主再次验证整个字段合同。
+这只能定位门禁为何拒绝，不能把拒绝改称通过，也不能借此升级预热镜像或移除原有软件。

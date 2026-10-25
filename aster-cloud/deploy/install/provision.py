@@ -228,11 +228,18 @@ def root_target():
     return CODENAMES[fields["VERSION_ID"]]
 
 
-def dependency_plan(component, with_mysql=False, with_libvirt=False):
+def dependency_plan(component, with_mysql=False, with_libvirt=False, *, codename=None):
     if (component not in PACKAGES or with_mysql and component != "controller" or
             with_libvirt and component != "node"):
         fail("Invalid fixed dependency role")
+    if with_libvirt and codename not in CODENAMES.values():
+        fail("Libvirt dependency plan requires a verified Ubuntu target")
     packages = list(PACKAGES[component]) + (["mysql-server", "mysql-client"] if with_mysql else []) + (["libvirt-daemon-system"] if with_libvirt else [])
+    # Ubuntu 26 split virtlockd out of libvirt-daemon. It is only recommended
+    # by that package, so keep no-recommends and request this one fixed daemon.
+    # Jammy/Noble bundle virtlockd in libvirt-daemon and have no split package.
+    if with_libvirt and codename == "resolute":
+        packages.append("libvirt-daemon-lock")
     return {"packages": packages, "source": "Ubuntu signed archive/security HTTPS only", "node_daemon_included": with_libvirt,
             "service_autostart": "blocked during explicit fresh-host package transaction",
             "mysql_transport": "unix-socket-only" if with_mysql else "unchanged",
@@ -337,15 +344,16 @@ def _apt_configuration(work, codename):
 
 
 def install_dependencies(component, state_dir, *, with_mysql=False, with_libvirt=False, resume=False):
-    plan = dependency_plan(component, with_mysql, with_libvirt)
+    codename = root_target()
+    plan = dependency_plan(component, with_mysql, with_libvirt, codename=codename)
     # Full daemon packages may never be installed without the outer operation's
     # persistent activation masks and approved receipt already being in place.
     if with_libvirt:
         outer = _json(read_private(str(Path(state_dir) / "libvirt.json")))
-        if outer.get("mode") != "fresh-owned" or outer.get("plan_sha256") != libvirt_plan_digest():
+        if (outer.get("mode") != "fresh-owned" or outer.get("codename") != codename or
+                outer.get("plan_sha256") != libvirt_plan_digest(codename)):
             fail("Libvirt packages require the owned preparation transaction")
         verify_libvirt_masks(outer)
-    codename = root_target()
     for executable in (APT_GET, SYSTEMCTL):
         protected_path(executable)
     protected_path(str(APT_KEYRING))
@@ -433,8 +441,8 @@ def libvirt_unit_bytes(name):
         "[Install]\nWantedBy=multi-user.target\n").encode()
 
 
-def libvirt_plan_digest():
-    plan = {"schema": 1, "packages": dependency_plan("node", with_libvirt=True)["packages"],
+def libvirt_plan_digest(codename):
+    plan = {"schema": 1, "packages": dependency_plan("node", with_libvirt=True, codename=codename)["packages"],
             "masks": list(LIBVIRT_VENDOR_UNITS), "empty": str(LIBVIRT_EMPTY),
             "config": hashlib.sha256(LIBVIRT_DAEMON_CONFIG).hexdigest(),
             "units": {name: hashlib.sha256(libvirt_unit_bytes(name)).hexdigest() for name in LIBVIRT_OWN_UNITS}}
@@ -585,7 +593,7 @@ def prepare_libvirt(state_dir, *, resume=False):
     protected_path(SYSTEMCTL)
     state_dir = ensure_dir(Path(state_dir))
     path = state_dir / "libvirt.json"
-    digest = libvirt_plan_digest()
+    digest = libvirt_plan_digest(codename)
     if path.exists():
         if not resume:
             fail("Libvirt receipt exists; explicitly resume the exact preparation plan")

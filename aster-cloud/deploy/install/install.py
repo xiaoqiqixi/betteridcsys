@@ -461,15 +461,22 @@ def source_bundle(args):
 def make_plan(args):
     options = native_options(args)
     bundle = source_bundle(args)
+    target = target_info()
+    codename = None
+    if options["prepare_libvirt"]:
+        if (target["system"] != "Linux" or target["architecture"] not in ("x86_64", "amd64") or
+                target["distribution"] != "ubuntu" or target["version"] not in provisioning_module().CODENAMES):
+            fail("Libvirt preparation plan requires a verified Ubuntu 22.04, 24.04 or 26.04 amd64 target")
+        codename = provisioning_module().CODENAMES[target["version"]]
     return {"mode": "plan", "component": args.component, "release_kind": bundle.manifest["release_kind"],
             "version": bundle.manifest["version"], "source_commit": bundle.manifest["source_commit"],
-            "bundle_sha256": args.sha256, "target": target_info(),
+            "bundle_sha256": args.sha256, "target": target,
             "software": "not-installed-by-plan", "configuration": "approval-required",
             "service": "not-started-by-plan", "approval_supplied": bool(args.approval),
             "start_requested": args.start,
             "guided_configuration_requested": bool(getattr(args, "wizard_inputs", None)),
             "native_options": options,
-            "dependency_plan": provisioning_module().dependency_plan(args.component, options["provision_mysql"], options["prepare_libvirt"]) if options["install_dependencies"] or options["prepare_libvirt"] else None,
+            "dependency_plan": provisioning_module().dependency_plan(args.component, options["provision_mysql"], options["prepare_libvirt"], codename=codename) if options["install_dependencies"] or options["prepare_libvirt"] else None,
             "steps": ["verify external SHA256 and every tar/manifest member", "root/Ubuntu/systemd/path preflight",
                       "exclusive lock and private persistent receipt", "atomic immutable version staging",
                       "import reviewed config without overwriting existing secrets", "fixed inactive native systemd unit",

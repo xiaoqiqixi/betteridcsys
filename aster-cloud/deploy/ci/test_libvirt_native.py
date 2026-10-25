@@ -78,6 +78,20 @@ class NativeFixtureContract(unittest.TestCase):
         actual = re.search(r'const Protocol = "([^"]+)"', contract).group(1)
         self.assertEqual(g.DOCTOR_PROTOCOL, actual)
 
+    def test_boot_checkpoints_preserve_existing_commands_and_fixed_sequence(self):
+        nonce = "a" * 32
+        commands = h.seed_commands(nonce)
+        boot = commands["bootcmd"]
+        self.assertEqual(len(boot), 7)
+        self.assertEqual(boot[2], ["sh", "-c", "systemctl mask --now apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer ssh.service ssh.socket || true"])
+        self.assertEqual(boot[5], ["sh", "-c", h.HOSTS_BOOT_COMMAND])
+        for index, stage in ((0, "bootcmd"), (1, "boot-mask:start"), (3, "boot-mask:done"), (4, "boot-hosts:start"), (6, "boot-hosts:done")):
+            self.assertIn(stage, h.BOOT_STAGES)
+            self.assertEqual(boot[index], ["sh", "-c", "printf '%s\\n' 'ASTER_LIBVIRT_NATIVE_PROGRESS_" + nonce + " " + stage + "' > /dev/ttyS0"])
+        self.assertIn("runcmd-enter", commands["runcmd"][0][2])
+        self.assertEqual(commands["runcmd"][1], ["sh", "-c", "/usr/bin/python3 -I /root/aster-native/guest.py; /sbin/poweroff -f"])
+        with self.assertRaises(h.Refused): h.seed_commands("bad;command")
+
     def test_hosts_boot_command_produces_real_newlines_without_host_write(self):
         suffix = " >> /etc/hosts"
         self.assertTrue(h.HOSTS_BOOT_COMMAND.endswith(suffix))
@@ -273,6 +287,57 @@ class NativeFixtureContract(unittest.TestCase):
             with self.assertRaises(h.Refused): h.regular(linked, 16)
             linked.unlink(); os.link(p, linked)
             with self.assertRaises(h.Refused): h.regular(p, 16)
+
+    def test_apt_plan_diagnostics_use_real_rejection_branches_without_versions(self):
+        plan = (b"Inst new-safe-package (1.0 Ubuntu)\n"
+                b"Inst libssl3t64:amd64 [PRIVATE_OLD] (PRIVATE_NEW Ubuntu)\n"
+                b"Remv libc6 [PRIVATE_VERSION]\n"
+                b"Inst openvswitch-switch (PRIVATE_NEW Ubuntu)\n")
+        result = g.classify_apt_plan(plan)
+        self.assertEqual(result, {"categories": ["installed-package-version-change", "remove", "unapproved-network-daemon"],
+                                 "packages": ["libc6", "libssl3t64", "openvswitch-switch"],
+                                 "unknown_package_count": 0, "truncated": False})
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        self.assertEqual(g.APT_PLAN_PACKAGES, h.APT_PLAN_PACKAGES)
+        self.assertEqual(g.APT_PLAN_CATEGORIES, h.APT_PLAN_CATEGORIES)
+
+    def test_apt_plan_diagnostics_bounds_unknown_names_and_invalid_bytes(self):
+        result = g.classify_apt_plan(b"Inst token-secret [PRIVATE] (https://credential:secret@host/path)\nRemv /private/path [SECRET]\n")
+        self.assertEqual(result["packages"], [])
+        self.assertEqual(result["unknown_package_count"], 2)
+        self.assertNotIn("secret", json.dumps(result)); self.assertNotIn("private", json.dumps(result))
+        names = sorted(g.APT_PLAN_PACKAGES)
+        result = g.classify_apt_plan("".join("Remv " + name + " [private]\n" for name in names).encode())
+        self.assertEqual(len(result["packages"]), 12); self.assertTrue(result["truncated"])
+        result = g.classify_apt_plan("".join("Remv unknown-package-" + str(i) + "\n" for i in range(300)).encode())
+        self.assertEqual(result["unknown_package_count"], 255); self.assertTrue(result["truncated"])
+        for value in (None, "secret", b"\xff", b"x" * (1024 * 1024 + 1)):
+            self.assertIsNone(g.classify_apt_plan(value))
+
+    def test_apt_plan_observer_preserves_return_identity_and_diagnostic_errors(self):
+        result = b"Inst libc6 [PRIVATE_OLD] (PRIVATE_NEW)\n"
+        module = types.SimpleNamespace(run_fixed=mock.Mock(return_value=result))
+        g.observe_real_commands(module)
+        argv = ["/usr/bin/apt-get", "--simulate", "install", "libvirt-daemon-system"]
+        with mock.patch.object(g, "APT_PLAN_DIAGNOSTICS", None):
+            self.assertIs(module.run_fixed(argv, timeout=7), result)
+            self.assertEqual(g.APT_PLAN_DIAGNOSTICS["packages"], ["libc6"])
+            with mock.patch.object(g, "classify_apt_plan", side_effect=RuntimeError("PRIVATE")):
+                self.assertIs(module.run_fixed(argv, timeout=7), result)
+            self.assertIsNone(g.APT_PLAN_DIAGNOSTICS)
+
+    def test_host_apt_plan_diagnostics_rejects_injected_schema_values_and_bounds(self):
+        safe = g.classify_apt_plan(b"Inst libc6 [PRIVATE_OLD] (PRIVATE_NEW)\n")
+        report = dict(self.metadata(), schema=1, passed=False, kvm_ready=False, code="APT_PLAN_UNSAFE", phase="prepare",
+                      diagnostics={"apt_plan_rejections": safe})
+        self.assertEqual(h.public_result(report, self.metadata())["diagnostics"]["apt_plan_rejections"], safe)
+        for key, value in (("packages", ["PRIVATE"]), ("packages", ["libc6"] * 13), ("categories", ["PRIVATE"]),
+                           ("unknown_package_count", True), ("unknown_package_count", -1), ("unknown_package_count", 256),
+                           ("truncated", "PRIVATE"), ("raw", "PRIVATE")):
+            changed = copy.deepcopy(report); changed["diagnostics"]["apt_plan_rejections"][key] = value
+            output = h.public_result(changed, self.metadata())
+            self.assertNotIn("apt_plan_rejections", output["diagnostics"])
+            self.assertNotIn("PRIVATE", json.dumps(output))
 
     def test_real_command_observer_never_changes_calls_results_or_exceptions(self):
         calls, result = [], object()

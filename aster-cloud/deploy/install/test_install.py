@@ -24,6 +24,24 @@ p = i.provisioning_module()
 
 
 class InstallerUnits(unittest.TestCase):
+    def test_libvirt_package_plan_is_fixed_for_each_verified_ubuntu_target(self):
+        base = list(p.PACKAGES["node"]) + ["libvirt-daemon-system"]
+        for codename in ("jammy", "noble", "resolute"):
+            with self.subTest(codename=codename):
+                expected = base + (["libvirt-daemon-lock"] if codename == "resolute" else [])
+                plan = p.dependency_plan("node", with_libvirt=True, codename=codename)
+                self.assertEqual(plan["packages"], expected)
+                self.assertTrue(plan["node_daemon_included"])
+                self.assertEqual(p.dependency_plan("node", codename=codename)["packages"], list(p.PACKAGES["node"]))
+                self.assertEqual(p.dependency_plan("controller", codename=codename)["packages"], list(p.PACKAGES["controller"]))
+        for codename in (None, "", "bionic", "resolute; arbitrary"):
+            with self.subTest(codename=codename), self.assertRaises(p.ProvisionError):
+                p.dependency_plan("node", with_libvirt=True, codename=codename)
+
+    def test_libvirt_plan_digest_preserves_22_24_and_binds_26_split_package(self):
+        self.assertEqual(p.libvirt_plan_digest("jammy"), p.libvirt_plan_digest("noble"))
+        self.assertNotEqual(p.libvirt_plan_digest("noble"), p.libvirt_plan_digest("resolute"))
+
     def test_apt_failures_report_only_fixed_categories_without_replaying_commands(self):
         cases = (
             (b"Temporary failure resolving 'secret.invalid'", "APT_DNS_FAILURE"),

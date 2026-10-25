@@ -16,8 +16,8 @@
 | 同提交现有 CI | 真实独立 MySQL、严格 TLS 浏览器、NAT namespace 包流、OVS parser、前后端与依赖扫描 | 节点 RPC / 部分执行器仍为受控替身 |
 | 官方预发布后匿名下载 | 两角色实际 GitHub 资产、Sigstore 来源、完整字节、认证安装器生产 plan | 不执行生产主机 apply / service start |
 
-已实际执行的本地结果（2026-10-25）：installer 安全测试 **108**、安装器 unit **14**、packager **25**、
-release 合同 **25**、独立 verifier **19**、native fixture 合同 **24** 均通过；它们以模型 / 临时目录为主，不是真实安装。
+已实际执行的本地结果（2026-10-25）：installer 安全测试 **111**、安装器 unit **17**、packager **25**、
+release 合同 **26**、独立 verifier **19**、native fixture 合同 **41** 均通过；它们以模型 / 临时目录为主，不是真实安装。
 前端 format / typecheck / **37 文件 892 tests** / production build 通过。Cloud 全部受跟踪 `cmd` / `internal` / `plugins`
 包 Darwin race 与 vet 通过；未配置 MySQL 的本地场景不是实库验收。三个 workflow 的 actionlint 1.7.7 与 Python 3.10 AST 通过。
 最初本机 `go test ./...` 因 ignored 历史证据中的孤立 Go 测试文件和沙盒禁止监听失败，保留失败日志；
@@ -43,6 +43,18 @@ TCG Ubuntu26明确为APT索引获取失败；已从QEMU/libslirp官方源码确�
 新CI-only launcher在内核自测中必须允许setsid、以SIGSYS拒绝11种身份 / capability变更及x32/i386旁路，
 并由外部/proc复核QEMU双层filter、NNP和零有效capabilities；relay按PID/starttime/pidfd精确回收。
 上述修正的Linux实测尚须新提交CI确认，不把源码审查、Darwin实签或36项fixture合同当完整通过。
+
+第三轮精确提交 `ad2ec5b` 的 Cloud **11/12** 通过：两套 Linux 匿名实签验证已通过，
+Ubuntu22 /24 guest 已完成真实 APT、systemd、专属 libvirt 与原计划 resume，默认网络未启用、
+只读挂载视图生效、宿主网络未改，真实 doctor 仅因无 KVM 拒绝就绪。实际内核 seccomp 自测、
+QEMU 双层过滤与 relay 回收均通过；这仍不是客户 VM 或生产整机安装验收。
+Ubuntu26 的更新与依赖模拟已成功，但生产安全检查报 `APT_PLAN_UNSAFE`，安装未执行，不能发布。
+后续只增加有界的违规类别 / 固定公开包名诊断，不放开升级、移除或非批准网络服务。
+
+另从三版 Ubuntu 官方 libvirt 打包源码核实：26 将 virtlockd 拆到仅被推荐的
+`libvirt-daemon-lock`，22/24 仍由 `libvirt-daemon` 提供。固定计划仅在26增加该包，保留
+`--no-install-recommends`；非 root 预览与应用使用同一已核目标，resume 绑定目标与真实包集合。
+这项 RED→GREEN 合同修复不代表26的实际安装已通过，后续精确提交仍须重跑全部门禁。
 
 `cloud-v0.1.0-rc.1` 仅作为候选预发布，不能声明生产可用。下载命令以[该 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)
 实际正文为准；若未发布或任一最终 gate 失败，不称通道验收完成。发布协议见[RELEASE_CHANNEL](RELEASE_CHANNEL.md)。

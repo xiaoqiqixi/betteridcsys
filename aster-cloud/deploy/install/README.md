@@ -162,6 +162,10 @@ secrets. They are **implemented and mock-tested, not real-host accepted**.
   users, AppArmor policy and package configuration. Vendor default-network XML
   may be created on a **fresh** disk by package maintainer scripts; this is not
   permission to activate it or edit an existing host's configuration.
+- Ubuntu 26 additionally selects the fixed `libvirt-daemon-lock` package for
+  `virtlockd`; Ubuntu 22/24 already include that executable in `libvirt-daemon`.
+  Recommends remain disabled. Preview and apply bind the same verified Ubuntu
+  target and package list; resuming an older, different 26 plan is refused.
 - Before APT, every enumerated vendor monolithic/modular service and socket,
   including TCP/TLS/network activation paths, receives an exclusively created,
   inode-bound **persistent `/dev/null` mask**. The nonce-owned temporary service

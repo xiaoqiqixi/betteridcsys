@@ -49,6 +49,7 @@ GUEST_RESULT_SEEN = False
 RELAY_PROOF = {}
 SANDBOX_PROOF = {}
 RELAY_EVENTS = {"spawned", "dns-ok", "dns-failed", "dns-nonpublic", "connect-ok", "connect-failed", "guest-first-bytes", "server-first-bytes", "guest-eof", "server-eof", "timeout", "io-failed"}
+BOOT_STAGES = {"bootcmd", "boot-mask:start", "boot-mask:done", "boot-hosts:start", "boot-hosts:done", "runcmd-enter"}
 GUEST_PHASES = {"preflight", "prepare", "inspect", "resume", "image-and-config", "doctor"}
 DIAGNOSTIC_COMMANDS = {"apt-update", "apt-simulate", "apt-install", "network-rules-readonly", "other-fixed-command"} | {
     "systemd-" + name for name in ("start", "stop", "enable", "disable", "daemon-reload", "show", "is-active")} | {
@@ -56,6 +57,27 @@ DIAGNOSTIC_COMMANDS = {"apt-update", "apt-simulate", "apt-install", "network-rul
 DIAGNOSTIC_STATUSES = {"preparing", "package-transaction-pending", "dependencies-installed", "failed-package-transaction-review-required",
                        "own-service-start-attempted", "own-service-enable-attempted", "libvirt-prepared", "failed-review-required", "unrecognized"}
 DIAGNOSTIC_STEPS = {"policy-created", "packages-installed", "existing-daemon-readonly-verified"}
+APT_PLAN_CATEGORIES = {"remove", "installed-package-version-change", "unapproved-network-daemon"}
+# Fixed public inventory: unknown package tokens are counted, never exported.
+APT_PLAN_PACKAGES = set("""
+ca-certificates openssl libc6 libc-bin libgcc-s1 libstdc++6 libssl3 libssl3t64
+systemd systemd-sysv systemd-resolved libsystemd0 libsystemd-shared libudev1 udev libnss-systemd libpam-systemd
+libpam0g libpam-modules libpam-modules-bin libpam-runtime libcap2 libcap2-bin libcap-ng0
+libglib2.0-0 libglib2.0-0t64 libglib2.0-bin libglib2.0-data libgcrypt20 libgpg-error0
+libgnutls30 libgnutls30t64 libgnutls-dane0t64 libp11-kit0 libtasn1-6 libhogweed6 libhogweed6t64 libnettle8 libnettle8t64
+libxml2 libxml2-16 libxslt1.1 libselinux1 libapparmor1 libseccomp2 libaudit1 libaudit-common libacl1 libattr1
+zlib1g libzstd1 liblzma5 liblz4-1 libbz2-1.0 libpcre2-8-0 libffi8 libuuid1 libblkid1 libmount1
+python3 python3-minimal python3-apt python3.10 python3.10-minimal libpython3.10-minimal libpython3.10-stdlib
+python3.12 python3.12-minimal libpython3.12-minimal libpython3.12-stdlib
+python3.14 python3.14-minimal libpython3.14-minimal libpython3.14-stdlib
+libvirt0 libvirt-clients libvirt-daemon libvirt-daemon-system libvirt-daemon-system-systemd
+libvirt-daemon-common libvirt-daemon-log libvirt-daemon-lock libvirt-daemon-driver-qemu libvirt-daemon-config-network
+qemu-system-x86 qemu-system-common qemu-system-data qemu-utils qemu-block-extra qemu-system-gui seabios ovmf
+libaio1 libaio1t64 liburing2 libnuma1 libfdt1 libslirp0 libpixman-1-0 libepoxy0 libdrm2 libdrm-common
+libcurl4 libcurl4t64 libssh-4 libssh2-1 libssh2-1t64 libyajl2 libtirpc3 libtirpc3t64 libnl-3-200 libnl-route-3-200
+libnftnl11 libnftables1 libmnl0 libxtables12 iptables nftables dnsmasq-base iproute2
+firewalld ufw openvswitch-common openvswitch-switch openvswitch-switch-dpdk
+""".split())
 GUEST_ERROR_CODES = set("""
 APPROVED_IMAGE_BLOCK_DEVICE_REQUIRED APPROVED_IMAGE_FORMAT_REJECTED APPROVED_IMAGE_HASH_MISMATCH APPROVED_IMAGE_MUST_BE_READONLY
 APPROVED_IMAGE_SIZE_REJECTED APPROVED_IMAGE_TRUNCATED DEFAULT_NETWORK_VISIBLE DOCTOR_CHECK_INVENTORY_REJECTED DOCTOR_CHECK_SCHEMA_REJECTED
@@ -531,6 +553,19 @@ def qemu_arguments(work, image, overlay, seed, *, nonce):
     return args
 
 
+def seed_commands(nonce):
+    """Only add static checkpoints around the unchanged guest-only commands."""
+    require(re.fullmatch(r"[0-9a-f]{32}", nonce or "") is not None, "SEED_PROGRESS_NONCE_REJECTED")
+    def checkpoint(stage):
+        require(stage in BOOT_STAGES, "SEED_PROGRESS_STAGE_REJECTED")
+        return ["sh", "-c", "printf '%s\\n' 'ASTER_LIBVIRT_NATIVE_PROGRESS_" + nonce + " " + stage + "' > /dev/ttyS0"]
+    return {"bootcmd": [checkpoint("bootcmd"), checkpoint("boot-mask:start"),
+                        ["sh", "-c", "systemctl mask --now apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer ssh.service ssh.socket || true"],
+                        checkpoint("boot-mask:done"), checkpoint("boot-hosts:start"),
+                        ["sh", "-c", HOSTS_BOOT_COMMAND], checkpoint("boot-hosts:done")],
+            "runcmd": [checkpoint("runcmd-enter"), ["sh", "-c", "/usr/bin/python3 -I /root/aster-native/guest.py; /sbin/poweroff -f"]]}
+
+
 def make_seed(work, root, source_sha, image_provenance):
     go = shutil.which("go")
     require(go is not None, "GO_TOOLCHAIN_REQUIRED")
@@ -548,10 +583,7 @@ def make_seed(work, root, source_sha, image_provenance):
               "encoding": "gz+b64", "content": base64.b64encode(gzip.compress(raw, mtime=0)).decode()} for name, raw in content.items()]
     config = {"users": [], "disable_root": True, "ssh_pwauth": False, "manage_etc_hosts": False, "write_files": files,
               "package_update": False, "package_upgrade": False,
-              "bootcmd": [["sh", "-c", "printf '%s\\n' 'ASTER_LIBVIRT_NATIVE_PROGRESS_" + nonce + " bootcmd' > /dev/ttyS0"],
-                          ["sh", "-c", "systemctl mask --now apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer ssh.service ssh.socket || true"],
-                          ["sh", "-c", HOSTS_BOOT_COMMAND]],
-              "runcmd": [["sh", "-c", "/usr/bin/python3 -I /root/aster-native/guest.py; /sbin/poweroff -f"]]}
+              **seed_commands(nonce)}
     (work / "user-data").write_text("#cloud-config\n" + json.dumps(config))
     (work / "meta-data").write_text(json.dumps({"instance-id": "aster-native-" + nonce, "local-hostname": "aster-native"}))
     seed = work / "seed.img"
@@ -563,7 +595,7 @@ def make_seed(work, root, source_sha, image_provenance):
 def run_vm(arguments, work, metadata):
     global GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF
     progress_pattern = ("ASTER_LIBVIRT_NATIVE_PROGRESS_" + metadata["nonce"] + " ").encode()
-    progress_allowed = GUEST_PHASES | {name + ":" + outcome for name in DIAGNOSTIC_COMMANDS for outcome in ("start", "done", "failed")} | {"bootcmd"}
+    progress_allowed = GUEST_PHASES | {name + ":" + outcome for name in DIAGNOSTIC_COMMANDS for outcome in ("start", "done", "failed")} | BOOT_STAGES
     started = time.monotonic()
     pattern = ("ASTER_LIBVIRT_NATIVE_RESULT_" + metadata["nonce"] + " ").encode()
     result, buffer, total = None, b"", 0
@@ -647,6 +679,16 @@ def public_result(result, metadata):
     diagnostics = result.get("diagnostics")
     if isinstance(diagnostics, dict):
         safe = {}
+        plan = diagnostics.get("apt_plan_rejections")
+        if (isinstance(plan, dict) and set(plan) == {"categories", "packages", "unknown_package_count", "truncated"} and
+                isinstance(plan["categories"], list) and len(plan["categories"]) <= 3 and
+                all(isinstance(v, str) and v in APT_PLAN_CATEGORIES for v in plan["categories"]) and
+                isinstance(plan["packages"], list) and len(plan["packages"]) <= 12 and
+                all(isinstance(v, str) and v in APT_PLAN_PACKAGES for v in plan["packages"]) and
+                type(plan["unknown_package_count"]) is int and 0 <= plan["unknown_package_count"] <= 255 and
+                type(plan["truncated"]) is bool):
+            safe["apt_plan_rejections"] = {"categories": sorted(set(plan["categories"])), "packages": sorted(set(plan["packages"])),
+                                           "unknown_package_count": plan["unknown_package_count"], "truncated": plan["truncated"]}
         commands = diagnostics.get("failed_commands")
         if isinstance(commands, list):
             safe["failed_commands"] = [v for v in commands if isinstance(v, str) and v in DIAGNOSTIC_COMMANDS][:4]

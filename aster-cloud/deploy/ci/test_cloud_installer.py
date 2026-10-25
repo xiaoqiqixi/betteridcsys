@@ -407,7 +407,8 @@ class InstallerContract(unittest.TestCase):
         args = self.args("node", ("--plan", "--prepare-libvirt"))
         p = installer.provisioning_module()
         before = self.tree()
-        with mock.patch.object(p, "prepare_libvirt") as prepare:
+        target = {"system": "Linux", "architecture": "x86_64", "distribution": "ubuntu", "version": "24.04"}
+        with mock.patch.object(p, "prepare_libvirt") as prepare, mock.patch.object(installer, "target_info", return_value=target):
             result = installer.execute(args)
         prepare.assert_not_called()
         self.assertTrue(result["native_options"]["prepare_libvirt"])
@@ -519,6 +520,62 @@ class InstallerContract(unittest.TestCase):
             self.assertFalse(any(argv[:2] == [h.p.SYSTEMCTL, "enable"] for argv, _ in h.commands))
             h.run.side_effect = original
             self.assertEqual(h.p.prepare_libvirt(h.state, resume=True)["status"], "libvirt-prepared")
+
+    def test_libvirt_target_packages_match_preview_and_keep_no_recommends(self):
+        p = installer.provisioning_module()
+        for version, codename in p.CODENAMES.items():
+            with self.subTest(version=version), tempfile.TemporaryDirectory(dir=self.root) as temporary, mock.patch.object(self, "root", Path(temporary)):
+                args = self.args("node", ("--plan", "--prepare-libvirt"))
+                target = {"system": "Linux", "architecture": "x86_64", "distribution": "ubuntu", "version": version}
+                with mock.patch.object(installer, "target_info", return_value=target), mock.patch.object(installer.os, "geteuid", return_value=501):
+                    preview = installer.execute(args)["dependency_plan"]["packages"]
+                with self.libvirt_host() as h, mock.patch.object(h.p, "root_target", return_value=codename):
+                    h.p.prepare_libvirt(h.state)
+                    expected = list(h.p.PACKAGES["node"]) + ["libvirt-daemon-system"] + (["libvirt-daemon-lock"] if codename == "resolute" else [])
+                    self.assertEqual(preview, expected)
+                    package_commands = [argv for argv, _ in h.commands if argv[0] == h.p.APT_GET and "install" in argv]
+                    self.assertEqual(len(package_commands), 2)
+                    for argv in package_commands:
+                        self.assertEqual(argv[argv.index("install") + 1:], expected)
+                        for option in ("--no-install-recommends", "--no-upgrade", "--no-remove"):
+                            self.assertIn(option, argv)
+                    receipt = json.loads((h.state / "libvirt.json").read_text())
+                    self.assertEqual(receipt["codename"], codename)
+                    self.assertEqual(receipt["plan_sha256"], h.p.libvirt_plan_digest(codename))
+
+    def test_libvirt_plan_rejects_unknown_target_without_blocking_plain_offline_plan(self):
+        args = self.args("node", ("--plan", "--prepare-libvirt"))
+        base = {"system": "Linux", "architecture": "x86_64", "distribution": "ubuntu", "version": "26.04"}
+        p = installer.provisioning_module()
+        for change in ({"system": "Darwin"}, {"architecture": "aarch64"}, {"distribution": "debian"}, {"version": "unknown"}):
+            with self.subTest(change=change), mock.patch.object(installer, "target_info", return_value={**base, **change}), mock.patch.object(p, "run_fixed") as run:
+                with self.assertRaisesRegex(installer.InstallerError, "verified Ubuntu"):
+                    installer.execute(args)
+                args.prepare_libvirt = False
+                try:
+                    self.assertEqual(installer.execute(args)["mode"], "plan")
+                finally:
+                    args.prepare_libvirt = True
+                run.assert_not_called()
+
+    def test_libvirt_resolute_resume_refuses_pre_split_package_plan_before_host_commands(self):
+        with self.libvirt_host() as h, mock.patch.object(h.p, "root_target", return_value="resolute"):
+            h.p.prepare_libvirt(h.state)
+            path = h.state / "libvirt.json"
+            original = json.loads(path.read_text())
+            # Old 26 plans had exactly the current 22/24 package set. Keep the
+            # target intact so rejection proves the actual package hash binds.
+            for change in ({"plan_sha256": h.p.libvirt_plan_digest("noble")}, {"codename": "noble"}):
+                with self.subTest(change=change):
+                    path.write_text(json.dumps({**original, **change}))
+                    before = self.tree()
+                    h.run.reset_mock()
+                    with self.assertRaisesRegex(h.p.ProvisionError, "resume plan"):
+                        h.p.prepare_libvirt(h.state, resume=True)
+                    with self.assertRaisesRegex(h.p.ProvisionError, "owned preparation transaction"):
+                        h.p.install_dependencies("node", h.state, with_libvirt=True, resume=True)
+                    h.run.assert_not_called()
+                    self.assertEqual(before, self.tree())
 
     def test_libvirt_resume_refuses_changed_plan_and_foreign_same_content_mask(self):
         with self.libvirt_host() as h:
