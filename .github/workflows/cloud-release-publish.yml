@@ -1,0 +1,93 @@
+name: Verified Cloud prerelease publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Only the reviewed first Cloud prerelease; never a financial tag'
+        required: true
+        default: 'cloud-v0.1.0-rc.1'
+        type: string
+      build_run_id:
+        description: 'Successful Cloud prerelease reproducible build run at this exact main SHA'
+        required: true
+        type: string
+      build_attempt:
+        description: 'Exact successful build attempt'
+        required: true
+        default: '1'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-prerelease-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Trusted main publisher only; no candidate code execution
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Reverify upstream identity, fifteen gates, signed bytes and new Cloud-only draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I controller/aster-cloud/deploy/ci/cloud_release.py publish --directory "$RUNNER_TEMP/cloud-publish"
+
+  anonymous-download:
+    name: Anonymous published ${{ matrix.role }} download and production plan
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [controller, node]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Public HTTPS only, empty identity environment, authenticated code and real read-only plan
+        env:
+          ROLE: ${{ matrix.role }}
+        run: |
+          set -euo pipefail
+          # This is reviewed main bootstrap, NOT a candidate installer. Root
+          # consumes its fixed bytes through stdin; every later code payload
+          # is downloaded into root0700 and cryptographically authenticated.
+          sudo /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 /usr/bin/python3 -I - "$ROLE" --download-only --evidence "$RUNNER_TEMP/anonymous-download.json" < controller/aster-cloud/deploy/install/release_verify.py
+          sudo chmod 0644 "$RUNNER_TEMP/anonymous-download.json"
+          python3 - "$RUNNER_TEMP/anonymous-download.json" "$ROLE" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))
+          assert result.get('passed') is True and result.get('role') == sys.argv[2]
+          import os
+          assert result.get('source_commit') == os.environ['GITHUB_SHA'] and result.get('tag') == 'cloud-v0.1.0-rc.1'
+          assert all(result.get(k) is True for k in ('anonymous_download', 'publisher_signature_reverified', 'production_installer_plan'))
+          assert result.get('host_apply') is False and result.get('service_started') is False
+          assert result.get('real_kvm_acceptance') is False
+          PY
+      - name: Retain redacted postpublication proof, never credentials or cache contents
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cloud-anonymous-download-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/anonymous-download.json
+          if-no-files-found: warn
+          overwrite: false
+          retention-days: 7

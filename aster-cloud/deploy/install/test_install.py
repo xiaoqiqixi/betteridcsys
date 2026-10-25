@@ -24,6 +24,52 @@ p = i.provisioning_module()
 
 
 class InstallerUnits(unittest.TestCase):
+    def test_libvirt_firewall_snapshot_ignores_only_traffic_counters_and_clock_comments(self):
+        first = "# Generated at first time\n*filter\n:INPUT ACCEPT [123:456]\n-A INPUT -s 192.0.2.1 -j DROP\nCOMMIT\n"
+        second = first.replace("first time", "second time").replace("123:456", "9999:88888")
+        normalized = p.normalize_firewall_evidence("iptables", first)
+        self.assertEqual(normalized, p.normalize_firewall_evidence("iptables", second))
+        self.assertIn("-s 192.0.2.1 -j DROP", normalized)
+        self.assertIn(":INPUT ACCEPT [0:0]", normalized)
+        for changed in (first.replace("ACCEPT", "DROP"), first.replace("192.0.2.1", "192.0.2.2"), first.replace("-j DROP", "-j ACCEPT")):
+            self.assertNotEqual(normalized, p.normalize_firewall_evidence("iptables", changed))
+
+    def test_libvirt_effective_units_reject_every_foreign_override_before_start(self):
+        def effective(argv, **kwargs):
+            return ("FragmentPath=" + str(p.UNIT_ROOT / argv[2]) + "\nDropInPaths=\n").encode()
+        with mock.patch.object(p, "run_fixed", side_effect=effective) as run:
+            p.verify_libvirt_effective_units()
+        self.assertEqual(len(run.call_args_list), 3)
+        self.assertTrue(all(call.args[0][1] == "show" for call in run.call_args_list))
+        for raw in (b"FragmentPath=/foreign/unit\nDropInPaths=\n", b"FragmentPath=/etc/systemd/system/aster-cloud-virtlogd.service\nDropInPaths=/usr/lib/systemd/system/foreign.conf\n"):
+            with self.subTest(raw=raw), mock.patch.object(p, "run_fixed", return_value=raw), self.assertRaises(p.ProvisionError):
+                p.verify_libvirt_effective_units()
+
+    def test_libvirt_namespace_checks_real_process_inode_and_readonly_mount(self):
+        properties = ("FragmentPath=" + str(p.UNIT_ROOT / "aster-cloud-libvirtd.service") + "\nDropInPaths=\nMainPID=812\n").encode()
+        def resolve(path, **kwargs):
+            return Path(p.LIBVIRTD) if str(path) == "/proc/812/exe" else path
+        for inode, mount, accepted in ((5, "ro,relatime", True), (6, "ro,relatime", False), (5, "rw,relatime", False)):
+            def info(path, **kwargs):
+                return argparse.Namespace(st_dev=7, st_ino=5 if path == p.LIBVIRT_EMPTY else inode)
+            with self.subTest(inode=inode, mount=mount), mock.patch.object(p, "run_fixed", return_value=properties), mock.patch.object(Path, "resolve", resolve), mock.patch.object(Path, "stat", info), mock.patch.object(Path, "read_text", return_value="100 1 7:0 /empty /etc/libvirt/qemu/networks " + mount + " - ext4 /dev/vda1 rw\n"):
+                if accepted:
+                    p.verify_libvirt_namespace()
+                else:
+                    with self.assertRaises(p.ProvisionError):
+                        p.verify_libvirt_namespace()
+
+    def test_libvirt_root_only_unix_configuration_never_disables_apparmor(self):
+        self.assertIn(b"listen_tls = 0", p.LIBVIRT_DAEMON_CONFIG)
+        self.assertIn(b"listen_tcp = 0", p.LIBVIRT_DAEMON_CONFIG)
+        self.assertIn(b'unix_sock_rw_perms = "0700"', p.LIBVIRT_DAEMON_CONFIG)
+        self.assertNotIn(b"security_driver", p.LIBVIRT_DAEMON_CONFIG)
+        self.assertNotIn(b'user = "root"', p.LIBVIRT_DAEMON_CONFIG)
+        for daemon in ("libvirtd", "virtlogd", "virtlockd", "virtnetworkd", "virtqemud", "virtproxyd"):
+            self.assertIn(daemon + ".service", p.LIBVIRT_VENDOR_UNITS)
+            self.assertIn(daemon + ".socket", p.LIBVIRT_VENDOR_UNITS)
+            self.assertIn(daemon + "-tls.socket", p.LIBVIRT_VENDOR_UNITS)
+
     def test_actual_migration_sql_privileges_include_foreign_key_references(self):
         # Read the real embedded SQL, not a synthetic CREATE fixture. New DDL
         # classes require an explicit grant-policy review instead of silently

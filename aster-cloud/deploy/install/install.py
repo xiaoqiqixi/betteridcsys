@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Fail-closed native Aster Cloud development-bundle installer (stdlib only).
+"""Fail-closed native Aster Cloud installer (stdlib core).
 
-No official release currently exists. This program never downloads a release,
-configures host networking, or deletes application data. Native dependencies and
-a new dedicated MySQL database require separate explicit opt-in approval. A supplied
-SHA256 is an integrity check, not proof of publisher authenticity: obtain it via
-an independently trusted channel and explicitly approve development code.
+This program never downloads a release, edits physical networking, or deletes
+application data. Native dependencies, new dedicated MySQL and isolated libvirt
+preparation require explicit approval. A SHA256 alone is NOT publisher identity:
+local development needs opt-in; the sole prerelease envelope needs offline
+cryptographic publisher reverification. No stable channel is inferred.
 """
 from __future__ import annotations
 
@@ -50,6 +50,7 @@ CONFIG_PATHS = {"controller": Path("/etc/aster-controller/config.json"),
 SYSTEMCTL = "/usr/bin/systemctl"
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
 PROVISION_MODULE = None
+RELEASE_MODULE = None
 
 
 class InstallerError(Exception):
@@ -85,7 +86,10 @@ def provisioning_module():
 
 def native_options(args):
     options = {"install_dependencies": bool(getattr(args, "install_dependencies", False)),
-               "provision_mysql": bool(getattr(args, "provision_mysql", False))}
+               "provision_mysql": bool(getattr(args, "provision_mysql", False)),
+               "prepare_libvirt": bool(getattr(args, "prepare_libvirt", False))}
+    if options["prepare_libvirt"] and args.component != "node":
+        fail("Libvirt daemon preparation is node-only")
     if options["provision_mysql"]:
         if args.component != "controller":
             fail("Dedicated MySQL provisioning is controller-only")
@@ -202,14 +206,17 @@ def verify_bundle(path, expected_sha256, component):
     if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or
             manifest["schema"] != 1 or manifest.get("component") != component or
             manifest.get("platform") != "linux-amd64" or
-            manifest.get("release_kind") != "development" or
             not isinstance(manifest.get("version"), str) or
-            not re.fullmatch(r"0\.[0-9]+\.[0-9]+-dev(?:\.[0-9]+)?", manifest["version"]) or
             not isinstance(manifest.get("source_commit"), str) or
             not re.fullmatch(r"[0-9a-f]{40}", manifest["source_commit"]) or
             not isinstance(manifest.get("files"), list) or
             len(manifest["files"]) != len(files)):
-        fail("Wrong component, platform, development version or manifest schema")
+        fail("Wrong component, platform, version or manifest schema")
+    development = manifest.get("release_kind") == "development" and re.fullmatch(r"0\.[0-9]+\.[0-9]+-dev(?:\.[0-9]+)?", manifest["version"])
+    release = (manifest.get("release_kind") == "release" and manifest["version"] == "0.1.0-rc.1" and
+               manifest.get("channel") == "prerelease" and manifest.get("release_tag") == "cloud-v0.1.0-rc.1")
+    if not development and not release:
+        fail("Only explicit development versions or the authenticated 0.1.0-rc.1 prerelease envelope are supported")
     listed = set()
     for entry in manifest["files"]:
         if not isinstance(entry, dict) or set(entry) != {"path", "sha256", "size", "mode"}:
@@ -419,16 +426,42 @@ def node_preflight():
 
 
 def source_bundle(args):
-    if not args.allow_development or not args.bundle or not args.sha256:
-        fail("Official Aster Cloud channel is unreleased; supply --allow-development --bundle ABS --sha256 SHA256")
+    receipt = getattr(args, "release_receipt", None)
+    if receipt and args.allow_development:
+        fail("Publisher-authenticated release and explicit local development are mutually exclusive")
+    if not args.bundle or not args.sha256 or not (args.allow_development or receipt):
+        fail("Provide a publisher-verified release receipt or explicit local development bundle, canonical path and SHA256")
     canonical(args.bundle)
-    return verify_bundle(args.bundle, args.sha256, COMPONENTS[args.component])
+    bundle = verify_bundle(args.bundle, args.sha256, COMPONENTS[args.component])
+    if receipt:
+        if bundle.manifest.get("release_kind") != "release":
+            fail("Release receipt cannot authorize a development bundle")
+        canonical(receipt)
+        global RELEASE_MODULE
+        if RELEASE_MODULE is None:
+            spec = importlib.util.spec_from_file_location("aster_release_verify", Path(__file__).with_name("release_verify.py"))
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            previous = sys.dont_write_bytecode
+            try:
+                sys.dont_write_bytecode = True
+                spec.loader.exec_module(module)
+            finally:
+                sys.dont_write_bytecode = previous
+            RELEASE_MODULE = module
+        try:
+            RELEASE_MODULE.verify_release_receipt(args.bundle, args.sha256, COMPONENTS[args.component], bundle.manifest, receipt, offline=True)
+        except RELEASE_MODULE.ReleaseError:
+            fail("Publisher release signature or exact bundle identity rejected; no installation performed")
+    elif bundle.manifest.get("release_kind") != "development":
+        fail("--allow-development never authorizes a formal/prerelease bundle; verified publisher receipt required")
+    return bundle
 
 
 def make_plan(args):
     options = native_options(args)
     bundle = source_bundle(args)
-    return {"mode": "plan", "component": args.component, "release_kind": "development",
+    return {"mode": "plan", "component": args.component, "release_kind": bundle.manifest["release_kind"],
             "version": bundle.manifest["version"], "source_commit": bundle.manifest["source_commit"],
             "bundle_sha256": args.sha256, "target": target_info(),
             "software": "not-installed-by-plan", "configuration": "approval-required",
@@ -436,7 +469,7 @@ def make_plan(args):
             "start_requested": args.start,
             "guided_configuration_requested": bool(getattr(args, "wizard_inputs", None)),
             "native_options": options,
-            "dependency_plan": provisioning_module().dependency_plan(args.component, options["provision_mysql"]) if options["install_dependencies"] else None,
+            "dependency_plan": provisioning_module().dependency_plan(args.component, options["provision_mysql"], options["prepare_libvirt"]) if options["install_dependencies"] or options["prepare_libvirt"] else None,
             "steps": ["verify external SHA256 and every tar/manifest member", "root/Ubuntu/systemd/path preflight",
                       "exclusive lock and private persistent receipt", "atomic immutable version staging",
                       "import reviewed config without overwriting existing secrets", "fixed inactive native systemd unit",
@@ -921,7 +954,8 @@ def execute(args):
         # Legacy schema-1 receipts predate native provisioning and therefore
         # approve NO package/database side effects. Resume may not silently add
         # such approval merely because the older receipt omitted this field.
-        prior_options = state.get("native_options", {"install_dependencies": False, "provision_mysql": False})
+        prior_options = dict(state.get("native_options", {"install_dependencies": False, "provision_mysql": False}))
+        prior_options.setdefault("prepare_libvirt", False)
         if prior_options != options:
             fail("Native dependency/database resume options changed; manual review required")
         state["native_options"] = options
@@ -943,10 +977,15 @@ def execute(args):
             atomic_state(state_path, state)
             return result
         try:
-            if options["install_dependencies"] or options["provision_mysql"]:
+            if options["install_dependencies"] or options["provision_mysql"] or options["prepare_libvirt"]:
                 module = provisioning_module()
                 try:
-                    if options["install_dependencies"]:
+                    if options["prepare_libvirt"]:
+                        # A daemon software-preparation receipt never skips the
+                        # real KVM/image/doctor gates below. Existing daemons are
+                        # inspected only; fresh setup owns its activation policy.
+                        state["libvirt_preparation"] = step("native-libvirt-preparation", lambda: module.prepare_libvirt(state_dir, resume=args.resume))
+                    elif options["install_dependencies"]:
                         step("native-dependencies", lambda: module.install_dependencies(args.component, state_dir,
                              with_mysql=options["provision_mysql"], resume=args.resume))
                     if options["provision_mysql"]:
@@ -985,7 +1024,7 @@ def execute(args):
                 binary = str(installed / "bin" / ("aster-controller" if args.component == "controller" else "aster-node"))
                 if args.component == "node":
                     if node_preflight():
-                        fail("Node host prerequisites incomplete; no bridge/network/libvirt-daemon changes attempted")
+                        fail("Node host prerequisites incomplete; software preparation is not KVM readiness; no node service started")
                     step("node-images-readonly-check", lambda: verify_node_images(cfg))
                     def doctor():
                         report = strict_json(run_fixed([binary, "--config", str(destination_config), "--doctor"]))
@@ -1061,7 +1100,8 @@ def execute(args):
                 "administrator": {"email": approval.get("bootstrap_admin_email"), "password": "set privately; never displayed"}
                     if args.component == "controller" and state["status"] == "service-ready" else None,
                 "next_step": "real pinned mTLS heartbeat FROM controller; maintenance remains on" if state["status"] == "node_started_pending_controller" else None,
-                "warning": "Development bundle; installation is not financial integration or VM provisioning acceptance"}
+                "libvirt_preparation": state.get("libvirt_preparation"),
+                "warning": ("Development bundle; " if bundle.manifest["release_kind"] == "development" else "Authenticated prerelease; ") + "installation is not financial integration or VM provisioning acceptance"}
     finally:
         os.close(fd)
 
@@ -1074,6 +1114,7 @@ def build_parser():
     action.add_argument("--dry-run", action="store_true", help="alias of read-only plan")
     action.add_argument("--apply", action="store_true", help="root-only native install")
     parser.add_argument("--allow-development", action="store_true", help="explicitly trust local development code")
+    parser.add_argument("--release-receipt", help="publisher-verified prerelease receipt; offline cryptographic reverification is mandatory")
     parser.add_argument("--bundle", help="local canonical absolute development tar.gz path")
     parser.add_argument("--sha256", help="independently obtained lowercase external archive SHA256")
     parser.add_argument("--approval", help="root-owned 0600 approval JSON file; never inline secrets")
@@ -1081,6 +1122,7 @@ def build_parser():
     parser.add_argument("--resume", action="store_true", help="explicitly continue original bundle/approval after reviewing receipt")
     parser.add_argument("--wizard", action="store_true", help="interactive local bundle and approval wizard")
     parser.add_argument("--install-dependencies", action="store_true", help="explicitly approve fixed signed Ubuntu packages on a fresh dedicated host (never a plan side effect)")
+    parser.add_argument("--prepare-libvirt", action="store_true", help="node-only: explicitly prepare a fresh local-only libvirt daemon with persistent vendor activation masks and no default network; existing active daemon is read-only")
     parser.add_argument("--provision-mysql", action="store_true", help="explicitly create a NEW dedicated controller DB and separate local DML/DDL identities")
     parser.add_argument("--database-name", default="aster_cloud", help="new dedicated DB name; never an existing finance DB")
     parser.add_argument("--runtime-db-user", default="aster_cloud_api", help="new local DML-only identity")
@@ -1091,12 +1133,12 @@ def build_parser():
 def wizard(args):
     if not sys.stdin.isatty():
         fail("Wizard needs a terminal; invoke install.py with explicit flags for automation")
-    print("Aster Cloud native installer: official channel UNRELEASED. No firewall/host-network/VM changes.")
+    print("Aster Cloud native installer: no unverified download, firewall/physical-network/VM changes.")
     print("Existing-dependencies is the default. Signed Ubuntu packages and NEW dedicated MySQL are explicit opt-ins.")
-    print("Real TLS/approved node images remain required; full node libvirt daemon APT is NOT automated.")
+    print("Real TLS/approved node images remain required. Libvirt software preparation is NOT KVM or controller admission readiness.")
     if args.component == "node":
         print("Use a dedicated KVM host, never the 1GB financial test server. Maintenance stays on.")
-    if not args.allow_development:
+    if not args.allow_development and not getattr(args, "release_receipt", None):
         if input("Trust an independently reviewed LOCAL DEVELOPMENT bundle? Type development: ") != "development":
             fail("Development execution not approved")
         args.allow_development = True
@@ -1107,6 +1149,10 @@ def wizard(args):
     if not args.install_dependencies:
         print("Optional APT: fixed Ubuntu signed packages; fresh dedicated host only, owned temporary policy blocks autostart.")
         args.install_dependencies = input("Approve this package transaction? Type apt (blank = existing dependencies): ").strip() == "apt"
+    if args.component == "node" and not args.prepare_libvirt:
+        print("Optional libvirt: fresh dedicated >=2GiB host only, official AppArmor/users retained, all vendor activation masked.")
+        print("Only owned UNIX daemons see an empty read-only networks directory. Existing active libvirt is preserved read-only.")
+        args.prepare_libvirt = input("Approve local libvirt software preparation? Type libvirt (blank = existing daemon): ").strip() == "libvirt"
     if not args.approval:
         choice = input("Existing root 0600 approval JSON path (blank = guided setup; software = binaries only): ").strip()
         if choice and choice != "software":
@@ -1174,7 +1220,7 @@ def wizard(args):
     preview = make_plan(args)
     print("Read-only bundle preflight: " + preview["component"] + " " + preview["version"] + " / " + preview["release_kind"])
     print("Target: " + json.dumps(preview["target"], sort_keys=True))
-    if args.install_dependencies:
+    if args.install_dependencies or args.prepare_libvirt:
         print("Explicit package plan: " + ", ".join(preview["dependency_plan"]["packages"]) + "; owned temporary service-start policy required.")
     if args.provision_mysql:
         print("Explicit NEW dedicated DB/accounts. MySQL will be started UNIX-SOCKET-ONLY even if Cloud API start is declined.")

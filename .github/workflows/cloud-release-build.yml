@@ -1,0 +1,113 @@
+name: Cloud prerelease reproducible build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing reviewed Cloud RC tag at the exact green main SHA'
+        required: true
+        default: 'cloud-v0.1.0-rc.1'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-prerelease-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Trusted main controller, never a candidate policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Exact tag, source, main and all fifteen real prechecks
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I controller/aster-cloud/deploy/ci/cloud_release.py prepare-build --policy "$RUNNER_TEMP/cloud-build-policy.json"
+      - name: Clean exact source checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.policy.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Two real isolated builds from the exact clean Git objects
+        env:
+          SOURCE_SHA: ${{ steps.policy.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 -I controller/aster-cloud/deploy/scripts/package-cloud.py --source-root "$GITHUB_WORKSPACE/source" --source-commit "$SOURCE_SHA" --version 0.1.0-rc.1 --output "$RUNNER_TEMP/cloud-candidate"
+          python3 -I controller/aster-cloud/deploy/scripts/package-cloud.py --source-root "$GITHUB_WORKSPACE/source" --source-commit "$SOURCE_SHA" --version 0.1.0-rc.1 --output "$RUNNER_TEMP/cloud-rebuild"
+          diff -r "$RUNNER_TEMP/cloud-candidate" "$RUNNER_TEMP/cloud-rebuild"
+      - name: Retain unsigned candidate data, not executable workflow code
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cloud-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloud-candidate/*
+          archive: true
+          if-no-files-found: error
+          overwrite: false
+          compression-level: 0
+          retention-days: 7
+
+  attest:
+    needs: build
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      # Job-scoped signing privileges never execute package builders, npm, Go,
+      # candidates, candidate installer imports or downloaded application code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Recheck trusted source and independently validate bounded candidate bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I controller/aster-cloud/deploy/ci/cloud_release.py prepare-attest --directory "$RUNNER_TEMP/cloud-attest"
+      - name: Sign all payloads, exact manifest, provenance and checksum inventory
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/cloud-attest/*
+          show-summary: true
+      - name: Verify the real local Sigstore bundle anonymously before retaining it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: python3 -I controller/aster-cloud/deploy/ci/cloud_release.py seal-attest --directory "$RUNNER_TEMP/cloud-attest" --bundle "$ATTESTATION_BUNDLE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cloud-signed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloud-attest/*
+          archive: true
+          if-no-files-found: error
+          overwrite: false
+          compression-level: 0
+          retention-days: 7

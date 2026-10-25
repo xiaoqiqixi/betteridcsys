@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build independent, deterministic cloud development bundles. Never installs them."""
+"""Build deterministic cloud development or first-RC bundles. Never installs/publishes them."""
 
 import argparse
 import gzip
@@ -20,6 +20,11 @@ import tempfile
 GO_TOOLCHAIN = "go1.27.3"
 NODE_VERSION = "v24.19.0"
 VERSION_RE = re.compile(r"0\.[0-9]+\.[0-9]+-dev(?:\.[0-9]+)?\Z")
+RC_VERSION = "0.1.0-rc.1"
+REPOSITORY = "xiaoqiqixi/betteridcsys"
+REPOSITORY_ID = 1418618420
+OWNER_ID = 123864154
+RC_ROOT_SHA256 = "65ca537f6ed8a47fd0e560c421baa1f6c1efb8b25fc200d8c5c02c0e92eb2b9c"
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 MAX_FILE_BYTES = 128 * 1024 * 1024
 ROLE_FILES = {
@@ -297,7 +302,7 @@ def source_metadata(source):
     return migrations[-1], schemas, sorted(protocols)
 
 
-def role_files(source, built, role):
+def role_files(source, built, role, *, prerelease=False):
     files = {}
     cloud = source / "aster-cloud"
     for name, relative in dict(COMMON_FILES, **ROLE_FILES[role]).items():
@@ -315,8 +320,8 @@ def role_files(source, built, role):
         add_tree(files, ui, "ui")
         add_tree(files, built / "licenses/npm", "licenses/npm")
     warning = (
-        "DEVELOPMENT CANDIDATE ONLY\n"
-        "Not a formal Release, installer acceptance, KVM/guest/network acceptance, or production readiness claim.\n"
+        ("UNPUBLISHED OFFICIAL PRERELEASE CANDIDATE\nNot production-ready.\n" if prerelease else "DEVELOPMENT CANDIDATE ONLY\n") +
+        "Packaging is not publication, installer acceptance, KVM/guest/network acceptance, or production readiness.\n"
         "No billing release assets, credentials, databases, VM images or journals are included.\n"
         "Templates require root review. Never install example approvals as active policy.\n"
         "Install/upgrade must retain uncertain operations and consistent database/journal backups.\n"
@@ -341,17 +346,47 @@ def write_archive(path, files, manifest, epoch):
                     archive.addfile(item, io.BytesIO(raw))
 
 
+def rc_files(source, scratch, source_commit, epoch):
+    """Package every adjacent Python import before any remote execution."""
+    directory = source / "aster-cloud/deploy/install"
+    files = {name: (read_regular(directory / name), "0644")
+             for name in ("install.py", "provision.py", "release_verify.py")}
+    manifest = {"schema": 1, "component": "aster-cloud-installer", "version": RC_VERSION,
+                "release_kind": "release", "channel": "prerelease", "release_tag": "cloud-v" + RC_VERSION,
+                "source_commit": source_commit,
+                "files": [{"path": name, "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw), "mode": mode}
+                          for name, (raw, mode) in sorted(files.items())]}
+    capsule = "aster-cloud-installer-" + RC_VERSION + ".tar.gz"
+    write_archive(scratch / capsule, files, manifest, epoch)
+    bootstrap = "aster-cloud-bootstrap-" + RC_VERSION + ".py"
+    (scratch / bootstrap).write_bytes(files["release_verify.py"][0])
+    roots = read_regular(directory / "release-trusted-root.json")
+    if hashlib.sha256(roots).hexdigest() != RC_ROOT_SHA256:
+        raise PackageError("official trusted-root snapshot differs from the reviewed pin")
+    (scratch / "release-trusted-root.json").write_bytes(roots)
+    provenance = {"schema": 1, "repository": REPOSITORY, "repository_id": REPOSITORY_ID,
+                  "tag": "cloud-v" + RC_VERSION, "version": RC_VERSION, "source_commit": source_commit,
+                  "source_date_epoch": epoch, "toolchains": {"go": GO_TOOLCHAIN, "node": NODE_VERSION},
+                  "scope": "independent-cloud-only", "production_ready": False, "real_kvm_accepted": False}
+    (scratch / "provenance.json").write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n")
+    return [capsule, bootstrap, "release-trusted-root.json", "provenance.json"]
+
+
 def package_cloud(source_root, source_commit, output, version="0.1.0-dev", *, build_runner=build_artifacts):
     """The builder injection is Python-test-only; the CLI has no fixture option."""
-    if not VERSION_RE.fullmatch(version):
-        raise PackageError("only explicit development versions such as 0.1.0-dev are supported")
+    prerelease = version == RC_VERSION
+    if not prerelease and not VERSION_RE.fullmatch(version):
+        raise PackageError("only development versions or the first 0.1.0-rc.1 prerelease are supported")
     root, output = Path(source_root).resolve(), Path(output).absolute()
     epoch = verify_source(root, source_commit)
     if output.is_symlink():
         raise PackageError("output may not be a symlink")
     output.mkdir(parents=True, exist_ok=True)
-    names = ["aster-cloud-" + role + "-" + version + "-linux-amd64.tar.gz" for role in ROLE_FILES]
-    if any((output / name).exists() or (output / name).is_symlink() for name in names + ["SHA256SUMS"]):
+    role_names = ["aster-cloud-" + role + "-" + version + "-linux-amd64.tar.gz" for role in ROLE_FILES]
+    extra_names = (["aster-cloud-installer-" + version + ".tar.gz", "aster-cloud-bootstrap-" + version + ".py",
+                    "release-trusted-root.json", "provenance.json", "release-manifest.json"] if prerelease else [])
+    names = role_names + extra_names + ["SHA256SUMS"]
+    if any((output / name).exists() or (output / name).is_symlink() for name in names):
         raise PackageError("refusing to overwrite package output")
     with tempfile.TemporaryDirectory(prefix=".cloud-package-", dir=str(output)) as temporary:
         scratch = Path(temporary)
@@ -361,26 +396,37 @@ def package_cloud(source_root, source_commit, output, version="0.1.0-dev", *, bu
         snapshot_source(root, source_commit, source)
         db_schema, journal_schemas, protocols = source_metadata(source)
         build_runner(source, built, epoch)
-        for role, name in zip(ROLE_FILES, names):
-            files = role_files(source, built, role)
+        for role, name in zip(ROLE_FILES, role_names):
+            files = role_files(source, built, role, prerelease=prerelease)
             manifest = {
                 "schema": 1, "component": "aster-cloud-" + role, "role": role,
                 "version": version, "source_commit": source_commit, "platform": "linux-amd64",
-                "release_kind": "development", "protocols": protocols,
+                "release_kind": "release" if prerelease else "development", "protocols": protocols,
                 "data_schemas": {"controller_mysql": db_schema} if role == "controller" else journal_schemas,
                 "build": {"go_toolchain": GO_TOOLCHAIN, **({"node": NODE_VERSION.lstrip("v")} if role == "controller" else {})},
                 "files": [{"path": name, "sha256": hashlib.sha256(raw).hexdigest(),
                            "size": len(raw), "mode": mode} for name, (raw, mode) in sorted(files.items())],
             }
+            if prerelease:
+                manifest.update(channel="prerelease", release_tag="cloud-v" + version)
             write_archive(scratch / name, files, manifest, epoch)
-        sums = "".join(hashlib.sha256(read_regular(scratch / name)).hexdigest() + "  " + name + "\n" for name in names)
+        payloads = role_names + (rc_files(source, scratch, source_commit, epoch) if prerelease else [])
+        sums = "".join(hashlib.sha256(read_regular(scratch / name)).hexdigest() + "  " + name + "\n" for name in sorted(payloads))
         (scratch / "SHA256SUMS").write_text(sums)
+        if prerelease:
+            manifest = {"schema": 1, "repository": REPOSITORY, "repository_id": REPOSITORY_ID, "owner_id": OWNER_ID,
+                        "version": version, "tag": "cloud-v" + version, "source_commit": source_commit,
+                        "source_ref": "refs/heads/main", "channel": "prerelease", "workflow": ".github/workflows/cloud-release-build.yml",
+                        "acceptance": {"production_ready": False, "real_kvm_accepted": False},
+                        "assets": [{"name": name, "sha256": hashlib.sha256(read_regular(scratch / name)).hexdigest(),
+                                    "size": (scratch / name).stat().st_size} for name in sorted(payloads + ["SHA256SUMS"])]}
+            (scratch / "release-manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
         # Build/validation failures publish no tarballs. Never replace an older
         # candidate. All artifacts originate from this owned private scratch.
-        for name in names + ["SHA256SUMS"]:
+        for name in names:
             os.link(str(scratch / name), str(output / name))
             (output / name).chmod(0o644)
-    return [output / name for name in names] + [output / "SHA256SUMS"]
+    return [output / name for name in names]
 
 
 def main(argv=None):
@@ -395,7 +441,8 @@ def main(argv=None):
     except (PackageError, OSError, ValueError, tarfile.TarError) as error:
         print("cloud package refused: " + str(error), file=sys.stderr)
         return 1
-    print("DEVELOPMENT CANDIDATES ONLY; no installation or KVM acceptance performed.")
+    print("UNPUBLISHED PRERELEASE CANDIDATES; packaging establishes no publisher identity or native acceptance."
+          if args.version == RC_VERSION else "DEVELOPMENT CANDIDATES ONLY; no installation or KVM acceptance performed.")
     for path in paths:
         print(path.resolve())
     return 0

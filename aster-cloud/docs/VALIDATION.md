@@ -1,8 +1,35 @@
 # 开发验证入口与历史记录
 
-验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列当前本地安装器安全测试，再列精确历史源码；历史日期段落保留原轮次的数量、工具链和限制，不是当前完整测试数量。独立主控没有正式 Release，财务 v0.5.9 发行包不因这些开发记录而改变。
+验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列当前本地安装器安全测试，再列精确历史源码；历史日期段落保留原轮次的数量、工具链和限制，不是当前完整测试数量。Cloud 的独立预发布不等于稳定版或真机验收；财务 v0.5.9 发行包不因这些记录而改变。
 
-## 当前工作区：新管理工作台
+## 当前工作区：官方通道与 libvirt 自动准备
+
+本轮只改 Cloud 安装 / 打包 / 发布 / 测试 / 文档，不改 Cloud Go 业务或迁移，更不改财务源码。
+精确 main 提交、官方 CI 与 Release 的结果须逐层核验，不能由本地模型测试推导真实安装成功。
+
+| 门禁 | 范围 | 不覆盖 |
+| --- | --- | --- |
+| installer / provision 离线安全测试 | 归档、恢复审批、固定依赖、libvirt units/masks/挂载视图及已有服务只读边界 | 实际发行版包脚本 / kernel / systemd 语义 |
+| 独立 publisher verifier 负例 | 缺失或伪造 receipt、错误来源/身份/版本、相邻代码篡改、输入边界 | 模型输出不是实际加密验签 |
+| Ubuntu 22 / 24 Linux unit 中匿名实签名核验 | 固定版本 gh、固定信任根、本地 Sigstore proof；无用户登录、无隐式下载或缓存写入 | 不是本项目新 Release 已发布 |
+| Ubuntu 22.04 / 24.04 / 26.04 隔离 TCG guest | 官方镜像签名及 SHA，真实 APT、systemd、libvirt、禁止默认网络、只读 namespace、宿主网络不变 | 没有 KVM 加速，不创建客户虚拟机，不证明物理网络可用 |
+| 同提交现有 CI | 真实独立 MySQL、严格 TLS 浏览器、NAT namespace 包流、OVS parser、前后端与依赖扫描 | 节点 RPC / 部分执行器仍为受控替身 |
+| 官方预发布后匿名下载 | 两角色实际 GitHub 资产、Sigstore 来源、完整字节、认证安装器生产 plan | 不执行生产主机 apply / service start |
+
+已实际执行的本地结果（2026-10-25）：installer 安全测试 **108**、安装器 unit **14**、packager **25**、
+release 合同 **25**、独立 verifier **19**、native fixture 合同 **24** 均通过；它们以模型 / 临时目录为主，不是真实安装。
+前端 format / typecheck / **37 文件 892 tests** / production build 通过。Cloud 全部受跟踪 `cmd` / `internal` / `plugins`
+包 Darwin race 与 vet 通过；未配置 MySQL 的本地场景不是实库验收。三个 workflow 的 actionlint 1.7.7 与 Python 3.10 AST 通过。
+最初本机 `go test ./...` 因 ignored 历史证据中的孤立 Go 测试文件和沙盒禁止监听失败，保留失败日志；
+随后按全部受跟踪包范围、允许仅测试 loopback 监听重跑通过，没有删历史证据或放宽业务断言。
+
+`cloud-v0.1.0-rc.1` 仅作为候选预发布，不能声明生产可用。下载命令以[该 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)
+实际正文为准；若未发布或任一最终 gate 失败，不称通道验收完成。发布协议见[RELEASE_CHANNEL](RELEASE_CHANNEL.md)。
+本轮原始结果及脱敏回执留在 ignored `artifacts/native-channel-20261025/`；源码文档不预填尚未执行的成功结果。
+
+下列“开发安装器”与旧 UI 段落保留各自历史阶段记录，不代表新增通道 / libvirt 的当前结果。
+
+## 历史阶段：新管理工作台
 
 - Gemini 原稿只提供视觉设计；生产使用独立 `WorkbenchHeader` / `InstanceLedger` 视图，仍接原有 API、session、RBAC 与持久化操作意图，不引入演示数据源或计时成功。
 - 本地完整执行 format、typecheck、**37 文件 / 892 tests** 和生产构建；`npm audit` 当前报告 0 vulnerabilities。已移除侧栏/重复顶栏，手机不再隐藏实例节点，详情、浮层与控件统一语义色和轻边界。
@@ -12,6 +39,8 @@
 - 当前 main 精确源码的 CI 运行见 [Controller development checks](https://github.com/xiaoqiqixi/betteridcsys/actions/workflows/cloud.yml)；必须核对运行所指向的 SHA 与结果，不把本地通过或旧运行当新完整验收。
 
 ## 当前工作区：开发安装器安全测试
+
+> 本节为正式通道 / libvirt 增量之前的历史阶段记录；旧计数与“尚未开放”仅指当时实现。
 
 本段记录已实际运行的本地开发检查，**不把未提交工作区或旧源码 SHA 写作新部署/发行验收终点**。
 独立 Cloud 正式 Release 与官方安装下载通道尚未发布，财务 `v0.5.9` 不能替代主控或被控开发包。

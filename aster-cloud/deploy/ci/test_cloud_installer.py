@@ -371,6 +371,266 @@ class InstallerContract(unittest.TestCase):
             stack.enter_context(mock.patch.object(Path, "is_symlink", fixture_is_symlink))
             yield provision, self.root / "native-state"
 
+    @contextlib.contextmanager
+    def libvirt_host(self):
+        """Later-boundary model only; real guard/readiness get separate tests."""
+        with self.provision_host() as (p, state), contextlib.ExitStack() as stack:
+            for name, value in {
+                "UNIT_ROOT": self.root / "virt-units", "RUNTIME_UNIT_ROOT": self.root / "runtime-virt-units",
+                "LIBVIRT_CONFIG": self.root / "etc-libvirt", "LIBVIRT_STATE": self.root / "libvirt-state",
+                "LIBVIRT_SOCKET": self.root / "libvirt-run/libvirt-sock", "LIBVIRT_EMPTY": self.root / "empty-networks",
+                "LIBVIRT_OWN_CONFIG": self.root / "etc-libvirt/aster-cloud-libvirtd.conf",
+                "LIBVIRTD": str(self.root / "libvirt-bin/libvirtd"),
+            }.items():
+                stack.enter_context(mock.patch.object(p, name, value))
+            p.UNIT_ROOT.mkdir(mode=0o755)
+            p.RUNTIME_UNIT_ROOT.mkdir(mode=0o755)
+            stack.enter_context(mock.patch.object(p, "fresh_libvirt_host"))
+            snapshot = {"links": {"lo": {"ifindex": "1", "address": "00", "mtu": "65536"}}, "rules": {"nft": "", "iptables": "", "ip6tables": ""}}
+            stack.enter_context(mock.patch.object(p, "network_snapshot", return_value=snapshot))
+            namespace = stack.enter_context(mock.patch.object(p, "verify_libvirt_namespace"))
+            ready = stack.enter_context(mock.patch.object(p, "verify_libvirt_daemon", return_value={"daemon": "owned-unix-only", "kvm": "not-asserted"}))
+            commands = []
+            def fixed(argv, **kwargs):
+                commands.append((argv, kwargs))
+                if argv[0] == p.APT_GET and "--assume-yes" in argv:
+                    p.LIBVIRT_CONFIG.mkdir(mode=0o755, exist_ok=True)
+                    # Model only vendor-created bytes, never a real network.
+                    (p.LIBVIRT_CONFIG / "vendor-default.xml").write_bytes(b"vendor default kept unchanged")
+                if argv[:2] == [p.SYSTEMCTL, "show"]:
+                    return ("FragmentPath=" + str(p.UNIT_ROOT / argv[2]) + "\nDropInPaths=\n").encode()
+                return b""
+            run = stack.enter_context(mock.patch.object(p, "run_fixed", side_effect=fixed))
+            yield types.SimpleNamespace(p=p, state=state, run=run, commands=commands, namespace=namespace, ready=ready)
+
+    def test_libvirt_plan_is_explicit_node_only_and_has_no_host_actions(self):
+        args = self.args("node", ("--plan", "--prepare-libvirt"))
+        p = installer.provisioning_module()
+        before = self.tree()
+        with mock.patch.object(p, "prepare_libvirt") as prepare:
+            result = installer.execute(args)
+        prepare.assert_not_called()
+        self.assertTrue(result["native_options"]["prepare_libvirt"])
+        self.assertIn("libvirt-daemon-system", result["dependency_plan"]["packages"])
+        self.assertEqual(before, self.tree())
+        with self.assertRaises(installer.InstallerError):
+            installer.execute(self.args("controller", ("--prepare-libvirt",)))
+        with self.assertRaises(p.ProvisionError):
+            p.dependency_plan("controller", with_libvirt=True)
+
+    def test_libvirt_fresh_software_guard_is_real_and_does_not_require_or_fake_kvm(self):
+        p = installer.provisioning_module()
+        extra = ("/var/lib/mariadb", "/etc/mysql", "/usr/sbin/mysqld", "/usr/sbin/dnsmasq", "/etc/dnsmasq.d-available/libvirt-daemon", str(p.LIBVIRT_SOCKET), p.LIBVIRTD, str(p.LIBVIRT_EMPTY))
+        unit_paths = tuple(str(root / (name + suffix)) for name in p.LIBVIRT_VENDOR_UNITS + p.LIBVIRT_OWN_UNITS for root in (p.UNIT_ROOT, p.RUNTIME_UNIT_ROOT) for suffix in ("", ".d"))
+        known = set(FRESH_DEPENDENCY_PATHS + extra + unit_paths)
+        for collision, kind in [(None, "exists"), *((name, kind) for name in sorted(known) for kind in ("exists", "symlink"))]:
+            def exists(path):
+                self.assertIn(str(path), known)
+                return kind == "exists" and str(path) == collision
+            def symlink(path):
+                self.assertIn(str(path), known)
+                return kind == "symlink" and str(path) == collision
+            def memory(path, *args, **kwargs):
+                self.assertEqual(str(path), "/proc/meminfo")
+                return "MemTotal: 2097152 kB\n"
+            with self.subTest(collision=collision, kind=kind), mock.patch.object(Path, "exists", exists), mock.patch.object(Path, "is_symlink", symlink), mock.patch.object(Path, "read_text", memory), mock.patch.object(Path, "stat", side_effect=AssertionError("software preparation must never require or fake a KVM device")), mock.patch.object(p, "run_fixed") as run:
+                if collision is None:
+                    p.fresh_libvirt_host()
+                else:
+                    with self.assertRaises(p.ProvisionError):
+                        p.fresh_libvirt_host()
+                run.assert_not_called()
+        for memory in ("MemTotal: 1048576 kB\n", "unknown"):
+            with mock.patch.object(Path, "exists", return_value=False), mock.patch.object(Path, "is_symlink", return_value=False), mock.patch.object(Path, "read_text", return_value=memory), self.assertRaises(p.ProvisionError):
+                p.fresh_libvirt_host()
+
+    def test_libvirt_package_path_cannot_be_used_without_outer_ownership_receipt(self):
+        with self.provision_host() as (p, state), mock.patch.object(p, "run_fixed") as run:
+            with self.assertRaises(p.ProvisionError):
+                p.install_dependencies("node", state, with_libvirt=True)
+            run.assert_not_called()
+
+    def test_libvirt_foreign_policy_refuses_before_any_mask_or_apt(self):
+        with self.libvirt_host() as h:
+            h.p.POLICY_PATH.write_bytes(b"foreign policy never overwrite")
+            with self.assertRaises(h.p.ProvisionError):
+                h.p.prepare_libvirt(h.state)
+            self.assertEqual(h.p.POLICY_PATH.read_bytes(), b"foreign policy never overwrite")
+            self.assertEqual(list(h.p.UNIT_ROOT.iterdir()), [])
+            h.run.assert_not_called()
+
+    def test_libvirt_legacy_receipt_cannot_add_preparation_on_resume(self):
+        args = self.args("node", ("--apply",))
+        p = installer.provisioning_module()
+        with self.isolated_host():
+            installer.execute(args)
+            receipt_path = installer.STATE_ROOT / "node/state.json"
+            receipt = json.loads(receipt_path.read_text())
+            receipt["native_options"].pop("prepare_libvirt")
+            receipt_path.write_text(json.dumps(receipt))
+            original = receipt_path.read_bytes()
+            args.resume, args.prepare_libvirt = True, True
+            with mock.patch.object(p, "prepare_libvirt") as prepare, self.assertRaises(installer.InstallerError):
+                installer.execute(args)
+            prepare.assert_not_called()
+            self.assertEqual(receipt_path.read_bytes(), original)
+
+    def test_libvirt_fresh_prepare_masks_every_vendor_activation_before_apt(self):
+        with self.libvirt_host() as h:
+            result = h.p.prepare_libvirt(h.state)
+            self.assertEqual(result["status"], "libvirt-prepared")
+            self.assertEqual(result["kvm"], "not-asserted")
+            receipt = json.loads((h.state / "libvirt.json").read_text())
+            self.assertEqual(set(receipt["masks"]), set(h.p.LIBVIRT_VENDOR_UNITS))
+            for name in h.p.LIBVIRT_VENDOR_UNITS:
+                self.assertEqual(os.readlink(h.p.UNIT_ROOT / name), "/dev/null")
+            h.p.verify_libvirt_masks(receipt)
+            self.assertFalse(h.p.POLICY_PATH.exists())
+            self.assertEqual((h.p.LIBVIRT_CONFIG / "vendor-default.xml").read_bytes(), b"vendor default kept unchanged")
+            for argv, _ in h.commands:
+                self.assertNotIn("unmask", argv)
+                if argv[0] == h.p.SYSTEMCTL and "start" in argv:
+                    self.assertEqual(argv[2:], list(h.p.LIBVIRT_OWN_UNITS))
+            h.namespace.assert_called_once_with()
+            h.ready.assert_called_once_with(owned=True)
+            for name in h.p.LIBVIRT_OWN_UNITS:
+                raw = (h.p.UNIT_ROOT / name).read_bytes()
+                self.assertNotIn(b"security_driver", raw)
+                self.assertNotIn(b"--listen", raw)
+            self.assertIn(b"BindReadOnlyPaths=", h.p.libvirt_unit_bytes("aster-cloud-libvirtd.service"))
+            self.assertEqual(list((h.p.LIBVIRT_EMPTY / "autostart").iterdir()), [])
+
+    def test_libvirt_failed_or_lost_start_ack_preserves_masks_and_stops_only_owned_services(self):
+        with self.libvirt_host() as h:
+            original = h.run.side_effect
+            def fail_start(argv, **kwargs):
+                if argv[:2] == [h.p.SYSTEMCTL, "start"]:
+                    h.commands.append((argv, kwargs))
+                    raise h.p.ProvisionError("synthetic acknowledgement lost")
+                return original(argv, **kwargs)
+            h.run.side_effect = fail_start
+            with self.assertRaises(h.p.ProvisionError):
+                h.p.prepare_libvirt(h.state)
+            receipt = json.loads((h.state / "libvirt.json").read_text())
+            self.assertEqual(receipt["status"], "failed-review-required")
+            self.assertEqual(receipt["cleanup"], "owned-daemons-stopped")
+            self.assertIn(([h.p.SYSTEMCTL, "stop", *reversed(h.p.LIBVIRT_OWN_UNITS)], {}), h.commands)
+            h.p.verify_libvirt_masks(receipt)
+            self.assertFalse(any(argv[:2] == [h.p.SYSTEMCTL, "enable"] for argv, _ in h.commands))
+            h.run.side_effect = original
+            self.assertEqual(h.p.prepare_libvirt(h.state, resume=True)["status"], "libvirt-prepared")
+
+    def test_libvirt_resume_refuses_changed_plan_and_foreign_same_content_mask(self):
+        with self.libvirt_host() as h:
+            h.p.prepare_libvirt(h.state)
+            path = h.state / "libvirt.json"
+            original = path.read_bytes()
+            receipt = json.loads(original)
+            receipt["plan_sha256"] = "0" * 64
+            path.write_text(json.dumps(receipt))
+            h.run.reset_mock()
+            with self.assertRaisesRegex(h.p.ProvisionError, "resume plan"):
+                h.p.prepare_libvirt(h.state, resume=True)
+            h.run.assert_not_called()
+            path.write_bytes(original)
+            name = h.p.LIBVIRT_VENDOR_UNITS[0]
+            replaced = h.p.UNIT_ROOT / name
+            aside = h.p.UNIT_ROOT / "old-mask"
+            replaced.rename(aside)
+            replaced.symlink_to("/dev/null")
+            with self.assertRaisesRegex(h.p.ProvisionError, "mask changed"):
+                h.p.prepare_libvirt(h.state, resume=True)
+            h.run.assert_not_called()
+            self.assertTrue(aside.is_symlink())
+
+    def test_libvirt_existing_host_is_readonly_and_never_reconfigured_or_started(self):
+        with self.libvirt_host() as h:
+            h.p.LIBVIRT_CONFIG.mkdir(mode=0o755)
+            original = h.p.LIBVIRT_CONFIG / "qemu.conf"
+            original.write_bytes(b"foreign reviewed qemu policy")
+            h.ready.return_value = {"daemon": "preserved-existing", "kvm": "not-asserted"}
+            result = h.p.prepare_libvirt(h.state)
+            self.assertEqual(result["daemon"], "preserved-existing")
+            self.assertEqual(original.read_bytes(), b"foreign reviewed qemu policy")
+            self.assertEqual(h.commands, [([h.p.SYSTEMCTL, "is-active", "--quiet", "libvirtd.service"], {})])
+            self.assertEqual(list(h.p.UNIT_ROOT.iterdir()), [])
+            self.assertFalse(h.p.POLICY_PATH.exists())
+            h.ready.assert_called_once_with()
+
+    def test_libvirt_existing_inactive_host_is_not_socket_activated_or_adopted(self):
+        with self.libvirt_host() as h:
+            h.p.LIBVIRT_CONFIG.mkdir(mode=0o755)
+            h.run.side_effect = h.p.ProvisionError("not active")
+            with self.assertRaises(h.p.ProvisionError):
+                h.p.prepare_libvirt(h.state)
+            h.ready.assert_not_called()
+            self.assertFalse((h.state / "libvirt.json").exists())
+
+    def test_libvirt_real_readiness_commands_are_fixed_readonly_and_no_kvm_claim(self):
+        p = installer.provisioning_module()
+        caps = b"<capabilities><host/><guest><arch name='x86_64'/></guest></capabilities>"
+        with mock.patch.object(p, "protected_path"), mock.patch.object(Path, "lstat", return_value=types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFSOCK | 0o700)), mock.patch.object(p, "run_fixed", side_effect=[b"", b"", caps]) as run:
+            self.assertEqual(p.verify_libvirt_daemon(owned=True)["kvm"], "not-asserted")
+        self.assertEqual([call.args[0] for call in run.call_args_list], [[p.VIRSH, "--connect", "qemu:///system", "--readonly", *tail] for tail in (("list", "--all", "--name"), ("net-list", "--all", "--name"), ("capabilities",))])
+        for values in ([b"existing-domain", b"", caps], [b"", b"default", caps], [b"", b"", b"<not-capabilities/>"]):
+            with self.subTest(values=values), mock.patch.object(p, "protected_path"), mock.patch.object(Path, "lstat", return_value=types.SimpleNamespace(st_uid=0, st_mode=stat.S_IFSOCK | 0o700)), mock.patch.object(p, "run_fixed", side_effect=values), self.assertRaises(p.ProvisionError):
+                p.verify_libvirt_daemon(owned=True)
+
+    def test_libvirt_network_or_firewall_change_is_not_accepted(self):
+        p = installer.provisioning_module()
+        before = {"links": {"eth0": {}}, "rules": {"nft": "", "iptables": None}}
+        p.verify_network_unchanged(before, {"links": before["links"], "rules": {"nft": "", "iptables": ""}})
+        for after in ({"links": {"virbr0": {}}, "rules": before["rules"]}, {"links": before["links"], "rules": {"nft": "table ip libvirt {}", "iptables": None}}):
+            with self.subTest(after=after), self.assertRaises(p.ProvisionError):
+                p.verify_network_unchanged(before, after)
+
+    def test_libvirt_software_prepared_never_skips_node_kvm_preflight(self):
+        args = self.args("node", ("--apply", "--start", "--prepare-libvirt"))
+        p = installer.provisioning_module()
+        with self.isolated_host(), self.synthetic_certificate_acceptance():
+            args.approval, _, _, _ = self.approval_input("node")
+            with mock.patch.object(p, "prepare_libvirt", return_value={"status": "libvirt-prepared", "kvm": "not-asserted"}) as prepare, mock.patch.object(installer, "node_preflight", return_value=["kvm-unavailable"]), mock.patch.object(installer, "run_fixed") as run:
+                with self.assertRaisesRegex(installer.InstallerError, "not KVM readiness"):
+                    installer.execute(args)
+            prepare.assert_called_once()
+            run.assert_not_called()
+            receipt = json.loads((installer.STATE_ROOT / "node/state.json").read_text())
+            self.assertEqual(receipt["libvirt_preparation"]["kvm"], "not-asserted")
+            self.assertEqual(receipt["service"], "not-started")
+
+    def test_release_envelope_requires_offline_publisher_verification_not_development_opt_in(self):
+        payload = self.payload()
+        manifest = self.manifest(payload)
+        manifest.update(release_kind="release", version="0.1.0-rc.1", channel="prerelease", release_tag="cloud-v0.1.0-rc.1")
+        path, digest = self.archive(payload, manifest)
+        args = installer.build_parser().parse_args(["controller", "--bundle", str(path), "--sha256", digest, "--allow-development"])
+        with self.assertRaises(installer.InstallerError):
+            installer.execute(args)
+        args.allow_development = False
+        args.release_receipt = str(self.private_file("release-receipt.json", b'{"verified":true}'))
+        module = types.SimpleNamespace(ReleaseError=type("ReleaseError", (Exception,), {}), verify_release_receipt=mock.Mock(return_value={"channel": "prerelease"}))
+        with mock.patch.object(installer, "RELEASE_MODULE", module):
+            result = installer.execute(args)
+        self.assertEqual(result["release_kind"], "release")
+        module.verify_release_receipt.assert_called_once_with(str(path), digest, "aster-cloud-controller", manifest, args.release_receipt, offline=True)
+        module.verify_release_receipt.side_effect = module.ReleaseError("forged receipt")
+        with mock.patch.object(installer, "RELEASE_MODULE", module), self.assertRaises(installer.InstallerError):
+            installer.execute(args)
+
+    def test_release_mode_cannot_authorize_development_or_stable_versions(self):
+        args = self.args()
+        args.allow_development = False
+        args.release_receipt = str(self.root / "receipt.json")
+        module = mock.Mock()
+        with mock.patch.object(installer, "RELEASE_MODULE", module), self.assertRaises(installer.InstallerError):
+            installer.execute(args)
+        module.verify_release_receipt.assert_not_called()
+        payload = self.payload()
+        for version, channel in (("0.1.0", "stable"), ("0.2.0-rc.1", "prerelease"), ("0.1.0-rc.1", "stable")):
+            manifest = self.manifest(payload)
+            manifest.update(release_kind="release", version=version, channel=channel)
+            self.rejected(*self.archive(payload, manifest))
+
     def test_valid_controller_bundle_is_verified_without_writes(self):
         path, digest = self.archive()
         before = self.tree()
@@ -1089,7 +1349,7 @@ class InstallerContract(unittest.TestCase):
     def test_node_wizard_never_requests_controller_client_certificate_or_key(self):
         args = self.args("node", ("--wizard", "--plan"))
         responses = [
-            "", "", "https://node.example.invalid:9443", "/etc/aster-input/server.crt", "/etc/aster-input/server.key", "127.0.0.1:9443", "dedicated-kvm",
+            "", "", "", "https://node.example.invalid:9443", "/etc/aster-input/server.crt", "/etc/aster-input/server.key", "127.0.0.1:9443", "dedicated-kvm",
             "node-a", "dc-a", "group-a", "/etc/aster-input/controller-ca.crt", "1" * 64,
             "ubuntu22", "/var/lib/aster-images/ubuntu22.qcow2", "2" * 64, "2", "1024", "10",
         ]

@@ -6,38 +6,36 @@
 
 使用 Go、MySQL、Vue 3 / TypeScript 与原生 systemd。目标宿主为 Ubuntu 22.04 及以上的 amd64；各发行版须单独验收。不对接 IDCsmart API；安装器不自动修改宿主机桥接、防火墙、已有 VM/镜像数据或物理上联。
 
-## 原生安装入口：仅本地开发包
+## 原生安装：主控与被控各一条命令
 
-**独立 Cloud 正式 Release / 官方下载通道尚未发布。** 财务 `v0.5.9` 不是主控或被控安装包，
-这里不提供假 `curl | sh` 地址，也不把开发包校验当成部署完成。
+Cloud 使用独立的 `cloud-v0.1.0-rc.1` **预发布通道**，不是财务 Core `v0.5.9`，也不是已验收稳定版。
+源码只在 `main` 更新；独立 Cloud 标签与资产不覆盖财务历史 Release，不改变财务 `latest`。
+**可执行命令以通过发布门禁的 [Cloud Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)
+正文为准**：每个角色一条固定完整提交 SHA 的 HTTPS bootstrap 命令。如果该 Release 尚不可下载，不能将本地开发包当正式通道。
 
-在审核过的本地仓库根目录，每台目标主机只执行对应角色的一条命令：
+初始脚本是操作者审核并信任的固定源码入口；它不是靠下载自己的 checksum 自证可信。
+后续主控 / 被控包和安装器代码必须通过 GitHub Actions 的 Sigstore 身份、精确源码 SHA、制品哈希和完整清单核验；
+无需 GitHub 登录，不读取用户 token。验证器固定版本与哈希，只放在 root 私有缓存，不替换系统 `gh`。
+包、签名、来源或代码邻接文件不一致即停止，不回退开发包。完整信任边界见[发布通道](docs/RELEASE_CHANNEL.md)。
 
-```sh
-sudo bash aster-cloud/deploy/install/controller.sh
-```
+- **主控**：一条命令进入交互向导，采集真实域名 / TLS / 专用数据库与管理员信息。
+  可以显式选择官方 Ubuntu 依赖和新专用 MySQL；runtime DML 与迁移 DDL 身份分离，绝不复用财务库。
+  只有严格 HTTPS、数据库、管理员引导与服务检查通过才报告就绪。密码私密输入，不进命令行和日志。
+- **KVM 被控**：一条命令进入节点向导，可明确批准自动准备官方 libvirt / QEMU 完整软件栈。
+  先约束 vendor 服务 / socket 的启动，再使用仅本机 Unix socket 的专属守护进程；空网络目录的只读 mount namespace
+  隔离包脚本生成的默认网络。核对真实 PID、unit、mount 与网络状态，不改物理上联、netplan 或防火墙规则。
+  已运行的外来 libvirt 仅做只读核验，不接管、不重启。
+- **默认安全边界**：先显示只读 plan，再由操作者明确批准依赖、配置、apply 与 start。
+  软件准备不要求假造 `/dev/kvm`，也不把安装成功等同于节点可接单；启动仍要求真实 KVM、证书、已批准镜像与预算。
+  维护开启、网络与删除关闭。本机启动状态仅为 `node_started_pending_controller`，真实 pinned mTLS 准入从主控发起，
+  不向节点复制主控 client 私钥。现有 1GB 财务测试机不能用作计算节点。
+- **兼容范围**：安装器明确接受 Ubuntu 22.04 / 24.04 / 26.04 amd64、Python 3.10+ 与 booted systemd；
+  CI 分别使用官方验签镜像进行隔离 TCG 安装测试，结果绑定精确提交。TCG 只验证真实 APT/systemd/libvirt 软件准备，
+  不代表 KVM 客户虚拟机、物理网络、迁移或整机升级恢复验收。真实 KVM 验收仍按计划后置。
 
-```sh
-sudo bash aster-cloud/deploy/install/node.sh
-```
-
-两条命令进入交互向导，**默认只读 plan**；向导要求本地开发包路径、独立可信来源的完整
-SHA256、显式开发版批准、真实配置与最终 apply/start 批准。不是复制命令后无条件上线。
-本轮实际核验过的本地包、真实 SHA 与可复跑的只读单命令见[当前验证记录](docs/VALIDATION.md#当前工作区开发安装器安全测试)。
-详细参数、配置审批和恢复见[安装器说明](deploy/install/README.md)、[开发包合同](docs/INSTALL_PACKAGES.md)
-与[安装器安全测试](docs/INSTALL_VALIDATION.md)。
-
-- **主控**：可沿用独立 MySQL / 真实 TLS，也可明确选装固定 Ubuntu 依赖和新专用 MySQL。
-  新 DB 的 runtime DML 与 migration DDL 账号分离，不复用财务库/账号；只对新建专用服务配置
-  Unix-socket-only MySQL。管理员口令私密输入；只有数据库检查、管理员引导、活跃服务和严格
-  HTTPS 健康检查完成才报告 `service-ready` 并输出访问入口。
-- **KVM 被控**：可选装固定 qemu / virsh-client / cloud-localds 工具，**没有开放完整 libvirt
-  daemon 与默认网络的自动安装**。仍须真实 KVM、已批准的 libvirt 服务、证书、镜像与预算；
-  默认维护开启、网络和删除关闭，不改物理上联/桥接/防火墙。即使本机检查与服务启动完成，也只报告
-  `node_started_pending_controller`，真实 mTLS 注册须从主控执行，不能把 controller 私钥放到节点。
-- **未完成项**：干净 KVM 节点端到端“一键就绪”尚未完成；本轮未执行真实 APT、MySQL provisioning、
-  systemd 安装或 KVM 部署验收。Ubuntu 22.04 / 24.04 / 26.04 amd64 是安装器目标检查，不是三个发行版已实测的承诺。
-  新 UI 的实库、浏览器和截图门禁独立执行；安装器安全测试与旧 UI 的结果不能代替它们。
+已有审核过的本地开发包仍可使用 `deploy/install/controller.sh` / `node.sh`，但必须显式批准 development
+和独立可信 SHA，不能据此安装 release 形态的包。详细参数、恢复与未验收项见[安装器说明](deploy/install/README.md)、
+[包合同](docs/INSTALL_PACKAGES.md)、[安装安全测试](docs/INSTALL_VALIDATION.md)及[精确验证记录](docs/VALIDATION.md)。
 
 ## 当前能力与限制
 
@@ -65,7 +63,7 @@ SHA256、显式开发版批准、真实配置与最终 apply/start 批准。不�
 - **接入财务**：[财务资源 worker](../vps-billing/docs/RESOURCE_PLUGINS.md) · [独立适配 CLI](plugins/billingconnector/README.md) · [财务产品配置合同](../vps-billing/docs/PRODUCT_CONFIGURATION.md)
 - **执行器细节**：[OVS 核心](internal/fabric/README.md) · [NAT 审批](internal/fabric/NAT.md) · [overlay 控制合同](docs/OVERLAY_CONTROL.md)
 
-财务仍使用公开 `aster.controller/1`；普通网络为 `aster.node/1`，显式 OVS VPC 为 `aster.node/2`，托管直绑公网为 `aster.node/3`。不同合同不自动互相升级，协议通过也不表示虚拟机已创建。开发环境通过 `go.mod` 的本地 replace 使用相邻财务源码的公开 `controllerapi`，不导入其内部数据库。现有打包工具可制作本地开发包；独立发行前仍须锁定公共合同来源、建立正式发布通道并完成原生安装验收。
+财务仍使用公开 `aster.controller/1`；普通网络为 `aster.node/1`，显式 OVS VPC 为 `aster.node/2`，托管直绑公网为 `aster.node/3`。不同合同不自动互相升级，协议通过也不表示虚拟机已创建。开发环境通过 `go.mod` 的本地 replace 使用相邻财务源码的公开 `controllerapi`，不导入其内部数据库。打包工具从同一精确 monorepo 提交编译公开合同与 Cloud 二进制；正式预发布通过独立签名与下载门禁，真实 KVM 和完整生产生命周期仍须另外验收。
 
 ## 状态与升级边界
 

@@ -1,26 +1,59 @@
-# Native installer — development channel only
+# Native installer — authenticated first prerelease / explicit development
 
-**There is no published standalone Aster Cloud release/channel yet.** The finance
-`v0.5.9` release is not a Cloud installer or bundle. No download URL or successful
-remote deployment is implied here. A local development bundle plus its exact,
-independently trusted external SHA256 is mandatory. A checksum is integrity,
-not publisher authentication; `--allow-development` explicitly trusts this code.
+The sole supported publisher-authenticated identity is **`cloud-v0.1.0-rc.1`**,
+version `0.1.0-rc.1`, channel `prerelease`. This page does **not** record that a
+Release was published, downloaded successfully, or installed on a native host.
+There is no generic stable/latest channel. The finance `v0.5.9` release is not a
+Cloud installer or bundle.
+
+### Official command source and trust boundary
+
+After publication, obtain the exact role-specific command from the
+[cloud-v0.1.0-rc.1 Release body](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1).
+If that body, complete assets or proof are absent, **stop**. Do not substitute a
+finance release, another RC, a `/main` script, or an invented download command.
+This document intentionally does not give a placeholder official one-liner.
+
+The initial HTTPS bootstrap is pinned to the Release's **full immutable source
+commit** and remains an explicit operator trust root: review that command/source;
+it does not authenticate itself by downloading a colocated checksum. Subsequent
+executable assets require anonymous Sigstore/GitHub attestation verification with
+the code-pinned Linux amd64 `gh` verifier and pinned official trusted roots. The
+signed release manifest binds the fixed repository and numeric owner/repository
+identity, tag, source SHA, workflow, and every asset name/size/SHA256. Certificates
+must match the approved GitHub-hosted workflow and source; no token, self-hosted
+runner or TLS bypass is accepted. A checksum alone is not publisher identity.
+
+The private publisher receipt is passed as `--release-receipt`; the installer
+reverifies the local proof **offline** before plan/apply. `verified:true` JSON is
+not authority. Its observed GitHub release ID prevents mixing a download, but is
+not a signed authorization. The downloaded capsule's three exact neighboring
+Python files are also authenticated; unknown adjacent imports are refused.
+`--download-only` anonymously downloads/verifies and executes the authenticated
+installer's real read-only plan, never apply or service start. It writes private
+download/proof material, unlike the installer plan itself.
+
+Local development remains separate: provide `--allow-development --bundle ...
+--sha256 ...` with a real reviewed package and independently trusted complete
+external digest. Development approval cannot authorize a release envelope, and a
+release receipt cannot authorize development or manufacture stable acceptance.
 
 ## One command per role
 
-From a reviewed local checkout, on the intended native host:
+For the **local development** path, from the reviewed checkout root on the
+intended native host (not an official-download command):
 
 ```sh
-sudo bash /absolute/path/to/aster-cloud/deploy/install/controller.sh
-sudo bash /absolute/path/to/aster-cloud/deploy/install/node.sh
+sudo bash aster-cloud/deploy/install/controller.sh
+sudo bash aster-cloud/deploy/install/node.sh
 ```
 
 These are **interactive installers**. Existing dependencies are the default;
-fixed Ubuntu packages and a new dedicated MySQL server/database are explicit
+fixed Ubuntu packages, isolated libvirt preparation and a new dedicated MySQL server/database are explicit
 optional paths, not an already-validated clean-Ubuntu unattended deployment. The controller and KVM node are separate machines and
 separate commands. Never run the node installer on the 1GB finance test server.
 The wizard asks for the bundle path, independently trusted archive SHA256,
-explicit development approval, optional package/database approval, real
+explicit development approval, optional package/database/libvirt approval, real
 configuration inputs, a read-only bundle preflight, and whether to apply/start. `software` deliberately installs only binaries; an empty approval-file
 answer enters guided configuration rather than requiring hand-written JSON.
 Passwords use `getpass` and the existing `bootstrap-admin -password-stdin` API;
@@ -64,10 +97,12 @@ reported ready, and the receipt requires explicit recovery.
 
 ### Existing KVM node prerequisites and guided path
 
-- A **dedicated** hardware-virtualization Linux host with usable `/dev/kvm`, at
-  least 2GiB RAM, distribution-supported libvirt daemon/socket already approved
-  and running, and fixed native executables `/usr/bin/virsh`, `qemu-img`,
-  `qemu-system-x86_64`, `cloud-localds`.
+- A **dedicated** hardware-virtualization Linux host with usable `/dev/kvm` and at
+  least 2GiB actual `MemTotal`. Use an already approved active libvirt daemon and
+  fixed native `/usr/bin/virsh`, `qemu-img`, `qemu-system-x86_64`, `cloud-localds`,
+  or explicitly approve the wizard's new `libvirt` software-preparation option.
+  That option includes the fixed tools and signed Ubuntu daemon stack; its
+  `libvirt-prepared` result is **not** KVM/image/VM readiness.
 - A real root-owned flat qcow2 image already under `/var/lib/aster-images`, its
   independently approved complete SHA256, actual node/datacenter/group IDs,
   and explicit CPU/memory/disk ceilings. No image is downloaded or fabricated.
@@ -80,11 +115,11 @@ Guided configuration stays `maintenance=true`, `network.enabled=false`,
 `allow_delete=false`, isolated-no-NIC and storage mutation disabled. Images are
 hashed and the Go `LoadConfig`/`--doctor` checks remain unchanged. The installer
 creates only private journal/storage directories and installs its fixed native
-unit; it does not enable libvirt's default network or modify bridges, netplan,
-ufw/nft/iptables, physical uplinks, images, VMs or journals. Optional node APT
-installs only fixed client/qemu/image utilities, **not the libvirt daemon stack**.
-The existing libvirt service/default-network policy still needs explicit native
-host preparation and acceptance; package scripts are not treated as harmless.
+unit; it does not enable libvirt's default network or edit bridges, netplan,
+ufw/nft/iptables, physical uplinks, images, VMs or journals. Plain optional node APT
+still installs only fixed client/qemu/image utilities. Explicit `--prepare-libvirt`
+adds the isolated daemon preparation described below. Package scripts are never
+treated as harmless merely because the package source is signed.
 
 A node started after doctor + active unit + local TCP-listener observation is
 **`node_started_pending_controller`**, NOT mTLS-admitted, not VM-ready, and not a
@@ -103,7 +138,7 @@ controller retains its private key. Its existing heartbeat performs real pinned
 mTLS to `/v1/capabilities`. Node maintenance stays on; operational admission and
 network/VM tests are separate explicit operations, not installation side effects.
 
-## Explicit optional dependency and dedicated-DB paths
+## Explicit optional dependency, libvirt and dedicated-DB paths
 
 The same one-command wizard asks whether to approve `apt`; blank retains the
 existing-dependencies path. Controller DSN input accepts `new` for a separate
@@ -111,8 +146,58 @@ explicit new-database approval. Automation equivalents are
 `--install-dependencies --provision-mysql --database-name aster_cloud`
 `--runtime-db-user aster_cloud_api --migration-db-user aster_cloud_migrate`, used
 with the existing `--wizard` / verified local development-bundle arguments.
-These flags never make `--plan` or `--dry-run` perform installation or generate
+The node wizard additionally asks for `libvirt`; its automation flag is
+`--prepare-libvirt` (node-only), which includes the fixed node-tool transaction on
+a fresh host. These flags never make `--plan` or `--dry-run` install or generate
 secrets. They are **implemented and mock-tested, not real-host accepted**.
+
+### Libvirt preparation is deliberately narrower than node readiness
+
+- Fresh dedicated Ubuntu 22.04/24.04/26.04 amd64 only, at least 2GiB `MemTotal`;
+  existing database/finance/virt configuration, foreign units/overrides/masks and
+  existing `policy-rc.d` are refused. Preparation does not fabricate or require
+  `/dev/kvm`; **starting the node still requires the unchanged real KVM preflight,
+  real image checks and Go doctor**. Never use the 1GB finance host.
+- Full official `libvirt-daemon-system` dependencies preserve Ubuntu's QEMU
+  users, AppArmor policy and package configuration. Vendor default-network XML
+  may be created on a **fresh** disk by package maintainer scripts; this is not
+  permission to activate it or edit an existing host's configuration.
+- Before APT, every enumerated vendor monolithic/modular service and socket,
+  including TCP/TLS/network activation paths, receives an exclusively created,
+  inode-bound **persistent `/dev/null` mask**. The nonce-owned temporary service
+  policy additionally denies package autostart. Vendor masks are not removed on
+  success, failure or resume; do not manually unmask them to make a check pass.
+- Only the new fixed `aster-cloud-libvirtd.service`,
+  `aster-cloud-virtlogd.service` and `aster-cloud-virtlockd.service` may be started.
+  The own daemon uses `/etc/libvirt/aster-cloud-libvirtd.conf`, root-only UNIX
+  sockets and no TCP/TLS listener. It does not disable AppArmor or make QEMU root.
+- Its `BindReadOnlyPaths` maps
+  `/var/lib/aster-cloud-installer/libvirt-empty-networks` (including an empty
+  `autostart`) onto `/etc/libvirt/qemu/networks` **in the actual daemon mount
+  namespace**. The installer checks effective unit fragments/no foreign drop-ins,
+  real PID/executable, source/namespace inode identity and read-only mount flags;
+  checking the unit text alone is insufficient.
+- Read-only `virsh --connect qemu:///system --readonly` list/net-list/capabilities
+  must succeed, with no fresh domains/networks. Interface and firewall structure
+  evidence is compared before packages and after start; only traffic counters and
+  clock comments are ignored, not chain policies or rules. No default NAT or
+  `virbr0` may be introduced. Boot enablement follows these checks.
+- An **already active existing** vendor daemon is preserved and only inspected
+  read-only: no APT, restart, masking, deletion or replacement configuration.
+  Existing networks are not claimed to be the fresh empty-network policy. A
+  stopped/misconfigured existing daemon is not silently socket-activated or fixed.
+- `libvirt.json` binds the OS, exact preparation plan and owned mask inodes.
+  Failure preserves evidence and masks, and a possible start/enable (including a
+  lost ACK) triggers disable/stop attempts only for owned units. Reviewed
+  `--resume` must retain the exact plan; legacy receipts cannot gain new side
+  effects. Nothing deletes domains, disks, journals or network data.
+
+The Ubuntu **22.04/24.04/26.04 TCG CI gate is pending execution/result review**.
+It is designed to boot a fresh signed Ubuntu VM, exercise real APT/PID-1 systemd
+and namespace/virsh evidence, and require the real node doctor to fail **only the
+missing-KVM checks**. TCG cannot establish hardware KVM or VM/network admission.
+See [the native gate contract](../ci/libvirt-native.md). No native success is
+asserted by the offline tests or this document.
 
 Package rules:
 
@@ -125,8 +210,10 @@ Package rules:
 - Fixed controller packages: `ca-certificates`, `openssl`; new-server mode adds
   `mysql-server`, `mysql-client`. Fixed node tools: `ca-certificates`, `qemu-utils`,
   `qemu-system-x86`, `libvirt-clients`, `cloud-image-utils`. There is no arbitrary
-  package-name flag. Simulation refuses upgrades/removals and network-daemon
-  packages; native integration remains necessary to validate maintainer behavior.
+  package-name flag. Only explicit libvirt preparation adds
+  `libvirt-daemon-system`; the ordinary utility plan refuses daemon packages.
+  Simulation refuses upgrades/removals and unrelated firewall/OVS daemons;
+  native integration remains necessary to validate maintainer behavior.
 - A conservative fresh-host gate refuses existing database/virt/finance paths.
   New MySQL package mode additionally refuses any existing MySQL config, data,
   daemon or local service. The installer exclusively creates a nonce-owned
@@ -192,8 +279,11 @@ are the basis for secret-free submitted SQL and conservative resume checks.
 
 ## Read-only planning / explicit automation
 
-Plans require neither root nor Ubuntu and do not write, invoke binaries, install
-packages, or perform network probes:
+Development installer plans require neither root nor Ubuntu and do not write,
+invoke binaries, install packages or perform network probes. Authenticated RC
+plans additionally invoke the **pinned local offline cryptographic verifier**;
+they do not download, write caches, apply APT/DB changes or start a daemon. Its
+root-private proof layout must be readable by the invoking identity.
 
 ```sh
 python3 /absolute/path/to/aster-cloud/deploy/install/install.py controller --plan \
@@ -203,9 +293,9 @@ python3 /absolute/path/to/aster-cloud/deploy/install/install.py node --dry-run \
 ```
 
 `REAL_EXTERNAL_SHA256` is documentation notation, not an accepted hash; provide
-all 64 lowercase hexadecimal characters from the real trusted checksum. Default
-invocation refuses the unpublished official channel rather than downloading
-finance artifacts or creating a dummy candidate.
+all 64 lowercase hexadecimal characters from the real trusted checksum. Missing
+release proof or development approval is refused, never replaced with a finance
+artifact, unpublished candidate or unsigned same-origin checksum.
 
 For a pre-reviewed complete configuration, `--approval /root/approval.json`
 (root-owned0600) replaces guided input, and `--apply --start` explicitly requests
@@ -272,6 +362,8 @@ the unit retains all four explicit writable paths and hardening directives.
   existing-admin approval), active service and authenticated strict HTTPS health.
 - Node `node_started_pending_controller` + `active-unadmitted`: host doctor,
   active service and local listener only; controller mTLS heartbeat still needed.
+- Libvirt `libvirt-prepared` + `kvm=not-asserted`: the separate daemon software
+  operation passed its local checks; it is not a started/admitted node or VM.
 - `failed`: execution stops; no later step is silently marked successful.
 
 Only safe summaries and the private receipt location are printed. Receipts and
@@ -302,8 +394,11 @@ sandbox; protected-home paths are not suitable runtime TLS/DSN locations.
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 /absolute/path/to/aster-cloud/deploy/ci/test_cloud_installer.py
 PYTHONDONTWRITEBYTECODE=1 python3 /absolute/path/to/aster-cloud/deploy/install/test_install.py
+PYTHONDONTWRITEBYTECODE=1 python3 /absolute/path/to/aster-cloud/deploy/ci/test_cloud_release_verifier.py
 ```
 
-The tests use synthetic bundles and per-process mocks; no apt/systemctl, remote
+Current offline results are **108 installer-security + 14 installer-unit + 19
+independent publisher-policy test methods**. The tests use synthetic bundles and per-process mocks; no apt/systemctl, remote
 host, production database, physical networking or actual VM is exercised. Real
-Ubuntu/MySQL/KVM deployment acceptance remains a separate required validation.
+Ubuntu/APT/MySQL/systemd/KVM deployment acceptance remains separate. Mocked gh
+stdout is a parser/policy model, **not** an actual successful Sigstore proof.

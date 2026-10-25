@@ -1,15 +1,24 @@
 # 主控 / KVM 被控安装器验证边界
 
 本页记录安装器安全回归的范围，**不是正式发行或整机安装验收声明**。
-当前没有已发布的 cloud 正式 release。开发候选包、Python 合成载荷、mock
-runner 或文件系统单测均不能称为真实主控 / KVM 安装、升级、恢复通过。
+本轮实现只接受唯一官方候选身份 `cloud-v0.1.0-rc.1` / `0.1.0-rc.1` /
+`prerelease`；这**不是已发布 Release 或下载成功的记录**，没有 stable/latest
+回退。开发候选包、Python 合成载荷、mock runner 或文件系统单测均不能称为
+真实主控 / KVM 安装、升级、恢复通过。财务 `v0.5.9` 不是 Cloud 发行物。
+
+正式角色命令只取实际发布后的
+[cloud-v0.1.0-rc.1 Release body](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)。
+若 Release body、完整 assets 或 attestation 缺失，必须停止，不用 `/main`、
+财务包或占位 curl 冒充可上线的一条命令。本页不记录官方发行已经完成。
 
 ## 本地安全回归
 
 仓库根目录运行：
 
 ```sh
-python3 aster-cloud/deploy/ci/test_cloud_installer.py
+python3 -B aster-cloud/deploy/ci/test_cloud_installer.py
+python3 -B aster-cloud/deploy/install/test_install.py
+python3 -B aster-cloud/deploy/ci/test_cloud_release_verifier.py
 ```
 
 测试只在 `tempfile.TemporaryDirectory` 内构造**合成** tar.gz、manifest
@@ -30,8 +39,10 @@ python3 aster-cloud/deploy/ci/test_cloud_installer.py
 - 哈希 / 解包竞争：完整外部 SHA 完成后替换源路径，或原 inode 写入另一份
   同大小合法包并恢复 mtime，均只能拒绝或返回原先已哈希的字节。
   PAX / GNU 元数据声明在读取载荷前被拒绝，避免 stdlib tar 迭代器提前分配。
-- `make_plan` / `execute` 的默认 plan 和 dry-run：非 root 可读、无安装写入、
-  不执行宿主命令、不将开发候选包伪装为正式 release。
+- `make_plan` / `execute` 的默认 plan 和 dry-run：开发路径非 root 可读、
+  无安装写入、不执行宿主配置命令。官方 RC 路径额外调用本地 pin 住的 gh，
+  离线复验 publisher proof；不联网、下载、写缓存或执行 APT/DB/service apply。
+  root 私有 proof 仍需调用身份有权限读取。不将开发候选包伪装为正式 release。
 - apply：非 root 必须拒绝；具体私有审批、已有 / 部分安装、未就绪节点和
   故障恢复结果以实际测试项为准，不能从 plan 的通过推断 apply 已经安全完成。
 - 配置 / 恢复：已有配置与 unit 不同即拒绝；部分 init seed 的 token 保留，
@@ -46,11 +57,27 @@ python3 aster-cloud/deploy/ci/test_cloud_installer.py
   检查，结果必须为 `node_started_pending_controller` / `active-unadmitted`。
   **这不是 mTLS 健康探针，也不是已加入主控**；真实 mTLS 核对必须从主控端
   使用仅保留在主控端的 client 私钥执行。主控 TLS 健康失败则不 enable 服务。
-- 可选原生依赖 / MySQL：默认关闭，带 opt-in 的 plan 仍不执行命令或生成秘密。
+- 可选原生依赖 / MySQL：默认关闭，带 opt-in 的 plan 仍不执行安装命令或生成秘密。
   测试核对固定包列表、独立 HTTPS Ubuntu signed-by 源、禁升级 / 移除、拒绝
-  网络 daemon 模拟计划、临时 policy 的独占创建与 inode/内容绑定删除、失败后
+  非批准 daemon 模拟计划、临时 policy 的独占创建与 inode/内容绑定删除、失败后
   显式原计划恢复。已有 policy、MySQL 配置、数据或 drop-in 均拒绝覆盖。
-  **节点依赖列表没有 libvirt daemon/default network**，不能称为干净节点端到端安装。
+  普通节点工具列表不含 daemon；新增显式 `--prepare-libvirt` 才批准固定官方
+  `libvirt-daemon-system` 及其依赖。该软件阶段不要求 `/dev/kvm`，但最终
+  node preflight/镜像/doctor gate 完全不放宽，仍不能称为真实 KVM 端到端安装。
+- libvirt 软件准备：真实 fresh guard 直接在虚拟读取边界下执行，逐项拒绝
+  数据库/财务/virt 路径、foreign units/drop-ins/masks、已有 policy 和不足
+  2GiB `MemTotal`。包事务前持久 mask 全部已枚举 vendor service/socket，
+  只启动 `aster-cloud-{libvirtd,virtlogd,virtlockd}.service`。保留官方 AppArmor、
+  QEMU 用户和 fresh 磁盘上的 vendor default XML，不删除 XML 假装隔离成功。
+  own libvirtd 以 `BindReadOnlyPaths` 将专用空 networks/autostart 映射到
+  `/etc/libvirt/qemu/networks`；核对有效 unit、真实 PID/exe、namespace inode
+  和只读 mount 标志，再做固定 readonly `virsh qemu:///system` 查询。
+  fresh 视图不得有 domain/network，接口/firewall 结构前后必须一致；仅忽略
+  流量计数/时间注释，规则、chain policy、source/target 变化仍拒绝。
+  软件状态只能为 `libvirt-prepared` / `kvm=not-asserted`。
+  既有活动 daemon 只读保留、不安装/重启/删配置/改已有网络；inactive daemon
+  不被隐式 socket-activate。失败保留 masks/receipt；start/enable 丢 ACK 也按
+  不确定处理，只对 owned units 尝试 disable/stop；resume 不得换计划或新加批准。
 - 数据库 bootstrap：只允许本机 root Unix socket 的一次性管理操作；实际 runtime
   必须是新建的非 root DML 身份，迁移为另一个非 root DDL 身份。测试核对 SQL
   仅走 stdin、client 不读 `/root` login-path、不继承密码环境变量；MySQL 生成随机
@@ -75,12 +102,54 @@ MySQL 的 `--no-login-paths` 是 8.2 才新增，不能盲用于 Ubuntu 的 8.0 
 当前代码使用私有 HOME / login-path 隔离，仍需目标主机实测。
 参见 [MySQL 官方说明](https://dev.mysql.com/blog-archive/new-client-option-no-login-paths-turn-off-login-path-file-processing/)。
 
+## 唯一 RC 的 publisher 验证边界
+
+初始 bootstrap 使用 Release body 的**完整 immutable commit** HTTPS 地址，
+是操作者必须审阅的信任起点，不是脚本拿同源 SHA 后“自我证明”。后续代码
+必须通过匿名 GitHub/Sigstore attestation：固定代码 hash 的官方 gh 二进制及
+固定官方 trusted roots，绑定 repository/owner 数字 ID、tag、source SHA/ref、
+workflow、GitHub-hosted runner、trigger 和 verified transparency timestamp。
+不依赖用户 token，不接受 self-hosted publisher 或 TLS 绕过。
+
+签名 release manifest 完整绑定每个 asset 的 name/size/hash；本地私有 receipt
+仅记录证明材料，不因 `verified:true` 获得授权。release ID 只记录 HTTPS API
+观察值以防混合一次下载，**不是签名授权**。installer 在 plan/apply 前离线
+复验 manifest、capsule、role bundle 三份 publisher 绑定，核对 capsule 三个
+代码邻居，拒绝多余 import、软/硬链接、公开权限、非 pin 住的 gh/roots。
+`--allow-development` 不能批准 release，正式 receipt 也不能批准开发包、其他
+RC 或 stable。原 tar/manifest 的每文件与完整外部 SHA 校验继续生效。
+
+新增 **19 个独立 publisher-policy methods** 使用合成证书/签名输出模型，
+成功例确实到达三次固定离线 verifier seam，并检查 flags 互斥兼容、匿名环境、
+无写入；负例逐项更改证书身份/SHA/owner/runner/trigger/timestamp、asset 绑定、
+capsule、私有权限和未知邻居。**mock gh stdout 不是密码学验签通过**。
+`--download-only` 本身允许写私有下载/proof，再执行实际已认证 installer 的
+只读 plan；它既不是零写入 bootstrap，也不是 host apply / VM 通过。
+
+## Ubuntu 22.04 / 24.04 / 26.04 TCG gate（待 CI）
+
+新增 [native-libvirt contract](../deploy/ci/libvirt-native.md) 规定使用 Canonical
+签名校验且固定 hash 的新 Ubuntu 镜像，在隔离的 TCG guest 内真实执行 APT、
+PID-1 systemd、生产 `prepare_libvirt` 与相同计划 resume。不能删除 runner
+已有 MySQL/libvirt 路径冒充 fresh host，也没有生产 `skip-kvm` 开关或假设备。
+
+必须真实核对 persistent vendor masks、owned units、root-only UNIX socket、
+实际只读空 networks mount、virsh capabilities/空 networks、无 `virbr`，并对
+宿主接口/路由/firewall 结构做前后对照。真实节点配置使用完整 Canonical
+镜像、真实临时证书和有效资源限制；doctor 不能任意非零就算过，必须通过
+非 KVM 先决检查并明确拒绝不存在的 `/dev/kvm` / hardware virtualization。
+
+**此处三个 Ubuntu gate 均待 CI 实际执行与结果核对，不记录 PASS。** 即使
+随后通过，也仅证明软件准备和 missing-KVM fail-closed；TCG 不是硬件 KVM、
+真实 VM 生命周期、物理上联、controller admission 或生产安装验收。
+
 ## 必须另外执行的验收
 
-正式使用前仍需在专用、可销毁的 Ubuntu 22.04 / 24.04 amd64 主机分别验证：
+正式使用前仍需在专用、可销毁的 Ubuntu 22.04 / 24.04 / 26.04 amd64 主机分别验证：
 
-1. 来源可核验的正式 release、独立取得的校验和、版本与构建 provenance。
-   外部 SHA 能发现传输变更，但不能单独证明发布者身份。
+1. 实际已发布 sole RC 的匿名完整下载、固定 commit bootstrap、真实 Sigstore
+   proof、版本与构建 provenance。外部 SHA 不能单独证明发布者身份；发布链
+   的 offline parser/mock 测试不等于一次真实官方下载/密码学验证成功。
 2. 干净主机安装、故障中断后的人工核对、重复安装拒绝、配套升级、备份与
    数据库 / journal / 制品一致性恢复。不能只换旧 binary 或删新表降级。
 3. 真实 APT 事务、维护脚本 autostart/默认网络边界、policy 中断恢复与所有权；
@@ -102,33 +171,36 @@ MySQL 的 `--no-login-paths` 是 8.2 才新增，不能盲用于 Ubuntu 的 8.0 
 
 ## 当前结果
 
-2026-10-25，Darwin 本地运行上述独立安全测试：**93 个 test methods 通过**
-（含额外 subtests），无 SKIP；测试只使用合成文件与替代系统边界，没有
-实际启动服务、连接 MySQL 或 KVM。与 packager 的 USTAR envelope / metadata
-往返兼容也只使用合成字节，不是真实包安装。
+2026-10-25，Darwin 本地离线结果：**108 个 installer-security + 14 个
+installer-unit + 19 个独立 publisher-policy test methods 通过**（另含 subtests），
+无 SKIP。它们只使用合成文件与替代系统边界，没有实际 APT、启动服务、
+连接 MySQL、执行 gh 密码学验证或 KVM。与 packager 的 USTAR envelope /
+metadata 往返兼容也只使用合成字节，不是真实包安装。
 
 首轮 RED 在安装器文件尚未落盘时失败；后续 RED 还发现向导的
 `is_loopback` property 调用错误及畸形镜像信息异常。归档前置元数据边界、
 TOCTOU immutable snapshot 和权限分离分别补入独立回归。**上述通过不是
 完整安全审计结论**；后续源码改动必须重跑，所有真实主机验收仍未执行。
 
-其中新增依赖 / MySQL 回归为 28 个 methods，另补 1 个真实002 FK源码对照
-与 migration-only REFERENCES 回归，以及 3 个 native 入口/transport 安全单测；
-另加 6 个 runner 隔离 / fresh-host 回归。APT source/policy 用例显式隔离
+依赖 / MySQL、真实002 FK源码对照与 migration-only REFERENCES、native
+入口/transport、runner 隔离和新增 libvirt / RC 边界均在当前计数内，不沿用
+旧93项结果冒充本轮。APT source/policy 用例显式隔离
 宿主 precondition；独立用例仍调用真实守卫，只虚拟文件读取，逐项核对全部
 数据库 / virt / finance 路径（存在及悬空 symlink）、节点内存 / KVM 字符设备，
 以及 MySQL 配置 / service / binary / socket 路径的拒绝和干净证据通过。
 本轮 RED 在模拟占用 runner 上复现提前拒绝，并发现原 node simulation 负例
 没有到达 APT；修复后强制 update / simulate 各一次，危险计划不进入 assume-yes。
-不沿用此前旧 55 项的通过结论。REFERENCES 只在专用数据库 migrator grants，
+REFERENCES 只在专用数据库 migrator grants，
 runtime 仍为 SELECT/INSERT/UPDATE/DELETE，不扩展 global/DROP/GRANT OPTION。
 这批使用 Python SQL 边界模型，不启动 MySQL、APT、systemd 或任何 daemon；
 不能称为真实 MySQL provisioning、干净 Ubuntu 安装或 KVM 验收通过。
 额外 RED 发现并回归了启动丢 ACK 的错误“未启动”归因，以及旧 receipt
 缺少 `native_options` 时可在 resume 引入新副作用的问题；旧 receipt 只按
-原始无 APT / 无数据库 provisioning 意图恢复，不因此获得新的安装授权。
+原始无 APT / 无数据库 provisioning / 无 libvirt prepare 意图恢复，不因此
+获得新的安装授权。当前计数不是完整安全审计结论，也不绑定尚未提交的工作区
+SHA 为验收终点。
 
-## 独立 native MySQL SQL / grants 合同门禁（待 CI 执行）
+## 独立 native MySQL SQL / grants 合同门禁（结果绑定精确 CI revision）
 
 `deploy/ci/check.sh` 在原有 disposable `mysql-native.sh` fixture 内强制执行
 `deploy/ci/test_cloud_mysql_grants.py`。入口必须为非 root Linux amd64，且
@@ -157,7 +229,9 @@ DDL成功但无global/邻库权限，以及数据库下划线不得作为wildcar
 固定scope/checks、迁移版本/hash、passed和cleanup状态，不输出SQL、grants原文、
 密码、DSN、token或原始client诊断。
 
-本机无 native fixture，实际调用已返回 `passed:false` / exit1，未运行数据库
-权限门禁。上面的93项仅包括纯guard/transport单测；native真实SQL结果必须
-以随后同提交GitHub native MySQL job为准。此门禁仍不覆盖生产root socket
-bootstrap、APT、systemd、整机安装/升级恢复或KVM。
+本机无 native fixture，guard 调用返回 `passed:false` / exit1，未在本机运行
+数据库权限门禁。上面的108项仅包括纯guard/transport单测；真实SQL结果须
+绑定同提交 GitHub native MySQL job，精确历史/当前 CI 记录见
+[总验证记录](VALIDATION.md)，不能把旧 revision 的通过自动沿用到新发行。
+此门禁仍不覆盖生产root socket bootstrap、APT、systemd、整机安装/升级恢复
+或KVM，也不能替代本轮尚待执行的 TCG libvirt gate。

@@ -52,6 +52,11 @@ class CloudPackageTests(unittest.TestCase):
         self.write("aster-cloud/internal/fabric/files.go", "l.state.Schema != 1 && l.state.Schema != 3\n")
         self.write("aster-cloud/internal/nodeproto/contract.go", 'const Protocol = "aster.node/1"\n')
         self.write("vps-billing/backend/internal/controllers/contract.go", 'const Protocol = "aster.controller/1"\n')
+        for name in ("install.py", "provision.py", "release_verify.py"):
+            self.write("aster-cloud/deploy/install/" + name, "# committed synthetic " + name + "\n")
+        roots = Path(__file__).parents[1] / "install/release-trusted-root.json"
+        target = self.repo / "aster-cloud/deploy/install/release-trusted-root.json"
+        target.write_bytes(roots.read_bytes())
         self.commit = self.commit_all()
         self.output = self.base / "out"
         self.calls = 0
@@ -177,9 +182,42 @@ class CloudPackageTests(unittest.TestCase):
             self.package()
 
     def test_stable_or_unsafe_versions_refused(self):
-        for version in ("0.1.0", "v0.1.0-dev", "../0.1.0-dev", "0.1.0-dev/evil", "0.1.0-dev\n", "0.1.0-rc.1", "1.2.3-dev", "0.1.0-dev.custom"):
+        for version in ("0.1.0", "v0.1.0-dev", "../0.1.0-dev", "0.1.0-dev/evil", "0.1.0-dev\n", "0.1.0-rc.2", "1.2.3-dev", "0.1.0-dev.custom"):
             with self.subTest(version=version), self.assertRaises(PACKAGE.PackageError):
                 self.package(version=version)
+
+    def test_only_first_official_prerelease_has_release_identity_without_stable_claim(self):
+        paths = self.package(version="0.1.0-rc.1")
+        for role, path in zip(("controller", "node"), paths[:2]):
+            _, content = self.read_archive(path)
+            manifest = json.loads(content["manifest.json"])
+            self.assertEqual(manifest["release_kind"], "release")
+            self.assertEqual(manifest["channel"], "prerelease")
+            self.assertEqual(manifest["release_tag"], "cloud-v0.1.0-rc.1")
+            self.assertEqual(manifest["version"], "0.1.0-rc.1")
+            self.assertEqual(manifest["source_commit"], self.commit)
+            self.assertEqual(manifest["component"], "aster-cloud-" + role)
+            self.assertIn(b"Not production-ready", content["docs/DEVELOPMENT.txt"])
+        names = {p.name for p in paths}
+        self.assertIn("aster-cloud-installer-0.1.0-rc.1.tar.gz", names)
+        self.assertIn("aster-cloud-bootstrap-0.1.0-rc.1.py", names)
+        self.assertIn("release-trusted-root.json", names)
+        self.assertIn("release-manifest.json", names)
+        self.assertIn("provenance.json", names)
+        self.assertEqual(len(paths), 8)
+        manifest = json.loads((self.output / "release-manifest.json").read_bytes())
+        self.assertNotIn("release_id", manifest)
+        self.assertEqual(manifest["tag"], "cloud-v0.1.0-rc.1")
+        self.assertEqual(manifest["repository_id"], 1418618420)
+        for entry in manifest["assets"]:
+            raw = (self.output / entry["name"]).read_bytes()
+            self.assertEqual(entry["size"], len(raw))
+            self.assertEqual(entry["sha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_official_prerelease_is_reproducible_across_private_build_directories(self):
+        first = self.package(self.base / "first-rc", version="0.1.0-rc.1")
+        second = self.package(self.base / "second-rc", version="0.1.0-rc.1")
+        self.assertEqual([p.read_bytes() for p in first], [p.read_bytes() for p in second])
 
     def test_short_uppercase_or_missing_commit_refused(self):
         for commit in (self.commit[:7], self.commit.upper(), "f" * 40):

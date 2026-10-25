@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Offline harness contracts, not cryptographic/native/KVM acceptance."""
+import argparse
+import ast
+import copy
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import types
+import unittest
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+
+
+def load(name, filename):
+    spec = importlib.util.spec_from_file_location(name, HERE / filename)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
+
+
+h = load("libvirt_native_contract", "libvirt-native.py")
+g = load("libvirt_native_guest_contract", "libvirt-native-guest.py")
+
+
+class NativeFixtureContract(unittest.TestCase):
+    def checks(self):
+        names = ("ubuntu_at_least_22", "x86_64_host", "hardware_virtualization_flags", "dev_kvm_read_write",
+                 "binary:/usr/bin/virsh", "binary:/usr/bin/qemu-img", "binary:/usr/bin/qemu-system-x86_64",
+                 "storage_directory", "libvirt_system_readonly_query")
+        return {name: name not in ("hardware_virtualization_flags", "dev_kvm_read_write") for name in names}
+
+    def report(self):
+        return {"protocol": "aster.node/1", "node_id": "native-tcg-node", "ready": False,
+                "checks": [{"name": k, "passed": v} for k, v in self.checks().items()]}
+
+    def result(self):
+        value = {k: True for k in ("passed", "real_apt", "real_systemd", "libvirt_prepared", "explicit_kvm_denial",
+                                  "non_kvm_doctor_checks_passed", "real_approved_image_validated", "owned_units_active",
+                                  "vendor_masks_persistent", "empty_network_mount_verified", "unix_libvirt_query_passed",
+                                  "default_network_absent", "virbr_absent", "libvirt_no_tcp_listener", "vendor_default_xml_retained_unchanged_on_resume")}
+        value.update(schema=1, kvm_ready=False, source_sha="a" * 40, ubuntu="22.04", image_sha256=h.IMAGES["22.04"][2], doctor_checks=self.checks(), doctor_protocol=g.DOCTOR_PROTOCOL)
+        return value
+
+    def metadata(self):
+        return {"source_sha": "a" * 40, "ubuntu": "22.04", "image_sha256": h.IMAGES["22.04"][2]}
+
+    def test_python_310_syntax(self):
+        for name in ("libvirt-native.py", "libvirt-native-guest.py", "test_libvirt_native.py"):
+            ast.parse((HERE / name).read_text(), feature_version=(3, 10))
+
+    def test_only_fixed_signed_dated_official_images(self):
+        self.assertEqual(set(h.IMAGES), {"22.04", "24.04", "26.04"})
+        for ubuntu, (suite, date, sha) in h.IMAGES.items():
+            self.assertRegex(date, r"^[0-9]{8}$")
+            self.assertRegex(sha, r"^[0-9a-f]{64}$")
+            self.assertNotIn(suite, ("current", "latest", "release"))
+            self.assertNotEqual(sha, "0" * 64)
+        self.assertEqual(h.IMAGES["26.04"][0], "resolute")
+
+    def test_public_key_is_independently_code_pinned(self):
+        raw = (HERE / "libvirt-native-image-key.asc").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), h.KEY_SHA256)
+        self.assertEqual(h.KEY_FINGERPRINT, "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81")
+        self.assertIn(b"BEGIN PGP PUBLIC KEY BLOCK", raw)
+        self.assertNotIn(b"PRIVATE KEY", raw)
+
+    def test_doctor_protocol_matches_real_production_constant_not_task_protocol(self):
+        contract = (HERE.parents[1] / "internal/nodeproto/contract.go").read_text()
+        actual = re.search(r'const Protocol = "([^"]+)"', contract).group(1)
+        self.assertEqual(g.DOCTOR_PROTOCOL, actual)
+
+    def test_hosts_boot_command_produces_real_newlines_without_host_write(self):
+        suffix = " >> /etc/hosts"
+        self.assertTrue(h.HOSTS_BOOT_COMMAND.endswith(suffix))
+        # Execute only the fixed printf, with the redirection removed. This
+        # checks actual shell escaping without touching any host configuration.
+        p = subprocess.run(["/bin/sh", "-c", h.HOSTS_BOOT_COMMAND[:-len(suffix)]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        self.assertEqual(p.stdout, b"\n10.0.2.100 archive.ubuntu.com\n10.0.2.101 security.ubuntu.com\n")
+
+    def test_signature_status_requires_exact_expected_key(self):
+        # Simulated GnuPG status is a parser test, not a signature proof.
+        h.verify_signature(("[GNUPG:] VALIDSIG " + h.KEY_FINGERPRINT + " 2026 1 0 4 0 1 10 00\n").encode())
+        for status in (b"", b"[GNUPG:] GOODSIG 123 Example\n", b"[GNUPG:] VALIDSIG " + b"a" * 40 + b" rest\n",
+                       ("[GNUPG:] BADSIG 123\n[GNUPG:] VALIDSIG " + h.KEY_FINGERPRINT + " rest\n").encode()):
+            with self.subTest(status=status), self.assertRaises(h.Refused):
+                h.verify_signature(status)
+
+    def test_https_redirect_never_downgrades_or_changes_origin(self):
+        for url in ("http://cloud-images.ubuntu.com/image", "https://evil.invalid/image", "https://user@cloud-images.ubuntu.com/image"):
+            with self.subTest(url=url), self.assertRaises(h.Refused):
+                h.HTTPSOnly().redirect_request(None, None, 302, "", {}, url)
+
+    def test_network_downloader_has_no_inherited_proxy(self):
+        source = (HERE / "libvirt-native.py").read_text()
+        self.assertIn("ProxyHandler({})", source)
+        self.assertNotIn("CERT_NONE", source)
+        self.assertNotIn("check_hostname = False", source)
+
+    def test_payload_qemu_network_is_fixed_restricted_user_mode(self):
+        args = h.qemu_arguments(Path("/tmp/owned"), Path("/tmp/base.img"), Path("/tmp/root.qcow2"), Path("/tmp/seed.img"))
+        text = " ".join(args)
+        self.assertIn("pc,accel=tcg", args)
+        self.assertIn("max,vmx=off,svm=off", args)
+        self.assertIn("3072", args)
+        self.assertIn("restrict=on,ipv6=off", text)
+        self.assertIn("guestfwd=tcp:10.0.2.100:443-cmd:/usr/bin/python3 -I /tmp/owned/relay.py archive.ubuntu.com", text)
+        self.assertIn("guestfwd=tcp:10.0.2.101:443-cmd:/usr/bin/python3 -I /tmp/owned/relay.py security.ubuntu.com", text)
+        for forbidden in ("hostfwd=", "tap,", "bridge,", "virtfs", "9p", "-enable-kvm", "accel=kvm", "-netdev socket", "tftp=", "smb="):
+            self.assertNotIn(forbidden, text)
+        self.assertIn("format=raw,readonly=on", text)
+        self.assertIn("-no-reboot", args)
+
+    def test_relay_is_not_an_arbitrary_connect_proxy(self):
+        for host in ("localhost", "127.0.0.1", "169.254.169.254", "github.com", "archive.ubuntu.com:443"):
+            with self.subTest(host=host), self.assertRaises(h.Refused), mock.patch.object(h.socket, "getaddrinfo") as lookup:
+                h.relay(host)
+            lookup.assert_not_called()
+        with mock.patch.object(h.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("127.0.0.1", 443))]), self.assertRaises(h.Refused):
+            h.relay("archive.ubuntu.com")
+
+    def test_no_secret_environment_is_forwarded(self):
+        self.assertEqual(set(h.SAFE_ENV), {"PATH", "LANG"})
+        source = (HERE / "libvirt-native.py").read_text()
+        self.assertIn("start_new_session=True", source)
+        self.assertIn("os.killpg(process.pid", source)
+        self.assertNotIn("process_group=", source)
+        self.assertNotIn("shutil.copytree", source)
+        self.assertNotIn("os.environ.copy()", source)
+
+    def test_doctor_must_reach_json_and_explicit_dev_kvm_check(self):
+        self.assertEqual(g.doctor_evidence(1, self.report()), self.checks())
+        for report in ({}, {"ready": False}, {"protocol": "aster.node/1", "node_id": "native-tcg-node", "ready": False, "checks": []}):
+            with self.subTest(report=report), self.assertRaises(g.Refused):
+                g.doctor_evidence(1, report)
+        with self.assertRaises(g.Refused):
+            g.doctor_evidence(0, self.report())
+
+    def test_every_other_real_doctor_check_must_pass(self):
+        for name in self.checks():
+            if name in ("dev_kvm_read_write", "hardware_virtualization_flags"):
+                continue
+            report = self.report()
+            next(c for c in report["checks"] if c["name"] == name)["passed"] = False
+            with self.subTest(name=name), self.assertRaises(g.Refused):
+                g.doctor_evidence(1, report)
+
+    def test_doctor_cannot_claim_missing_image_or_rejected_configuration_is_kvm_denial(self):
+        report = self.report(); report["node_id"] = "wrong-node"
+        with self.assertRaises(g.Refused): g.doctor_evidence(1, report)
+        report = self.report(); report["checks"].append(copy.deepcopy(report["checks"][0]))
+        with self.assertRaises(g.Refused): g.doctor_evidence(1, report)
+        report = self.report(); next(c for c in report["checks"] if c["name"] == "dev_kvm_read_write")["passed"] = True
+        with self.assertRaises(g.Refused): g.doctor_evidence(1, report)
+
+    def test_result_bindings_and_all_proofs_are_required(self):
+        h.validate_result(self.result(), self.metadata())
+        for key, value in (("source_sha", "b" * 40), ("image_sha256", "b" * 64), ("ubuntu", "24.04"), ("kvm_ready", True),
+                           ("real_apt", False), ("real_systemd", False), ("default_network_absent", False), ("libvirt_prepared", False)):
+            result = self.result(); result[key] = value
+            with self.subTest(key=key), self.assertRaises(h.Refused): h.validate_result(result, self.metadata())
+        result = self.result(); result["secret"] = "must never export"
+        with self.assertRaises(h.Refused): h.validate_result(result, self.metadata())
+
+    def test_host_rechecks_explicit_doctor_evidence(self):
+        result = self.result(); result["doctor_checks"]["dev_kvm_read_write"] = True
+        with self.assertRaises(h.Refused): h.validate_result(result, self.metadata())
+        result = self.result(); result["doctor_checks"]["libvirt_system_readonly_query"] = False
+        with self.assertRaises(h.Refused): h.validate_result(result, self.metadata())
+
+    def test_guest_uses_real_approved_image_and_no_fake_kvm(self):
+        source = (HERE / "libvirt-native-guest.py").read_text()
+        self.assertIn('"/dev/vdb"', source)
+        self.assertIn('sha(image) == metadata["image_sha256"]', source)
+        self.assertIn('info.get("format") == "qcow2"', source)
+        self.assertIn("module.prepare_libvirt(state)", source)
+        self.assertIn("module.prepare_libvirt(state, resume=True)", source)
+        self.assertNotIn("mknod", source)
+        self.assertNotIn("mock.patch", source)
+        self.assertNotIn("security_driver", source)
+
+    def test_only_public_json_outputs_not_serial_or_seed(self):
+        source = (HERE / "libvirt-native.py").read_text()
+        self.assertIn('work / "private-serial.log"', source)
+        for name in ("summary.json", "guest-report.json", "image-provenance.json"):
+            self.assertIn('output / "' + name + '"', source)
+        self.assertNotIn('output / "private-serial.log"', source)
+        self.assertNotIn('output / "user-data"', source)
+
+    def test_no_native_or_host_write_on_unsupported_platform(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "out"
+            args = argparse.Namespace(ubuntu="22.04", source_root=directory, source_sha="a" * 40, output=str(out))
+            with mock.patch.object(h.platform, "system", return_value="Darwin"), mock.patch.object(h, "run") as command, self.assertRaises(h.Refused):
+                h.execute(args)
+            command.assert_not_called(); self.assertFalse(out.exists())
+
+    def test_input_links_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / "file"; p.write_bytes(b"test"); p.chmod(0o600)
+            h.regular(p, 16)
+            linked = p.with_name("link"); linked.symlink_to(p)
+            with self.assertRaises(h.Refused): h.regular(linked, 16)
+            linked.unlink(); os.link(p, linked)
+            with self.assertRaises(h.Refused): h.regular(p, 16)
+
+    def test_real_command_observer_never_changes_calls_results_or_exceptions(self):
+        calls, result = [], object()
+        failure = RuntimeError("private stderr must not escape")
+        def real(argv, **kwargs):
+            calls.append((argv, kwargs))
+            if argv[0] == "/usr/bin/apt-get": raise failure
+            return result
+        module = types.SimpleNamespace(run_fixed=real)
+        g.observe_real_commands(module)
+        with mock.patch.object(g, "FAILED_COMMANDS", []):
+            argv, kwargs = ["/usr/bin/virsh", "capabilities"], {"timeout": 19, "env": {"PRIVATE": "not exported"}}
+            self.assertIs(module.run_fixed(argv, **kwargs), result)
+            self.assertEqual(calls[-1], (argv, kwargs))
+            with self.assertRaises(RuntimeError) as raised:
+                module.run_fixed(["/usr/bin/apt-get", "--simulate", "install", "private-value"])
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(g.FAILED_COMMANDS, ["apt-simulate"])
+
+    def test_failed_public_report_exports_only_fixed_enums_not_nested_values(self):
+        report = dict(self.metadata(), schema=1, passed=False, kvm_ready=False, code="APT_PLAN_UNSAFE", phase="prepare",
+                      doctor_checks={"secret": "must not export"}, arbitrary="must not export",
+                      diagnostics={"failed_commands": ["apt-simulate", "SECRET_ARGV", {"argv": "secret"}],
+                                   "dependencies_status": "failed-package-transaction-review-required",
+                                   "libvirt_status": "SECRET_NONCE", "dependencies_steps": ["policy-created", "SECRET_PASSWORD"],
+                                   "argv": ["secret"]})
+        public = h.public_result(report, self.metadata())
+        self.assertEqual(public["code"], "APT_PLAN_UNSAFE")
+        self.assertEqual(public["diagnostics"], {"failed_commands": ["apt-simulate"],
+                         "dependencies_status": "failed-package-transaction-review-required", "dependencies_steps": ["policy-created"]})
+        self.assertNotIn("SECRET", json.dumps(public)); self.assertNotIn("secret", json.dumps(public))
+        report.update(code="ARBITRARY_SECRET", phase="ARBITRARY_SECRET")
+        public = h.public_result(report, self.metadata())
+        self.assertEqual(public["code"], "GUEST_REPORTED_FAILURE"); self.assertEqual(public["phase"], "unrecognized")
+        report["source_sha"] = "b" * 40
+        with self.assertRaises(h.Refused): h.public_result(report, self.metadata())
+
+    def test_public_success_is_fully_validated_before_export(self):
+        self.assertEqual(h.public_result(self.result(), self.metadata()), self.result())
+        for extra in ("code", "phase", "diagnostics"):
+            result = self.result(); result[extra] = "secret"
+            with self.subTest(extra=extra), self.assertRaises(h.Refused): h.public_result(result, self.metadata())
+
+    def test_guest_error_catalog_and_command_categories_stay_in_sync(self):
+        tree = ast.parse((HERE / "libvirt-native-guest.py").read_text())
+        codes = set(g.PROVISION_CODES.values())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"require", "Refused"}:
+                value = node.args[-1] if node.args else None
+                if isinstance(value, ast.Constant) and isinstance(value.value, str): codes.add(value.value)
+        self.assertTrue(codes <= h.GUEST_ERROR_CODES, codes - h.GUEST_ERROR_CODES)
+        for argv in (["/usr/bin/apt-get", "update"], ["/usr/bin/apt-get", "--simulate"], ["/usr/bin/apt-get", "--assume-yes"],
+                     ["/usr/bin/systemctl", "start"], ["/usr/bin/virsh", "net-list"], ["/usr/sbin/nft"], []):
+            self.assertIn(g.command_code(argv), h.DIAGNOSTIC_COMMANDS)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

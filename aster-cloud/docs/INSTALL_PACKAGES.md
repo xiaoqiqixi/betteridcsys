@@ -1,10 +1,25 @@
-# Independent cloud development packages
+# Independent Cloud packages and first-RC publisher proof
 
-These are **development candidates**, not a formal Release or proof that native
-installation, a real KVM guest, networking, upgrade or recovery has passed.
-The financial Core `v0.5.9` assets and installer are not cloud packages.
-Only `0.x.y-dev` and `0.x.y-dev.n` versions are accepted, matching the independent
-installer's development-candidate policy.
+Local packaging produces **unpublished candidates**, not proof of publication or
+native installation, real KVM, networking, upgrade or recovery acceptance. The
+financial Core `v0.5.9` assets and installer are not Cloud packages.
+
+Two separate policies are implemented:
+
+- Development: `0.x.y-dev` / `0.x.y-dev.n`, `release_kind=development`; installation
+  requires explicit `--allow-development`, a real local bundle and its trusted
+  external whole-archive SHA256. A checksum is integrity, not publisher identity.
+- Publisher-authenticated first RC only: `0.1.0-rc.1`, tag
+  **`cloud-v0.1.0-rc.1`**, `release_kind=release`, `channel=prerelease`. It requires
+  the exact signed manifest/attestation chain and a private `--release-receipt`
+  that is cryptographically reverified offline. A development opt-in cannot
+  authorize this envelope. No stable/latest/other-tag fallback is supported.
+
+**A supported tag/pipeline is not a published Release.** The official role commands
+must come from the actual
+[cloud-v0.1.0-rc.1 Release body](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)
+after its complete assets/proof exist. If absent, stop; this document provides no
+invented `/main`, placeholder curl, or finance-release substitute.
 
 ## Build from one reviewed commit
 
@@ -43,7 +58,7 @@ at runtime. This is not yet a separately published public-contract module.
 
 ## Output and installer contract
 
-Exactly two archives and an external checksum file are published:
+Development packaging emits exactly two archives and an external checksum file:
 
 ```text
 aster-cloud-controller-0.1.0-dev-linux-amd64.tar.gz
@@ -98,7 +113,7 @@ only for binaries and `0644` for other content. Additional metadata records
 tool versions. Schema/protocol metadata describes compatibility, not deployment
 approval or a guarantee that all features were acceptance-tested.
 
-`SHA256SUMS` uses the standard `64hex␠␠archive-name` format and hashes both complete
+Development `SHA256SUMS` uses the standard `64hex␠␠archive-name` format and hashes both complete
 archives, including their manifests. It is a checksum, **not an authenticated
 signature or provenance attestation**. An installer must receive a checksum from
 an operator-approved source; downloading an archive and its checksum from the
@@ -108,6 +123,82 @@ creates a tag, Release, signature, remote upload or production-readiness claim.
 Existing candidate names are never overwritten. Build/validation errors publish
 no archives; the checksum file is published last as the complete-set marker.
 Incomplete output after interruption must be reviewed, not silently overwritten.
+
+## Sole prerelease envelope and distribution chain
+
+Using `--version 0.1.0-rc.1` on a clean exact source commit selects the sole RC
+candidate mode. It adds `channel=prerelease` and
+`release_tag=cloud-v0.1.0-rc.1` to both role manifests; ordinary file inventory,
+ELF, mode, canonical-path and external-SHA requirements do not change. The
+additional installer capsule contains only regular `manifest.json`, `install.py`,
+`provision.py`, `release_verify.py` files. All code hashes/sizes/modes are bound by
+its manifest; there is no arbitrary adjacent module/script allowance.
+
+The completed publisher asset contract is:
+
+```text
+aster-cloud-controller-0.1.0-rc.1-linux-amd64.tar.gz
+aster-cloud-node-0.1.0-rc.1-linux-amd64.tar.gz
+aster-cloud-installer-0.1.0-rc.1.tar.gz
+aster-cloud-bootstrap-0.1.0-rc.1.py
+release-trusted-root.json
+provenance.json
+SHA256SUMS
+release-manifest.json
+attestations.jsonl
+```
+
+The local packager does **not** create `attestations.jsonl`, publish these assets,
+or authenticate its own output. Those are separate reviewed publisher-workflow
+operations. `release-manifest.json` binds the fixed repository and numeric
+repository/owner IDs, exact source SHA/ref, approved workflow, sole RC tag/channel
+and sorted complete asset names/sizes/SHA256. Its acceptance fields remain
+`production_ready=false`, `real_kvm_accepted=false`; signed software is not host
+or VM acceptance. Checksums and provenance are covered by the publisher chain,
+not promoted to standalone trust roots.
+
+The Release-body bootstrap must use a **full immutable commit**, never `/main`.
+That initial reviewed HTTPS command is an operator trust root, not a script
+which proves itself using a same-origin checksum. Anonymous verification of all
+subsequent executable payloads uses the fixed official Linux amd64 `gh` binary
+hash and fixed official Sigstore trusted-root bytes. The verifier pins repository,
+GitHub OIDC issuer, workflow certificate identity, source/signer SHA, public
+repository owner/ID, GitHub-hosted runner, trigger and verified transparency
+timestamps. Do not add an authentication token or disable TLS to work around a
+failed public download.
+
+The private receipt records exact repository/tag/source/component/asset
+name/hash/size and paths/hashes for local manifest, capsule, attestation, verifier
+and roots. `release_id` is only an observed HTTPS API consistency value, **not a
+signed code authorization**. Root-private regular files, empty private anonymous
+HOME/config and exact capsule neighbors are required. A JSON `verified:true`
+assertion cannot replace verification. Before a release plan/apply, the installer
+performs three local offline publisher rechecks (manifest, capsule, role package)
+using `--bundle` and `--custom-trusted-root`; it neither downloads nor writes a
+verifier cache. The installer then independently checks every tar/manifest member.
+
+Bootstrap `--download-only` is a distinct operation: it may download private
+assets/proofs and invoke the authenticated installer's real read-only plan. It
+must not apply APT/DB changes or start services. Its successful proof, once
+obtained from a real published RC, still would not prove fresh-host or KVM
+readiness. This page records no such public-download result.
+
+## Native installer relationship
+
+Both roles use the same [interactive native installer](../deploy/install/README.md).
+Controller optional signed packages/new dedicated MySQL and node optional
+`--prepare-libvirt` remain explicit approvals, never packaging side effects.
+Fresh libvirt preparation retains Ubuntu AppArmor/QEMU users, permanently masks
+vendor service/socket activation and starts only owned UNIX daemons whose real
+mount namespace sees a read-only empty networks directory. Vendor default XML may
+exist on fresh disk, but it may not be activated; existing active hosts are only
+inspected read-only. No bridge/uplink/firewall rewrite, controller private-key
+import, dummy image or KVM bypass is permitted.
+
+The Ubuntu 22.04/24.04/26.04 signed-image **TCG gate is pending CI**. It is designed
+to test actual APT/systemd/libvirt namespace behavior and an honest missing-KVM
+doctor refusal; it cannot pass hardware KVM acceptance. Preserve this distinction
+even if reproducible packaging and all offline tests pass.
 
 ## Offline tests and remaining gates
 
@@ -127,3 +218,9 @@ comparison, dependency/security scans, strict native TLS/MySQL/systemd installat
 and rollback acceptance, or later dedicated KVM host acceptance. In particular,
 the existing 1 GB financial server must not be used as a new KVM installation
 target merely because a node archive can be built.
+
+Current installer-side offline safety results are **108 installer-security + 14
+installer-unit + 19 independent publisher-policy methods**, with synthetic
+inputs/process models, not actual Sigstore proof or host apply. Publisher and
+native CI results must be checked for the exact eventual release source; this
+document does not appoint an uncommitted workspace SHA as an acceptance endpoint.
