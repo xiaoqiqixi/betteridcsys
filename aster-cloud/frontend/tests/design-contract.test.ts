@@ -62,6 +62,25 @@ describe("design contracts (static tokens, not browser computed)", () => {
       source.match(/\.nat-summary header > div\s*\{([^}]+)\}/)?.[1],
     ).toContain("min-width: 0");
   });
+  it("gives mobile public-IP heading actions a full row while preserving wrapping and 44px targets", () => {
+    const source = readFileSync(
+      resolve(root, "pages/PublicIPsPage.vue"),
+      "utf8",
+    );
+    const { descriptor } = parse(source);
+    const style = descriptor.styles.find((entry) => entry.scoped)!.content;
+    const mobile = style.match(
+      /@media \(max-width: 600px\)\s*\{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(mobile).toMatch(
+      /\.page-heading > \.ip-actions,\s*\.ip-record-actions \.ip-actions\s*\{\s*width: 100%;/,
+    );
+    expect(mobile).toMatch(/\.ip-actions > \.ui-button\s*\{\s*flex: 1;/);
+    const actions = style.match(/\.ip-actions\s*\{([^}]+)\}/)?.[1];
+    expect(actions).toContain("flex-wrap: wrap");
+    expect(actions).not.toContain("nowrap");
+    expect(css).toMatch(/\.page button\.ui-button\s*\{\s*min-height: 44px;/);
+  });
   it("wraps long recovery identities without squeezing egress modes or stacking the count rows", () => {
     const source = readFileSync(
       resolve(root, "components/OverlayEpochDialog.vue"),

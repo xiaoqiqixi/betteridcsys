@@ -621,6 +621,7 @@ const bindingLabel = (v: string) =>
   .ip-actions > .ui-button {
     flex: 1;
   }
+  .page-heading > .ip-actions,
   .ip-record-actions .ip-actions {
     width: 100%;
   }

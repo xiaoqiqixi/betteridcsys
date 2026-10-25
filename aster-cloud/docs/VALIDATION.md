@@ -5,9 +5,9 @@
 ## 当前工作区：新管理工作台
 
 - Gemini 原稿只提供视觉设计；生产使用独立 `WorkbenchHeader` / `InstanceLedger` 视图，仍接原有 API、session、RBAC 与持久化操作意图，不引入演示数据源或计时成功。
-- 本地完整执行 format、typecheck、**37 文件 / 891 tests** 和生产构建；`npm audit` 当前报告 0 vulnerabilities。已移除侧栏/重复顶栏，手机不再隐藏实例节点，详情、浮层与控件统一语义色和轻边界。
+- 本地完整执行 format、typecheck、**37 文件 / 892 tests** 和生产构建；`npm audit` 当前报告 0 vulnerabilities。已移除侧栏/重复顶栏，手机不再隐藏实例节点，详情、浮层与控件统一语义色和轻边界。
 - 本地实际浏览器的合成 DTO 视图用于检查手机/桌面布局、中英文、长名称、完整 ID、44px 目标与浅深主题；这些不是实库、真节点或生产部署证明，原型和截图不打进生产 bundle。
-- 同提交的真实 MySQL / 严格 TLS 浏览器及不变性门禁必须独立执行。新的导航门禁要求 53 项（中文浅色37 / 英文深色16），保留原162项业务、13个网络版本、原请求/财务/网络快照和64张互不替代的截图要求。当前源码不能继承旧51项侧栏报告。
+- 同提交的真实 MySQL / 严格 TLS 浏览器及不变性门禁必须独立执行。新的导航门禁要求 53 项（中文浅色37 / 英文深色16），业务门禁为163项（原162项全部保留，新增390/320px公网IP标题动作实际满行、对齐与单行文本检查），保留13个网络版本、原请求/财务/网络快照和64张互不替代的截图要求。新检查待精确提交 CI 执行；当前源码不能继承旧51项侧栏报告。
 - 新增 `deploy/ci/test_cloud_mysql_grants.py`，只接受原生 CI 私有 MySQL fixture：实际 RANDOM PASSWORD / ATTRIBUTE / SHOW GRANTS、全部10份迁移 SQL 与外键、runtime 四项 DML 和拒绝 DDL/越库授权。仅临时替换测试传输，不绕过生产 root/文件属主保护；非 fixture 拒绝退出而不是跳过。完整安装器、Ubuntu包脚本和 KVM 真机验收另行进行。
 - 当前 main 精确源码的 CI 运行见 [Controller development checks](https://github.com/xiaoqiqixi/betteridcsys/actions/workflows/cloud.yml)；必须核对运行所指向的 SHA 与结果，不把本地通过或旧运行当新完整验收。
 

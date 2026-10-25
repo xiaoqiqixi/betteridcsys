@@ -107,6 +107,71 @@ async function recoveryValueOneLine(name) {
   assert.equal(evidence.vertically_stacked, true, 'The long-profile mobile recovery row must stack its label and value');
   check(name, evidence);
 }
+async function publicPoolHeadingActions() {
+  const viewports = [];
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const actions = page.locator('.page-heading > .ip-actions');
+    await actions.waitFor({ state: 'visible' });
+    await actions.scrollIntoViewIfNeeded();
+    assert.equal(await actions.locator(':scope > button.ui-button').count(), 2);
+    const evidence = await actions.evaluate(async element => {
+      await document.fonts.ready;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const heading = element.closest('.page-heading');
+      const headingBox = heading.getBoundingClientRect();
+      const headingStyle = getComputedStyle(heading);
+      const contentLeft = headingBox.left + parseFloat(headingStyle.borderLeftWidth) + parseFloat(headingStyle.paddingLeft);
+      const contentRight = headingBox.right - parseFloat(headingStyle.borderRightWidth) - parseFloat(headingStyle.paddingRight);
+      const box = element.getBoundingClientRect();
+      const buttons = [...element.querySelectorAll(':scope > button.ui-button')].map(button => {
+        const buttonBox = button.getBoundingClientRect();
+        const style = getComputedStyle(button);
+        const lines = [];
+        let hasText = false, textWithinButton = true;
+        const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!node.textContent?.trim()) continue;
+          hasText = true;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            if (!lines.some(y => Math.abs(y - rect.y) <= 1)) lines.push(rect.y);
+            textWithinButton &&= rect.left >= buttonBox.left - 1 && rect.right <= buttonBox.right + 1 && rect.top >= buttonBox.top - 1 && rect.bottom <= buttonBox.bottom + 1;
+          }
+        }
+        return {
+          width: buttonBox.width, height: buttonBox.height, top: buttonBox.top, bottom: buttonBox.bottom,
+          rendered: style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 && buttonBox.width > 0 && buttonBox.height > 0,
+          in_actions_and_viewport: buttonBox.left >= box.left - 1 && buttonBox.right <= box.right + 1 && buttonBox.left >= 0 && buttonBox.right <= innerWidth && buttonBox.top >= 0 && buttonBox.bottom <= innerHeight,
+          has_text: hasText, text_lines: lines.length, text_within_button: textWithinButton,
+        };
+      });
+      return {
+        width: innerWidth, document_scroll_width: document.documentElement.scrollWidth,
+        actions_width: box.width, heading_content_width: contentRight - contentLeft,
+        fills_heading_content: Math.abs(box.left - contentLeft) <= 1 && Math.abs(box.right - contentRight) <= 1,
+        below_heading_text: box.top >= heading.firstElementChild.getBoundingClientRect().bottom - 1,
+        buttons,
+      };
+    });
+    assert.equal(evidence.width, width);
+    assert(evidence.document_scroll_width <= width);
+    assert.equal(evidence.fills_heading_content, true, 'Mobile public pool actions must fill the actual heading content row');
+    assert.equal(evidence.below_heading_text, true);
+    assert.equal(evidence.buttons.length, 2);
+    for (const button of evidence.buttons) {
+      assert(button.width >= 44 && button.height >= 44, 'Both heading actions retain actual 44px targets');
+      assert(button.rendered && button.in_actions_and_viewport && button.has_text && button.text_within_button);
+      assert.equal(button.text_lines, 1, 'Each actual heading-action label must remain on one visible text line');
+    }
+    assert(Math.abs(evidence.buttons[0].top - evidence.buttons[1].top) <= 1 && Math.abs(evidence.buttons[0].bottom - evidence.buttons[1].bottom) <= 1, 'Both heading actions must align on the same row');
+    viewports.push(evidence);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  check('390px and 320px public pool heading actions fill a row with single-line 44px buttons', { viewports });
+}
 async function singleInfoNotice(name) {
   // Ignore the outgoing 150 ms transition, but never wait long enough for the
   // five-second expiry to disguise a stack of newly emitted success notices.
@@ -713,6 +778,7 @@ try {
   await screenshot('desktop-public-ip-pools');
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow('390px public pool overview has no horizontal overflow');
+  await publicPoolHeadingActions();
   await screenshot('mobile-public-ip-pools');
 
   phase = 'public-ip-allocation-lost-ack';

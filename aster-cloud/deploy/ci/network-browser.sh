@@ -262,7 +262,21 @@ sidebar_screenshots = report.get('sidebar_screenshots', [])
 assert len(sidebar_screenshots) == 12 and set(sidebar_screenshots) == required_sidebar, 'All 12 responsive sidebar screenshots are mandatory'
 assert not set(business_screenshots) & required_sidebar, 'Sidebar evidence cannot replace original business screenshots'
 assert {p.name for p in output.glob('*.png')} == set(business_screenshots) | required_sidebar, 'Exact 64 actual PNG files must match the two disjoint report lists'
-assert len(report.get('checks', [])) >= 162, 'Original business coverage must not be reduced'
+assert len(report.get('checks', [])) >= 163, 'Original business coverage and the new mobile public-pool layout proof must not be reduced'
+pool_heading = [c for c in report.get('checks', []) if c.get('name') == '390px and 320px public pool heading actions fill a row with single-line 44px buttons']
+assert len(pool_heading) == 1, 'The actual two-viewport public-pool heading proof is mandatory'
+assert [v.get('width') for v in pool_heading[0].get('viewports', [])] == [390, 320]
+for proof in pool_heading[0]['viewports']:
+    assert proof.get('document_scroll_width', float('inf')) <= proof['width']
+    assert proof.get('fills_heading_content') is True and proof.get('below_heading_text') is True
+    assert abs(proof['actions_width'] - proof['heading_content_width']) <= 1
+    buttons = proof.get('buttons', [])
+    assert len(buttons) == 2
+    assert abs(buttons[0]['top'] - buttons[1]['top']) <= 1 and abs(buttons[0]['bottom'] - buttons[1]['bottom']) <= 1
+    for button in buttons:
+        assert button.get('width', 0) >= 44 and button.get('height', 0) >= 44
+        assert all(button.get(k) is True for k in ('rendered', 'in_actions_and_viewport', 'has_text', 'text_within_button'))
+        assert button.get('text_lines') == 1
 assert report.get('console_errors') == [], 'The real browser must not have JavaScript errors'
 sidebar_checks = report.get('sidebar_checks', [])
 assert len(sidebar_checks) >= 53, 'New command-rail geometry, semantics and navigation lifecycle must all execute'
