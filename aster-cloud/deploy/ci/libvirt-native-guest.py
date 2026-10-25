@@ -17,6 +17,8 @@ ROOT = Path("/root/aster-native")
 DOCTOR_PROTOCOL = "aster.node/1"
 PHASE = "preflight"
 FAILED_COMMANDS = []
+PROGRESS_NONCE = None
+APT_CODES = set("APT_DNS_FAILURE APT_TLS_FAILURE APT_SIGNATURE_FAILURE APT_METADATA_FAILURE APT_PACKAGE_UNAVAILABLE APT_DEPENDENCY_CONFLICT APT_LOCKED APT_COMMAND_REJECTED APT_COMMAND_UNAVAILABLE APT_COMMAND_TIMEOUT APT_OUTPUT_OVERSIZED".split())
 PROVISION_CODES = {
     "APT plan would upgrade/remove": "APT_PLAN_UNSAFE",
     "Fixed native provisioning command unavailable": "NATIVE_COMMAND_UNAVAILABLE",
@@ -64,6 +66,25 @@ def sha(path):
     return h.hexdigest()
 
 
+def progress(stage):
+    """Fixed diagnostic checkpoints only; never a success/acceptance signal."""
+    if PROGRESS_NONCE is None:
+        return
+    allowed = {"preflight", "prepare", "inspect", "resume", "image-and-config", "doctor"}
+    commands = {"apt-update", "apt-simulate", "apt-install", "network-rules-readonly", "other-fixed-command"}
+    commands |= {"systemd-" + name for name in ("start", "stop", "enable", "disable", "daemon-reload", "show", "is-active")}
+    commands |= {"virsh-" + name for name in ("net-list", "list", "capabilities")}
+    allowed |= {name + ":" + outcome for name in commands for outcome in ("start", "done", "failed")}
+    if stage not in allowed or not re.fullmatch(r"[0-9a-f]{32}", PROGRESS_NONCE):
+        return
+    try:
+        with open("/dev/ttyS0", "w") as console:
+            console.write("ASTER_LIBVIRT_NATIVE_PROGRESS_" + PROGRESS_NONCE + " " + stage + "\n")
+            console.flush()
+    except OSError:
+        pass  # Diagnostic delivery must not alter a real command's outcome.
+
+
 def command_code(argv):
     """Classify fixed native commands without persisting any argument data."""
     if not isinstance(argv, list) or not argv:
@@ -87,10 +108,14 @@ def observe_real_commands(module):
     """Observability only: exact real calls/results/exceptions are preserved."""
     real = module.run_fixed
     def observed(argv, **kwargs):
+        code = command_code(argv)
+        progress(code + ":start")
         try:
-            return real(argv, **kwargs)
+            result = real(argv, **kwargs)
+            progress(code + ":done")
+            return result
         except Exception:
-            code = command_code(argv)
+            progress(code + ":failed")
             if code not in FAILED_COMMANDS and len(FAILED_COMMANDS) < 4:
                 FAILED_COMMANDS.append(code)
             raise
@@ -221,6 +246,7 @@ def inspect_libvirt():
 def execute(metadata):
     global PHASE
     PHASE = "preflight"
+    progress(PHASE)
     require(os.geteuid() == 0 and (Path("/proc/1/comm").read_text().strip() == "systemd"), "REAL_GUEST_SYSTEMD_ROOT_REQUIRED")
     require(Path("/sys/class/dmi/id/product_name").read_text().strip() in ("Standard PC (i440FX + PIIX, 1996)", "Standard PC (Q35 + ICH9, 2009)"), "OWNED_QEMU_GUEST_REQUIRED")
     release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
@@ -234,12 +260,14 @@ def execute(metadata):
     observe_real_commands(module)
     state = Path("/var/lib/aster-cloud-installer/native-ci"); state.mkdir(mode=0o700, parents=True)
     PHASE = "prepare"
+    progress(PHASE)
     result = module.prepare_libvirt(state)
     require(result.get("status") == "libvirt-prepared" and result.get("daemon") == "owned-unix-only" and result.get("kvm") == "not-asserted", "REAL_PREPARE_RECEIPT_REJECTED")
     receipt = Path(result["receipt"]); info = receipt.lstat()
     require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and not info.st_mode & 0o077, "PRIVATE_PREPARE_RECEIPT_REQUIRED")
     require(run(["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}", "libvirt-daemon-system"]).stdout == b"installed", "REAL_APT_PACKAGE_NOT_INSTALLED")
     PHASE = "inspect"
+    progress(PHASE)
     proof = inspect_libvirt()
     vendor_xml = Path("/etc/libvirt/qemu/networks/default.xml")
     require(vendor_xml.is_file() and not vendor_xml.is_symlink(), "VENDOR_DEFAULT_XML_NOT_RETAINED")
@@ -247,13 +275,16 @@ def execute(metadata):
     # Revalidation uses the original production resume API, not substituted
     # system calls, fake receipts, a bypass flag or fabricated /dev/kvm.
     PHASE = "resume"
+    progress(PHASE)
     again = module.prepare_libvirt(state, resume=True)
     require(again.get("status") == "libvirt-prepared", "PREPARE_RESUME_FAILED")
     require(inspect_libvirt() == proof, "PREPARE_RESUME_CHANGED_PROOF")
     require(sha(vendor_xml) == vendor_before_resume, "VENDOR_DEFAULT_XML_CHANGED_ON_RESUME")
     PHASE = "image-and-config"
+    progress(PHASE)
     config = image_and_config(metadata)
     PHASE = "doctor"
+    progress(PHASE)
     doctor = run([str(ROOT / "aster-node"), "--config", str(config), "--doctor"], check=False)
     try:
         report = json.loads(doctor.stdout)
@@ -268,7 +299,9 @@ def execute(metadata):
 
 
 def main():
+    global PROGRESS_NONCE
     metadata = json.loads((ROOT / "metadata.json").read_text())
+    PROGRESS_NONCE = metadata.get("nonce")
     try:
         report = execute(metadata)
     except Refused as error:
@@ -278,7 +311,8 @@ def main():
     except Exception as error:
         code = "NATIVE_GUEST_REFUSED_DETAILS_WITHHELD"
         if error.__class__.__name__ == "ProvisionError":
-            code = next((value for prefix, value in PROVISION_CODES.items() if str(error).startswith(prefix)), "PROVISION_PREPARE_REFUSED")
+            apt_code = getattr(error, "code", None)
+        code = apt_code if isinstance(apt_code, str) and apt_code in APT_CODES else next((value for prefix, value in PROVISION_CODES.items() if str(error).startswith(prefix)), "PROVISION_PREPARE_REFUSED")
         report = {"schema": 1, "passed": False, "code": code, "ubuntu": metadata["ubuntu"],
                   "source_sha": metadata["source_sha"], "image_sha256": metadata["image_sha256"], "kvm_ready": False, "phase": PHASE,
                   "diagnostics": safe_diagnostics()}

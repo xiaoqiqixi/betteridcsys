@@ -251,6 +251,58 @@ class NativeFixtureContract(unittest.TestCase):
             result = self.result(); result[extra] = "secret"
             with self.subTest(extra=extra), self.assertRaises(h.Refused): h.public_result(result, self.metadata())
 
+    def test_firewall_normalization_preserves_policy_values_and_only_removes_counters(self):
+        rule = {"nftables": [{"rule": {"expr": [{"counter": {"packets": 3, "bytes": 20}},
+                 {"limit": {"rate": 100, "bytes": 1024}}, {"match": {"right": "secret-address"}}]}}]}
+        changed = copy.deepcopy(rule)
+        changed["nftables"][0]["rule"]["expr"][0]["counter"] = {"packets": 50, "bytes": 90}
+        self.assertEqual(h.normalized(rule, kind="nft"), h.normalized(changed, kind="nft"))
+        changed["nftables"][0]["rule"]["expr"][1]["limit"]["bytes"] = 4096
+        self.assertNotEqual(h.normalized(rule, kind="nft"), h.normalized(changed, kind="nft"))
+        self.assertEqual(h.normalized({"local": "192.0.2.1", "valid_life_time": 20}),
+                         h.normalized({"local": "192.0.2.1", "valid_life_time": 19}))
+        self.assertNotEqual(h.normalized({"local": "192.0.2.1"}), h.normalized({"local": "192.0.2.2"}))
+
+    def test_host_network_diagnostics_do_not_export_values_or_unknown_keys(self):
+        before = {"addresses": [{"local": "SECRET_IP"}], "routes": [{"SECRET_NAME": "SECRET_VALUE"}], "firewall": {"policy": "drop"}}
+        after = copy.deepcopy(before)
+        after["addresses"][0]["local"] = "ANOTHER_IP"
+        after["routes"][0]["SECRET_NAME"] = "ANOTHER_VALUE"
+        proof = h.network_proof(before, after)
+        self.assertFalse(proof["unchanged"])
+        self.assertEqual(proof["changed_sections"], ["addresses", "routes"])
+        self.assertEqual(proof["difference_paths"], [".addresses[0].local", ".routes[0].unknown-field"])
+        self.assertNotIn("SECRET", json.dumps(proof)); self.assertNotIn("ANOTHER", json.dumps(proof))
+        self.assertEqual(proof["before_sha256"]["firewall"], proof["after_sha256"]["firewall"])
+        self.assertNotEqual(proof["before_sha256"]["addresses"], proof["after_sha256"]["addresses"])
+        self.assertTrue(h.network_proof(before, before)["unchanged"])
+
+    def test_progress_requires_owned_nonce_and_fixed_stage_without_exporting_inputs(self):
+        with mock.patch.object(g, "PROGRESS_NONCE", None), mock.patch("builtins.open") as opened:
+            g.progress("prepare")
+            opened.assert_not_called()
+        with mock.patch.object(g, "PROGRESS_NONCE", "a" * 32), mock.patch("builtins.open", mock.mock_open()) as opened:
+            g.progress("prepare")
+            opened.assert_called_once_with("/dev/ttyS0", "w")
+            opened().write.assert_called_once_with("ASTER_LIBVIRT_NATIVE_PROGRESS_" + "a" * 32 + " prepare\n")
+            opened.reset_mock(); g.progress("SECRET_PATH_OR_ARGV")
+            opened.assert_not_called()
+
+    def test_guest_apt_error_codes_are_fixed_and_host_allowlisted(self):
+        self.assertTrue(g.APT_CODES <= h.GUEST_ERROR_CODES)
+        self.assertIn("APT_TLS_FAILURE", g.APT_CODES)
+        self.assertIn("APT_PACKAGE_UNAVAILABLE", g.APT_CODES)
+        source = (HERE / "libvirt-native-guest.py").read_text()
+        self.assertIn('getattr(error, "code", None)', source)
+        self.assertNotIn('str(error.stderr)', source)
+
+    def test_runtime_failure_keeps_report_and_does_not_require_success_schema(self):
+        source = (HERE / "libvirt-native.py").read_text()
+        self.assertIn('require(result.get("passed") is True, "GUEST_ACCEPTANCE_FAILED")', source)
+        self.assertIn('public = public_result(result, metadata)', source)
+        self.assertIn('"progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN', source)
+        self.assertIn('deadline = time.monotonic() + 1200', source)
+
     def test_guest_error_catalog_and_command_categories_stay_in_sync(self):
         tree = ast.parse((HERE / "libvirt-native-guest.py").read_text())
         codes = set(g.PROVISION_CODES.values())

@@ -24,6 +24,28 @@ p = i.provisioning_module()
 
 
 class InstallerUnits(unittest.TestCase):
+    def test_apt_failures_report_only_fixed_categories_without_replaying_commands(self):
+        cases = (
+            (b"Temporary failure resolving 'secret.invalid'", "APT_DNS_FAILURE"),
+            (b"Certificate verification failed: bearer SECRET", "APT_TLS_FAILURE"),
+            (b"NO_PUBKEY SECRET", "APT_SIGNATURE_FAILURE"),
+            (b"The repository 'https://secret.invalid' does not have a Release file", "APT_METADATA_FAILURE"),
+            (b"Unable to locate package SECRET", "APT_PACKAGE_UNAVAILABLE"),
+            (b"Unable to correct problems, you have held broken packages SECRET", "APT_DEPENDENCY_CONFLICT"),
+            (b"Could not get lock SECRET", "APT_LOCKED"),
+            (b"unknown SECRET", "APT_COMMAND_REJECTED"),
+        )
+        for diagnostic, code in cases:
+            with self.subTest(code=code):
+                result = argparse.Namespace(returncode=100, stdout=b"SECRET output", stderr=diagnostic)
+                output = io.StringIO()
+                with mock.patch.object(p.subprocess, "run", return_value=result) as run, contextlib.redirect_stdout(output), contextlib.redirect_stderr(output), self.assertRaises(p.ProvisionError) as error:
+                    p.run_fixed([p.APT_GET, "--simulate", "--no-upgrade", "--no-remove", "install", "libvirt-daemon-system"])
+                self.assertEqual(getattr(error.exception, "code", None), code)
+                self.assertNotIn("SECRET", str(error.exception) + output.getvalue())
+                self.assertNotIn("secret.invalid", str(error.exception) + output.getvalue())
+                self.assertEqual(run.call_count, 1)
+
     def test_libvirt_firewall_snapshot_ignores_only_traffic_counters_and_clock_comments(self):
         first = "# Generated at first time\n*filter\n:INPUT ACCEPT [123:456]\n-A INPUT -s 192.0.2.1 -j DROP\nCOMMIT\n"
         second = first.replace("first time", "second time").replace("123:456", "9999:88888")

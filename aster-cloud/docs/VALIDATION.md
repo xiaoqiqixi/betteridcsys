@@ -23,6 +23,13 @@ release 合同 **25**、独立 verifier **19**、native fixture 合同 **24** �
 最初本机 `go test ./...` 因 ignored 历史证据中的孤立 Go 测试文件和沙盒禁止监听失败，保留失败日志；
 随后按全部受跟踪包范围、允许仅测试 loopback 监听重跑通过，没有删历史证据或放宽业务断言。
 
+首轮精确提交 `766c055` 官方结果：财务 **3/3** 通过；Cloud **7/12** 通过、**5/12** 失败，
+不计完整验收。实库 / 严格 TLS 浏览器为163项业务 +53项导航、64张PNG，历史财务 / 网络快照保留，节点RPC仍为替身。
+两项 Linux unit 在 ShellCheck SC2024（普通shell有意读取review脚本、sudo消费stdin）处失败，后续匿名验签未执行。
+Ubuntu24/26确实进入guest，但APT simulate非零；22达到TCG总时限，不能猜成网络波动或KVM不可用。
+首轮还暴露失败JSON误套成功schema、宿主差异覆盖guest原因的问题。后续补固定诊断 / 阶段心跳，并收紧APT update
+为任何索引失败即停止；未放宽签名、TLS、无升级 / 移除、无默认网络或真实doctor门槛。修复提交仍须全套重跑。
+
 `cloud-v0.1.0-rc.1` 仅作为候选预发布，不能声明生产可用。下载命令以[该 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)
 实际正文为准；若未发布或任一最终 gate 失败，不称通道验收完成。发布协议见[RELEASE_CHANNEL](RELEASE_CHANNEL.md)。
 本轮原始结果及脱敏回执留在 ignored `artifacts/native-channel-20261025/`；源码文档不预填尚未执行的成功结果。

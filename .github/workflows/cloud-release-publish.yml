@@ -70,6 +70,9 @@ jobs:
           # This is reviewed main bootstrap, NOT a candidate installer. Root
           # consumes its fixed bytes through stdin; every later code payload
           # is downloaded into root0700 and cryptographically authenticated.
+          # The unprivileged shell intentionally reads reviewed main source;
+          # sudo consumes stdin, not a privileged filesystem redirection.
+          # shellcheck disable=SC2024
           sudo /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 /usr/bin/python3 -I - "$ROLE" --download-only --evidence "$RUNNER_TEMP/anonymous-download.json" < controller/aster-cloud/deploy/install/release_verify.py
           sudo chmod 0644 "$RUNNER_TEMP/anonymous-download.json"
           python3 - "$RUNNER_TEMP/anonymous-download.json" "$ROLE" <<'PY'

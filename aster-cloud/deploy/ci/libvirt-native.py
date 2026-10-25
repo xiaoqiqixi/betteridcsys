@@ -43,6 +43,9 @@ MAX_SERIAL = 16 * 1024 * 1024
 MAX_IMAGE = 2 * 1024 * 1024 * 1024
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}
 OUTPUT_CREATED = None
+VM_PROGRESS = []
+HOST_PROOF = {}
+GUEST_RESULT_SEEN = False
 GUEST_PHASES = {"preflight", "prepare", "inspect", "resume", "image-and-config", "doctor"}
 DIAGNOSTIC_COMMANDS = {"apt-update", "apt-simulate", "apt-install", "network-rules-readonly", "other-fixed-command"} | {
     "systemd-" + name for name in ("start", "stop", "enable", "disable", "daemon-reload", "show", "is-active")} | {
@@ -63,7 +66,7 @@ TCG_GUEST_UNEXPECTED_KVM UNEXPECTED_DOMAIN VENDOR_DEFAULT_XML_CHANGED_ON_RESUME 
 VENDOR_MASK_NOT_PERSISTENT VENDOR_UNIT_NOT_PERSISTENTLY_MASKED APT_PLAN_UNSAFE NATIVE_COMMAND_UNAVAILABLE NATIVE_COMMAND_REJECTED
 INTERFACE_PROOF_CHANGED FIREWALL_PROOF_CHANGED LIBVIRT_MOUNT_INODE_MISMATCH LIBVIRT_MOUNT_NOT_READONLY LIBVIRT_PROCESS_IDENTITY_MISMATCH
 LIBVIRT_FOREIGN_EFFECTIVE_UNIT LIBVIRT_UNIX_SOCKET_REJECTED LIBVIRT_UNEXPECTED_RESOURCES LIBVIRT_CAPABILITIES_REJECTED
-PROVISION_PREPARE_REFUSED NATIVE_GUEST_REFUSED_DETAILS_WITHHELD
+PROVISION_PREPARE_REFUSED NATIVE_GUEST_REFUSED_DETAILS_WITHHELD APT_DNS_FAILURE APT_TLS_FAILURE APT_SIGNATURE_FAILURE APT_METADATA_FAILURE APT_PACKAGE_UNAVAILABLE APT_DEPENDENCY_CONFLICT APT_LOCKED APT_COMMAND_REJECTED APT_COMMAND_UNAVAILABLE APT_COMMAND_TIMEOUT APT_OUTPUT_OVERSIZED
 """.split())
 
 
@@ -191,12 +194,53 @@ def obtain_image(ubuntu, work):
                    "key_sha256": KEY_SHA256, "signature_verified": True}
 
 
-def normalized(value):
+def normalized(value, *, kind="ip", parent=None):
+    """Remove only observed runtime counters/lifetimes, never rule parameters."""
     if isinstance(value, list):
-        return [normalized(x) for x in value]
+        return [normalized(x, kind=kind, parent=parent) for x in value]
     if isinstance(value, dict):
-        return {k: normalized(v) for k, v in value.items() if k not in ("packets", "bytes", "valid_life_time", "preferred_life_time", "expires", "lastuse")}
+        omitted = {"valid_life_time", "preferred_life_time", "expires", "lastuse"} if kind == "ip" else ({"packets", "bytes"} if parent == "counter" else set())
+        return {k: normalized(v, kind=kind, parent=k) for k, v in value.items() if k not in omitted}
     return value
+
+
+def changed_paths(before, after, path="", limit=32):
+    # Kernel/nft schema names only. Interface names, addresses, chains, marks,
+    # rule strings and any unknown dictionary key are never exported.
+    known = set("addresses routes firewall nftables metainfo version release_name json_schema_version ifindex ifname flags mtu qdisc operstate group txqlen link_type address broadcast addr_info family local prefixlen scope label metric protocol table dev dst gateway type src prefsrc priority uid pref name handle chain rule set map expr counter packets bytes mangle payload field match op left right lookup elem val accept drop queue reject masquerade snat dnat ct key fwd saddr daddr dport sport mark verdict limit rate per burst policy hook prio cache link_index link_netnsid master".split())
+    output = []
+    def visit(left, right, here):
+        if len(output) >= limit or left == right:
+            return
+        if isinstance(left, dict) and isinstance(right, dict):
+            for key in sorted(set(left) | set(right)):
+                child = here + "." + (key if key in known else "unknown-field")
+                if key not in left or key not in right:
+                    output.append(child)
+                else:
+                    visit(left[key], right[key], child)
+                if len(output) >= limit: break
+        elif isinstance(left, list) and isinstance(right, list):
+            if len(left) != len(right): output.append(here + ".length")
+            for index, (a, b) in enumerate(zip(left, right)):
+                visit(a, b, here + "[" + str(index) + "]")
+                if len(output) >= limit: break
+        else:
+            output.append(here or "root")
+    visit(before, after, path)
+    return list(dict.fromkeys(output))[:limit]
+
+
+def network_proof(before, after):
+    """Only category/hash evidence; no host address or firewall value leaves CI."""
+    sections = ("addresses", "routes", "firewall")
+    require(set(before) == set(after) == set(sections), "HOST_NETWORK_PROOF_SCHEMA_REJECTED")
+    hashed = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return {"unchanged": before == after,
+            "changed_sections": [name for name in sections if before[name] != after[name]],
+            "difference_paths": changed_paths(before, after),
+            "before_sha256": {name: hashed(before[name]) for name in sections},
+            "after_sha256": {name: hashed(after[name]) for name in sections}}
 
 
 def host_network():
@@ -206,7 +250,7 @@ def host_network():
               "routes": normalized(json.loads(run([ip, "-j", "route", "show", "table", "all"]))) }
     nft = next((p for p in ("/usr/sbin/nft", "/sbin/nft") if Path(p).is_file()), None)
     if nft:
-        result["firewall"] = normalized(json.loads(run(["/usr/bin/sudo", "-n", nft, "-j", "list", "ruleset"])))
+        result["firewall"] = normalized(json.loads(run(["/usr/bin/sudo", "-n", nft, "-j", "list", "ruleset"])), kind="nft")
     else:
         saves = ["/usr/sbin/iptables-save", "/usr/sbin/ip6tables-save"]
         require(all(Path(p).is_file() for p in saves), "HOST_READONLY_FIREWALL_TOOLS_REQUIRED")
@@ -276,7 +320,8 @@ def make_seed(work, root, source_sha, image_provenance):
               "encoding": "gz+b64", "content": base64.b64encode(gzip.compress(raw, mtime=0)).decode()} for name, raw in content.items()]
     config = {"users": [], "disable_root": True, "ssh_pwauth": False, "manage_etc_hosts": False, "write_files": files,
               "package_update": False, "package_upgrade": False,
-              "bootcmd": [["sh", "-c", "systemctl mask --now apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer ssh.service ssh.socket || true"],
+              "bootcmd": [["sh", "-c", "printf '%s\\n' 'ASTER_LIBVIRT_NATIVE_PROGRESS_" + nonce + " bootcmd' > /dev/ttyS0"],
+                          ["sh", "-c", "systemctl mask --now apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer ssh.service ssh.socket || true"],
                           ["sh", "-c", HOSTS_BOOT_COMMAND]],
               "runcmd": [["sh", "-c", "/usr/bin/python3 -I /root/aster-native/guest.py; /sbin/poweroff -f"]]}
     (work / "user-data").write_text("#cloud-config\n" + json.dumps(config))
@@ -288,6 +333,10 @@ def make_seed(work, root, source_sha, image_provenance):
 
 
 def run_vm(arguments, work, metadata):
+    global GUEST_RESULT_SEEN
+    progress_pattern = ("ASTER_LIBVIRT_NATIVE_PROGRESS_" + metadata["nonce"] + " ").encode()
+    progress_allowed = GUEST_PHASES | {name + ":" + outcome for name in DIAGNOSTIC_COMMANDS for outcome in ("start", "done", "failed")} | {"bootcmd"}
+    started = time.monotonic()
     pattern = ("ASTER_LIBVIRT_NATIVE_RESULT_" + metadata["nonce"] + " ").encode()
     result, buffer, total = None, b"", 0
     process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -306,11 +355,20 @@ def run_vm(arguments, work, metadata):
                     log.write(chunk); buffer += chunk
                     while b"\n" in buffer:
                         line, buffer = buffer.split(b"\n", 1)
+                        if progress_pattern in line:
+                            label = line.split(progress_pattern, 1)[1].strip().decode("ascii", errors="ignore")
+                            if label in progress_allowed:
+                                VM_PROGRESS.append({"stage": label, "elapsed_seconds": int(time.monotonic() - started)})
+                                del VM_PROGRESS[:-32]
                         if pattern in line:
                             require(result is None, "DUPLICATE_GUEST_RESULT")
                             encoded = line.split(pattern, 1)[1].strip()
                             require(len(encoded) <= 65536, "GUEST_RESULT_OVERSIZED")
                             result = json.loads(base64.b64decode(encoded, validate=True))
+                            GUEST_RESULT_SEEN = True
+                            public = public_result(result, metadata)
+                            if OUTPUT_CREATED is not None:
+                                (OUTPUT_CREATED / "guest-report.json").write_text(json.dumps(public, indent=2) + "\n")
                 if process.poll() is not None and not selector.get_map():
                     break
             require(process.poll() is not None, "GUEST_VM_DEADLINE_EXCEEDED")
@@ -372,7 +430,7 @@ def public_result(result, metadata):
 
 
 def execute(args):
-    global OUTPUT_CREATED
+    global OUTPUT_CREATED, HOST_PROOF
     require(platform.system() == "Linux" and platform.machine() in ("x86_64", "amd64") and os.geteuid() != 0, "LINUX_AMD64_NONROOT_RUNNER_REQUIRED")
     require(re.fullmatch(r"[0-9a-f]{40}", args.source_sha or ""), "FULL_SOURCE_SHA_REQUIRED")
     root, output = Path(args.source_root), Path(args.output)
@@ -397,9 +455,11 @@ def execute(args):
             # Never export arbitrary nested data from a failed VM report.
             # Successful reports also pass the complete schema before export.
             (output / "guest-report.json").write_text(json.dumps(public_result(result, metadata), indent=2) + "\n")
+            require(result.get("passed") is True, "GUEST_ACCEPTANCE_FAILED")
             validate_result(result, metadata)
     finally:
-        require(host_network() == before, "HOST_NETWORK_OR_FIREWALL_CHANGED")
+        HOST_PROOF = network_proof(before, host_network())
+        require(HOST_PROOF["unchanged"], "HOST_NETWORK_OR_FIREWALL_CHANGED")
     summary = {k: result[k] for k in ("passed", "real_apt", "real_systemd", "libvirt_prepared", "kvm_ready", "image_sha256", "ubuntu", "source_sha")}
     summary.update(schema=1, host_network_unchanged=True, tcg_only=True,
                    doctor_protocol=result["doctor_protocol"], explicit_kvm_denial=result["explicit_kvm_denial"],
@@ -410,8 +470,8 @@ def execute(args):
 
 
 def main(argv=None):
-    global OUTPUT_CREATED
-    OUTPUT_CREATED = None
+    global OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN
+    OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN = None, [], {}, False
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", choices=sorted(IMAGES), required=True)
     parser.add_argument("--source-root", required=True)
@@ -426,11 +486,13 @@ def main(argv=None):
         print(json.dumps(execute(args), sort_keys=True)); return 0
     except Refused as error:
         if OUTPUT_CREATED is not None:
-            (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": str(error), "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False}) + "\n")
+            (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": str(error), "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False,
+                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF}) + "\n")
         print("FAIL: " + str(error), file=sys.stderr); return 1
     except Exception:
         if OUTPUT_CREATED is not None:
-            (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": "NATIVE_FIXTURE_REFUSED_DETAILS_WITHHELD", "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False}) + "\n")
+            (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": "NATIVE_FIXTURE_REFUSED_DETAILS_WITHHELD", "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False,
+                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF}) + "\n")
         print("FAIL: NATIVE_FIXTURE_REFUSED_DETAILS_WITHHELD", file=sys.stderr); return 1
 
 

@@ -63,7 +63,9 @@ LIBVIRT_DAEMON_CONFIG = (b'listen_tls = 0\nlisten_tcp = 0\nlisten_addr = "127.0.
 
 
 class ProvisionError(Exception):
-    pass
+    def __init__(self, message, *, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 def fail(message):
@@ -167,14 +169,46 @@ def save_receipt(path, receipt):
         os.close(fd)
 
 
+def apt_failure_code(stdout, stderr):
+    """Map captured APT diagnostics to fixed public categories, never raw text.
+
+    Categories describe the observed failure only. They neither grant a retry
+    nor loosen transport, package-selection, signature or no-upgrade policy.
+    """
+    raw = (stdout[:MAX_OUTPUT] + b"\n" + stderr[:MAX_OUTPUT]).lower()
+    patterns = (
+        ("APT_DNS_FAILURE", (b"temporary failure resolving", b"could not resolve", b"name or service not known")),
+        ("APT_TLS_FAILURE", (b"certificate verification failed", b"could not handshake", b"certificate is not trusted", b"tls connection")),
+        ("APT_SIGNATURE_FAILURE", (b"no_pubkey", b"signatures couldn't be verified", b"invalid signature", b"is not signed", b"signature verification failed")),
+        ("APT_METADATA_FAILURE", (b"does not have a release file", b"some index files failed", b"failed to fetch", b"hash sum mismatch", b"release file expired", b"release file is not valid yet")),
+        ("APT_PACKAGE_UNAVAILABLE", (b"unable to locate package", b"has no installation candidate")),
+        ("APT_DEPENDENCY_CONFLICT", (b"unmet dependencies", b"held broken packages", b"pkgproblemresolver", b"packages were downgraded")),
+        ("APT_LOCKED", (b"could not get lock", b"unable to acquire", b"is another process using it")),
+    )
+    for code, needles in patterns:
+        if any(needle in raw for needle in needles):
+            return code
+    return "APT_COMMAND_REJECTED"
+
+
 def run_fixed(argv, *, stdin=None, env=None, timeout=120):
+    is_apt = bool(argv) and argv[0] == APT_GET
     try:
         result = subprocess.run(argv, input=stdin, env=env or SAFE_ENV, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        fail("Fixed native provisioning command unavailable or timed out; output withheld")
-    if result.returncode or len(result.stdout) > MAX_OUTPUT:
-        fail("Fixed native provisioning command rejected; output withheld to protect secrets")
+    except subprocess.TimeoutExpired:
+        raise ProvisionError("Fixed native provisioning command timed out; output withheld",
+                             code="APT_COMMAND_TIMEOUT" if is_apt else None) from None
+    except OSError:
+        raise ProvisionError("Fixed native provisioning command unavailable; output withheld",
+                             code="APT_COMMAND_UNAVAILABLE" if is_apt else None) from None
+    if len(result.stdout) > MAX_OUTPUT or len(result.stderr) > MAX_OUTPUT:
+        raise ProvisionError("Fixed native provisioning command output exceeded limit; output withheld",
+                             code="APT_OUTPUT_OVERSIZED" if is_apt else None)
+    if result.returncode:
+        code = apt_failure_code(result.stdout, result.stderr) if is_apt else None
+        raise ProvisionError("Fixed native provisioning command rejected; output withheld to protect secrets",
+                             code=code)
     return result.stdout
 
 
@@ -293,6 +327,7 @@ def _apt_configuration(work, codename):
               f'Dir::Etc::preferences "{work}/preferences";\nDir::Etc::preferencesparts "{work}/preferences-parts";\n'
               f'Dir::Etc::trusted "{APT_KEYRING}";\nDir::Etc::trustedparts "{work}/trusted-parts";\n'
               f'Dir::State::lists "{work}/lists";\nDir::Cache::archives "{work}/archives";\n'
+              'APT::Update::Error-Mode "any";\n'
               'APT::Get::AllowUnauthenticated "false";\nAcquire::AllowInsecureRepositories "false";\n'
               'Acquire::AllowDowngradeToInsecureRepositories "false";\nAcquire::https::Verify-Peer "true";\n'
               'Acquire::https::Verify-Host "true";\nAcquire::Check-Valid-Until "true";\nAcquire::Check-Date "true";\n'

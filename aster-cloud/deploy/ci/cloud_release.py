@@ -367,14 +367,20 @@ def release_body(source, bootstrap_sha):
     commands = []
     for role in ("controller", "node"):
         commands.append("```sh\nbash -o pipefail -c 'curl --fail --silent --show-error --proto \"=https\" --tlsv1.2 --connect-timeout 10 --max-time 60 --max-filesize 1048576 " + url + " | sudo /usr/bin/python3 -I - " + role + "'\n```")
-    return ("# Aster Cloud " + V.VERSION + " — official prerelease, not production-ready\n\n"
-            "The first command explicitly trusts the reviewed full source-commit HTTPS bootstrap below. It does not verify itself before execution. "
-            "That bootstrap pins the official CLI and trust roots, then anonymously verifies the fixed Cloud publisher's Sigstore signatures before executing any downloaded installer code.\n\n"
-            "Controller:\n" + commands[0] + "\n\nDedicated KVM node:\n" + commands[1] + "\n\n"
-            "Source commit: `" + source + "`. Bootstrap SHA256 (manual audit): `" + bootstrap_sha + "`.\n\n"
-            "Real KVM/dataplane/production acceptance remains outstanding. No financial release/assets, host firewall or physical uplink is changed. "
-            "The wizard requires real TLS/identity inputs and explicit dedicated-host approvals; the node never receives the controller client private key. "
-            "A failure is not automatically retried; review retained private state before an explicit resume.\n")
+    return ("# Aster Cloud " + V.VERSION + " · 官方预发布\n\n"
+            "这是 RC 候选版，不是 stable 稳定版；真实 KVM、物理网络和生产部署尚未验收。\n\n"
+            "适用：Ubuntu 22.04 / 24.04 / 26.04 amd64，Python 3.10+、curl、sudo 与已启动的 systemd。"
+            "主控和被控分别在各自机器执行以下一条命令。交互向导默认不安装；核对真实 TLS、身份和配置后，"
+            "需明确输入 install 才应用，Cloud 服务启动还需 start 批准。主控可选新专用 MySQL，被控可选 libvirt 自动准备；"
+            "这些准备步骤可安装并启动相应依赖服务。\n\n"
+            "初始脚本是操作者审核并信任的固定源码入口，依赖 HTTPS 和下方精确提交，不能在执行前自证可信。"
+            "脚本固定验证器与信任根；后续下载的安装器代码只有匿名 Sigstore 验签通过后才执行，无需 GitHub 登录。\n\n"
+            "## 主控\n" + commands[0] + "\n\n## 专用 KVM 被控\n" + commands[1] + "\n\n"
+            "被控仅用于专用计算宿主，不要安装到现有 1GB 财务测试机；主控 client 私钥不得复制到被控。"
+            "软件准备完成不等于 KVM 就绪或已加入主控。\n\n"
+            "源码提交：`" + source + "`。初始脚本 SHA256（供人工核对）：`" + bootstrap_sha + "`。\n\n"
+            "财务既有标签、Release、资产和 latest 均不改变，不修改宿主防火墙或物理上联。"
+            "失败不会自动重试；先核对保留的私有状态，再明确使用 resume。\n")
 
 
 def publish(api, env, event, directory):

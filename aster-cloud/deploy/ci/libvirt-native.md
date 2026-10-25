@@ -112,3 +112,23 @@ QEMU 8.2 source includes TCG AVX/F16C/FMA and AVX2/BMI support, making the 26.04
 the actual required native job must pass before claiming that guest accepted.
 None of these tests establishes real KVM creation, physical guest networking,
 controller admission, provider ownership, or production-host installation.
+
+## 首次 native CI 失败与诊断修正
+
+`766c055` 的三份 Ubuntu 镜像均实际通过签名与完整 SHA256 校验，不能因此称安装成功。
+24.04 / 26.04 在真实 APT simulate 失败，只有 owned policy-created，尚未安装 libvirt；
+22.04 在固定 1200 秒 VM deadline 退出，没有收到最终 guest report。原始脱敏结果保存在该 CI artifact。
+
+后续 fixture 不延长超时、不重试包安装、不把失败改成 SKIP。增加只含固定阶段 / 命令类别
+start-done-failed 与秒数的 serial 心跳；原始 serial、stdout/stderr、nonce、路径和秘密不上传。
+收到最终 report 即先做绑定 / 完整 schema 校验并保存，避免关机超时丢失已经产生的诊断；
+超时仍失败，不能因 report 存在就通过。失败 report 不再误套成功 schema。
+
+宿主网络仍逐项比较真实地址、路由与规则。只略去 IP 运行期 lifetime / last-use 与 nft
+**counter 对象内部**的 packets/bytes；限额、规则字段中的 bytes/rate 必须保留，不能通用删键。
+失败摘要另给固定 category、schema field path 和各部分 SHA256，不输出地址 / 链名 / 规则值。
+任何结构变化仍 hard-fail，不把未知 runner 变化推定为无害。
+
+APT 错误只接收 production `ProvisionError.code` 的固定白名单，未知错误仍拒绝；
+新增分类不放宽正式验证或变更执行器的原调用、返回值和异常。所有离线合同是模型回归，
+需下一精确 main SHA 的三套真实 Ubuntu CI 重新验收。

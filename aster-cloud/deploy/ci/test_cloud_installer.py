@@ -1505,6 +1505,7 @@ class InstallerContract(unittest.TestCase):
             self.assertIn('Acquire::https::Verify-Peer "true"', settings)
             self.assertIn('Acquire::https::Verify-Host "true"', settings)
             self.assertIn('APT::Get::AllowUnauthenticated "false"', settings)
+            self.assertIn('APT::Update::Error-Mode "any"', settings)
             self.assertIn('Dir::Etc::parts "', settings)
             self.assertIn('empty-parts', settings)
             sources = config.with_name("sources.list").read_text()
