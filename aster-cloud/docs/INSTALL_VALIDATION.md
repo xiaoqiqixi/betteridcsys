@@ -102,7 +102,7 @@ MySQL 的 `--no-login-paths` 是 8.2 才新增，不能盲用于 Ubuntu 的 8.0 
 
 ## 当前结果
 
-2026-10-25，Darwin 本地运行上述独立安全测试：**87 个 test methods 通过**
+2026-10-25，Darwin 本地运行上述独立安全测试：**93 个 test methods 通过**
 （含额外 subtests），无 SKIP；测试只使用合成文件与替代系统边界，没有
 实际启动服务、连接 MySQL 或 KVM。与 packager 的 USTAR envelope / metadata
 往返兼容也只使用合成字节，不是真实包安装。
@@ -114,6 +114,12 @@ TOCTOU immutable snapshot 和权限分离分别补入独立回归。**上述通�
 
 其中新增依赖 / MySQL 回归为 28 个 methods，另补 1 个真实002 FK源码对照
 与 migration-only REFERENCES 回归，以及 3 个 native 入口/transport 安全单测；
+另加 6 个 runner 隔离 / fresh-host 回归。APT source/policy 用例显式隔离
+宿主 precondition；独立用例仍调用真实守卫，只虚拟文件读取，逐项核对全部
+数据库 / virt / finance 路径（存在及悬空 symlink）、节点内存 / KVM 字符设备，
+以及 MySQL 配置 / service / binary / socket 路径的拒绝和干净证据通过。
+本轮 RED 在模拟占用 runner 上复现提前拒绝，并发现原 node simulation 负例
+没有到达 APT；修复后强制 update / simulate 各一次，危险计划不进入 assume-yes。
 不沿用此前旧 55 项的通过结论。REFERENCES 只在专用数据库 migrator grants，
 runtime 仍为 SELECT/INSERT/UPDATE/DELETE，不扩展 global/DROP/GRANT OPTION。
 这批使用 Python SQL 边界模型，不启动 MySQL、APT、systemd 或任何 daemon；
@@ -152,6 +158,6 @@ DDL成功但无global/邻库权限，以及数据库下划线不得作为wildcar
 密码、DSN、token或原始client诊断。
 
 本机无 native fixture，实际调用已返回 `passed:false` / exit1，未运行数据库
-权限门禁。上面的87项仅包括纯guard/transport单测；native真实SQL结果必须
+权限门禁。上面的93项仅包括纯guard/transport单测；native真实SQL结果必须
 以随后同提交GitHub native MySQL job为准。此门禁仍不覆盖生产root socket
 bootstrap、APT、systemd、整机安装/升级恢复或KVM。

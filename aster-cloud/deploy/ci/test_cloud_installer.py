@@ -35,6 +35,15 @@ def sha256(value):
 
 
 ELF_HEADER = b"\x7fELF\x02\x01" + b"\x00" * 12 + b"\x3e\x00" + b"\x00" * 44
+FRESH_DEPENDENCY_PATHS = (
+    "/var/lib/mysql", "/var/lib/mariadb", "/var/lib/postgresql",
+    "/var/lib/libvirt", "/etc/libvirt", "/opt/vps-billing", "/opt/aster-billing",
+)
+FRESH_MYSQL_PATHS = (
+    "/etc/mysql", "/var/lib/mysql", "/etc/systemd/system/mysql.service.d",
+    "/etc/systemd/system/mysql.service", "/etc/systemd/system/mysqld.service",
+    "/usr/sbin/mysqld", "/run/mysqld/mysqld.sock",
+)
 
 
 class SyntheticMySQL:
@@ -293,6 +302,41 @@ class InstallerContract(unittest.TestCase):
         }
 
     @contextlib.contextmanager
+    def dependency_host_evidence(self, *, existing=(), symlinks=(),
+                                 memory="MemTotal: 2097152 kB\n", kvm_mode=stat.S_IFCHR | 0o600):
+        """Virtualize only read boundaries; execute the real fresh-host guards.
+
+        Unknown filesystem probes fail rather than falling back to this Mac or
+        a pre-populated CI runner. No provisioning fixture/precondition stub is
+        used by the independent guard tests.
+        """
+        known = set(FRESH_DEPENDENCY_PATHS + FRESH_MYSQL_PATHS)
+        existing, symlinks = set(existing), set(symlinks)
+        self.assertLessEqual(existing | symlinks, known)
+        def exists(path):
+            self.assertIn(str(path), known)
+            return str(path) in existing
+        def is_symlink(path):
+            self.assertIn(str(path), known)
+            return str(path) in symlinks
+        def read_text(path, *args, **kwargs):
+            self.assertEqual(str(path), "/proc/meminfo")
+            if isinstance(memory, OSError):
+                raise memory
+            return memory
+        def path_stat(path, *args, **kwargs):
+            self.assertEqual(str(path), "/dev/kvm")
+            if kvm_mode is None:
+                raise FileNotFoundError("synthetic missing KVM device")
+            return types.SimpleNamespace(st_mode=kvm_mode)
+        with contextlib.ExitStack() as stack:
+            probes = {}
+            for name, callback in (("exists", exists), ("is_symlink", is_symlink),
+                                   ("read_text", read_text), ("stat", path_stat)):
+                probes[name] = stack.enter_context(mock.patch.object(Path, name, autospec=True, side_effect=callback))
+            yield types.SimpleNamespace(**probes)
+
+    @contextlib.contextmanager
     def provision_host(self):
         """Only fixture-owned provisioning paths; never real APT or MySQL."""
         provision = installer.provisioning_module()
@@ -308,10 +352,23 @@ class InstallerContract(unittest.TestCase):
                 "MYSQL_CONFIG": self.root / "native-host/etc-mysql",
                 "MYSQL_DATA": self.root / "native-host/mysql-data",
                 "MYSQL_DROPIN": self.root / "native-host/mysql.service.d/aster-cloud-local-only.conf",
+                "MYSQL_SOCKET": str(self.root / "native-host/mysql.sock"),
             }
             for name, value in constants.items():
                 stack.enter_context(mock.patch.object(provision, name, value))
             stack.enter_context(mock.patch.object(provision, "root_target", return_value="noble"))
+            # Package/source/policy tests exercise later boundaries, not the
+            # runner's databases/virt/KVM. Real fresh-host guards are covered
+            # directly below with every filesystem read virtualized instead.
+            stack.enter_context(mock.patch.object(provision, "fresh_dependency_host", return_value=None))
+            original_exists, original_is_symlink = Path.exists, Path.is_symlink
+            fixed_mysql_paths = set(FRESH_MYSQL_PATHS) - {"/etc/mysql", "/var/lib/mysql"}
+            def fixture_exists(path):
+                return False if str(path) in fixed_mysql_paths else original_exists(path)
+            def fixture_is_symlink(path):
+                return False if str(path) in fixed_mysql_paths else original_is_symlink(path)
+            stack.enter_context(mock.patch.object(Path, "exists", fixture_exists))
+            stack.enter_context(mock.patch.object(Path, "is_symlink", fixture_is_symlink))
             yield provision, self.root / "native-state"
 
     def test_valid_controller_bundle_is_verified_without_writes(self):
@@ -1080,6 +1137,73 @@ class InstallerContract(unittest.TestCase):
             provision.dependency_plan("arbitrary; command")
         self.assertEqual(before, self.tree())
 
+    def test_fresh_dependency_host_refuses_every_existing_workload_or_broken_symlink(self):
+        provision = installer.provisioning_module()
+        before = self.tree()
+        for component in ("controller", "node"):
+            for path in FRESH_DEPENDENCY_PATHS:
+                for kind in ("existing", "symlinks"):
+                    with self.subTest(component=component, path=path, kind=kind):
+                        with self.dependency_host_evidence(**{kind: (path,)}) as probes, mock.patch.object(provision, "run_fixed") as run:
+                            with self.assertRaisesRegex(provision.ProvisionError, "fresh dedicated-host only"):
+                                provision.fresh_dependency_host(component)
+                            probes.read_text.assert_not_called()
+                            probes.stat.assert_not_called()
+                            run.assert_not_called()
+        self.assertEqual(before, self.tree())
+
+    def test_fresh_dependency_node_refuses_insufficient_or_unverifiable_memory(self):
+        provision = installer.provisioning_module()
+        for memory in ("MemTotal: 0 kB\n", "MemTotal: 2097151 kB\n", "MemFree: 4194304 kB\n",
+                       "MemTotal: malformed kB\n", OSError("synthetic unreadable meminfo")):
+            with self.subTest(memory=str(memory)), self.dependency_host_evidence(memory=memory) as probes:
+                with self.assertRaises(provision.ProvisionError):
+                    provision.fresh_dependency_host("node")
+                probes.read_text.assert_called_once()
+                probes.stat.assert_not_called()
+
+    def test_fresh_dependency_node_refuses_missing_or_non_character_kvm(self):
+        provision = installer.provisioning_module()
+        for mode in (None, stat.S_IFREG | 0o600, stat.S_IFDIR | 0o700, stat.S_IFBLK | 0o600):
+            with self.subTest(mode=mode), self.dependency_host_evidence(kvm_mode=mode) as probes:
+                with self.assertRaises(provision.ProvisionError):
+                    provision.fresh_dependency_host("node")
+                probes.read_text.assert_called_once()
+                probes.stat.assert_called_once()
+
+    def test_fresh_dependency_host_accepts_only_clean_valid_role_evidence_without_writes(self):
+        provision = installer.provisioning_module()
+        before = self.tree()
+        # Controller does not require node-only memory or KVM evidence.
+        with self.dependency_host_evidence(memory=OSError("must not read node evidence"), kvm_mode=None) as probes:
+            self.assertIsNone(provision.fresh_dependency_host("controller"))
+            self.assertEqual([str(call.args[0]) for call in probes.exists.call_args_list], list(FRESH_DEPENDENCY_PATHS))
+            self.assertEqual([str(call.args[0]) for call in probes.is_symlink.call_args_list], list(FRESH_DEPENDENCY_PATHS))
+            probes.read_text.assert_not_called()
+            probes.stat.assert_not_called()
+        # Exact 2GiB boundary plus a character KVM device is valid for node.
+        with self.dependency_host_evidence() as probes:
+            self.assertIsNone(provision.fresh_dependency_host("node"))
+            self.assertEqual(probes.exists.call_count, len(FRESH_DEPENDENCY_PATHS))
+            self.assertEqual(probes.is_symlink.call_count, len(FRESH_DEPENDENCY_PATHS))
+            probes.read_text.assert_called_once()
+            probes.stat.assert_called_once()
+        self.assertEqual(before, self.tree())
+
+    def test_fresh_mysql_host_refuses_all_existing_service_paths_or_broken_symlinks(self):
+        provision = installer.provisioning_module()
+        for path in FRESH_MYSQL_PATHS:
+            for kind in ("existing", "symlinks"):
+                with self.subTest(path=path, kind=kind), self.dependency_host_evidence(**{kind: (path,)}) as probes:
+                    with self.assertRaisesRegex(provision.ProvisionError, "fresh-host only"):
+                        provision._fresh_mysql_host()
+                    probes.read_text.assert_not_called()
+                    probes.stat.assert_not_called()
+        with self.dependency_host_evidence() as probes:
+            self.assertIsNone(provision._fresh_mysql_host())
+            self.assertEqual(probes.exists.call_count, len(FRESH_MYSQL_PATHS))
+            self.assertEqual(probes.is_symlink.call_count, len(FRESH_MYSQL_PATHS))
+
     def test_existing_service_policy_is_never_overwritten_even_temporarily(self):
         with self.provision_host() as (provision, state):
             provision.POLICY_PATH.write_bytes(b"#!/bin/sh\n# existing operator policy\nexit 0\n")
@@ -1129,6 +1253,24 @@ class InstallerContract(unittest.TestCase):
             self.assertIn("signed-by=" + str(provision.APT_KEYRING), sources)
             self.assertNotIn("trusted=yes", sources)
 
+    def test_dependency_fixture_is_independent_of_runner_workloads(self):
+        # Reproduce an occupied Linux runner even on Darwin. This is a fixture
+        # contract, not permission to install packages on that occupied host.
+        original_exists = Path.exists
+        occupied = set(FRESH_DEPENDENCY_PATHS + FRESH_MYSQL_PATHS)
+        def runner_exists(path):
+            return str(path) in occupied or original_exists(path)
+        with mock.patch.object(Path, "exists", runner_exists), self.provision_host() as (provision, state):
+            with mock.patch.object(provision, "run_fixed", return_value=b"") as run:
+                result = provision.install_dependencies("controller", state, with_mysql=True)
+            self.assertEqual(result["status"], "dependencies-installed")
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(len(commands), 3)
+            self.assertEqual(commands[0], [provision.APT_GET, "update"])
+            self.assertEqual(sum("--simulate" in argv for argv in commands), 1)
+            self.assertEqual(sum("--assume-yes" in argv for argv in commands), 1)
+            self.assertEqual(provision.MYSQL_DROPIN.read_bytes(), provision.MYSQL_LOCAL_DROPIN)
+
     def test_dependency_simulation_refuses_upgrade_remove_or_network_daemon(self):
         for simulation in (b"Remv existing-service [1.0]\n", b"Inst openssl [1.0] (2.0 Ubuntu [amd64])\n", b"Inst libvirt-daemon-system (1.0 Ubuntu [amd64])\n", b"Inst ufw (1.0 Ubuntu [amd64])\n"):
             with self.subTest(simulation=simulation), self.provision_host() as (provision, state):
@@ -1138,8 +1280,10 @@ class InstallerContract(unittest.TestCase):
                     state = self.root / ("native-state-" + sha256(simulation)[:8])
                 def apt(argv, **kwargs):
                     return simulation if "--simulate" in argv else b""
-                with mock.patch.object(provision, "run_fixed", side_effect=apt) as run, self.assertRaises(provision.ProvisionError):
+                with mock.patch.object(provision, "run_fixed", side_effect=apt) as run, self.assertRaisesRegex(provision.ProvisionError, "APT plan would upgrade/remove"):
                     provision.install_dependencies("node", state)
+                self.assertEqual(sum("--simulate" in call.args[0] for call in run.call_args_list), 1)
+                self.assertEqual(sum(call.args[0] == [provision.APT_GET, "update"] for call in run.call_args_list), 1)
                 self.assertFalse(any("--assume-yes" in call.args[0] for call in run.call_args_list))
                 if provision.POLICY_PATH.exists():
                     provision.POLICY_PATH.unlink()
@@ -1150,8 +1294,11 @@ class InstallerContract(unittest.TestCase):
                 if "--assume-yes" in argv:
                     raise provision.ProvisionError("synthetic package transaction interrupted")
                 return b""
-            with mock.patch.object(provision, "run_fixed", side_effect=fail_install), self.assertRaises(provision.ProvisionError):
+            with mock.patch.object(provision, "run_fixed", side_effect=fail_install) as run, self.assertRaisesRegex(provision.ProvisionError, "synthetic package transaction interrupted"):
                 provision.install_dependencies("controller", state)
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual(sum("--simulate" in call.args[0] for call in run.call_args_list), 1)
+            self.assertEqual(sum("--assume-yes" in call.args[0] for call in run.call_args_list), 1)
             owned_policy = provision.POLICY_PATH.read_bytes()
             self.assertTrue(owned_policy.endswith(b"exit 101\n"))
             with mock.patch.object(provision, "run_fixed") as run, self.assertRaises(provision.ProvisionError):
@@ -1184,8 +1331,10 @@ class InstallerContract(unittest.TestCase):
 
     def test_resume_refuses_same_content_foreign_policy_before_any_apt_action(self):
         with self.provision_host() as (provision, state):
-            with mock.patch.object(provision, "run_fixed", side_effect=provision.ProvisionError("synthetic interruption")), self.assertRaises(provision.ProvisionError):
+            with mock.patch.object(provision, "run_fixed", side_effect=provision.ProvisionError("synthetic interruption")) as interrupted, self.assertRaisesRegex(provision.ProvisionError, "synthetic interruption"):
                 provision.install_dependencies("controller", state)
+            interrupted.assert_called_once()
+            self.assertEqual(interrupted.call_args.args[0], [provision.APT_GET, "update"])
             replacement = provision.POLICY_PATH.with_name("replacement")
             replacement.write_bytes(provision.POLICY_PATH.read_bytes())
             replacement.chmod(0o755)
@@ -1198,7 +1347,7 @@ class InstallerContract(unittest.TestCase):
         for directory in ("empty-parts", "source-parts", "trusted-parts", "preferences-parts"):
             with self.subTest(directory=directory), self.provision_host() as (provision, state):
                 foreign = self.private_file("apt-work/controller/" + directory + "/foreign-entry", b"unapproved configuration", 0o644)
-                with mock.patch.object(provision, "run_fixed") as run, self.assertRaises(provision.ProvisionError):
+                with mock.patch.object(provision, "run_fixed") as run, self.assertRaisesRegex(provision.ProvisionError, "Private APT configuration isolation directory is not empty"):
                     provision.install_dependencies("controller", state)
                 run.assert_not_called()
                 self.assertEqual(foreign.read_bytes(), b"unapproved configuration")
@@ -1217,7 +1366,7 @@ class InstallerContract(unittest.TestCase):
                     path.write_bytes(b"existing operator MySQL policy")
                 else:
                     path.mkdir(exist_ok=True)
-                with mock.patch.object(provision, "run_fixed") as run, self.assertRaises(provision.ProvisionError):
+                with mock.patch.object(provision, "run_fixed") as run, self.assertRaisesRegex(provision.ProvisionError, "MySQL package provisioning is fresh-host only"):
                     provision.install_dependencies("controller", state, with_mysql=True)
                 run.assert_not_called()
                 self.assertFalse(provision.POLICY_PATH.exists())

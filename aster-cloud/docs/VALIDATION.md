@@ -18,11 +18,15 @@
 
 | 检查 | 当前结果 | 明确边界 |
 | --- | --- | --- |
-| `deploy/ci/test_cloud_installer.py` | 87 tests 通过、0 skip | 合成归档、私有测试文件系统及 APT/MySQL/systemd/网络替身；含 legacy receipt 禁止 resume 新增宿主副作用 |
+| `deploy/ci/test_cloud_installer.py` | 93 tests 通过、0 skip | 合成归档、私有测试文件系统及 APT/MySQL/systemd/网络替身；含 legacy receipt 禁止 resume 新增宿主副作用 |
 | `deploy/install/test_install.py` | 10 tests 通过、0 skip | TLS pair/SAN/有效期分支、固定命令/来源边界、文件模式/回执恢复及真实 migration SQL 的 FK/REFERENCES 权限对照；不替代原生安装 |
 | `deploy/scripts/test_cloud_package.py` | 23 tests 通过、0 skip | 开发包合同、安全成员/权限与可复现规则；不证明发布者身份或生产升级兼容 |
 | 静态入口 | shell 语法、Python 语法/AST、diff 检查通过 | 未执行目标机 apply；三组测试不相加宣传为独立真实业务验收场景 |
 | 真实开发制品只读检查 | 两角色真实编译包通过外部 SHA、manifest 与 plan/dry-run | 是本地候选包，不是正式下载资产；其旧 UI 不能用于本轮新 UI 最终截图/API 验收 |
+
+`59367c2` 的两个 Linux unit job 因夹具读取真实 runner 的 fresh-host 证据而失败；
+本轮只更正测试隔离，另直接调用真实守卫覆盖已有工作负载与节点内存/KVM 拒绝，
+未放宽生产限制。上述为本地结果，后续精确提交的 CI 尚须重新核验。
 
 打包验证时的已提交源码为 `be617c8`，候选包版本为 `0.1.0-dev` / `linux-amd64`。这个来源说明
 只绑定候选制品，不表示当前安装器、新 UI 或当前工作区获得了该旧源码的全部 CI 结论。

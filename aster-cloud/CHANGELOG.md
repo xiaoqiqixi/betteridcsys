@@ -30,8 +30,10 @@
 - 节点只可选装固定 qemu / virsh-client / cloud-localds 工具。完整 libvirt daemon 的默认网络自动化
   未开放，干净节点端到端一键部署仍未完成。不改物理上联、桥接或防火墙，不创建假镜像；维护开启、
   网络与删除关闭。节点本机启动仅为 `node_started_pending_controller`，controller 私钥不导入节点。
-- 当前本地安全测试：独立 installer **87**、专属 unit **10**、packager **23**，均通过；shell/语法/
+- 当前本地安全测试：独立 installer **93**、专属 unit **10**、packager **23**，均通过；shell/语法/
   diff 检查通过。测试使用合成制品与宿主命令替身，不是实际 APT/MySQL/systemd/KVM 验收。
+- `59367c2` 的两个 Linux unit job 因测试夹具读取真实 runner 的 fresh-host 证据而失败。
+  本轮仅隔离夹具并独立补齐真实守卫回归，生产限制不变；后续精确提交的 CI 结果仍须重验。
 - 独立正式 Release / 官方下载通道仍缺失，财务 `v0.5.9` 资产不变。真实本地开发包只执行过校验与
   plan/dry-run，未远程部署。新 UI 的实库与浏览器门禁独立执行，不由开发包 plan/dry-run 推定。
   入口与限制见[项目说明](README.md#原生安装入口仅本地开发包)和[当前验证](docs/VALIDATION.md#当前工作区开发安装器安全测试)。
