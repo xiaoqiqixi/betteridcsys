@@ -46,6 +46,9 @@ OUTPUT_CREATED = None
 VM_PROGRESS = []
 HOST_PROOF = {}
 GUEST_RESULT_SEEN = False
+RELAY_PROOF = {}
+SANDBOX_PROOF = {}
+RELAY_EVENTS = {"spawned", "dns-ok", "dns-failed", "dns-nonpublic", "connect-ok", "connect-failed", "guest-first-bytes", "server-first-bytes", "guest-eof", "server-eof", "timeout", "io-failed"}
 GUEST_PHASES = {"preflight", "prepare", "inspect", "resume", "image-and-config", "doctor"}
 DIAGNOSTIC_COMMANDS = {"apt-update", "apt-simulate", "apt-install", "network-rules-readonly", "other-fixed-command"} | {
     "systemd-" + name for name in ("start", "stop", "enable", "disable", "daemon-reload", "show", "is-active")} | {
@@ -260,45 +263,270 @@ def host_network():
     return result
 
 
-def relay(host):
+def process_identity(pid):
+    directory = Path("/proc") / str(pid)
+    fields = {}
+    for line in (directory / "status").read_text().splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            if key in {"Uid", "Gid", "CapInh", "CapPrm", "CapEff", "CapAmb", "NoNewPrivs", "Seccomp", "Seccomp_filters"}:
+                fields[key] = value.split()
+    stat_line = (directory / "stat").read_text()
+    end = stat_line.rfind(")")
+    require(end > 0, "OWNED_PROCESS_STAT_REJECTED")
+    return {"start_time": int(stat_line[end + 2:].split()[19]), "status": fields}
+
+
+def unprivileged_status(fields, *, sandbox=False, minimum_filters=0):
+    try:
+        require(len(fields["Uid"]) == len(fields["Gid"]) == 4 and
+                {int(v) for v in fields["Uid"]} == {os.getuid()} and os.getuid() != 0 and
+                {int(v) for v in fields["Gid"]} == {os.getgid()} and os.getgid() != 0,
+                "QEMU_UNPRIVILEGED_IDENTITIES_REQUIRED")
+        require(all(len(fields[key]) == 1 and int(fields[key][0], 16) == 0 for key in ("CapInh", "CapPrm", "CapEff", "CapAmb")), "QEMU_CAPABILITIES_MUST_BE_EMPTY")
+        if sandbox:
+            require(fields["NoNewPrivs"] == ["1"] and fields["Seccomp"] == ["2"] and
+                    len(fields["Seccomp_filters"]) == 1 and int(fields["Seccomp_filters"][0]) >= minimum_filters,
+                    "QEMU_OUTER_AND_INNER_FILTERS_REQUIRED")
+    except (KeyError, ValueError, TypeError):
+        raise Refused("QEMU_STATUS_SCHEMA_REJECTED") from None
+
+
+def record_relay_identity(host, nonce):
+    directory = Path(__file__).resolve().parent
+    require(stat.S_IMODE(directory.stat().st_mode) == 0o700 and directory.stat().st_uid == os.getuid(), "RELAY_PRIVATE_WORK_REQUIRED")
+    identity = process_identity(os.getpid())
+    unprivileged_status(identity["status"], sandbox=True, minimum_filters=2)
+    record = {"pid": os.getpid(), "start_time": identity["start_time"], "host": host, "nonce": nonce}
+    path = directory / ("relay-owner-" + str(record["pid"]) + "-" + str(record["start_time"]) + ".json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(json.dumps(record, sort_keys=True).encode()); stream.flush(); os.fsync(stream.fileno())
+
+
+def cleanup_relays(work, metadata):
+    """setsid children leave QEMU's group: pin PID identity then signal pidfd."""
+    require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"), "PIDFD_RELAY_CLEANUP_REQUIRED")
+    records = list(work.glob("relay-owner-*.json"))
+    require(len(records) <= 4096, "RELAY_OWNERSHIP_RECORD_BOUND")
+    matched, terminated = 0, 0
+    for path in records:
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid() and
+                stat.S_IMODE(info.st_mode) == 0o600 and info.st_size <= 512, "RELAY_OWNER_RECORD_REJECTED")
+        record = json.loads(path.read_bytes())
+        require(isinstance(record, dict) and set(record) == {"pid", "start_time", "host", "nonce"} and
+                type(record["pid"]) is int and record["pid"] > 1 and type(record["start_time"]) is int and record["start_time"] > 0 and
+                record["host"] in APT_DESTINATIONS and record["nonce"] == metadata["nonce"] and
+                path.name == "relay-owner-" + str(record["pid"]) + "-" + str(record["start_time"]) + ".json", "RELAY_OWNER_BINDING_REJECTED")
+        try:
+            identity = process_identity(record["pid"])
+        except FileNotFoundError:
+            continue
+        require(identity["start_time"] == record["start_time"], "RELAY_PID_REUSED_NO_SIGNAL")
+        expected = b"\0".join(v.encode() for v in ("/usr/bin/python3", "-I", str(work / "relay.py"), record["host"], metadata["nonce"])) + b"\0"
+        try:
+            command = (Path("/proc") / str(record["pid"]) / "cmdline").read_bytes()
+        except (FileNotFoundError, ProcessLookupError):
+            continue  # Exact recorded process exited before it could be signalled.
+        if not command:
+            continue  # An exited zombie cannot retain an outbound connection.
+        require(command == expected, "RELAY_COMMAND_CHANGED_NO_SIGNAL")
+        unprivileged_status(identity["status"], sandbox=True, minimum_filters=2)
+        try:
+            descriptor = os.pidfd_open(record["pid"], 0)
+        except ProcessLookupError:
+            continue
+        try:
+            require(process_identity(record["pid"])["start_time"] == record["start_time"], "RELAY_PID_CHANGED_NO_SIGNAL")
+            matched += 1
+            with selectors.DefaultSelector() as waiter:
+                waiter.register(descriptor, selectors.EVENT_READ)
+                if not waiter.select(0):
+                    signal.pidfd_send_signal(descriptor, signal.SIGTERM, None, 0)
+                    if not waiter.select(3):
+                        signal.pidfd_send_signal(descriptor, signal.SIGKILL, None, 0)
+                        require(bool(waiter.select(3)), "OWNED_RELAY_DID_NOT_EXIT")
+                    terminated += 1
+        except (ProcessLookupError, FileNotFoundError):
+            pass
+        finally:
+            os.close(descriptor)
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit(): continue
+        try:
+            if entry.stat().st_uid != os.getuid(): continue
+            command = (entry / "cmdline").read_bytes()
+            for host in APT_DESTINATIONS:
+                expected = b"\0".join(v.encode() for v in ("/usr/bin/python3", "-I", str(work / "relay.py"), host, metadata["nonce"])) + b"\0"
+                require(command != expected, "OWNED_RELAY_REMAINS_NO_CLEANUP_CLAIM")
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return {"owned_records": len(records), "live_identities_matched": matched, "terminated_owned": terminated, "cleanup_complete": True}
+
+
+def prepare_sandbox(work):
+    global SANDBOX_PROOF
+    unprivileged_status(process_identity(os.getpid())["status"])
+    release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    require(release.get("ID", "").strip('"') == "ubuntu" and release.get("VERSION_ID", "").strip('"') == "24.04", "REVIEWED_EMULATOR_HOST_REQUIRED")
+    version = run(["/usr/bin/dpkg-query", "-W", "-f=${Version}", "libslirp0"]).decode().strip()
+    require(re.fullmatch(r"(?:[0-9]+:)?4\.7\.[0-9]+[A-Za-z0-9.+:~_-]*", version) is not None, "REVIEWED_LIBSLIRP_47_REQUIRED")
+    source = regular(HERE / "libvirt-native-sandbox.c", 65536)
+    executable = work / "qemu-sandbox"
+    run(["/usr/bin/cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-D_FORTIFY_SOURCE=2", "-fstack-protector-strong", str(source), "-o", str(executable)])
+    executable.chmod(0o700)
+    proof = json.loads(run([str(executable), "--self-test"], cwd=work))
+    required = {"schema", "passed", "setsid_allowed", "denied_syscalls", "x32_denied", "i386_denied", "no_new_privs", "seccomp", "capabilities_zero"}
+    denied = {"setuid", "setgid", "setpgid", "setreuid", "setregid", "setresuid", "setresgid", "setfsuid", "setfsgid", "setgroups", "capset"}
+    require(isinstance(proof, dict) and set(proof) == required and proof["schema"] == 1 and
+            all(proof[k] is True for k in ("passed", "setsid_allowed", "x32_denied", "i386_denied", "capabilities_zero")) and
+            proof["no_new_privs"] == 1 and proof["seccomp"] == 2 and isinstance(proof["denied_syscalls"], list) and
+            len(proof["denied_syscalls"]) == len(denied) and set(proof["denied_syscalls"]) == denied,
+            "REAL_SANDBOX_SELF_TEST_REJECTED")
+    SANDBOX_PROOF = {**proof, "emulator_host": "24.04", "libslirp_version": version, "qemu_process_verified": False}
+    return executable
+
+
+def verify_running_sandbox(process):
+    baseline = int(process_identity(os.getpid())["status"].get("Seccomp_filters", ["0"])[0])
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        require(process.poll() is None, "QEMU_LAUNCHER_EXITED_BEFORE_PROOF")
+        try:
+            if (Path("/proc") / str(process.pid) / "exe").resolve() == Path("/usr/bin/qemu-system-x86_64").resolve():
+                status = process_identity(process.pid)["status"]
+                unprivileged_status(status, sandbox=True, minimum_filters=baseline + 2)
+                return {"qemu_process_verified": True, "minimum_filter_count": baseline + 2}
+        except (FileNotFoundError, Refused):
+            pass
+        time.sleep(0.05)
+    raise Refused("QEMU_REAL_SANDBOX_NOT_OBSERVED")
+
+
+def relay_event(host, nonce, event):
+    """Private append-only static diagnostics; never addresses or exception text."""
+    if host not in APT_DESTINATIONS or event not in RELAY_EVENTS or not re.fullmatch(r"[0-9a-f]{32}", nonce or ""):
+        return
+    directory = Path(__file__).resolve().parent
+    try:
+        info = directory.stat()
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            return
+        path = directory / "relay-events.jsonl"
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            info = os.fstat(fd)
+            if (info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                    stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 256 * 1024):
+                return
+            os.write(fd, (json.dumps({"host": host, "nonce": nonce, "event": event}, sort_keys=True) + "\n").encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # Diagnostic failure must not change the byte relay's semantics.
+
+
+def relay_evidence(work, metadata):
+    counts = {host: {} for host in APT_DESTINATIONS}
+    path = work / "relay-events.jsonl"
+    if not path.exists():
+        return {"spawned_seen": False, "counts": counts}
+    try:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or
+                stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 512 * 1024):
+            return {"diagnostic_rejected": True}
+        for raw in path.read_bytes().splitlines():
+            if len(raw) > 256: continue
+            item = json.loads(raw)
+            if (not isinstance(item, dict) or set(item) != {"host", "nonce", "event"} or item.get("nonce") != metadata["nonce"] or
+                    item.get("host") not in APT_DESTINATIONS or item.get("event") not in RELAY_EVENTS):
+                continue
+            events = counts[item["host"]]
+            events[item["event"]] = events.get(item["event"], 0) + 1
+        return {"spawned_seen": any(v.get("spawned", 0) for v in counts.values()), "counts": counts}
+    except (OSError, ValueError, TypeError):
+        return {"diagnostic_rejected": True}
+
+
+def relay_stream(target, input_stream, output_stream, observe=lambda _event: None):
+    """Preserve TCP half-close: drain responses after guest write-side EOF."""
+    with selectors.DefaultSelector() as selector:
+        selector.register(input_stream, selectors.EVENT_READ, "input")
+        selector.register(target, selectors.EVENT_READ, "remote")
+        deadline, total, seen = time.monotonic() + 300, 0, set()
+        while time.monotonic() < deadline:
+            for key, _ in selector.select(1):
+                try:
+                    data = os.read(key.fileobj.fileno(), 65536)
+                except BlockingIOError:
+                    continue
+                if not data:
+                    if key.data == "input":
+                        observe("guest-eof")
+                        selector.unregister(key.fileobj)
+                        target.shutdown(socket.SHUT_WR)
+                        # A peer that never closes cannot orphan this child.
+                        # Do not discard a legitimate response after FIN.
+                        deadline = min(deadline, time.monotonic() + 60)
+                        continue
+                    observe("server-eof")
+                    return
+                if key.data not in seen:
+                    observe("guest-first-bytes" if key.data == "input" else "server-first-bytes")
+                    seen.add(key.data)
+                total += len(data)
+                require(total <= 512 * 1024 * 1024, "RELAY_BYTE_BOUND_EXCEEDED")
+                if key.data == "input":
+                    target.settimeout(20); target.sendall(data); target.setblocking(False)
+                else:
+                    output_stream.write(data); output_stream.flush()
+        observe("timeout")
+        raise Refused("RELAY_DEADLINE_EXCEEDED")
+
+
+def relay(host, nonce=None):
     """A fixed-target TLS-transparent byte relay, never an HTTP CONNECT proxy."""
     require(host in APT_DESTINATIONS, "RELAY_TARGET_REJECTED")
-    addresses = socket.getaddrinfo(host, 443, family=socket.AF_INET, type=socket.SOCK_STREAM)
-    require(addresses and all(ipaddress.ip_address(a[4][0]).is_global for a in addresses), "RELAY_NONPUBLIC_ADDRESS_REJECTED")
+    require(re.fullmatch(r"[0-9a-f]{32}", nonce or "") is not None, "RELAY_NONCE_REJECTED")
+    record_relay_identity(host, nonce)
+    observe = lambda event: relay_event(host, nonce, event)
+    observe("spawned")
+    try:
+        addresses = socket.getaddrinfo(host, 443, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    except OSError:
+        observe("dns-failed")
+        raise Refused("RELAY_DNS_FAILED") from None
+    if not addresses or not all(ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+        observe("dns-nonpublic")
+        raise Refused("RELAY_NONPUBLIC_ADDRESS_REJECTED")
+    observe("dns-ok")
     family, socktype, proto, _, address = addresses[0]
     with socket.socket(family, socktype, proto) as target:
-        target.settimeout(20); target.connect(address); target.setblocking(False)
-        with selectors.DefaultSelector() as selector:
-            selector.register(sys.stdin.buffer, selectors.EVENT_READ, "input")
-            selector.register(target, selectors.EVENT_READ, "remote")
-            deadline, total = time.monotonic() + 300, 0
-            while time.monotonic() < deadline:
-                for key, _ in selector.select(1):
-                    try:
-                        data = os.read(key.fileobj.fileno(), 65536)
-                    except BlockingIOError:
-                        continue
-                    if not data:
-                        # QEMU closes the pipe when the guest connection ends;
-                        # do not leave a relay waiting on a remote keep-alive.
-                        return
-                    total += len(data)
-                    require(total <= 512 * 1024 * 1024, "RELAY_BYTE_BOUND_EXCEEDED")
-                    if key.data == "input":
-                        target.settimeout(20); target.sendall(data); target.setblocking(False)
-                    else:
-                        sys.stdout.buffer.write(data); sys.stdout.buffer.flush()
+        try:
+            target.settimeout(20); target.connect(address); target.setblocking(False)
+        except OSError:
+            observe("connect-failed")
+            raise Refused("RELAY_CONNECT_FAILED") from None
+        observe("connect-ok")
+        try:
+            relay_stream(target, sys.stdin.buffer, sys.stdout.buffer, observe)
+        except (OSError, Refused):
+            observe("io-failed")
+            raise
 
 
-def qemu_arguments(work, image, overlay, seed):
+def qemu_arguments(work, image, overlay, seed, *, nonce):
+    require(re.fullmatch(r"[0-9a-f]{32}", nonce) is not None, "RELAY_NONCE_REJECTED")
     args = ["/usr/bin/qemu-system-x86_64", "-machine", "pc,accel=tcg", "-cpu", "max,vmx=off,svm=off", "-smp", "2", "-m", "3072",
             "-nodefaults", "-display", "none", "-monitor", "none", "-serial", "stdio", "-no-reboot",
-            "-sandbox", "on,obsolete=deny,elevateprivileges=deny,spawn=allow,resourcecontrol=deny",
+            "-sandbox", "on,obsolete=deny,elevateprivileges=allow,spawn=allow,resourcecontrol=deny",
             "-drive", f"file={overlay},if=none,id=root,format=qcow2", "-device", "virtio-blk-pci,drive=root,bootindex=0",
             "-drive", f"file={image},if=none,id=approved,format=raw,readonly=on", "-device", "virtio-blk-pci,drive=approved",
             "-drive", f"file={seed},if=none,id=seed,format=raw,readonly=on", "-device", "virtio-blk-pci,drive=seed",
             "-netdev", "user,id=apt,restrict=on,ipv6=off" + "".join(
-                f",guestfwd=tcp:10.0.2.{100+n}:443-cmd:/usr/bin/python3 -I {work}/relay.py {host}"
+                f",guestfwd=tcp:10.0.2.{100+n}:443-cmd:/usr/bin/python3 -I {work}/relay.py {host} {nonce}"
                 for n, host in enumerate(APT_DESTINATIONS)), "-device", "virtio-net-pci,netdev=apt"]
     return args
 
@@ -333,16 +561,17 @@ def make_seed(work, root, source_sha, image_provenance):
 
 
 def run_vm(arguments, work, metadata):
-    global GUEST_RESULT_SEEN
+    global GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF
     progress_pattern = ("ASTER_LIBVIRT_NATIVE_PROGRESS_" + metadata["nonce"] + " ").encode()
     progress_allowed = GUEST_PHASES | {name + ":" + outcome for name in DIAGNOSTIC_COMMANDS for outcome in ("start", "done", "failed")} | {"bootcmd"}
     started = time.monotonic()
     pattern = ("ASTER_LIBVIRT_NATIVE_RESULT_" + metadata["nonce"] + " ").encode()
     result, buffer, total = None, b"", 0
-    process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               env=dict(SAFE_ENV, HOME=str(work)), start_new_session=True)
+    process = subprocess.Popen([str(work / "qemu-sandbox"), *arguments], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               cwd=work, env=dict(SAFE_ENV, HOME=str(work)), start_new_session=True)
     selector = selectors.DefaultSelector(); selector.register(process.stdout, selectors.EVENT_READ)
     try:
+        SANDBOX_PROOF.update(verify_running_sandbox(process))
         deadline = time.monotonic() + 1200
         with (work / "private-serial.log").open("xb") as log:
             (work / "private-serial.log").chmod(0o600)
@@ -377,6 +606,8 @@ def run_vm(arguments, work, metadata):
     finally:
         selector.close()
         stop_owned(process)
+        RELAY_PROOF = relay_evidence(work, metadata)
+        RELAY_PROOF["lifecycle"] = cleanup_relays(work, metadata)
 
 
 def validate_result(result, metadata):
@@ -446,12 +677,13 @@ def execute(args):
         with tempfile.TemporaryDirectory(prefix="aster-libvirt-native.", dir=output.parent) as temporary:
             work = Path(temporary); work.chmod(0o700)
             require(re.fullmatch(r"/[A-Za-z0-9_./-]+", str(work)) is not None, "SCRATCH_COMMAND_PATH_REJECTED")
+            prepare_sandbox(work)
             image, provenance = obtain_image(args.ubuntu, work)
             (output / "image-provenance.json").write_text(json.dumps({"source_sha": args.source_sha, **provenance}, indent=2) + "\n")
             seed, metadata = make_seed(work, root, args.source_sha, provenance)
             overlay = work / "root.qcow2"
             run(["/usr/bin/qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", str(image), str(overlay), "16G"])
-            result = run_vm(qemu_arguments(work, image, overlay, seed), work, metadata)
+            result = run_vm(qemu_arguments(work, image, overlay, seed, nonce=metadata["nonce"]), work, metadata)
             # Never export arbitrary nested data from a failed VM report.
             # Successful reports also pass the complete schema before export.
             (output / "guest-report.json").write_text(json.dumps(public_result(result, metadata), indent=2) + "\n")
@@ -460,8 +692,13 @@ def execute(args):
     finally:
         HOST_PROOF = network_proof(before, host_network())
         require(HOST_PROOF["unchanged"], "HOST_NETWORK_OR_FIREWALL_CHANGED")
+    require(SANDBOX_PROOF.get("passed") is True and SANDBOX_PROOF.get("qemu_process_verified") is True and
+            RELAY_PROOF.get("spawned_seen") is True and RELAY_PROOF.get("lifecycle", {}).get("cleanup_complete") is True,
+            "NATIVE_PROCESS_ISOLATION_OR_RELAY_CLEANUP_UNVERIFIED")
     summary = {k: result[k] for k in ("passed", "real_apt", "real_systemd", "libvirt_prepared", "kvm_ready", "image_sha256", "ubuntu", "source_sha")}
     summary.update(schema=1, host_network_unchanged=True, tcg_only=True,
+                   host_process_isolation_verified=True, sandbox_selftests_passed=True, relay_cleanup_verified=True,
+                   sandbox_proof=SANDBOX_PROOF, relay_proof=RELAY_PROOF,
                    doctor_protocol=result["doctor_protocol"], explicit_kvm_denial=result["explicit_kvm_denial"],
                    non_kvm_doctor_checks_passed=result["non_kvm_doctor_checks_passed"],
                    scope="Software preparation and explicit no-KVM doctor denial only; not a real KVM guest or production deployment acceptance.")
@@ -470,8 +707,8 @@ def execute(args):
 
 
 def main(argv=None):
-    global OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN
-    OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN = None, [], {}, False
+    global OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF
+    OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF = None, [], {}, False, {}, {}
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", choices=sorted(IMAGES), required=True)
     parser.add_argument("--source-root", required=True)
@@ -487,19 +724,24 @@ def main(argv=None):
     except Refused as error:
         if OUTPUT_CREATED is not None:
             (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": str(error), "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False,
-                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF}) + "\n")
+                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF, "relay_proof": RELAY_PROOF, "sandbox_proof": SANDBOX_PROOF}) + "\n")
         print("FAIL: " + str(error), file=sys.stderr); return 1
     except Exception:
         if OUTPUT_CREATED is not None:
             (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": "NATIVE_FIXTURE_REFUSED_DETAILS_WITHHELD", "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False,
-                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF}) + "\n")
+                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF, "relay_proof": RELAY_PROOF, "sandbox_proof": SANDBOX_PROOF}) + "\n")
         print("FAIL: NATIVE_FIXTURE_REFUSED_DETAILS_WITHHELD", file=sys.stderr); return 1
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 2 and sys.argv[1] in APT_DESTINATIONS:
+    if len(sys.argv) == 3 and sys.argv[1] in APT_DESTINATIONS:
         try:
-            relay(sys.argv[1])
+            def relay_deadline(_number, _frame):
+                relay_event(sys.argv[1], sys.argv[2], "timeout")
+                raise Refused("RELAY_OVERALL_DEADLINE")
+            signal.signal(signal.SIGALRM, relay_deadline)
+            signal.alarm(300)
+            relay(sys.argv[1], sys.argv[2])
         except Exception:
             sys.exit(1)
     else:

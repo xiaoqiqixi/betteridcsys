@@ -133,12 +133,21 @@ def run_fixed(argv, env):
     return result.stdout
 
 
+def verification_environment(home, config):
+    # gh 2.103.2 otherwise creates ~/.local/state/gh/device-id even for a
+    # successful local-bundle verification. Explicitly disable telemetry and
+    # update probes rather than permitting writes in an offline installer plan.
+    return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(home),
+            "GH_CONFIG_DIR": str(config), "GH_HOST": "github.com", "GIT_CONFIG_NOSYSTEM": "1",
+            "XDG_CACHE_HOME": str(home / "cache"), "TMPDIR": str(home),
+            "GH_TELEMETRY": "disabled", "DO_NOT_TRACK": "1", "GH_NO_UPDATE_NOTIFIER": "1",
+            "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1"}
+
+
 def verify_attestation(path, expected_sha, source_commit, gh, root, bundle, home, config):
     if not COMMIT.fullmatch(source_commit) or not HEX.fullmatch(expected_sha):
         fail("Exact source and artifact digests required")
-    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(home),
-           "GH_CONFIG_DIR": str(config), "GH_HOST": "github.com", "GIT_CONFIG_NOSYSTEM": "1",
-           "XDG_CACHE_HOME": str(home / "cache"), "TMPDIR": str(home)}
+    env = verification_environment(home, config)
     argv = [str(gh), "attestation", "verify", str(path), "--bundle", str(bundle),
             "--repo", REPOSITORY, "--signer-workflow", REPOSITORY + "/" + WORKFLOW,
             "--source-ref", SOURCE_REF, "--source-digest", source_commit,

@@ -6,6 +6,9 @@ import copy
 import hashlib
 import importlib.util
 import json
+import io
+import socket
+import threading
 import os
 from pathlib import Path
 import re
@@ -103,7 +106,7 @@ class NativeFixtureContract(unittest.TestCase):
         self.assertNotIn("check_hostname = False", source)
 
     def test_payload_qemu_network_is_fixed_restricted_user_mode(self):
-        args = h.qemu_arguments(Path("/tmp/owned"), Path("/tmp/base.img"), Path("/tmp/root.qcow2"), Path("/tmp/seed.img"))
+        args = h.qemu_arguments(Path("/tmp/owned"), Path("/tmp/base.img"), Path("/tmp/root.qcow2"), Path("/tmp/seed.img"), nonce="a" * 32)
         text = " ".join(args)
         self.assertIn("pc,accel=tcg", args)
         self.assertIn("max,vmx=off,svm=off", args)
@@ -121,8 +124,70 @@ class NativeFixtureContract(unittest.TestCase):
             with self.subTest(host=host), self.assertRaises(h.Refused), mock.patch.object(h.socket, "getaddrinfo") as lookup:
                 h.relay(host)
             lookup.assert_not_called()
-        with mock.patch.object(h.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("127.0.0.1", 443))]), self.assertRaises(h.Refused):
-            h.relay("archive.ubuntu.com")
+        with mock.patch.object(h, "record_relay_identity"), mock.patch.object(h.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("127.0.0.1", 443))]), self.assertRaises(h.Refused):
+            h.relay("archive.ubuntu.com", "a" * 32)
+
+    def test_real_relay_drains_server_response_after_guest_pipe_eof(self):
+        target, server = socket.socketpair()
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, b"request")
+        os.close(write_fd)
+        response, received, events = io.BytesIO(), [], []
+        def remote():
+            server.settimeout(1)
+            try:
+                chunks = []
+                while True:
+                    block = server.recv(1024)
+                    if not block: break
+                    chunks.append(block)
+                received.append(b"".join(chunks))
+                server.sendall(b"response-after-half-close")
+                server.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+            finally:
+                server.close()
+        worker = threading.Thread(target=remote)
+        worker.start()
+        try:
+            with os.fdopen(read_fd, "rb", buffering=0) as request:
+                target.setblocking(False)
+                h.relay_stream(target, request, response, events.append)
+        finally:
+            target.close()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(received, [b"request"])
+        self.assertEqual(response.getvalue(), b"response-after-half-close")
+        self.assertLess(events.index("guest-eof"), events.index("server-first-bytes"))
+        self.assertIn("server-eof", events)
+
+    def test_relay_private_events_are_nonce_bound_and_redacted_to_static_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory); work.chmod(0o700)
+            with mock.patch.object(h, "__file__", str(work / "relay.py")):
+                h.relay_event("archive.ubuntu.com", "a" * 32, "spawned")
+                h.relay_event("archive.ubuntu.com", "a" * 32, "connect-ok")
+                h.relay_event("security.ubuntu.com", "b" * 32, "spawned")
+                h.relay_event("SECRET_HOST", "a" * 32, "spawned")
+                h.relay_event("archive.ubuntu.com", "a" * 32, "SECRET_ERROR")
+            proof = h.relay_evidence(work, {"nonce": "a" * 32})
+            self.assertTrue(proof["spawned_seen"])
+            self.assertEqual(proof["counts"], {"archive.ubuntu.com": {"spawned": 1, "connect-ok": 1}, "security.ubuntu.com": {}})
+            self.assertNotIn("SECRET", json.dumps(proof)); self.assertNotIn("a" * 32, json.dumps(proof))
+            self.assertEqual((work / "relay-events.jsonl").stat().st_mode & 0o777, 0o600)
+            (work / "relay-events.jsonl").chmod(0o644)
+            self.assertEqual(h.relay_evidence(work, {"nonce": "a" * 32}), {"diagnostic_rejected": True})
+
+    def test_relay_never_exposes_credentials_or_allows_nonpublic_dns(self):
+        events = []
+        with mock.patch.object(h, "record_relay_identity"), mock.patch.object(h, "relay_event", side_effect=lambda host, nonce, event: events.append(event)), mock.patch.object(h.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("198.18.0.10", 443))]), self.assertRaises(h.Refused):
+            h.relay("archive.ubuntu.com", "a" * 32)
+        self.assertEqual(events, ["spawned", "dns-nonpublic"])
+        with mock.patch.object(h.socket, "getaddrinfo") as lookup, self.assertRaises(h.Refused):
+            h.relay("archive.ubuntu.com", "SECRET_INVALID_NONCE")
+        lookup.assert_not_called()
 
     def test_no_secret_environment_is_forwarded(self):
         self.assertEqual(set(h.SAFE_ENV), {"PATH", "LANG"})
@@ -296,12 +361,70 @@ class NativeFixtureContract(unittest.TestCase):
         self.assertIn('getattr(error, "code", None)', source)
         self.assertNotIn('str(error.stderr)', source)
 
+    def test_guest_error_classification_never_loses_unrelated_exception_or_exports_text(self):
+        unrelated = RuntimeError("PRIVATE_STDERR")
+        self.assertEqual(g.provision_error_code(unrelated), "NATIVE_GUEST_REFUSED_DETAILS_WITHHELD")
+        error = type("ProvisionError", (Exception,), {})("PRIVATE_STDERR")
+        error.code = "APT_TLS_FAILURE"
+        self.assertEqual(g.provision_error_code(error), "APT_TLS_FAILURE")
+        error.code = "PRIVATE_PROVIDER_TEXT"
+        self.assertEqual(g.provision_error_code(error), "PROVISION_PREPARE_REFUSED")
+        self.assertNotIn("PRIVATE", g.provision_error_code(error))
+        error = type("ProvisionError", (Exception,), {})("Fixed native provisioning command rejected; private")
+        self.assertEqual(g.provision_error_code(error), "NATIVE_COMMAND_REJECTED")
+
     def test_runtime_failure_keeps_report_and_does_not_require_success_schema(self):
         source = (HERE / "libvirt-native.py").read_text()
         self.assertIn('require(result.get("passed") is True, "GUEST_ACCEPTANCE_FAILED")', source)
         self.assertIn('public = public_result(result, metadata)', source)
         self.assertIn('"progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN', source)
         self.assertIn('deadline = time.monotonic() + 1200', source)
+
+    def test_real_proc_sandbox_contract_requires_identity_caps_and_two_filters(self):
+        fields = {"Uid": [str(os.getuid())] * 4, "Gid": [str(os.getgid())] * 4,
+                  "CapInh": ["0"], "CapPrm": ["0"], "CapEff": ["0"], "CapAmb": ["0"],
+                  "CapBnd": ["ffffffff"], "NoNewPrivs": ["1"], "Seccomp": ["2"], "Seccomp_filters": ["2"]}
+        h.unprivileged_status(fields, sandbox=True, minimum_filters=2)
+        for name, value in (("Uid", ["0"] * 4), ("Gid", ["0"] * 4), ("CapEff", ["1"]), ("CapAmb", ["1"]),
+                            ("NoNewPrivs", ["0"]), ("Seccomp", ["0"]), ("Seccomp_filters", ["1"])):
+            invalid = copy.deepcopy(fields); invalid[name] = value
+            with self.subTest(name=name), self.assertRaises(h.Refused): h.unprivileged_status(invalid, sandbox=True, minimum_filters=2)
+
+    def test_emulator_uses_outer_credential_filter_not_unprotected_allow(self):
+        source = (HERE / "libvirt-native.py").read_text()
+        self.assertIn('subprocess.Popen([str(work / "qemu-sandbox"), *arguments]', source)
+        self.assertNotIn('subprocess.Popen(arguments,', source)
+        self.assertIn('minimum_filters=baseline + 2', source)
+        self.assertIn('prepare_sandbox(work)', source)
+        self.assertIn('signal.pidfd_send_signal', source)
+        self.assertIn('"OWNED_RELAY_REMAINS_NO_CLEANUP_CLAIM"', source)
+        self.assertIn('signal.alarm(300)', source)
+        helper = (HERE / "libvirt-native-sandbox.c").read_text()
+        self.assertIn('SECCOMP_RET_KILL_PROCESS', helper)
+        self.assertIn('AUDIT_ARCH_X86_64', helper)
+        self.assertIn('PR_SET_NO_NEW_PRIVS', helper)
+        self.assertIn('SIGSYS', helper)
+
+    def test_relay_cleanup_accepts_exact_process_exit_race_without_signalling(self):
+        with tempfile.TemporaryDirectory() as raw:
+            work = Path(raw)
+            record = {"pid": 12345, "start_time": 9, "host": "archive.ubuntu.com", "nonce": "a" * 32}
+            path = work / "relay-owner-12345-9.json"
+            path.write_text(json.dumps(record)); path.chmod(0o600)
+            original = Path.read_bytes
+            def read(path):
+                if path == Path("/proc/12345/cmdline"):
+                    raise FileNotFoundError()
+                return original(path)
+            with mock.patch.object(h.os, "pidfd_open", create=True) as pidfd, \
+                    mock.patch.object(h.signal, "pidfd_send_signal", create=True) as send, \
+                    mock.patch.object(h, "process_identity", return_value={"start_time": 9}), \
+                    mock.patch.object(Path, "read_bytes", read), \
+                    mock.patch.object(Path, "iterdir", return_value=iter(())):
+                proof = h.cleanup_relays(work, {"nonce": "a" * 32})
+            self.assertTrue(proof["cleanup_complete"])
+            self.assertEqual(proof["owned_records"], 1)
+            pidfd.assert_not_called(); send.assert_not_called()
 
     def test_guest_error_catalog_and_command_categories_stay_in_sync(self):
         tree = ast.parse((HERE / "libvirt-native-guest.py").read_text())

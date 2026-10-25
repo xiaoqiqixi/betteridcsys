@@ -132,3 +132,35 @@ start-done-failed 与秒数的 serial 心跳；原始 serial、stdout/stderr、n
 APT 错误只接收 production `ProvisionError.code` 的固定白名单，未知错误仍拒绝；
 新增分类不放宽正式验证或变更执行器的原调用、返回值和异常。所有离线合同是模型回归，
 需下一精确 main SHA 的三套真实 Ubuntu CI 重新验收。
+
+本地真实 pipe + socketpair 回归复现：旧 relay 在输入 EOF 时立即返回，丢失对端在 FIN 后
+发送的完整响应（RED：实际输出为空）。现改为 `shutdown(SHUT_WR)` 后继续读取响应，
+EOF 后最多 60 秒 drain、单连接总 deadline 300 秒，不放开地址检查；同一实际内核 I/O 测试已 GREEN。
+这证明修复 TCP half-close 缺陷，**尚未证明它就是 CI 的 APT 根因**。
+relay 另在 owned 0700 scratch 下写仅固定 host / nonce / event 的 0600 append 诊断；
+主进程仅导出匹配本次 nonce 的静态事件计数，区分启动、DNS、非公网地址拒绝、连接与字节/EOF。
+不导出 IP、nonce、原始异常或私有文件，也不绕过非公网 DNS 拒绝。
+
+### QEMU / libslirp 子进程过滤器修正
+
+代码级核对发现：QEMU 的 `elevateprivileges=deny` 将 `setsid` 与身份变更一起拒绝；
+libslirp 在执行每条 `guestfwd ... cmd` 前调用 `setsid`，因此 helper 可在 Python 启动前即被 SIGSYS 终止。
+不能简单关闭 sandbox 或放开 guest Internet。CI 使用独立、非 root、单线程 C launcher：
+设置不可逆 NNP，复制官方原 PRIVILEGED 拒绝集合，**仅允许不提升权限的 session 创建 setsid**；
+setuid/setgid/setpgid/setreuid/setregid/setresuid/setresgid/setfsuid/setfsgid 仍 KILL_PROCESS，
+额外拒绝 setgroups/capset、i386 和 x32 ABI。QEMU 自身 obsolete / resource-control 与默认过滤继续启用。
+
+launcher 从 owned 0700 cwd 仅允许精确的 35 项 QEMU 参数、三个固定镜像名和两个固定 TLS relay；
+root-owned ELF64 QEMU 经 O_NOFOLLOW 打开并以同一 FD 执行，不接受任意程序或外部命令参数。
+每次 Linux fixture 先真实 fork 自测：允许 setsid，全部被禁 syscall / i386 / x32 必须 SIGSYS，
+不能把普通非 root 的 EPERM 当作成功。启动后另从实际 `/proc/QEMU/status` 核对 NNP=1、
+Seccomp=2、filter 数至少宿主基线+2、四个 UID/GID 保持原非 root 身份，
+CapInh/CapPrm/CapEff/CapAmb=0；不冒称无权限清空的 CapBnd 也为零。
+
+仿真宿主固定 Ubuntu 24.04 + 官方 libslirp 4.7.x，避免旧 4.6 的临时 helper socket 使用
+INADDR_ANY；**guest 仍分别是验签的 Ubuntu 22.04、24.04、26.04**，不能将宿主版本偷换成 guest 兼容证据。
+relay 记录本次 nonce、PID 和 starttime 的 private ownership；QEMU 退出后不按泛进程名杀，
+对精确身份和命令复核后使用 pidfd 终止并等待退出，再确认无本次 relay 命令存活。
+单连接 DNS/连接/传输总限时 300 秒、写侧 EOF 后 drain 最多60秒。成功 summary 必须含实际
+`host_process_isolation_verified`、`sandbox_selftests_passed`、`relay_cleanup_verified` 三个真值；
+未完成或超时不能取得这些通过声明。C helper 仅 CI，不进入生产包或改变 libvirt 生产策略。

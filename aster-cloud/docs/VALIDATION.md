@@ -23,12 +23,26 @@ release 合同 **25**、独立 verifier **19**、native fixture 合同 **24** �
 最初本机 `go test ./...` 因 ignored 历史证据中的孤立 Go 测试文件和沙盒禁止监听失败，保留失败日志；
 随后按全部受跟踪包范围、允许仅测试 loopback 监听重跑通过，没有删历史证据或放宽业务断言。
 
+TCG emulator 宿主统一为 Ubuntu24 GitHub runner，要求已审核 libslirp 4.7.x 的 loopback-only 转发实现；
+被测 guest 仍分别是真实签名 Ubuntu22 /24 /26 系统，不以宿主版本冒充guest版本。
+旧 libslirp 4.6 的 command socketpair 曾短暂bind全接口；不在该宿主实现上宣称“仅loopback”。
+QEMU 原elevateprivileges syscall组还会拦libslirp执行guestfwd所需的setsid；CI-only launcher用精确外层
+seccomp保留身份变更禁止，仅允许会话操作setsid，配合no-new-privileges、零有效capabilities和内核自测。
+这只修测试基础设施，不改变生产libvirt/AppArmor策略或KVM硬件准入。
+
 首轮精确提交 `766c055` 官方结果：财务 **3/3** 通过；Cloud **7/12** 通过、**5/12** 失败，
 不计完整验收。实库 / 严格 TLS 浏览器为163项业务 +53项导航、64张PNG，历史财务 / 网络快照保留，节点RPC仍为替身。
 两项 Linux unit 在 ShellCheck SC2024（普通shell有意读取review脚本、sudo消费stdin）处失败，后续匿名验签未执行。
 Ubuntu24/26确实进入guest，但APT simulate非零；22达到TCG总时限，不能猜成网络波动或KVM不可用。
 首轮还暴露失败JSON误套成功schema、宿主差异覆盖guest原因的问题。后续补固定诊断 / 阶段心跳，并收紧APT update
 为任何索引失败即停止；未放宽签名、TLS、无升级 / 移除、无默认网络或真实doctor门槛。修复提交仍须全套重跑。
+
+第二轮 `13f2388` 财务3/3通过，Cloud仍7/12通过、5项失败。Linux离线合同 / lint通过，但真实匿名验签失败；
+本地实签核对发现官方gh默认telemetry会写device-id，故明确关闭telemetry与update notifier，保持空HOME断言不豁免文件。
+TCG Ubuntu26明确为APT索引获取失败；已从QEMU/libslirp官方源码确认guestfwd的setsid与原沙箱组冲突。
+新CI-only launcher在内核自测中必须允许setsid、以SIGSYS拒绝11种身份 / capability变更及x32/i386旁路，
+并由外部/proc复核QEMU双层filter、NNP和零有效capabilities；relay按PID/starttime/pidfd精确回收。
+上述修正的Linux实测尚须新提交CI确认，不把源码审查、Darwin实签或36项fixture合同当完整通过。
 
 `cloud-v0.1.0-rc.1` 仅作为候选预发布，不能声明生产可用。下载命令以[该 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)
 实际正文为准；若未发布或任一最终 gate 失败，不称通道验收完成。发布协议见[RELEASE_CHANNEL](RELEASE_CHANNEL.md)。

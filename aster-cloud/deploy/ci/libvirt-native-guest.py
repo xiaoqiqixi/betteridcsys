@@ -298,6 +298,15 @@ def execute(metadata):
             "doctor_protocol": report["protocol"], "doctor_checks": checks, **proof}
 
 
+def provision_error_code(error):
+    if error.__class__.__name__ != "ProvisionError":
+        return "NATIVE_GUEST_REFUSED_DETAILS_WITHHELD"
+    apt_code = getattr(error, "code", None)
+    if isinstance(apt_code, str) and apt_code in APT_CODES:
+        return apt_code
+    return next((value for prefix, value in PROVISION_CODES.items() if str(error).startswith(prefix)), "PROVISION_PREPARE_REFUSED")
+
+
 def main():
     global PROGRESS_NONCE
     metadata = json.loads((ROOT / "metadata.json").read_text())
@@ -309,10 +318,7 @@ def main():
                   "source_sha": metadata["source_sha"], "image_sha256": metadata["image_sha256"], "kvm_ready": False, "phase": PHASE,
                   "diagnostics": safe_diagnostics()}
     except Exception as error:
-        code = "NATIVE_GUEST_REFUSED_DETAILS_WITHHELD"
-        if error.__class__.__name__ == "ProvisionError":
-            apt_code = getattr(error, "code", None)
-        code = apt_code if isinstance(apt_code, str) and apt_code in APT_CODES else next((value for prefix, value in PROVISION_CODES.items() if str(error).startswith(prefix)), "PROVISION_PREPARE_REFUSED")
+        code = provision_error_code(error)
         report = {"schema": 1, "passed": False, "code": code, "ubuntu": metadata["ubuntu"],
                   "source_sha": metadata["source_sha"], "image_sha256": metadata["image_sha256"], "kvm_ready": False, "phase": PHASE,
                   "diagnostics": safe_diagnostics()}

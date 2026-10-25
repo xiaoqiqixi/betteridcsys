@@ -173,6 +173,10 @@ class PublisherVerifierContract(unittest.TestCase):
         self.assertNotIn("--cert-identity", argv)
         self.assertNotIn("--signer-repo", argv)
         self.assertEqual(env["GH_HOST"], "github.com")
+        self.assertEqual(env.get("GH_TELEMETRY"), "disabled")
+        self.assertEqual(env.get("DO_NOT_TRACK"), "1")
+        self.assertEqual(env.get("GH_NO_UPDATE_NOTIFIER"), "1")
+        self.assertEqual(env.get("GH_NO_EXTENSION_UPDATE_NOTIFIER"), "1")
         self.assertFalse(set(env) & {"GH_TOKEN", "GITHUB_TOKEN", "MYSQL_PWD", "LD_PRELOAD", "HTTP_PROXY", "HTTPS_PROXY"})
 
     def test_wrong_certificate_identity_source_owner_runner_or_trigger_is_rejected(self):

@@ -35,10 +35,29 @@ V = C.V
 SOURCE = "a" * 40
 OFFICIAL_SOURCE = "4f2cfe92e3499f8581bf39db77e0a1431fa7b55c"
 OFFICIAL_BUNDLE_SHA = "56a973357566cb0ac6e2297731f238951d0f5f5291e3733fc89e754ae38934be"
+NATIVE_PHASE = "preflight"
+
+
+def native_cli_failure(result):
+    """Classify only this no-token public-fixture invocation; never echo stderr."""
+    message = result.stderr[:V.MAX_SMALL_BYTES].lower()
+    if result.returncode == -4:
+        return "CLI_CPU_INSTRUCTION_UNAVAILABLE"
+    if b"glibc_" in message and b"not found" in message:
+        return "CLI_LIBC_UNAVAILABLE"
+    if b"unknown flag" in message or b"unknown command" in message:
+        return "CLI_USAGE_MISMATCH"
+    if b"gh auth login" in message:
+        return "CLI_UNEXPECTED_AUTH_REQUIREMENT"
+    if b"verification failed" in message or b"failed to verify" in message or b"no matching attestations" in message:
+        return "CLI_SIGNATURE_VERIFICATION_FAILED"
+    return "CLI_NONZERO_EXIT_DETAILS_WITHHELD"
 
 
 def native_verifier(evidence):
     """Real pinned Linux CLI, anonymous local bundle, fresh empty HOME/config."""
+    global NATIVE_PHASE
+    NATIVE_PHASE = "preflight"
     if sys.platform != "linux" or os.uname().machine not in ("x86_64", "amd64"):
         raise C.PolicyError("Native anonymous contract requires Linux amd64; never skip-success")
     bundle = HERE / "fixtures/gh-2.103.2-linux-amd64.attestation.json"
@@ -50,37 +69,49 @@ def native_verifier(evidence):
         home, config = base / "home", base / "config"
         home.mkdir(mode=0o700)
         config.mkdir(mode=0o700)
+        NATIVE_PHASE = "official-cli-download"
         archive = V.fetch("https://github.com/cli/cli/releases/download/v" + V.GH_VERSION + "/" + V.GH_TAR_NAME, V.GH_TAR_SIZE)
         V.write_new(base / V.GH_TAR_NAME, archive)
+        NATIVE_PHASE = "pinned-cli-extraction"
         V.write_new(base / "gh", V.pinned_gh(archive), 0o700)
         argv = [str(base / "gh"), "attestation", "verify", str(base / V.GH_TAR_NAME), "--bundle", str(bundle),
                 "--repo", "cli/cli", "--signer-workflow", "cli/cli/.github/workflows/deployment.yml",
                 "--source-ref", "refs/heads/trunk", "--source-digest", OFFICIAL_SOURCE, "--signer-digest", OFFICIAL_SOURCE,
                 "--cert-oidc-issuer", V.ISSUER, "--deny-self-hosted-runners", "--custom-trusted-root", str(roots), "--format", "json"]
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "GH_CONFIG_DIR": str(config), "GH_HOST": "github.com",
-               "XDG_CACHE_HOME": str(home / "cache"), "TMPDIR": str(home), "LANG": "C.UTF-8"}
+        env = V.verification_environment(home, config)
         # No inherited GH_TOKEN/GITHUB_TOKEN, user HOME/config or keychain.
+        NATIVE_PHASE = "offline-signature-command"
         result = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45, check=False)
-        if result.returncode or len(result.stdout) > V.MAX_SMALL_BYTES:
-            raise C.PolicyError("Real anonymous offline signature verification failed; diagnostics withheld")
+        if len(result.stdout) > V.MAX_SMALL_BYTES or len(result.stderr) > V.MAX_SMALL_BYTES:
+            raise C.PolicyError("CLI verification output exceeds the fixed bound")
+        if result.returncode:
+            raise C.PolicyError(native_cli_failure(result))
+        NATIVE_PHASE = "verified-result-json"
         rows = V.strict_json(result.stdout)
         if not isinstance(rows, list) or len(rows) != 1:
             raise C.PolicyError("Unexpected official example verification result")
         verified = rows[0]["verificationResult"]
         certificate = verified["signature"]["certificate"]
+        NATIVE_PHASE = "verified-certificate-identity"
         required = {"sourceRepositoryIdentifier": "212613049", "sourceRepositoryOwnerIdentifier": "59704711",
                     "issuer": V.ISSUER, "sourceRepositoryDigest": OFFICIAL_SOURCE, "sourceRepositoryRef": "refs/heads/trunk",
                     "buildSignerDigest": OFFICIAL_SOURCE, "runnerEnvironment": "github-hosted",
                     "subjectAlternativeName": "https://github.com/cli/cli/.github/workflows/deployment.yml@refs/heads/trunk"}
-        if (any(certificate.get(key) != value for key, value in required.items()) or not verified.get("verifiedTimestamps") or
-                not any(item.get("name") == V.GH_TAR_NAME and item.get("digest") == {"sha256": V.GH_TAR_SHA256} for item in verified["statement"]["subject"]) or
-                any(home.iterdir()) or any(config.iterdir())):
-            raise C.PolicyError("Anonymous identity/digest/read-only state contract mismatch")
+        if any(certificate.get(key) != value for key, value in required.items()):
+            raise C.PolicyError("Anonymous verified certificate identity mismatch")
+        NATIVE_PHASE = "verified-subject-and-time"
+        if (not verified.get("verifiedTimestamps") or
+                not any(item.get("name") == V.GH_TAR_NAME and item.get("digest") == {"sha256": V.GH_TAR_SHA256} for item in verified["statement"]["subject"])):
+            raise C.PolicyError("Anonymous verified artifact digest or timestamp mismatch")
+        NATIVE_PHASE = "empty-home-and-config"
+        if any(home.iterdir()) or any(config.iterdir()):
+            raise C.PolicyError("Offline verifier wrote unexpected private HOME or config state")
     proof = {"schema": 1, "passed": True, "gh_version": V.GH_VERSION, "gh_archive_sha256": V.GH_TAR_SHA256,
              "gh_binary_sha256": V.GH_BINARY_SHA256, "trusted_root_sha256": V.TRUSTED_ROOT_SHA256,
              "example_bundle_sha256": OFFICIAL_BUNDLE_SHA, "anonymous": True, "token_environment": False,
              "fresh_empty_home_config_unchanged": True, "local_bundle_custom_roots": True,
              "signer_workflow_source_digest_policy_verified": True, "host_apply": False, "cloud_release_acceptance": False}
+    NATIVE_PHASE = "redacted-proof-output"
     if evidence is not None:
         if not evidence.is_absolute() or ".." in evidence.parts:
             raise C.PolicyError("Absolute new redacted JSON evidence file required")
@@ -309,6 +340,19 @@ class CloudReleaseContract(unittest.TestCase):
             C.write_directory(directory, {"SHA256SUMS": b"new"})
         self.assertEqual((directory / "operator-file").read_bytes(), b"preserve")
 
+    def test_native_cli_failure_diagnostics_are_fixed_codes_never_raw_stderr(self):
+        cases = ((-4, b"synthetic-private-marker", "CLI_CPU_INSTRUCTION_UNAVAILABLE"),
+                 (1, b"GLIBC_2.99 not found synthetic-private-marker", "CLI_LIBC_UNAVAILABLE"),
+                 (1, b"unknown flag synthetic-private-marker", "CLI_USAGE_MISMATCH"),
+                 (4, b"please run gh auth login synthetic-private-marker", "CLI_UNEXPECTED_AUTH_REQUIREMENT"),
+                 (1, b"verification failed synthetic-private-marker", "CLI_SIGNATURE_VERIFICATION_FAILED"),
+                 (1, b"unrecognized synthetic-private-marker", "CLI_NONZERO_EXIT_DETAILS_WITHHELD"))
+        for code, stderr, expected in cases:
+            with self.subTest(expected=expected):
+                message = native_cli_failure(types.SimpleNamespace(returncode=code, stderr=stderr))
+                self.assertEqual(message, expected)
+                self.assertNotIn("synthetic-private-marker", message)
+
     def test_code_pinned_root_snapshot_matches_committed_official_material(self):
         raw = (HERE.parent / "install/release-trusted-root.json").read_bytes()
         self.assertEqual(len(raw), V.TRUSTED_ROOT_SIZE)
@@ -403,8 +447,14 @@ if __name__ == "__main__":
         args = parser.parse_args()
         try:
             native_verifier(args.evidence)
-        except (C.PolicyError, V.ReleaseError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
-            print("Native anonymous verifier contract failed; no credentials or raw provider diagnostics exported.", file=sys.stderr)
+        except (C.PolicyError, V.ReleaseError) as error:
+            # These two types contain only our own fixed policy messages, never
+            # provider stderr, credential data, arbitrary argv or source text.
+            print("Native anonymous verifier refused [" + NATIVE_PHASE + "]: " + str(error), file=sys.stderr)
+            sys.exit(1)
+        except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+            code = "COMMAND_TIMEOUT" if isinstance(error, subprocess.TimeoutExpired) else "OS_OPERATION_REFUSED" if isinstance(error, OSError) else "STRUCTURED_RESULT_INVALID"
+            print("Native anonymous verifier refused [" + NATIVE_PHASE + "]: " + code, file=sys.stderr)
             sys.exit(1)
     else:
         unittest.main(verbosity=2)
