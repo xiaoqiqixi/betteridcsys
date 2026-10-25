@@ -36,6 +36,13 @@ export function validateMembersResponse(value) {
   return value;
 }
 
+// Self-contained browser-realm callback: native Fetch Response.status is a
+// numeric property; only the outer Playwright Response uses status().
+export async function readMembersInBrowser(cursor) {
+  const response = await fetch('/console/v1/users' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''), { credentials: 'same-origin', method: 'GET' });
+  return { status: response.status, data: response.status === 200 ? await response.json() : null };
+}
+
 export async function membersBrowserAcceptance({ page, output, report, base, credentials }) {
   const fixture = validateMembersFixture(credentials.members_page);
   const origin = new URL(base).origin;
@@ -76,10 +83,7 @@ export async function membersBrowserAcceptance({ page, output, report, base, cre
     return body(await response);
   }
   async function read(cursor = null) {
-    const result = await page.evaluate(async cursor => {
-      const response = await fetch('/console/v1/users' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''), { credentials: 'same-origin', method: 'GET' });
-      return { status: response.status(), data: response.status === 200 ? await response.json() : null };
-    }, cursor);
+    const result = await page.evaluate(readMembersInBrowser, cursor);
     assert(result.status === 200, 'Real inventory read denied');
     return validateMembersResponse(result.data);
   }

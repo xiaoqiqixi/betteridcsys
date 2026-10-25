@@ -1,7 +1,8 @@
 // Pure parser/guard tests only: never a substitute for the real MySQL browser job.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MEMBERS_CHECKS, MEMBERS_SCREENSHOTS, validateMembersFixture, validateMembersResponse } from './members-browser.mjs';
+import { runInNewContext } from 'node:vm';
+import { MEMBERS_CHECKS, MEMBERS_SCREENSHOTS, validateMembersFixture, validateMembersResponse, readMembersInBrowser } from './members-browser.mjs';
 const ids = Array.from({ length: 205 }, (_, index) => (index + 1).toString(16).padStart(32, '0'));
 const fixture = { count: 205, ids, viewer_email: 'viewer@example.invalid', viewer_password: 'synthetic-private-fixture-only' };
 const items = ids.slice(0, 100).map((id, index) => ({ id, email: `member-${index}@example.invalid` }));
@@ -35,4 +36,32 @@ test('long reserved-domain synthetic email survives guard; customer domains do n
   for (const email of ['a@example.invalid.evil.test', 'a@@example.invalid', 'a b@example.invalid']) {
     assert.throws(() => validateMembersResponse({ items: [{ id: ids[0], email }], limit: 100, next_cursor: null, truncated_possible: false }));
   }
+});
+
+// Execute the exact serialized callback used by page.evaluate in another realm.
+// These are real native Response objects, not Playwright-style status() objects.
+async function nativeRead(response, cursor = null) {
+  const requests = [];
+  const result = await runInNewContext('(' + readMembersInBrowser.toString() + ')(cursor)', {
+    cursor,
+    fetch: async (url, options) => { requests.push({ url, options }); return response; },
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.method, 'GET');
+  assert.equal(requests[0].options.credentials, 'same-origin');
+  assert.equal(requests[0].url, '/console/v1/users' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+  return structuredClone(result);
+}
+test('browser-native Fetch status 200 parses JSON and returns only status/data', async () => {
+  const data = { items: [], limit: 100, next_cursor: null, truncated_possible: false };
+  const result = await nativeRead(new Response(JSON.stringify(data), { status: 200 }), 'u1.test');
+  assert.deepEqual(result, { status: 200, data });
+  assert.deepEqual(Object.keys(result).sort(), ['data', 'status']);
+});
+test('browser-native 401 keeps its numeric status and never parses rejected response bytes', async () => {
+  assert.deepEqual(await nativeRead(new Response('not JSON; must not be returned', { status: 401 })), { status: 401, data: null });
+});
+test('browser-native 403 is not a successful data page; invalid 200 JSON still rejects', async () => {
+  assert.deepEqual(await nativeRead(new Response('forbidden', { status: 403 })), { status: 403, data: null });
+  await assert.rejects(nativeRead(new Response('invalid JSON', { status: 200 })));
 });

@@ -78,3 +78,11 @@ W07-A 的接口/状态设计先落在身份计划，随后实现主控固定100�
 本地真实TLS正反探针确认：Firefox私有NSS信任不覆盖Playwright的Node请求。本批仅向受控acceptance子进程提供本轮生成的localhost受限CA，外部继承的信任覆盖仍拒绝；负向TLS浏览器检查和主机信任不变。故障响应不再继承真实响应的旧Content-Length/Encoding，只替换为正确帧长的无效DTO；必须先收到真实后端200及data，再故障注入并验证恢复。四项读取错误断言保留，增加固定阶段和有界计数诊断，不输出凭据或原始异常。
 
 这一修正的49项Python守卫、财务前端24文件1042 Vitest及35 Node、format/typecheck/build通过。它是测试基础设施修复，不是放宽生产HTTP/TLS、响应校验、支付协议或改写财务结果。最终GitHub同SHA全链仍须运行，不预填结果。
+
+## e967719 实库浏览器结果与成员探针修正
+
+`e967719aca83900762716bd407998331e7f99f50` 的[财务实库浏览器](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40187478010)实际通过20项检查，导出12张中英桌面/手机PNG；真实MySQL历史表摘要不变、业务写0、临时库删除及进程清理通过。TLS先拒绝未知CA再用私有profile信任，主机信任未改。原始ZIP核对GitHub SHA256通过；实际看图确认本轮面板和审计页，不能外推浅色主题或全站视觉完成。该run其他门禁当时仍进行中，不提前称4/4。
+
+同SHA的[Cloud浏览器](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40187478036)在新增成员读取探针失败：浏览器原生Fetch Response的`status`数值属性被误写成Playwright式`status()`。生产分页未因此改动。原162项业务检查与53项布局检查已执行通过，最后第163项总错误检查位于成员模块后，尚未执行；本轮没有成员图片，不写成通过。
+
+仅修复该属性读取，并把同一个自足浏览器回调置于独立realm、用真实原生Response做200/401/403及无效JSON回归。3项新用例先RED、修正后GREEN，Node8项+Python9项守卫通过；原18成员、163业务、53布局及70张图门槛不减。仍需新SHA重跑真实浏览器与全部门禁，不能靠单测代替。
