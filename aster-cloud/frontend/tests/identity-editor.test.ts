@@ -5,6 +5,7 @@ import { webcrypto } from "node:crypto";
 import UserEditor from "../src/components/UserEditor.vue";
 import IdentityEditorFields from "../src/components/IdentityEditorFields.vue";
 import UiOverlay from "../src/components/UiOverlay.vue";
+import { resetOrphanedOverlayHistory } from "../src/components/overlay-stack";
 import { ApiError } from "../src/api/client";
 import { consoleKey } from "../src/context";
 import { admin } from "./fixtures";
@@ -93,6 +94,13 @@ it("opens the latest account revision, preserves a conflict draft and reloads on
   expect(name().value).toBe("Preserved draft");
   expect(name().disabled).toBe(true);
   expect(document.body.textContent).toContain("资料已有更新");
+  expect(
+    document.activeElement?.classList.contains("identity-editor-feedback"),
+  ).toBe(true);
+  expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({
+    block: "start",
+    behavior: "instant",
+  });
   form().dispatchEvent(
     new Event("submit", { bubbles: true, cancelable: true }),
   );
@@ -104,6 +112,31 @@ it("opens the latest account revision, preserves a conflict draft and reloads on
   expect(name().value).toBe(target.name);
   expect(name().disabled).toBe(false);
   expect(wrapper.emitted("saved")).toBeUndefined();
+});
+it("reveals uncertain revocation feedback only in the interactive confirmation layer", async () => {
+  const { calls } = await editor((method) => {
+    if (method === "GET") return { user: target };
+    throw new ApiError("unavailable", "UNAVAILABLE", 503);
+  });
+  byText("撤销全部会话").click();
+  await flushPromises();
+  const reason = document.querySelector<HTMLInputElement>(".aw-reason-input")!;
+  reason.value = "Require a fresh sign-in";
+  reason.dispatchEvent(new Event("input", { bubbles: true }));
+  await flushPromises();
+  byText("确认撤销会话").click();
+  await flushPromises();
+  expect(calls).toHaveLength(1);
+  const top = document.querySelector(".aw-revoke-dialog-body")!;
+  expect(top.contains(document.activeElement)).toBe(true);
+  expect(
+    document.activeElement?.classList.contains("identity-editor-feedback"),
+  ).toBe(true);
+  expect(document.querySelectorAll(".aw-op-notice")).toHaveLength(1);
+  expect(document.activeElement?.closest("[inert]")).toBeNull();
+  expect(sessionStorage.getItem("aster.cloud.identity.pending.v1")).toContain(
+    "Require a fresh sign-in",
+  );
 });
 it("renders fixed-role permissions as read-only and counts complete Unicode code points", async () => {
   const model = {
@@ -171,6 +204,9 @@ it("keeps only the top nested dialog interactive and restores the parent lock an
   await flushPromises();
   const shades = [...document.querySelectorAll<HTMLElement>(".overlay-shade")];
   expect(shades).toHaveLength(2);
+  const liveState = structuredClone(history.state);
+  resetOrphanedOverlayHistory();
+  expect(history.state).toEqual(liveState);
   expect(shades[0]!.inert).toBe(true);
   expect(shades[1]!.inert).toBe(false);
   expect(

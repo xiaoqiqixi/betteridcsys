@@ -25,6 +25,8 @@ import StateBlock from "./components/StateBlock.vue";
 import ToastStack from "./components/ToastStack.vue";
 import InlineError from "./components/InlineError.vue";
 import LoginPage from "./pages/LoginPage.vue";
+import { resetOrphanedOverlayHistory } from "./components/overlay-stack";
+resetOrphanedOverlayHistory();
 const api = createApiClient(),
   session = useSession(api),
   prefs = usePreferences(),

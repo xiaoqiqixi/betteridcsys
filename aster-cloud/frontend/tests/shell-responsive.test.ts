@@ -69,7 +69,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function shellFixture(compact = true) {
+async function shellFixture(
+  compact = true,
+  startupState?: Record<string, unknown>,
+) {
   const compactMedia = controlledMedia(compactQuery, compact);
   const darkMedia = controlledMedia(darkQuery, false);
   const matchMedia = vi.fn((query: string) => {
@@ -129,6 +132,9 @@ async function shellFixture(compact = true) {
   });
   await router.push(detailPath);
   await router.isReady();
+  if (startupState)
+    history.replaceState({ ...history.state, ...startupState }, "");
+  const startupHistoryLength = history.length;
   const app = document.createElement("div");
   app.id = "app";
   document.body.append(app);
@@ -171,6 +177,7 @@ async function shellFixture(compact = true) {
     destination,
     writes: fake.calls,
     unmount,
+    startupHistoryLength,
   };
 }
 
@@ -241,6 +248,30 @@ async function actualBack() {
 }
 
 describe("real app responsive navigation lifecycle", () => {
+  it("forgets only a reload-orphaned dialog marker without navigating or clearing pending work", async () => {
+    const opaquePending = "unresolved original intent bytes";
+    sessionStorage.setItem("aster.cloud.identity.pending.v1", opaquePending);
+    const f = await shellFixture(true, {
+      asterOverlay: `cloud-${"a".repeat(32)}`,
+      unrelatedState: { preserve: "router and caller state" },
+    });
+    expect(history.state.asterOverlay).toBeUndefined();
+    expect(history.state.unrelatedState).toEqual({
+      preserve: "router and caller state",
+    });
+    expect(location.hash).toBe(`#${detailPath}`);
+    expect(history.length).toBe(f.startupHistoryLength);
+    expect(history.back).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("aster.cloud.identity.pending.v1")).toBe(
+      opaquePending,
+    );
+    sessionStorage.removeItem("aster.cloud.identity.pending.v1");
+  });
+  it("does not strip another application's history state on startup", async () => {
+    await shellFixture(true, { asterOverlay: "unrelated-dialog-marker" });
+    expect(history.state.asterOverlay).toBe("unrelated-dialog-marker");
+    expect(history.back).not.toHaveBeenCalled();
+  });
   it("preserves the real deep-link permission gate without inventing an allowed current destination", async () => {
     const f = await shellFixture();
     await f.router.push("/users");

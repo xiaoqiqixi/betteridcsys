@@ -12,6 +12,19 @@ const handled = new WeakSet<Event>();
 let overflow = "",
   observer: MutationObserver | undefined,
   listening = false;
+export function resetOrphanedOverlayHistory() {
+  // A full reload does not unmount the former dialog. Its UI-only history
+  // marker survives, but its DOM layer does not. Never navigate on startup,
+  // discard router state, touch pending operations or reset a live layer.
+  if (layers.length || retired.size) return;
+  const state: unknown = history.state;
+  if (!state || typeof state !== "object" || Array.isArray(state)) return;
+  const token = (state as Record<string, unknown>).asterOverlay;
+  if (typeof token !== "string" || !/^cloud-[a-f0-9]{32}$/.test(token)) return;
+  const restored = { ...state } as Record<string, unknown>;
+  delete restored.asterOverlay;
+  history.replaceState(restored, "");
+}
 function capturePop(event: PopStateEvent) {
   const token: unknown = history.state?.asterOverlay;
   if (typeof token !== "string" || retired.get(token) !== location.href) return;

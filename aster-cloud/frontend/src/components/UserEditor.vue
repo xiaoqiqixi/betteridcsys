@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import {
   computed,
+  nextTick,
   onScopeDispose,
   reactive,
   shallowRef,
   useId,
+  useTemplateRef,
   watch,
 } from "vue";
 import type { Role, User } from "../api/types";
@@ -59,6 +61,8 @@ const latest = shallowRef<User | null>(null),
   loadError = shallowRef("");
 const revokeOpen = shallowRef(false),
   revokeReason = shallowRef("");
+const editorFeedback = useTemplateRef<HTMLElement>("editorFeedback"),
+  revocationFeedback = useTemplateRef<HTMLElement>("revocationFeedback");
 let original = "",
   ticket = 0,
   abort: AbortController | undefined;
@@ -137,6 +141,25 @@ const noticeState = computed(() =>
         : mutation.error.value === "revision"
           ? "conflict"
           : null,
+);
+watch(
+  [noticeState, revokeOpen, () => props.open, loading],
+  async ([state, , open, isLoading], _previous, onCleanup) => {
+    if (!open || isLoading || !state || state === "busy") return;
+    let current = true;
+    onCleanup(() => (current = false));
+    await nextTick();
+    if (!current) return;
+    // A submit button can be far below the result. Reveal the result only
+    // in the active dialog, never by stealing focus from its nested child.
+    const feedback = revokeOpen.value
+      ? revocationFeedback.value
+      : editorFeedback.value;
+    if (!feedback || feedback.closest("[inert]")) return;
+    feedback.focus({ preventScroll: true });
+    feedback.scrollIntoView({ block: "start", behavior: "instant" });
+  },
+  { immediate: true, flush: "post" },
 );
 const managerAllowed = computed(
   () =>
@@ -340,17 +363,23 @@ async function inspect() {
         novalidate
         @submit.prevent="submit"
       >
-        <IdentityOperationNotice
-          v-if="noticeState"
-          :state="noticeState"
-          :labels="noticeLabels"
-          :operation-id="pending?.key"
-          :target-label="latest?.email || form.email"
-          :base-revision="latest?.revision"
-          :busy="mutation.busy.value || !!mutation.inspecting.value"
-          @reload="load"
-          @inspect="inspect"
-        />
+        <div
+          v-if="noticeState && !revokeOpen"
+          ref="editorFeedback"
+          class="identity-editor-feedback"
+          tabindex="-1"
+        >
+          <IdentityOperationNotice
+            :state="noticeState"
+            :labels="noticeLabels"
+            :operation-id="pending?.key"
+            :target-label="latest?.email || form.email"
+            :base-revision="latest?.revision"
+            :busy="mutation.busy.value || !!mutation.inspecting.value"
+            @reload="load"
+            @inspect="inspect"
+          />
+        </div>
         <p v-if="!managerAllowed" class="identity-access-error" role="alert">
           {{
             tr(
@@ -393,20 +422,30 @@ async function inspect() {
         @update:reason="revokeReason = $event"
         @confirm="revoke"
       >
-        <template #notice
-          ><IdentityOperationNotice
-            v-if="noticeState"
-            :state="noticeState"
-            :labels="noticeLabels"
-            :operation-id="pending?.key"
-            :target-label="latest.email"
-            :base-revision="latest.revision"
-            :busy="mutation.busy.value || !!mutation.inspecting.value"
-            @reload="load"
-            @inspect="inspect" /><InlineError
-            v-else-if="mutation.error.value"
-            :error="mutation.error.value"
-        /></template>
+        <template #notice>
+          <div
+            v-if="noticeState || mutation.error.value"
+            ref="revocationFeedback"
+            class="identity-editor-feedback"
+            tabindex="-1"
+          >
+            <IdentityOperationNotice
+              v-if="noticeState"
+              :state="noticeState"
+              :labels="noticeLabels"
+              :operation-id="pending?.key"
+              :target-label="latest.email"
+              :base-revision="latest.revision"
+              :busy="mutation.busy.value || !!mutation.inspecting.value"
+              @reload="load"
+              @inspect="inspect"
+            />
+            <InlineError
+              v-else-if="mutation.error.value"
+              :error="mutation.error.value"
+            />
+          </div>
+        </template>
       </IdentitySessionRevocation>
     </template>
     <template #footer="{ close }"
@@ -433,6 +472,15 @@ async function inspect() {
 .identity-editor-form {
   display: grid;
   gap: 20px;
+}
+.identity-editor-feedback {
+  min-width: 0;
+  scroll-margin-block: 12px;
+}
+.identity-editor-feedback:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
 }
 .identity-access-error {
   color: var(--danger);

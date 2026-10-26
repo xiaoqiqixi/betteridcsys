@@ -247,7 +247,8 @@ function handleConfirm(): void {
 </template>
 
 <style scoped>
-.aw-session-revoke {
+.aw-session-revoke,
+.aw-revoke-dialog-body {
   --aw-ledger-bg: var(--surface);
   --aw-ledger-surface: var(--subtle);
   --aw-ledger-border: var(--border);
@@ -280,7 +281,9 @@ function handleConfirm(): void {
 }
 
 :global([data-theme="dark"] .aw-session-revoke),
-.aw-session-revoke[data-theme="dark"] {
+.aw-session-revoke[data-theme="dark"],
+:global([data-theme="dark"] .aw-revoke-dialog-body),
+.aw-revoke-dialog-body[data-theme="dark"] {
   --aw-ledger-bg: var(--surface);
   --aw-ledger-surface: var(--subtle);
   --aw-ledger-border: var(--border);

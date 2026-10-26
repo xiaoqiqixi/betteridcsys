@@ -13,6 +13,7 @@ export const IDENTITY_CHECKS = Object.freeze([
  'original_receipt_matches','reconciliation_get_only','all_target_sessions_revoked','fresh_signin_allowed',
  'nested_focus_and_inert','nested_browser_back','self_revocation_exits','self_cookie_revoked',
  'readonly_member_denied','mobile_320_and_390_geometry','english_dark_geometry','custom_controls','ten_actual_screenshots',
+ 'reload_clears_orphan_overlay_marker','critical_feedback_revealed','teleported_confirmation_tokens',
 ]);
 export function validateIdentityBrowserReport(report, fixture, output) {
  assert.deepEqual(Object.keys(report).sort(),['schema','passed','real_mysql','strict_tls','checks','screenshots','write_attempts','foreign_requests'].sort());

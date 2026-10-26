@@ -29,6 +29,33 @@ const themes = [
   ),
 );
 describe("design contracts (static tokens, not browser computed)", () => {
+  it("defines revocation tokens on the teleported confirmation, not only its former parent", () => {
+    const { descriptor } = parse(
+      readFileSync(
+        resolve(root, "components/IdentitySessionRevocation.vue"),
+        "utf8",
+      ),
+    );
+    const result = compileStyle({
+      source: descriptor.styles[0]!.content,
+      id: "data-v-revocation-tokens",
+      filename: "IdentitySessionRevocation.vue",
+      scoped: true,
+    });
+    expect(result.errors).toEqual([]);
+    const tokens = [...result.code.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(
+      ([, selectors, declarations]) =>
+        selectors!.includes(
+          ".aw-revoke-dialog-body[data-v-revocation-tokens]",
+        ) && declarations!.includes("--aw-ledger-border-strong:"),
+    )?.[2];
+    expect(tokens).toContain(
+      "--aw-ledger-border-strong: var(--control-border)",
+    );
+    expect(tokens).toContain("--aw-warn-bg: var(--warning-bg)");
+    expect(tokens).toContain("--aw-warn-icon: var(--warning)");
+    expect(tokens).toContain("--aw-danger-text: var(--danger)");
+  });
   it.each([
     "IdentityEditorFields",
     "IdentityOperationNotice",
