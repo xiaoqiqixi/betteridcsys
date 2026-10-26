@@ -25,3 +25,9 @@ test('gate keeps the read-only members baseline and runs a second owned database
  const browser=fs.readFileSync(new URL('./identity-browser.mjs',import.meta.url),'utf8');
  assert(browser.includes('ignoreHTTPSErrors:false'));assert(!browser.includes('route.fulfill'));assert(!browser.includes('storageState:'));assert(!browser.includes('method:\'POST\''));
 });
+test('dialog evidence waits for the real opaque transition and uses its actual viewport',()=>{
+ const browser=fs.readFileSync(new URL('./identity-browser.mjs',import.meta.url),'utf8');
+ assert(browser.includes("getComputedStyle(e).opacity==='1'"));
+ assert(browser.includes("overlay-enter-active"));assert(browser.includes("fullPage:false"));
+ assert(!browser.includes('fullPage:true'));assert(IDENTITY_CHECKS.includes('settled_dialog_screenshots'));
+});

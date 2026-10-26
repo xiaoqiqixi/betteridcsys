@@ -333,8 +333,8 @@ def main():
         finally:
             os.close(release_directory)
         fields = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?$', release, re.MULTILINE))
-        if fields.get("ID") != "ubuntu" or fields.get("VERSION_ID") != "24.04":
-            raise Failure("Only the disposable Ubuntu 24.04 runner image is supported")
+        if fields.get("ID") != "ubuntu" or fields.get("VERSION_ID") not in {"22.04", "24.04"}:
+            raise Failure("Only disposable Ubuntu 22.04/24.04 runner images are supported")
         print(json.dumps(prepare(root), sort_keys=True))
     finally:
         os.close(root)

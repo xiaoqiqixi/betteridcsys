@@ -12,7 +12,18 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 [[ $EUID != 0 && $(uname -m) == x86_64 ]] || fail 'Use the unprivileged Linux amd64 runner account.'
 [[ -f /etc/os-release ]] || fail 'Missing OS identity.'
 . /etc/os-release
-[[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || fail 'Only Ubuntu 24.04 is supported.'
+[[ $ID == ubuntu ]] || fail 'Only Ubuntu 22.04/24.04 is supported.'
+case $VERSION_ID in
+  22.04)
+    platform_libraries=(libaio1 libssl3 libtirpc3 libpcre3)
+    nginx_package=nginx-core
+    ;;
+  24.04)
+    platform_libraries=(libaio1t64 libssl3t64 libtirpc3t64)
+    nginx_package=nginx
+    ;;
+  *) fail 'Only Ubuntu 22.04/24.04 is supported.' ;;
+esac
 [[ -n ${GITHUB_ENV:-} && -f $GITHUB_ENV && -w $GITHUB_ENV ]] || fail 'Missing job environment output.'
 for command in sudo apt-get dpkg-deb sha256sum; do
   command -v "$command" >/dev/null || fail "Missing $command."
@@ -39,17 +50,17 @@ sudo apt-get "${apt_security[@]}" update
 # These are runtime libraries/tools and browser-test fonts only. Do not install or upgrade MySQL or
 # Nginx services, change repositories, disable signature checks or run a daemon.
 sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_security[@]}" install --yes --no-install-recommends \
-  libaio1t64 libmecab2 libnuma1 libssl3t64 libtirpc3t64 libtinfo6 \
+  "${platform_libraries[@]}" libmecab2 libnuma1 libtinfo6 \
   libgssapi-krb5-2 libkrb5-3 libsasl2-2 libudev1 libpcre2-8-0 openssl fonts-noto-cjk
 (
   cd "$fixture_root/packages"
-  apt-get "${apt_security[@]}" download nginx
+  apt-get "${apt_security[@]}" download "$nginx_package"
 )
 shopt -s nullglob
 packages=("$fixture_root/packages/"*.deb)
 [[ ${#packages[@]} == 1 ]] || fail 'Expected one authenticated Ubuntu nginx package.'
 package=${packages[0]}
-[[ $(dpkg-deb --field "$package" Package) == nginx ]] || fail 'Unexpected Nginx package identity.'
+[[ $(dpkg-deb --field "$package" Package) == "$nginx_package" ]] || fail 'Unexpected Nginx package identity.'
 [[ $(dpkg-deb --field "$package" Architecture) == amd64 ]] || fail 'Unexpected Nginx package architecture.'
 dpkg-deb --extract "$package" "$fixture_root/nginx"
 nginx_binary="$fixture_root/nginx/usr/sbin/nginx"

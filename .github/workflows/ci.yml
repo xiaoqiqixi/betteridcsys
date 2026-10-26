@@ -103,6 +103,97 @@ jobs:
             [[ $(stat -c %u "$ASTER_NATIVE_FIXTURE_ROOT") == "$(id -u)" ]]
             sudo rm -rf --one-file-system -- "$ASTER_NATIVE_FIXTURE_ROOT"
           fi
+  native-ubuntu22:
+    name: Native financial acceptance (ubuntu-22.04)
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.event.repository.private == false
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Prepare disposable native runner
+        run: bash vps-billing/deploy/ci/prepare-native-runner.sh
+      - name: Required regressions with native MySQL
+        run: RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash vps-billing/deploy/ci/mysql-native.sh -- bash vps-billing/deploy/ci/check.sh "$GITHUB_WORKSPACE"
+      - name: Native systemd, TLS, business, backup and rollback acceptance
+        env:
+          ASTER_ACCEPT_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          acceptance_evidence="$RUNNER_TEMP/native-acceptance-evidence"
+          RUNNER_TEMP="$ASTER_NATIVE_FIXTURE_ROOT" bash vps-billing/deploy/ci/mysql-native.sh -- bash vps-billing/deploy/ci/accept-native.sh --allow-isolated-runner "$GITHUB_WORKSPACE" "$acceptance_evidence"
+      - name: npm vulnerability gate
+        working-directory: vps-billing/frontend
+        run: npm audit --audit-level=high
+      - name: Sandboxed browser acceptance with the loopback demo
+        run: |
+          chrome_path=/opt/google/chrome/chrome
+          python3 -I vps-billing/deploy/ci/browser-demo.py --repo-root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/browser-acceptance" --chromium-path "$chrome_path"
+      - name: Workflow syntax and expression checks
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/ci.yml .github/workflows/release-build.yml .github/workflows/release-publish.yml .github/workflows/performance.yml
+      - name: Retain nonsecret native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-acceptance-ubuntu22-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/native-acceptance-evidence/native-acceptance.json
+            ${{ runner.temp }}/native-acceptance-evidence/preflight-empty.json
+            ${{ runner.temp }}/native-acceptance-evidence/preflight-current.json
+            ${{ runner.temp }}/native-acceptance-evidence/public-core-prepare.json
+            ${{ runner.temp }}/native-acceptance-evidence/core-native/*.json
+            ${{ runner.temp }}/native-acceptance-evidence/host-doctor.json
+            ${{ runner.temp }}/native-acceptance-evidence/backup-metadata.json
+            ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native.json
+            ${{ runner.temp }}/native-acceptance-evidence/plugin-native/plugin-native-failure.json
+            ${{ runner.temp }}/native-acceptance-evidence/payment-native/payment-native.json
+            ${{ runner.temp }}/native-acceptance-evidence/payment-native/payment-native-failure.json
+            ${{ runner.temp }}/native-acceptance-evidence/cleanup.json
+            ${{ runner.temp }}/native-acceptance-evidence/https-tests.json
+            ${{ runner.temp }}/native-acceptance-evidence/restored-https-tests.json
+            ${{ runner.temp }}/native-acceptance-evidence/api-properties.txt
+            ${{ runner.temp }}/native-acceptance-evidence/systemd-verify.log
+            ${{ runner.temp }}/native-acceptance-evidence/nginx-config.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability.json
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-generated-engine.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-generated-syslog.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-template-engine.log
+            ${{ runner.temp }}/native-acceptance-evidence/edge-observability-template-syslog.log
+            ${{ runner.temp }}/native-acceptance-evidence/failure-unit-status.txt
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: false
+      - name: Retain synthetic browser acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-acceptance-ubuntu22-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/browser-acceptance/summary.json
+            ${{ runner.temp }}/browser-acceptance/screenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: false
+      - name: Remove owned native runner scratch
+        if: always()
+        run: |
+          if [[ -n ${ASTER_NATIVE_FIXTURE_ROOT:-} ]]; then
+            [[ $ASTER_NATIVE_FIXTURE_ROOT =~ ^/run/aster-native\.[A-Za-z0-9]{8}$ ]]
+            [[ -d $ASTER_NATIVE_FIXTURE_ROOT && ! -L $ASTER_NATIVE_FIXTURE_ROOT ]]
+            [[ $(stat -c %u "$ASTER_NATIVE_FIXTURE_ROOT") == "$(id -u)" ]]
+            sudo rm -rf --one-file-system -- "$ASTER_NATIVE_FIXTURE_ROOT"
+          fi
   go-vulnerability:
     # Keep this scan independent of database provisioning so network failures
     # and vulnerability findings remain visible even when another gate fails.

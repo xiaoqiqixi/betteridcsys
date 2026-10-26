@@ -50,3 +50,15 @@ Chrome 执行前验证预装包记录和文件权限；一次性 runner 中只�
 只读 CI、成功构建、正常 Release、真实安装是独立事实。公开发布不部署服务器，文档命令也不会自动在用户主机执行。CI 不验证宝塔面板组合、真实域名/公共 CA 签发续期、数据库进程或整机恢复、跨 schema 降级、独立实例/异地灾备、容量、外部 SMTP 投递或真实服务商支付结算。运营放行需按 [RELEASE.md](RELEASE.md) 和实际环境另行判断。
 
 检查失败先保留精确 action/run/资产状态。已执行操作先核对结果，禁止移动标签、重建旧包或削弱守卫以取得绿灯。API 拒绝操作时记录明确原因和真实状态，不绕过仓库权限或发布守卫。
+
+## 当前候选：Ubuntu22/24原生与同提交门禁
+
+原`checks`继续在Ubuntu24执行，新增`Native financial acceptance (ubuntu-22.04)`独立运行相同实库与原生链，
+不以demo或24结果替代22。另有Go漏洞、正式公开组件metadata和真实MySQL财务浏览器，合计五个必需财务任务。
+builder与publisher只读核对精确main SHA的最新push run/attempt及完整任务集合，缺失、失败、取消、跳过、替名、重复均拒绝；
+发布前后再次复核。该读取使用现有`actions: read`，不扩写权限、不修改旧标签/资产。
+
+Jammy/Noble使用分别审核的MySQL8.4四包pin；24原8.4.11不变，22为8.4.13。
+Python必须具备安全tar data_filter及filter参数，保持显式data过滤，不因22而回退到不安全解包。
+当前0.5.10未发行prepare合同同步新控制文件，历史版本信任清单不变。
+设计、运行证据与未验项见[W04记录](../../docs/FINANCE_NATIVE_22_24.md)；代码存在不等于两个平台已完成验收。

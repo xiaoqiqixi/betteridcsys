@@ -56,6 +56,7 @@ CLOUD_JOBS = {
 }
 FINANCE_JOBS = {
     "checks", "go-vulnerability", "official-release-metadata",
+    "Native financial acceptance (ubuntu-22.04)",
     "Real MySQL financial browser acceptance",
 }
 

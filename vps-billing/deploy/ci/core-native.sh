@@ -14,8 +14,8 @@ fail() { printf 'FAIL Core executor acceptance: %s\n' "$*" >&2; exit 1; }
 python3 - <<'PY'
 from pathlib import Path
 values = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
-if values.get('ID', '').strip('"') != 'ubuntu' or values.get('VERSION_ID', '').strip('"') != '24.04':
-    raise SystemExit('FAIL: Core executor acceptance requires Ubuntu 24.04')
+if values.get('ID', '').strip('"') != 'ubuntu' or values.get('VERSION_ID', '').strip('"') not in {'22.04', '24.04'}:
+    raise SystemExit('FAIL: Core executor acceptance requires Ubuntu 22.04/24.04')
 PY
 source_root=$(cd -- "$2" && pwd -P)
 [[ $3 == /* && ! -e $3 && -d $(dirname -- "$3") ]] || fail 'Evidence directory must be new with an existing parent.'

@@ -27,8 +27,13 @@ REPOSITORY = "xiaoqiqixi/betteridcsys"
 REPOSITORY_ID = 1418618420
 BUILD_WORKFLOW = ".github/workflows/release-build.yml"
 PUBLISH_WORKFLOW = ".github/workflows/release-publish.yml"
+FINANCIAL_CI_JOBS = frozenset({
+    "checks", "Native financial acceptance (ubuntu-22.04)", "go-vulnerability",
+    "official-release-metadata", "Real MySQL financial browser acceptance",
+})
 TRUSTED_PATHS = (
     BUILD_WORKFLOW,
+    ".github/workflows/ci.yml",
     "vps-billing/deploy/ci/release_pipeline.py",
     "vps-billing/deploy/ci/historical-artifacts.json",
     "vps-billing/deploy/ci/check.sh",
@@ -50,7 +55,9 @@ TRUSTED_PATHS = (
     "vps-billing/frontend/tests/browser-mysql.mjs",
     "vps-billing/frontend/tests/ui-copy-boundaries.mjs",
     "vps-billing/deploy/ci/mysql-native.sh",
+    "vps-billing/deploy/ci/mysql-distribution.py",
     "vps-billing/deploy/ci/mysql-distribution.json",
+    "vps-billing/deploy/ci/mysql-distribution-ubuntu22.json",
     "vps-billing/deploy/scripts/package-release.sh",
     "vps-billing/deploy/scripts/release-manifest.py",
     "vps-billing/deploy/scripts/plugin-manager.py",
@@ -490,12 +497,48 @@ def environment_identity(env):
     return integer(int(env.get("GITHUB_RUN_ID", "0")), "run ID"), integer(int(env.get("GITHUB_RUN_ATTEMPT", "0")), "run attempt")
 
 
+def green_financial_ci(api, source):
+    """No mutation: require all native/safety/browser gates at this main SHA.
+
+    An older success, a successful demo substituted for the real API browser,
+    a skipped/missing Jammy job or a latest failed attempt cannot authorize a
+    release. The current publisher rechecks this before its bounded mutations.
+    """
+    source = sha(source)
+    workflow = api.request("GET", api_path("/actions/workflows/ci.yml"))
+    workflow_id = integer(workflow.get("id"), "required CI workflow ID")
+    require(workflow.get("path") == ".github/workflows/ci.yml" and workflow.get("state") == "active",
+            "Required financial CI workflow identity mismatch")
+    result = api.request("GET", api_path("/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=" + source + "&per_page=100"))
+    rows, count = result.get("workflow_runs"), result.get("total_count")
+    require(isinstance(rows, list) and type(count) is int and 0 <= count <= 100 and count == len(rows) and
+            all(isinstance(row, dict) for row in rows), "Required financial CI run list incomplete")
+    matches = [row for row in rows if row.get("head_sha") == source and row.get("head_branch") == "main" and
+               row.get("event") == "push" and row.get("workflow_id") == workflow_id]
+    require(matches, "No required financial exact-main-SHA CI run")
+    run = max(matches, key=lambda row: integer(row.get("id"), "required CI run ID"))
+    run_id = integer(run["id"], "required CI run ID")
+    attempt = integer(run.get("run_attempt"), "required CI attempt")
+    require(run.get("status") == "completed" and run.get("conclusion") == "success",
+            "Latest required financial exact-SHA CI run is not successful")
+    result = api.request("GET", api_path(f"/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"))
+    jobs = result.get("jobs")
+    require(type(result.get("total_count")) is int and result["total_count"] == len(FINANCIAL_CI_JOBS) and
+            isinstance(jobs, list) and len(jobs) == len(FINANCIAL_CI_JOBS) and
+            all(isinstance(job, dict) and isinstance(job.get("name"), str) for job in jobs) and
+            {job.get("name") for job in jobs} == FINANCIAL_CI_JOBS and
+            all(job.get("status") == "completed" and job.get("conclusion") == "success" for job in jobs),
+            "Every exact-SHA financial CI job must pass, including Ubuntu22 native and real MySQL browser")
+    return {"workflow": "ci.yml", "source_sha": source, "run_id": run_id, "attempt": attempt,
+            "jobs": sorted(FINANCIAL_CI_JOBS)}
+
+
 def prepare_build(api, env, event):
     run_id, attempt = environment_identity(env)
     branch = repository(api)
     default = resolve_ref(api, "heads/" + branch)
-    # This step executes before source/dependency code and needs contents:read
-    # only. The publisher later verifies this claimed identity against Actions.
+    # This step executes before source/dependency code with contents/actions
+    # read only. The publisher also verifies the build identity against Actions.
     event_name = env.get("GITHUB_EVENT_NAME")
     require(event_name in {"push", "workflow_dispatch"}, "Untrusted build event")
     run = {"event": event_name, "head_sha": sha(env.get("GITHUB_SHA"))}
@@ -517,6 +560,7 @@ def prepare_build(api, env, event):
     blobs = trusted_blobs(api, default)
     require(trusted_blobs(api, run["head_sha"]) == blobs and trusted_blobs(api, source) == blobs,
             "Build/source guard policy differs from the default branch")
+    green_financial_ci(api, source)
     return {"schema": 1, "repository": REPOSITORY, "repository_id": REPOSITORY_ID,
             "run_id": run_id, "run_attempt": attempt, "event": run["event"],
             "tag": tag, "version": version, "source_sha": source,
@@ -1010,6 +1054,7 @@ def verify_provenance(files, policy, api):
     ancestor(api, sha(provenance["default_sha"]), policy["trusted_default_sha"])
     require(trusted_blobs(api, source) == policy["trusted_blobs"] and
             trusted_blobs(api, provenance["default_sha"]) == policy["trusted_blobs"], "Source/build policy differs from trusted default")
+    green_financial_ci(api, source)
     package = {key: value for key, value in files.items() if key != "PROVENANCE.json"}
     normal = "-" not in provenance["version"]
     assets = validate_package(package, source, provenance["version"], release_kind(tag), files["PROVENANCE.json"] if normal else None)
@@ -1027,6 +1072,7 @@ def recheck(api, policy, provenance):
     run = validate_run(api, policy["run_id"], policy["run_attempt"], True)
     require(run["head_sha"] == policy["run_head_sha"] and run["event"] == policy["event"] and
             run.get("head_branch") == policy["run_head_branch"], "Upstream run changed")
+    green_financial_ci(api, provenance["source_sha"])
 
 
 def publish(api, policy, archive_bytes):

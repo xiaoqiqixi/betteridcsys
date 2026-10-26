@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Disposable native MySQL 8.4 fixture; never install a service or alter host users.
 # Usage: bash mysql-native.sh [--packages /path/to/pinned-debs] -- command [args...]
-# RUNNER_TEMP must be an existing private CI scratch directory. Ubuntu 24.04
+# RUNNER_TEMP must be an existing private CI scratch directory. Ubuntu 22/24
 # native runtime libraries must be provisioned by the workflow, not this script.
 # Offline packages still require every reviewed, committed manifest checksum.
 set +x
@@ -25,55 +25,12 @@ controller_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 # This gate precedes every download, archive extraction and database execution.
 # Never accept a caller-supplied hash, URL or already-extracted executable tree.
-if ! metadata=$(python3 - "$controller_dir/mysql-distribution.json" <<'PY'
-import json
-from pathlib import Path
-import re
-import sys
-try:
-    if sys.version_info < (3, 12):
-        raise ValueError("Python 3.12 or newer is required for safe package data extraction")
-    value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema") != 2:
-        raise ValueError("unsupported distribution manifest schema")
-    if value.get("status") != "pinned_official_metadata":
-        raise ValueError("native MySQL distribution requires reviewed official package pins")
-    version = value.get("version")
-    if not isinstance(version, str) or re.fullmatch(r"8\.4\.[0-9]+", version) is None:
-        raise ValueError("only a reviewed MySQL 8.4 patch release is accepted")
-    package_version = f"{version}-1ubuntu24.04"
-    if value.get("package_version") != package_version or value.get("architecture") != "amd64" or value.get("distribution") != "ubuntu-24.04":
-        raise ValueError("only the pinned Ubuntu 24.04 amd64 package version is accepted")
-    if value.get("metadata_url") != "https://repo.mysql.com/apt/ubuntu/dists/noble/mysql-8.4-lts/binary-amd64/Packages":
-        raise ValueError("package metadata must identify the official Oracle Ubuntu 24.04 8.4 repository")
-    packages = value.get("packages")
-    expected = {"mysql-community-server-core", "mysql-community-client-core", "mysql-community-client-plugins", "mysql-community-client"}
-    if not isinstance(packages, list) or len(packages) != len(expected):
-        raise ValueError("all four pinned MySQL packages are required")
-    names = [item.get("name") for item in packages if isinstance(item, dict)]
-    if len(names) != len(expected) or set(names) != expected:
-        raise ValueError("package names must be the exact, nonduplicated MySQL fixture set")
-    print(version)
-    for item in packages:
-        digest = item.get("sha256")
-        size = item.get("size")
-        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None or digest == "0" * 64:
-            raise ValueError("a reviewed, nonempty SHA-256 is required for every package")
-        if type(size) is not int or not 0 < size <= 1024 * 1024 * 1024:
-            raise ValueError("a positive bounded package size is required")
-        filename = f"{item['name']}_{package_version}_amd64.deb"
-        print(filename)
-        print(digest)
-        print(size)
-except (OSError, ValueError, TypeError) as error:
-    print(f"FAIL: {error}", file=sys.stderr)
-    raise SystemExit(1)
-PY
-); then
+if ! metadata=$(python3 -I "$controller_dir/mysql-distribution.py"); then
   exit 1
 fi
 mapfile -t distribution <<<"$metadata"
-mysql_version=${distribution[0]}
+distribution_manifest=${distribution[0]}
+mysql_version=${distribution[1]}
 
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || fail 'Native MySQL CI requires Linux amd64.'
 [[ $EUID != 0 ]] || fail 'Run this disposable fixture as an unprivileged CI user, never root.'
@@ -157,7 +114,7 @@ PY
 }
 
 mkdir "$fixture_tmp/packages" "$fixture_tmp/distribution" "$fixture_tmp/data" "$fixture_tmp/tmp"
-for ((index = 1; index < ${#distribution[@]}; index += 3)); do
+for ((index = 2; index < ${#distribution[@]}; index += 3)); do
   filename=${distribution[index]}
   digest=${distribution[index + 1]}
   expected_size=${distribution[index + 2]}
@@ -182,7 +139,7 @@ done
 # archives. dpkg-deb never installs packages or executes their maintainer scripts.
 # Python's data filter rejects devices and escaping links; the extra path check
 # rejects absolute/traversing members rather than silently normalizing them.
-python3 - "$controller_dir/mysql-distribution.json" "$fixture_tmp" <<'PY'
+python3 - "$distribution_manifest" "$fixture_tmp" <<'PY'
 import json
 from pathlib import Path, PurePosixPath
 import subprocess

@@ -228,6 +228,14 @@ def flow_fixture():
         "GITHUB_SHA": DEFAULT_SHA, "GITHUB_WORKFLOW_SHA": DEFAULT_SHA,
     }
     event = {"action": "completed", "workflow_run": copy.deepcopy(run)}
+    ci_id, ci_workflow = 701, 702
+    responses[("GET", PREFIX + "/actions/workflows/ci.yml")] = {"id": ci_workflow, "path": ".github/workflows/ci.yml", "state": "active"}
+    for source_sha in (SHA, DEFAULT_SHA):
+        ci_run = {"id": ci_id, "run_attempt": 1, "workflow_id": ci_workflow, "head_sha": source_sha,
+                  "head_branch": "main", "event": "push", "status": "completed", "conclusion": "success"}
+        responses[("GET", PREFIX + "/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=" + source_sha + "&per_page=100")] = {"total_count": 1, "workflow_runs": [ci_run]}
+    responses[("GET", PREFIX + f"/actions/runs/{ci_id}/attempts/1/jobs?per_page=100")] = {
+        "total_count": len(pipeline.FINANCIAL_CI_JOBS), "jobs": [{"name": name, "status": "completed", "conclusion": "success"} for name in sorted(pipeline.FINANCIAL_CI_JOBS)]}
     return FakeAPI(responses), env, event, build_policy, files, archive
 
 
@@ -417,9 +425,15 @@ class BuildPolicyTest(unittest.TestCase):
         }
         self.event = {"ref": "refs/tags/" + TAG, "deleted": False}
 
-    def test_tag_build_uses_contents_reads_only(self):
+    def test_tag_build_uses_only_contents_and_required_ci_metadata_gets(self):
         self.assertEqual(pipeline.prepare_build(self.api, self.env, self.event), self.expected)
-        self.assertTrue(all(call[0] == "GET" and "/actions/" not in call[1] for call in self.api.calls))
+        self.assertTrue(all(call[0] == "GET" for call in self.api.calls))
+        actions = {call[1] for call in self.api.calls if "/actions/" in call[1]}
+        self.assertEqual(actions, {
+            PREFIX + "/actions/workflows/ci.yml",
+            PREFIX + "/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=" + SHA + "&per_page=100",
+            PREFIX + "/actions/runs/701/attempts/1/jobs?per_page=100",
+        })
         self.assertFalse(self.api.uploads)
 
     def test_manual_build_uses_default_workflow_and_requested_tag_source(self):
@@ -987,6 +1001,82 @@ class PatchReleaseNotesTest(unittest.TestCase):
         self.assertNotIn("aster.payment/1", body)
         self.assertEqual(len(api.uploads), 5)
         self.assertEqual(api.mutations[-1][2]["make_latest"], "false")
+
+
+class FinancialCIGateTests(unittest.TestCase):
+    runs_path = PREFIX + "/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=" + SHA + "&per_page=100"
+    jobs_path = PREFIX + "/actions/runs/701/attempts/1/jobs?per_page=100"
+
+    def test_all_five_exact_jobs_are_required_and_reads_never_mutate(self):
+        api, *_ = flow_fixture()
+        result = pipeline.green_financial_ci(api, SHA)
+        self.assertEqual(result["source_sha"], SHA)
+        self.assertEqual(len(result["jobs"]), 5)
+        self.assertIn("Native financial acceptance (ubuntu-22.04)", result["jobs"])
+        self.assertIn("Real MySQL financial browser acceptance", result["jobs"])
+        self.assertTrue(all(call[0] == "GET" for call in api.calls))
+        self.assertFalse(api.uploads)
+
+    def test_missing_duplicate_extra_and_substitute_jobs_are_rejected(self):
+        original, *_ = flow_fixture()
+        baseline = original.responses[("GET", self.jobs_path)]["jobs"]
+        for missing in range(len(baseline)):
+            for replacement in (None, {"name": "Synthetic demo only", "status": "completed", "conclusion": "success"}, baseline[(missing + 1) % len(baseline)]):
+                api, *_ = flow_fixture()
+                jobs = copy.deepcopy(baseline)
+                jobs.pop(missing)
+                if replacement:
+                    jobs.append(copy.deepcopy(replacement))
+                api.responses[("GET", self.jobs_path)] = {"total_count": len(jobs), "jobs": jobs}
+                with self.subTest(missing=missing, replacement=replacement), self.assertRaises(pipeline.GuardError):
+                    pipeline.green_financial_ci(api, SHA)
+
+    def test_every_job_must_succeed_without_skips(self):
+        for index in range(5):
+            for conclusion in ("skipped", "failure", "cancelled", None):
+                api, *_ = flow_fixture()
+                api.responses[("GET", self.jobs_path)]["jobs"][index]["conclusion"] = conclusion
+                with self.subTest(index=index, conclusion=conclusion), self.assertRaises(pipeline.GuardError):
+                    pipeline.green_financial_ci(api, SHA)
+
+    def test_latest_failed_run_never_falls_back_to_an_older_success(self):
+        api, *_ = flow_fixture()
+        old = api.responses[("GET", self.runs_path)]["workflow_runs"][0]
+        latest = {**old, "id": 703, "conclusion": "failure"}
+        api.responses[("GET", self.runs_path)] = {"total_count": 2, "workflow_runs": [old, latest]}
+        with self.assertRaisesRegex(pipeline.GuardError, "Latest required"):
+            pipeline.green_financial_ci(api, SHA)
+
+    def test_foreign_sha_branch_event_workflow_and_incomplete_run_lists_do_not_authorize(self):
+        for field, value in (("head_sha", "f" * 40), ("head_branch", "other"), ("event", "workflow_dispatch"), ("workflow_id", 999)):
+            api, *_ = flow_fixture()
+            api.responses[("GET", self.runs_path)]["workflow_runs"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(pipeline.GuardError):
+                pipeline.green_financial_ci(api, SHA)
+        for count in (None, True, 0, 101, "1"):
+            api, *_ = flow_fixture()
+            api.responses[("GET", self.runs_path)]["total_count"] = count
+            with self.subTest(count=count), self.assertRaises(pipeline.GuardError):
+                pipeline.green_financial_ci(api, SHA)
+
+    def test_no_release_mutation_or_upload_precedes_the_required_ubuntu22_gate(self):
+        api, env, event, *_rest, archive = flow_fixture()
+        policy = pipeline.prepare_publish(api, env, event)
+        jobs = api.responses[("GET", self.jobs_path)]["jobs"]
+        next(job for job in jobs if job["name"] == "Native financial acceptance (ubuntu-22.04)")["conclusion"] = "failure"
+        with self.assertRaises(pipeline.GuardError):
+            pipeline.publish(api, policy, archive)
+        self.assertTrue(all(call[0] == "GET" for call in api.calls))
+        self.assertFalse(api.uploads)
+
+    def test_financial_and_cloud_required_finance_job_sets_stay_identical(self):
+        # Read the constant expression only; never execute the other publisher.
+        import ast
+        cloud = Path(__file__).resolve().parents[3] / 'aster-cloud/deploy/ci/cloud_release.py'
+        tree = ast.parse(cloud.read_text())
+        node = next(node for node in tree.body if isinstance(node, ast.Assign) and
+                    any(isinstance(target, ast.Name) and target.id == 'FINANCE_JOBS' for target in node.targets))
+        self.assertEqual(ast.literal_eval(node.value), pipeline.FINANCIAL_CI_JOBS)
 
 
 if __name__ == "__main__":

@@ -161,14 +161,15 @@ class CloudReleaseContract(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
 
-    def test_all_fifteen_exact_sha_jobs_require_both_supported_native_guests_and_financial_browser(self):
+    def test_all_sixteen_exact_sha_jobs_require_both_supported_native_guests_and_financial_browser(self):
         api = Gates()
         result = C.prepare_build(api, environment(), {"inputs": {"tag": V.TAG}})
-        self.assertEqual(sum(len(proof["jobs"]) for proof in result["prechecks"]), 15)
+        self.assertEqual(sum(len(proof["jobs"]) for proof in result["prechecks"]), 16)
         for version in ("22.04", "24.04"):
             self.assertIn("Native libvirt preparation (ubuntu-" + version + ")", result["prechecks"][0]["jobs"])
         self.assertNotIn("Native libvirt preparation (ubuntu-26.04)", result["prechecks"][0]["jobs"])
         self.assertIn("Real MySQL financial browser acceptance", result["prechecks"][1]["jobs"])
+        self.assertIn("Native financial acceptance (ubuntu-22.04)", result["prechecks"][1]["jobs"])
         self.assertTrue(all(method == "GET" for method, _, _ in api.calls))
 
     def test_each_supported_native_gate_is_required_at_exact_source(self):

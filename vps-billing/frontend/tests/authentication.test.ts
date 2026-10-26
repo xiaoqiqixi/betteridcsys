@@ -714,6 +714,10 @@ describe("independent sign-in panel", () => {
     expect(wrapper.emitted("signedIn")).toHaveLength(1);
   });
   it("honors Retry-After and prevents repeated credential submissions", async () => {
+    // Make the real boundary deterministic: distinct Date.now() samples in
+    // one response handler must not inflate an exact 120s delay to 121s.
+    let clock = 1_790_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock++);
     ws().signIn.mockRejectedValueOnce(
       new ApiError("RATE_LIMITED", 429, { retryAfter: "120" }),
     );

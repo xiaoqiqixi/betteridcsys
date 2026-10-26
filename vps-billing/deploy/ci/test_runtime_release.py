@@ -281,6 +281,9 @@ class RuntimeReleaseTests(unittest.TestCase):
             spec.loader.exec_module(manager)
             self.assertEqual(manager.TRUSTED_PATHS, set(pipeline.TRUSTED_PATHS))
             new_gate = {
+                ".github/workflows/ci.yml",
+                "vps-billing/deploy/ci/mysql-distribution.py",
+                "vps-billing/deploy/ci/mysql-distribution-ubuntu22.json",
                 "vps-billing/deploy/ci/browser-mysql.sh",
                 "vps-billing/deploy/ci/browser-mysql.py",
                 "vps-billing/deploy/ci/browser-mysql-fixture.gotxt",

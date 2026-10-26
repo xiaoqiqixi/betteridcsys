@@ -73,18 +73,19 @@ async function submit() {
             uncertain: true,
           });
     if (error.value.code === "RATE_LIMITED") {
-      now.value = Date.now();
+      const observedAt = Date.now();
+      now.value = observedAt;
       const raw = error.value.retryAfter;
       const until =
         raw && /^\d+$/.test(raw)
-          ? Date.now() + Number(raw) * 1000
+          ? observedAt + Number(raw) * 1000
           : raw
             ? Date.parse(raw)
             : NaN;
       retryUntil.value =
-        Number.isFinite(until) && until > Date.now()
+        Number.isFinite(until) && until > observedAt
           ? until
-          : Date.now() + 900000;
+          : observedAt + 900000;
     }
   } finally {
     password.value = "";

@@ -141,3 +141,41 @@ UiOverlay增加共享层栈，只有最上层处理焦点/Escape/Back；关闭�
 真实浏览器合同扩展为**28检查/10张实际PNG**，新增刷新标记、关键反馈可见和Teleport实际计算样式，
 五次有限写/严格TLS/原回归全部保留。失败只导出固定阶段/步骤与布尔、数量，不泄露异常原文或DOM文本。
 以上仍为新提交前本地结果；新同SHA CI、最后两张图及完整身份实库回执尚待完成，不预填成功。
+
+### 1620cdc：实库闭环通过，但整轮仍有失败
+
+[Cloud 40340166622](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40340166622)最终11/11成功，
+包含22/24 native libvirt、OVS/NAT、独立MySQL、Vue和实库浏览器。
+新增身份夹具实际完成28检查、10张PNG、5次浏览器写、5条提交回执；目标revision5、操作者revision2，
+旧目标会话全部401，密码hash与全部资源/财务/节点数据不变。严格TLS、外域请求0，没有VM/宿主动作。
+原70图和旧163/53/18检查全部保留。下载artifact核对完整SHA256：
+`c9e5c6c0ab7f494d85248f8c3e12ea413b508e07ebbf6bf6f969cd65566e4a28`，85文件/80张PNG。
+
+已人工看过本批10张身份图，发现桌面撤销图恰好捕获Teleport入场过渡，确认层还透明；
+手机fullPage图也会画出实际视口之外、固定shade没有覆盖的背景。不能只凭检查布尔宣称截图都合格。
+因此截图器补等真实过渡class消失且opacity=1，固定按实际视口截图，新合同为29检查/10图；仍待新SHA运行和重新人工看图。
+
+[财务40340166525](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40340166525)仅3/4成功。
+失败是原登录Retry-After断言：120秒显示成121秒。不是重试掩盖；先用逐毫秒递增时钟稳定复现121，
+再让响应处理只读取一次observedAt，用同一时刻计算deadline/剩余量。原120秒和禁止再次提交断言保留，
+未改变后端限流或15分钟兜底。财务前端format/typecheck/build、24文件1042项和Node35项通过。
+财务金额、支付处理、幂等、历史快照和SQL无变化；新增改动仅为登录提示时间计算。
+
+### W04：财务22/24原生链与必需发行检查
+
+先写[W04合同](FINANCE_NATIVE_22_24.md)，再补独立22任务、Jammy四包pin、安全tar能力检查、
+平台运行库与Nginx实际二进制包选择。原24四包pin字节不改，22官方四包逐个下载核对大小/SHA256，
+不把下载校验说成PGP验证或原生安装完成。无URL/hash/manifest调用者覆盖，也没有不安全解压回退。
+新fixture负例包括穿越/绝对路径、FIFO/设备和逃逸软硬链接，必须在任何数据库执行前拒绝。
+
+新增Ubuntu22任务执行同一个完整check.sh、真实systemd/TLS/MySQL/插件/升级/备份恢复/回滚/清理链，
+artifact独立命名，真实OS写报告。26仍拒绝。财务builder/publisher新增精确main-SHA五任务只读检查，
+Cloud也要求该五任务；必需总门由15增至16。未发行0.5.10 prepare精确信任清单同步新控制文件，
+0.5.0–0.5.9旧清单、标签和资产不改。
+
+本机已通过：发行策略74、raw runtime26、更新器46、平台/pin12、Cloud发行28、浏览器Node合同14；
+workflow actionlint、shell语法、Python编译与diff检查通过。
+最初更新器测试遇到macOS `/var`符号路径与sandbox监听限制；改用真实`/private/tmp`和仅测试端口权限后46通过，
+没有修改生产路径保护。native acceptance离线测试在macOS仍有Linux xattr/127.0.0.2/3不可用的3项错误，
+不将它记通过、不改系统接口或删断言；须由Ubuntu22/24 CI实际运行。
+原生完整安装链及新16门**仍待新提交同SHA结果**，目前没有发布、移动标签、改用户测试机或主机CA信任。

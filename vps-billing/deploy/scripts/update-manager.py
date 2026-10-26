@@ -33,9 +33,12 @@ LEGACY_TRUSTED_PATHS = {WORKFLOW, "vps-billing/deploy/ci/release_pipeline.py", "
 PREPARE_TRUSTED_PATHS = LEGACY_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-manager.py", "vps-billing/deploy/scripts/test-core-manager.py"}
 EXECUTOR_TRUSTED_PATHS = PREPARE_TRUSTED_PATHS | {"vps-billing/deploy/scripts/core-operation.py", "vps-billing/deploy/scripts/test-core-operation.py", "vps-billing/deploy/ci/core-native.sh", "vps-billing/deploy/ci/core-native.py"}
 PAYMENT_TRUSTED_PATHS = EXECUTOR_TRUSTED_PATHS | {"vps-billing/deploy/ci/payment-native.sh", "vps-billing/deploy/ci/payment-native.py", "vps-billing/deploy/ci/test_payment_native.py", "vps-billing/deploy/systemd/aster-payment.service"}
-# Core 0.5.10 adds a real-MySQL browser gate. Preserve older proof inventories;
+# Core 0.5.10 adds real-MySQL browser and Ubuntu22 native gates. Preserve older proof inventories;
 # requiring these new files for historical artifacts would rewrite their contract.
 TRUSTED_PATHS = PAYMENT_TRUSTED_PATHS | {
+    ".github/workflows/ci.yml",
+    "vps-billing/deploy/ci/mysql-distribution.py",
+    "vps-billing/deploy/ci/mysql-distribution-ubuntu22.json",
     "vps-billing/deploy/ci/browser-mysql.sh",
     "vps-billing/deploy/ci/browser-mysql.py",
     "vps-billing/deploy/ci/browser-mysql-fixture.gotxt",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline lifecycle tests with fake executables; not real MySQL acceptance."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -8,12 +9,17 @@ import signal
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import textwrap
 import time
 import unittest
 
 SCRIPT = Path(__file__).with_name("mysql-native.sh").resolve()
-MANIFEST = SCRIPT.with_name("mysql-distribution.json")
+POLICY = SCRIPT.with_name("mysql-distribution.py")
+# The behavioral fake lifecycle follows its real Ubuntu host; it must not make
+# a Jammy executable report the Noble pin or skip one platform's validation.
+OS_FIELDS = dict(line.split("=", 1) for line in (Path("/etc/os-release").read_text().splitlines() if Path("/etc/os-release").exists() else []) if "=" in line)
+MANIFEST = SCRIPT.with_name("mysql-distribution-ubuntu22.json" if OS_FIELDS.get("VERSION_ID", "").strip('"') == "22.04" else "mysql-distribution.json")
 
 
 def executable(path, source):
@@ -30,6 +36,7 @@ class NativeMySQLFixtureTest(unittest.TestCase):
         self.controller.mkdir()
         self.script = self.controller / SCRIPT.name
         self.script.write_bytes(SCRIPT.read_bytes())
+        (self.controller / POLICY.name).write_bytes(POLICY.read_bytes())
         self.runner = self.root / "runner"
         self.runner.mkdir()
         self.fake_bin = self.root / "tools"
@@ -209,6 +216,8 @@ class NativeMySQLFixtureTest(unittest.TestCase):
             "MYSQL_TEST_LOGIN_FILE": "inherited-must-not-escape",
             "ASTER_MYSQL_TEST_DSN": "inherited-must-not-escape",
             "ASTER_NATIVE_COMMAND_STOP_SECONDS": "1",
+            "CI_FIXTURE_BINARY_VERSION": self.manifest["version"],
+            "CI_FIXTURE_SERVER_VERSION": self.manifest["version"],
         })
 
     def write_manifest(self):
@@ -315,6 +324,52 @@ class NativeMySQLFixtureTest(unittest.TestCase):
         self.assertIn("AbsoluteLinkError", result.stderr)
         self.assertFalse(outside.exists())
         self.assertFalse((self.root / "events").exists())
+
+    def test_unsafe_pinned_debian_data_members_cannot_escape_or_create_devices(self):
+        # Alter only a fake, locally owned package's data member. Its control
+        # identity and newly computed TEST pin remain valid, so failures reach
+        # the production tar precheck/filter, not an earlier hash mismatch.
+        package = self.manifest["packages"][0]
+        path = self.package_dir / f"{package['name']}_{self.manifest['package_version']}_amd64.deb"
+        original = path.read_bytes()
+        self.assertEqual(original[:8], b"!<arch>\n")
+        entries, offset = [], 8
+        while offset < len(original):
+            header = original[offset:offset + 60]
+            self.assertEqual(header[58:60], b"`\n")
+            size = int(header[48:58])
+            entries.append((header[:16].decode().strip().rstrip('/'), original[offset + 60:offset + 60 + size]))
+            offset += 60 + size + size % 2
+        self.assertEqual(offset, len(original))
+        for kind, name, link, rejected in (
+                (tarfile.REGTYPE, '../outside', '', 'unsafe path'),
+                (tarfile.REGTYPE, '/absolute-outside', '', 'unsafe path'),
+                (tarfile.FIFOTYPE, 'usr/share/unsafe-fifo', '', 'SpecialFileError'),
+                (tarfile.CHRTYPE, 'usr/share/unsafe-device', '', 'SpecialFileError'),
+                (tarfile.SYMTYPE, 'usr/share/unsafe-link', '../../../../outside', 'LinkOutsideDestinationError'),
+                (tarfile.LNKTYPE, 'usr/share/unsafe-hardlink', '../../../../outside', 'LinkOutsideDestinationError')):
+            with self.subTest(kind=kind, name=name):
+                data = io.BytesIO()
+                with tarfile.open(fileobj=data, mode='w:') as archive:
+                    member = tarfile.TarInfo(name)
+                    member.type, member.linkname = kind, link
+                    member.mode = 0o600
+                    archive.addfile(member)
+                changed = bytearray(b'!<arch>\n')
+                for entry_name, raw in entries:
+                    if entry_name.startswith('data.tar'):
+                        entry_name, raw = 'data.tar', data.getvalue()
+                    header = (f"{entry_name + '/':<16}{0:<12}{0:<6}{0:<6}{'100644':<8}{len(raw):<10}`\n").encode('ascii')
+                    self.assertEqual(len(header), 60)
+                    changed.extend(header + raw + (b'\n' if len(raw) % 2 else b''))
+                path.write_bytes(changed)
+                package['size'], package['sha256'] = len(changed), hashlib.sha256(changed).hexdigest()
+                self.write_manifest()
+                result = self.run_fixture()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(rejected, result.stderr)
+                self.assertFalse((self.root / 'events').exists())
+                self.assertFalse((self.root / 'outside').exists())
 
     def test_wrong_package_size_stops_before_extraction(self):
         self.manifest["packages"][-1]["size"] += 1

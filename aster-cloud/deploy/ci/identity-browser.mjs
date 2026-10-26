@@ -21,9 +21,16 @@ const dialog=()=>page.getByRole('dialog',{includeHidden:true}).filter({has:page.
 async function read(p,currentPage=page){return currentPage.evaluate(async p=>{const r=await fetch('/console/v1'+p,{method:'GET',credentials:'same-origin',cache:'no-store'});return{status:r.status,data:r.status===200?await r.json():null};},p);}
 async function screenshot(name){
  assert(IDENTITY_SHOTS.includes(name)&&!report.screenshots.includes(name));
+ // Visible layout is not enough: a Teleport can already hold focus while its
+ // enter-from shade is still transparent. Capture the settled actual viewport,
+ // not a full-document image extending past a fixed mobile shade.
+ await page.waitForFunction(()=>{
+  const shades=[...document.querySelectorAll('.overlay-shade')];
+  return shades.length>0&&shades.every(e=>!['overlay-enter-active','overlay-enter-from','overlay-enter-to','overlay-leave-active'].some(c=>e.classList.contains(c))&&getComputedStyle(e).opacity==='1');
+ });
  assert.equal(await page.locator('input[type=password]').evaluateAll(inputs=>inputs.some(input=>input.value!=='')),false,'Screenshots may never include entered credentials');
  assert.equal(await page.locator('.login-form').count(),0,'No login screenshots');
- await page.screenshot({path:path.join(output,name),fullPage:true,animations:'disabled'});report.screenshots.push(name);
+ await page.screenshot({path:path.join(output,name),fullPage:false,animations:'disabled'});report.screenshots.push(name);
 }
 async function geometry(){
  const proof=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,regions:[...document.querySelectorAll('[role=dialog],.overlay-body,.aw-op-notice')].map(e=>({width:e.clientWidth,scroll:e.scrollWidth}))}));
@@ -92,7 +99,7 @@ try{
  phase='theme';await setPreferences('en','dark');await editTarget();await geometry();await screenshot('identity-desktop-english-dark.png');await page.setViewportSize({width:390,height:844});await geometry();await screenshot('identity-mobile-english-dark.png');check('english_dark_geometry');check('custom_controls');await closeEditor();
  await setPreferences('zh-CN','light');await page.getByRole('button',{name:'新增成员',exact:true}).click();await page.getByRole('dialog',{name:'新增成员',exact:true}).waitFor();await screenshot('identity-mobile-create-preview.png');await page.getByRole('dialog',{name:'新增成员',exact:true}).getByRole('button',{name:'取消',exact:true}).click();await page.waitForFunction(()=>!history.state?.asterOverlay);
  phase='self-revocation';await page.locator('.member-row').filter({hasText:credentials.email}).getByRole('button',{name:'编辑',exact:true}).click();await dialog().getByRole('button',{name:'撤销全部会话',exact:true}).click();await confirmation.waitFor();await screenshot('identity-mobile-self-revocation.png');await confirmation.getByLabel('撤销原因',{exact:true}).fill('结束本轮隔离验收的所有管理会话');const selfResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/'+credentials.actor_id+'/revoke-sessions'));await confirmation.getByRole('button',{name:'撤销并退出登录',exact:true}).click();assert.equal((await selfResponse).status(),200);await page.locator('.login-form').waitFor();check('self_revocation_exits');assert.equal((await read('/auth/me')).status,401);check('self_cookie_revoked');
- assert.equal(report.screenshots.length,10);check('ten_actual_screenshots');
+ assert.equal(report.screenshots.length,10);check('ten_actual_screenshots');check('settled_dialog_screenshots');
  // Real backend separately verifies target sessions were removed, unchanged
  // credential hashes, five receipts and every resource/financial/node row.
  report.passed=true;

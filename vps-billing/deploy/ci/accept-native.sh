@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Native acceptance on one disposable Ubuntu 24.04 GitHub-hosted runner.
+# Native acceptance on one disposable Ubuntu 22.04/24.04 GitHub-hosted runner.
 # Never run against a user server. mysql-native.sh owns the database process.
 # Usage: accept-native.sh --allow-isolated-runner SOURCE_ROOT EVIDENCE_DIR
 set +x
@@ -35,8 +35,8 @@ PYFACT
 python3 - <<'PY'
 from pathlib import Path
 values = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
-if values.get('ID', '').strip('"') != 'ubuntu' or values.get('VERSION_ID', '').strip('"') != '24.04':
-    raise SystemExit('FAIL: native acceptance requires Ubuntu 24.04')
+if values.get('ID', '').strip('"') != 'ubuntu' or values.get('VERSION_ID', '').strip('"') not in {'22.04', '24.04'}:
+    raise SystemExit('FAIL: native acceptance requires Ubuntu 22.04/24.04')
 PY
 source_root=$(cd -- "$2" && pwd -P)
 project="$source_root/vps-billing"
@@ -523,9 +523,14 @@ from pathlib import Path
 import subprocess
 import sys
 out, source, count, source_tables, restored_tables, backup_started, backup_finished, restore_started, restore_finished, migration_count, payment_attempts, payment_settlements = sys.argv[1:]
+platform = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
+ubuntu = platform.get('VERSION_ID', '').strip('"')
+if platform.get('ID', '').strip('"') != 'ubuntu' or ubuntu not in {'22.04', '24.04'}:
+    raise SystemExit('FAIL: native summary platform does not match a supported Ubuntu runner')
 summary = {
     'source_commit': subprocess.check_output(['git','-C',source,'rev-parse','HEAD'],text=True).strip(),
-    'environment': 'isolated Ubuntu 24.04 GitHub-hosted runner',
+    'environment': 'isolated Ubuntu ' + ubuntu + ' GitHub-hosted runner',
+    'ubuntu_version': ubuntu,
     'systemd_hardened_api': True, 'nginx_verified_tls': True,
     'runtime_dml_migrator_separation': True, 'native_backup_restore_equal_data': True,
     'smtp_encrypted_settings_restored': True, 'smtp_disabled_restore_check_no_send': True,

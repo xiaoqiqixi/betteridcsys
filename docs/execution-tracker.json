@@ -94,15 +94,19 @@
       "depends_on": [
         "W02"
       ],
-      "state": "planned",
-      "evidence": [],
+      "state": "in_progress",
+      "evidence": [
+        "FINANCE_NATIVE_22_24.md",
+        "EXECUTION-20261026.md"
+      ],
       "checklist_ids": [
         "B9.2",
         "I06",
         "I07",
         "I08",
         "R05"
-      ]
+      ],
+      "scope": "独立Ubuntu22原生任务、Jammy四包pin、安全tar能力检查、真实OS报告与精确main-SHA五个财务必需门已实现；原24 pin及旧版信任合同不变。新增16门和22/24完整systemd/TLS/MySQL/升级恢复链待同SHA CI，不记已验收。"
     },
     {
       "id": "W05",
@@ -206,7 +210,7 @@
           "id": "W07-B",
           "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
           "state": "implemented_local",
-          "scope": "schema12、严格身份事务/回执、公开意图账本与Gemini视图已实现；本地1001前端测试、MySQL/race全部源码2538 PASS。9cc4b1b独立MySQL与财务四门通过，但身份浏览器仅22/25检查、8/10图，不能记完成；已补刷新残留history、活动层反馈和Teleport样式回归，新28检查/10图及完整同SHA CI待验。",
+          "scope": "schema12身份事务/回执与Gemini视图已实现；1620cdc实际28身份检查/5写/10图、资源历史hash不变，Cloud11/11成功。财务3/4因120s显示121s失败，已复现修复；人工看图再补入场过渡/实际视口。新29检查/10图及新增16门同SHA CI待验，未记整个W07完成。",
           "not_included": [
             "数据库强制append-only逐表授权（W13）",
             "MFA/step-up",

@@ -74,6 +74,10 @@ APT / systemd / libvirt，检查默认网络未启动、专属 Unix socket / mou
 主控新 MySQL 的完整生产 bootstrap / TLS / systemd 安装也不能由单独 SQL grants 测试替代。
 所有结果绑定精确 SHA，见[验证入口](VALIDATION.md)。
 
+当前必需集合为Cloud11门、财务5门，共16门；财务新增明确命名的
+`Native financial acceptance (ubuntu-22.04)`，原`checks`仍保留Ubuntu24。
+两套策略拒绝缺失、跳过、失败或demo替代。历史15门通过记录仍只属于当时SHA，不能冒充新集合成功。
+
 参考：[GitHub attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)、
 [`gh attestation verify`](https://cli.github.com/manual/gh_attestation_verify)、
 [libvirtd 默认 Unix / socket activation](https://libvirt.org/manpages/libvirtd.html)。
