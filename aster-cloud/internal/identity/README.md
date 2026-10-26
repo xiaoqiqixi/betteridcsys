@@ -87,3 +87,27 @@ Only `?cursor=u1.<canonical-unpadded-base64url>` is supported. Its exact compact
 The console uses previous/next navigation with an in-memory, identity-bound page stack. Page/count advance only after a validated response; a failed next request retries that intended page. A 401/403 clears rows and cursors; identity/permission changes close the old editor and discard late responses. No account writes occur while navigating. The new frontend deliberately refuses legacy responses without `next_cursor`, rather than calling their truncated list complete; deploy matching frontend/backend assets.
 
 Index migration, rollback and acceptance boundaries: [members pagination](../../docs/MEMBERS_PAGINATION.md).
+
+## Queued identity writes and session revocation (W07-B1)
+
+Create/update require an internal request proof containing only the authenticated
+session hash and user ID. `Require` supplies it after live authentication and CSRF;
+an actor ID alone is not sufficient, even for the unexported Store entry points.
+No proof or bearer cookie is added to the public User DTO or persisted tasks.
+
+The write transaction locks `identity_lock`, then uses a locking current read of
+that exact session. Missing, anonymous, mismatched or expired sessions return
+`401 AUTH_REQUIRED`; expiry is evaluated after row-lock waits. Session storage
+errors remain unavailable (503), never success or a fabricated rejection. The
+session lock is held through commit. Logout uses the same identity→session order;
+original current-grant/delegation/self-protection/last-admin checks and atomic
+audit behavior remain in force. Another valid device session is unaffected by
+ordinary single-session logout.
+
+HTTP regressions pause at the first request-body read, after actual authentication,
+and commit logout/password reset or advance the private clock before releasing
+the request. They require a complete JSON 401 and no account/audit write. Store
+tests seed and remove actual private DB sessions, without any production bypass.
+This does not claim revision conflict handling, explicit all-session revocation,
+MFA/SSO, or a fence for already accepted resource operations. Full design and
+remaining identity contracts: repository `docs/IDENTITY_SESSION_FENCE.md`.

@@ -112,7 +112,10 @@ func insertUser(ctx context.Context, tx *sql.Tx, email, name, hash, role string,
 	_, err = tx.ExecContext(ctx, "INSERT INTO controller_console_users(id,email,name,password_hash,role,enabled,permissions,created_at,updated_at) VALUES(?,?,?,?,?,TRUE,?,?,?)", u.ID, u.Email, u.Name, hash, u.Role, raw, now, now)
 	return u, conflict(err)
 }
-func authorizedManager(ctx context.Context, tx *sql.Tx, actorID string) (User, error) {
+func (s *Service) authorizedManager(ctx context.Context, tx *sql.Tx, actorID string) (User, error) {
+	if err := s.checkManagerSession(ctx, tx, actorID); err != nil {
+		return User{}, err
+	}
 	u, err := scanUser(tx.QueryRowContext(ctx, "SELECT "+userColumns+" FROM controller_console_users WHERE id=?", actorID))
 	if err != nil || !u.Can("users.manage") {
 		return User{}, ErrForbidden
@@ -146,6 +149,9 @@ func mayManage(actor User, existing *User, proposed User) bool {
 	return true
 }
 func (s *Service) createUser(ctx context.Context, actorID string, in CreateUser) (User, error) {
+	if _, err := managerSession(ctx, actorID); err != nil {
+		return User{}, err
+	}
 	email, err := normalizeEmail(in.Email)
 	if err != nil || !validName(in.Name) {
 		return User{}, ErrInput
@@ -165,7 +171,7 @@ func (s *Service) createUser(ctx context.Context, actorID string, in CreateUser)
 	if err = identityLock(ctx, tx); err != nil {
 		return User{}, err
 	}
-	actor, err := authorizedManager(ctx, tx, actorID)
+	actor, err := s.authorizedManager(ctx, tx, actorID)
 	if err != nil {
 		return User{}, err
 	}
@@ -187,6 +193,9 @@ func validID(id string) bool {
 	return e == nil && len(b) == 16 && id == strings.ToLower(id)
 }
 func (s *Service) updateUser(ctx context.Context, actorID, target string, in UpdateUser) (User, error) {
+	if _, err := managerSession(ctx, actorID); err != nil {
+		return User{}, err
+	}
 	if !validID(target) || (in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil) {
 		return User{}, ErrInput
 	}
@@ -206,7 +215,7 @@ func (s *Service) updateUser(ctx context.Context, actorID, target string, in Upd
 	if err = identityLock(ctx, tx); err != nil {
 		return User{}, err
 	}
-	actor, err := authorizedManager(ctx, tx, actorID)
+	actor, err := s.authorizedManager(ctx, tx, actorID)
 	if err != nil {
 		return User{}, err
 	}
@@ -513,6 +522,9 @@ func (s *Service) logout(ctx context.Context, raw string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err = identityLock(ctx, tx); err != nil {
+		return err
+	}
 	h := tokenHash(raw)
 	var uid sql.NullString
 	err = tx.QueryRowContext(ctx, "SELECT user_id FROM controller_console_sessions WHERE token_hash=? FOR UPDATE", h[:]).Scan(&uid)

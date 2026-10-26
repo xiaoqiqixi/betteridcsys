@@ -197,7 +197,7 @@ func TestMySQLUsersPagination(t *testing.T) {
 				usersRequest(t, s, managerToken, firstCursor, 200)
 				// Next page must re-evaluate the real session after a role change.
 				role := "viewer"
-				if _, err := s.updateUser(context.Background(), admin.ID, manager.ID, UpdateUser{Role: &role}); err != nil {
+				if _, err := updateAs(t, s, admin.ID, manager.ID, UpdateUser{Role: &role}); err != nil {
 					t.Fatal(err)
 				}
 				usersRequest(t, s, managerToken, firstCursor, 401)

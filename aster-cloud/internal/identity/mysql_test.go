@@ -106,7 +106,7 @@ func bootstrap(t *testing.T, s *Service) User {
 }
 func create(t *testing.T, s *Service, a User, email, role string, p []string) User {
 	t.Helper()
-	u, err := s.createUser(context.Background(), a.ID, CreateUser{Email: email, Name: "Synthetic User", Password: testPassword, Role: role, Permissions: p})
+	u, err := createAs(t, s, a.ID, CreateUser{Email: email, Name: "Synthetic User", Password: testPassword, Role: role, Permissions: p})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		}
 		raw = loginUser(t, s, a)
 		next := "another strong independent password"
-		if _, err := s.updateUser(context.Background(), a.ID, a.ID, UpdateUser{Password: &next}); err != nil {
+		if _, err := updateAs(t, s, a.ID, a.ID, UpdateUser{Password: &next}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.authenticate(context.Background(), raw); !errors.Is(err, ErrAuthentication) {
@@ -203,7 +203,7 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		v := create(t, s, a, "viewer@example.invalid", "viewer", nil)
 		raw := loginUser(t, s, v)
 		enabled := false
-		if _, err := s.updateUser(context.Background(), a.ID, v.ID, UpdateUser{Enabled: &enabled}); err != nil {
+		if _, err := updateAs(t, s, a.ID, v.ID, UpdateUser{Enabled: &enabled}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.authenticate(context.Background(), raw); !errors.Is(err, ErrAuthentication) {
@@ -214,12 +214,12 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 			t.Fatal("disabled credentials accepted")
 		}
 		enabled = true
-		if _, err := s.updateUser(context.Background(), a.ID, v.ID, UpdateUser{Enabled: &enabled}); err != nil {
+		if _, err := updateAs(t, s, a.ID, v.ID, UpdateUser{Enabled: &enabled}); err != nil {
 			t.Fatal(err)
 		}
 		raw = loginUser(t, s, v)
 		role := "operator"
-		if _, err := s.updateUser(context.Background(), a.ID, v.ID, UpdateUser{Role: &role}); err != nil {
+		if _, err := updateAs(t, s, a.ID, v.ID, UpdateUser{Role: &role}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.authenticate(context.Background(), raw); !errors.Is(err, ErrAuthentication) {
@@ -232,42 +232,45 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		b := create(t, s, a, "second@example.invalid", "admin", nil)
 		role := "operator"
 		disabled := false
-		if _, err := s.updateUser(context.Background(), a.ID, a.ID, UpdateUser{Role: &role}); !errors.Is(err, ErrForbidden) {
+		if _, err := updateAs(t, s, a.ID, a.ID, UpdateUser{Role: &role}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("self-demotion allowed")
 		}
-		if _, err := s.updateUser(context.Background(), a.ID, a.ID, UpdateUser{Enabled: &disabled}); !errors.Is(err, ErrForbidden) {
+		if _, err := updateAs(t, s, a.ID, a.ID, UpdateUser{Enabled: &disabled}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("self-disable allowed")
 		}
-		var wg sync.WaitGroup
-		var success atomic.Int32
-		for _, pair := range [][2]User{{a, b}, {b, a}} {
-			wg.Add(1)
-			go func(actor, target User) {
-				defer wg.Done()
-				_, err := s.updateUser(context.Background(), actor.ID, target.ID, UpdateUser{Role: &role})
-				if err == nil {
-					success.Add(1)
-				} else if !errors.Is(err, ErrForbidden) {
-					t.Error(err)
-				}
-			}(pair[0], pair[1])
+		// Both real sessions pass authentication before either write starts.
+		// The winner revokes the loser's session; the queued loser must return
+		// an exact authentication denial, not continue under its earlier grants.
+		tokenA := loginUsersPageHTTP(t, s, a)
+		tokenB := loginUsersPageHTTP(t, s, b)
+		releaseA, waitA := queuedIdentityMutation(t, s, tokenA, "PATCH", "/console/v1/users/"+b.ID, map[string]any{"role": role})
+		releaseB, waitB := queuedIdentityMutation(t, s, tokenB, "PATCH", "/console/v1/users/"+a.ID, map[string]any{"role": role})
+		releaseA()
+		releaseB()
+		success, denied := 0, 0
+		for _, response := range []*httptest.ResponseRecorder{waitA(), waitB()} {
+			if response.Code == 200 {
+				success++
+			} else {
+				requireIdentity401(t, response)
+				denied++
+			}
 		}
-		wg.Wait()
 		var admins int
 		db.QueryRow("SELECT COUNT(*) FROM controller_console_users WHERE enabled=TRUE AND role='admin'").Scan(&admins)
-		if success.Load() != 1 || admins != 1 {
-			t.Fatal("last-admin invariant", success.Load(), admins)
+		if success != 1 || denied != 1 || admins != 1 {
+			t.Fatal("last-admin invariant", success, denied, admins)
 		}
 		last, err := scanUser(db.QueryRow("SELECT " + userColumns + " FROM controller_console_users WHERE role='admin'"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		manager := create(t, s, last, "manager@example.invalid", "custom", []string{"users.manage"})
-		if _, err = s.updateUser(context.Background(), manager.ID, last.ID, UpdateUser{Role: &role}); !errors.Is(err, ErrForbidden) {
+		if _, err = updateAs(t, s, manager.ID, last.ID, UpdateUser{Role: &role}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("custom manager removed last administrator")
 		}
 		p := []string{}
-		if _, err = s.updateUser(context.Background(), manager.ID, manager.ID, UpdateUser{Permissions: &p}); !errors.Is(err, ErrForbidden) {
+		if _, err = updateAs(t, s, manager.ID, manager.ID, UpdateUser{Permissions: &p}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("custom self grant change allowed")
 		}
 	})
@@ -314,22 +317,22 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		higher := create(t, s, a, "higher-target@example.invalid", "custom", []string{"instances.dangerous", "instances.read"})
 		var before int
 		db.QueryRow("SELECT COUNT(*) FROM controller_identity_audit").Scan(&before)
-		if _, err := s.createUser(context.Background(), manager.ID, CreateUser{Email: "escalate@example.invalid", Name: "Escalation", Password: testPassword, Role: "admin"}); !errors.Is(err, ErrForbidden) {
+		if _, err := createAs(t, s, manager.ID, CreateUser{Email: "escalate@example.invalid", Name: "Escalation", Password: testPassword, Role: "admin"}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("bounded manager created admin", err)
 		}
 		reset := "not the original administrator password"
-		if _, err := s.updateUser(context.Background(), manager.ID, a.ID, UpdateUser{Password: &reset}); !errors.Is(err, ErrForbidden) {
+		if _, err := updateAs(t, s, manager.ID, a.ID, UpdateUser{Password: &reset}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("bounded manager reset admin", err)
 		}
 		danger := []string{"instances.dangerous", "instances.read"}
-		if _, err := s.updateUser(context.Background(), manager.ID, limited.ID, UpdateUser{Permissions: &danger}); !errors.Is(err, ErrForbidden) {
+		if _, err := updateAs(t, s, manager.ID, limited.ID, UpdateUser{Permissions: &danger}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("bounded manager granted absent dangerous permission", err)
 		}
 		low := []string{"instances.read"}
-		if _, err := s.updateUser(context.Background(), manager.ID, higher.ID, UpdateUser{Permissions: &low, Password: &reset}); !errors.Is(err, ErrForbidden) {
+		if _, err := updateAs(t, s, manager.ID, higher.ID, UpdateUser{Permissions: &low, Password: &reset}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("bounded manager controlled superior existing account", err)
 		}
-		if _, err := s.createUser(context.Background(), manager.ID, CreateUser{Email: "escalate-custom@example.invalid", Name: "Escalation", Password: testPassword, Role: "custom", Permissions: danger}); !errors.Is(err, ErrForbidden) {
+		if _, err := createAs(t, s, manager.ID, CreateUser{Email: "escalate-custom@example.invalid", Name: "Escalation", Password: testPassword, Role: "custom", Permissions: danger}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("bounded manager created superior custom account", err)
 		}
 		var after int
@@ -337,15 +340,15 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		if after != before {
 			t.Fatal("forbidden delegation committed state/audit")
 		}
-		created, err := s.createUser(context.Background(), manager.ID, CreateUser{Email: "scoped-new@example.invalid", Name: "Scoped", Password: testPassword, Role: "custom", Permissions: low})
+		created, err := createAs(t, s, manager.ID, CreateUser{Email: "scoped-new@example.invalid", Name: "Scoped", Password: testPassword, Role: "custom", Permissions: low})
 		if err != nil {
 			t.Fatal("scoped creation rejected", err)
 		}
-		if _, err = s.updateUser(context.Background(), manager.ID, created.ID, UpdateUser{Password: &reset}); err != nil {
+		if _, err = updateAs(t, s, manager.ID, created.ID, UpdateUser{Password: &reset}); err != nil {
 			t.Fatal("scoped credential management rejected", err)
 		}
 		all := create(t, s, a, "custom-all@example.invalid", "custom", append([]string{}, allPermissions...))
-		if _, err = s.updateUser(context.Background(), all.ID, a.ID, UpdateUser{Password: &reset}); !errors.Is(err, ErrForbidden) {
+		if _, err = updateAs(t, s, all.ID, a.ID, UpdateUser{Password: &reset}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("all-grants custom manager edited administrator", err)
 		}
 		var hash string
@@ -499,7 +502,7 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		raw := loginUser(t, s, a)
 		v := create(t, s, a, "audit@example.invalid", "viewer", nil)
 		disabled := false
-		if _, err := s.updateUser(context.Background(), a.ID, v.ID, UpdateUser{Enabled: &disabled}); err != nil {
+		if _, err := updateAs(t, s, a.ID, v.ID, UpdateUser{Enabled: &disabled}); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.logout(context.Background(), raw); err != nil {
@@ -527,7 +530,7 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		var before int
 		db.QueryRow("SELECT COUNT(*) FROM controller_identity_audit").Scan(&before)
 		role := "viewer"
-		if _, err := s.updateUser(context.Background(), a.ID, a.ID, UpdateUser{Role: &role}); !errors.Is(err, ErrForbidden) {
+		if _, err := updateAs(t, s, a.ID, a.ID, UpdateUser{Role: &role}); !errors.Is(err, ErrForbidden) {
 			t.Fatal("forbidden update allowed")
 		}
 		var after int

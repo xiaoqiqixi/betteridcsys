@@ -34,10 +34,11 @@
       "depends_on": [
         "W00"
       ],
-      "state": "implemented_local",
+      "state": "ci_verified",
       "evidence": [
         "../aster-cloud/docs/VALIDATION.md",
-        "EXECUTION-20261025.md"
+        "EXECUTION-20261025.md",
+        "EXECUTION-20261026.md"
       ],
       "checklist_ids": [
         "CL-K01",
@@ -109,11 +110,12 @@
       "depends_on": [
         "W00"
       ],
-      "state": "implemented_local",
+      "state": "ci_verified",
       "evidence": [
         "../aster-cloud/frontend/tests/state.test.ts",
         "../aster-cloud/frontend/tests/overlay-mutation.test.ts",
-        "../aster-cloud/frontend/tests/public-mutation-storage.test.ts"
+        "../aster-cloud/frontend/tests/public-mutation-storage.test.ts",
+        "EXECUTION-20261026.md"
       ],
       "checklist_ids": [
         "CL-C02",
@@ -128,10 +130,11 @@
       "depends_on": [
         "W00"
       ],
-      "state": "implemented_local",
+      "state": "ci_verified",
       "evidence": [
         "../vps-billing/frontend/tests/ui-copy-boundaries.mjs",
-        "EXECUTION-20261025.md"
+        "EXECUTION-20261025.md",
+        "EXECUTION-20261026.md"
       ],
       "checklist_ids": [
         "UI-010",
@@ -149,7 +152,9 @@
       "state": "in_progress",
       "evidence": [
         "IDENTITY_PERMISSION_PLAN.md",
-        "../aster-cloud/docs/MEMBERS_PAGINATION.md"
+        "../aster-cloud/docs/MEMBERS_PAGINATION.md",
+        "IDENTITY_SESSION_FENCE.md",
+        "EXECUTION-20261026.md"
       ],
       "checklist_ids": [
         "B4.1",
@@ -172,13 +177,27 @@
         {
           "id": "W07-A",
           "title": "主控成员完整游标分页",
-          "state": "implemented_local",
-          "scope": "生产分页、schema11精确索引迁移、身份隔离和205成员真实浏览器入口；同SHA真实MySQL和浏览器待运行。",
+          "state": "ci_verified",
+          "scope": "生产分页/schema11已通过同SHA真实MySQL与18项成员浏览器检查、6图；Cloud11门和财务4门均成功。",
           "not_included": [
             "MFA/SSO",
             "用户revision/会话撤销新合同",
             "财务细粒度权限组",
             "跨路由返回页码/滚动恢复（W15）"
+          ],
+          "source_sha": "4626e321803f03be8d414f8f7cd29b77481eca97"
+        },
+        {
+          "id": "W07-B1",
+          "title": "排队身份写入的会话事务fence",
+          "state": "implemented_local",
+          "scope": "严格事务内session hash/owner/expiry复核、注销锁序和真实HTTP并发回归；本地身份/控制面真实MySQL race669 PASS、0FAIL/0SKIP及vet/Linux静态构建通过，最终SHA CI待执行。",
+          "not_included": [
+            "用户revision",
+            "显式全设备撤销",
+            "身份操作回执与未知结果锁",
+            "MFA/SSO",
+            "资源任务取消"
           ]
         }
       ]
@@ -3078,13 +3097,13 @@
         }
       ],
       "current_evidence": [],
-      "execution_note": "W07-A修复100人读取上限，保留原账户写操作及权限；本地回归通过，待最终SHA真实MySQL/浏览器。该项其他安全能力未因此标完成。"
+      "execution_note": "W07-A在4626e32通过205人成员分页真实MySQL/18浏览器检查及6图；W07-B1继续处理排队会话撤销竞态，不把整个账号/角色域标完成。"
     },
     {
       "id": "CL-A03",
       "title": "独立 HTTPS 会话和 CSRF",
       "code_observation": "implemented",
-      "delivery_state": "planned",
+      "delivery_state": "in_progress",
       "priority": "P0",
       "origin": "user",
       "group": "03 主控、KVM被控与网络",
@@ -3115,7 +3134,8 @@
           "note": "严格解码"
         }
       ],
-      "current_evidence": []
+      "current_evidence": [],
+      "execution_note": "保留原独立HTTPS/CSRF；W07-B1新增身份写事务会话fence，真实RED→GREEN已复现与修复，最终新SHA CI待执行。"
     },
     {
       "id": "CL-A04",
@@ -9793,6 +9813,6 @@
   "release_state": "not_published",
   "real_kvm_acceptance": "deferred_by_user",
   "requirements_scope": "原269项逐项保留现状、下一步与验收；1625个末级字段/交互细节在原功能树中，不能把工作包完成等同全部叶子完成。",
-  "active_batch": "20261025-foundation-and-W07-A",
-  "batch_record": "EXECUTION-20261025.md"
+  "active_batch": "20261026-identity-session-fence",
+  "batch_record": "EXECUTION-20261026.md"
 }

@@ -142,7 +142,9 @@ func (s *Service) Require(permission string, next http.Handler) http.Handler {
 		if unsafe(r.Method) && !s.checkCSRF(w, r, raw) {
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorKey{}, u)))
+		ctx = context.WithValue(r.Context(), actorKey{}, u)
+		ctx = context.WithValue(ctx, managerSessionKey{}, managerSessionProof{hash: tokenHash(raw), userID: u.ID})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 func decode(r *http.Request, out any) error {
