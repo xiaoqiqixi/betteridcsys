@@ -31,12 +31,15 @@
 | 项目 | 准确范围 |
 | --- | --- |
 | Ubuntu 24.04 / amd64 | 既有完整 native CI/发布基线；候选仍须跑自身全部门禁 |
-| Ubuntu 22.04 / amd64 | 部署目标；历史业务/race/能力检查不等于完整安装、HTTPS、升级、备份恢复和回滚已完成 |
+| Ubuntu 22.04 / amd64 | 独立native任务、专用MySQL四包pin和平台依赖已接；实际全链尚未通过，不以历史业务/race/能力检查代替 |
 | Ubuntu 26.04、其他发行版、arm64 | 本轮不支持，不宣称已适配 |
 | doctor | 报告支持目标、native CI 基线和未验状态；不证明这台主机已验收 |
 | install/upgrade | 既有 Linux/root/amd64、工具、权限及服务检查保持不变；本轮未新增发行版硬拒绝门槛 |
 
-22.04 全链缺口包括其专用 MySQL 8.4 来源/包依赖合同、兼容 Nginx、Python 提取工具合同，以及真实 systemd/TLS/安装升级/备份恢复回滚门禁。当前临时 CI runner 与 MySQL DEB 提取仍固定 Ubuntu 24.04，不能只扩 matrix 就宣称 22.04 支持完成。原生部署，不使用 Docker。
+22.04专用Jammy MySQL8.4.13四包pin、非t64运行库、nginx-core二进制包、Python安全data_filter能力检查已实现；24的8.4.11 pin保留。
+两平台执行相同原生安装链，财务builder/publisher要求精确main-SHA的全部五任务成功，Cloud总门为16。
+e566f20的两平台都被一处旧测试清单差集挡住，实际systemd/TLS/安装升级/备份恢复回滚步骤未到达，修复后仍须完整跑通。
+不能只扩matrix或下载pin就宣称22.04验收完成。原生部署，不使用Docker；详见[W04合同](../../docs/FINANCE_NATIVE_22_24.md)。
 
 ## 新发行的六资产（发布后才可使用）
 

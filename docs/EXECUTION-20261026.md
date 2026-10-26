@@ -179,3 +179,23 @@ workflow actionlint、shell语法、Python编译与diff检查通过。
 没有修改生产路径保护。native acceptance离线测试在macOS仍有Linux xattr/127.0.0.2/3不可用的3项错误，
 不将它记通过、不改系统接口或删断言；须由Ubuntu22/24 CI实际运行。
 原生完整安装链及新16门**仍待新提交同SHA结果**，目前没有发布、移动标签、改用户测试机或主机CA信任。
+
+### e566f20：29项身份浏览器已实跑；财务两平台被旧测试清单挡住
+
+[Cloud40344463671](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40344463671)最终11/11成功。
+29项身份检查、10张身份图、有限5写及独立实库持久性回执全部成功，原70图/163业务/53布局/18成员检查保留。
+下载ZIP大小/精确SHA/摘要与安全路径再次验证，SHA256为
+`b152674724e4ef5fe9572f9412640b16d3c14d8cc798de38c96c3c184c6d9e2c`。
+已重新人工查看全部10张身份图，桌面确认层已完整入场，手机图严格是320×760或390×844实际视口；
+输入边界、警示条、未知结果与冲突反馈可见。不是只改检查布尔或复用旧图。
+
+[财务40344463985](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40344463985)实际3/5成功；
+22原生与24原`checks`都失败在同一旧测试`test_new_payment_policy_preserves_exact_published_executor_inventory`。
+它仍把0.5.10新增信任集写死为原五文件，漏记本包新增的CI策略及两个pin控制文件。
+只同步当前未发行候选的精确差集，保留0.5.2/0.5.3/0.5.9原集合及所有相等断言，定向负例修复后通过；
+未修改生产校验或放宽历史规则来求绿。
+
+本轮22已实际完成平台准备、独立MySQL启动及Go实库/race阶段，且两平台的data_filter能力、进程清理、
+路径穿越/FIFO/设备/逃逸软硬链接负例均在日志中明确`ok`。但流程在Python合同阶段中止，
+后面的完整native systemd/TLS/升级/恢复链**尚未运行**，绝不因为22任务已存在或MySQL能启动就记全链成功。
+本机整组payment-native合同也因Linux ELF不可在Darwin执行而失败；只有上述精确信任差集定向测试本地通过。

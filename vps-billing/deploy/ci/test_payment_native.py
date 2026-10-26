@@ -92,6 +92,8 @@ class PaymentNativeGuards(unittest.TestCase):
             "vps-billing/deploy/ci/test_payment_native.py", "vps-billing/deploy/systemd/aster-payment.service"})
         self.assertEqual(UPDATER.trusted_paths_for_core("0.5.10"), UPDATER.TRUSTED_PATHS)
         self.assertEqual(UPDATER.TRUSTED_PATHS - UPDATER.PAYMENT_TRUSTED_PATHS, {
+            ".github/workflows/ci.yml", "vps-billing/deploy/ci/mysql-distribution.py",
+            "vps-billing/deploy/ci/mysql-distribution-ubuntu22.json",
             "vps-billing/deploy/ci/browser-mysql.sh", "vps-billing/deploy/ci/browser-mysql.py",
             "vps-billing/deploy/ci/browser-mysql-fixture.gotxt",
             "vps-billing/frontend/tests/browser-mysql.mjs",

@@ -106,7 +106,7 @@
         "I08",
         "R05"
       ],
-      "scope": "独立Ubuntu22原生任务、Jammy四包pin、安全tar能力检查、真实OS报告与精确main-SHA五个财务必需门已实现；原24 pin及旧版信任合同不变。新增16门和22/24完整systemd/TLS/MySQL/升级恢复链待同SHA CI，不记已验收。"
+      "scope": "22独立任务、Jammy四包pin、安全tar、Nginx平台准备、OS报告及同SHA五个财务门已实现。e566f20两平台启动MySQL并跑实库/race，但被旧payment-native信任差集测试挡住，完整安装/升级/恢复未执行；精确测试已修，待新16门。"
     },
     {
       "id": "W05",
@@ -210,7 +210,7 @@
           "id": "W07-B",
           "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
           "state": "implemented_local",
-          "scope": "schema12身份事务/回执与Gemini视图已实现；1620cdc实际28身份检查/5写/10图、资源历史hash不变，Cloud11/11成功。财务3/4因120s显示121s失败，已复现修复；人工看图再补入场过渡/实际视口。新29检查/10图及新增16门同SHA CI待验，未记整个W07完成。",
+          "scope": "e566f20主控11/11通过，实际29项身份检查/5写/10图、完整回执及资源历史hash不变，全部10图已人工检查；跨系统16门尚因旧财务测试差集失败，不能将整体W07或发行记完成。",
           "not_included": [
             "数据库强制append-only逐表授权（W13）",
             "MFA/step-up",
