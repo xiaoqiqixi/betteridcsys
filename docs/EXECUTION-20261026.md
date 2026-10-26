@@ -46,3 +46,56 @@ Store 级旧测试仅在测试文件内准备真实持久会话并按 token 清�
 
 W07-A记为同SHA CI已证；W07仍进行中。B1不包含用户revision、显式全部会话撤销、撤销前在途登录代次、身份操作不可变回执/未知结果锁和新安全UI，详见[下一切片](IDENTITY_PERMISSION_PLAN.md)。
 W08资源交付、W09节点目录、W10实例操作、W11存储迁移、W12网络安全、W13运维灾备、W14商业规则、W15完整UI及W16正式发行继续按依赖推进，不把本轮修复记成整个清单完成。
+
+## 连续实施：W07-B 账户修订、全部会话撤销和原操作核对
+
+本批从 `b2c273fd9bf8a1c82e0daf51bae34d8ee5d0e4dd` 继续，不在一次局部修复后停工。
+B1已取得该源码Cloud11门及财务4门SUCCESS：
+[Cloud 40288999864](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40288999864)、
+[财务 40288999878](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40288999878)。这些旧结果不替本批新增schema12背书。
+
+### 接口、事务和升级
+
+先写[身份操作合同](IDENTITY_OPERATIONS.md)，再增加独立迁移012，旧001–011字节不改。
+revision使用JavaScript安全整数范围；打开编辑器先GET最新版本，陈旧PATCH完整409，不覆盖草稿。
+新增显式全部会话撤销；用户变更、session删除、audit和唯一操作回执在同一事务内提交。
+已用key不重放，不存密码或密码摘要；核对只读原actor/target/完整公开intent对应的receipt，404不是未执行证据。
+撤销前已开始的登录也在锁内复核revision/hash；普通改名不会踢掉已登录设备。
+
+迁移覆盖11→12、column-only/table-only/both未记账DDL重入、结构/索引漂移拒绝、历史账户/session/audit及旧迁移收据不变。
+实际核对安装器默认数据库collation后，012显式固定新表utf8mb4_bin，额外验unicode_ci默认库，避免只在bin测试库通过。
+另以真实Console.Handler＋TLS复现新增receipt路径漏转发为404，再修复顶层dispatcher；不是仅直接测identity.Handler。
+
+### 前端与Gemini分工
+
+审美与三份纯视图原稿由Gemini App生成：连续ledger表单、冲突/未知notice、会话撤销行及确认层。
+生成前已选择4 Argon/高；App卡住经用户重启后显示高阶额度限制，未给Flash-Lite再发设计任务。
+用户随后允许限额时自行继续，因此补接待核对列表、状态、主题token和可访问性工程，没有发送仓库源码、旧UI图片、凭据或真实资料。
+
+原稿SHA256（本地ignored `aster-cloud/artifacts/gemini-20261026/`）：
+
+- IdentityEditorFields：`4943c44207e1e59a9183b13a09deb18112fb3daeba4068fa17c3ecf4ea33fe96`
+- IdentityOperationNotice：`44435d1d866c89f9d08a55e35bd6f5e0c465be8b77a9e0416f464500b73f39e8`
+- IdentitySessionRevocation：`ebf2410dcb01b66670c5e9f237ee7480b2aaf11c213cbd699234cffcddeb7377`
+
+必要工程修正：理由按Unicode码点截500、不拆emoji；useId保证同app多实例ID；固定角色权限只读；
+基础按钮variant对应现有合同；深浅色映射现有Workbench语义token；不添加假进度或成功计时器。
+UiOverlay增加共享层栈，只有最上层处理焦点/Escape/Back；关闭子层不解除父层inert/滚动锁，身份变化同时销毁两层时消除本层历史条目。
+临时TextEdit在取回原稿后已关闭。
+
+身份账本与VM账本分开：先持久化完整公开意图，再唯一发送；actor+target锁、创建email关联锁、1MiB完整恢复、无64条截断。
+密码只在短期请求/表单内存，关闭/失去身份/提交结束清空；跨身份迟到结果只可清自己匹配的记录，不在新账户界面报成功。
+旧通用账本的opaque未核实意图仍保留并阻止绕过；不凭新GET404、当前资料相同或VM receipt清理它们。
+
+### 本地结果与本批仍待门槛
+
+- 前端format/typecheck/build通过，42文件/994测试通过；3份Gemini视图已真实编译进生产入口，不是只收需求或演示页面。
+- 新身份账本22定向项覆盖180条完整恢复、存储损坏/配额、换理由/动作锁、双击、丢ACK、404、回执不匹配、跨身份与本人撤销。
+- 补齐委派/秘密/审计失败及顶层路由后，本地两包真实MySQL/race最终 **701 PASS事件、0FAIL/0SKIP**；vet、Linux amd64静态controller构建与独立浏览器夹具编译通过。新源码Linux完整门禁仍须同SHA CI。
+- 新增独立实库浏览器夹具和25检查/10图的强制合同，沿用私有NSS localhost信任，不改用户系统CA。
+  它另建测试库，只通过可见UI做有限5次身份写；原205成员只读hash、163业务/53布局/18成员及原70图门槛完全保留。
+- 新浏览器**尚待实际执行与人工看图**；当前不能把组件通过或已编译当成视觉验收，也不复用b2c273f截图。
+- 无财务源码/SQL改动；未付款、未执行宿主或VM命令、未新建标签/Release、未改测试服务器。
+
+当前runtime仍有专用数据库级DML，所以回执是应用append-only，不是DB强制不可篡改。逐表最小授权与升级收敛留在W13，不能靠较窄表GRANT掩盖既有更宽授权。
+本包不等于整个W07或全清单完成：MFA/step-up/SSO、财务员工权限组、W08资源交付及后续工作继续按计划推进；真KVM验收仍后置。

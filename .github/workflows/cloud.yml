@@ -322,6 +322,9 @@ jobs:
             aster-cloud/artifacts/network-browser/report.json
             aster-cloud/artifacts/network-browser/tls.json
             aster-cloud/artifacts/network-browser/fixture.json
+            aster-cloud/artifacts/network-browser/identity/*.png
+            aster-cloud/artifacts/network-browser/identity/report.json
+            aster-cloud/artifacts/network-browser/identity/fixture.json
           if-no-files-found: warn
           retention-days: 7
       - name: Remove only owned native scratch, browser profile and test certificates

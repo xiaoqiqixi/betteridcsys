@@ -227,11 +227,11 @@ func (b *consoleHTTPBrowser) login(t *testing.T, email string) {
 }
 func (b *consoleHTTPBrowser) createUser(t *testing.T, email, role string, permissions []string) identity.User {
 	t.Helper()
-	input := map[string]any{"email": email, "name": "Synthetic " + role, "password": consoleHTTPPassword, "role": role}
+	input := map[string]any{"email": email, "name": "Synthetic " + role, "password": consoleHTTPPassword, "role": role, "reason": "Isolated console fixture account creation"}
 	if permissions != nil {
 		input["permissions"] = permissions
 	}
-	status, raw := b.request(t, "POST", "/console/v1/users", consoleHTTPJSON(t, input), consoleHTTPOptions{})
+	status, raw := b.request(t, "POST", "/console/v1/users", consoleHTTPJSON(t, input), consoleHTTPOptions{idempotency: id()})
 	var response struct {
 		User identity.User `json:"user"`
 	}
@@ -607,7 +607,7 @@ func TestMySQLConsoleHTTPSessionsRBACAndExplicitDispatch(t *testing.T) {
 	}
 
 	t.Run("disabling_user_through_account_API_revokes_existing_browser_immediately", func(t *testing.T) {
-		status, _ := admin.request(t, "PATCH", "/console/v1/users/"+viewer.user.ID, `{"enabled":false}`, consoleHTTPOptions{})
+		status, _ := admin.request(t, "PATCH", "/console/v1/users/"+viewer.user.ID, consoleHTTPJSON(t, map[string]any{"enabled": false, "revision": viewer.user.Revision, "reason": "隔离验收：停用现有成员并撤销会话"}), consoleHTTPOptions{idempotency: id()})
 		if status != 200 {
 			t.Fatal("admin could not disable staff account", status)
 		}

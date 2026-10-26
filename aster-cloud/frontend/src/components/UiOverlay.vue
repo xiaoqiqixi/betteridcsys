@@ -9,6 +9,13 @@ import {
 } from "vue";
 import { X } from "@lucide/vue";
 import { key32 } from "../api/client";
+import {
+  enterOverlay,
+  leaveOverlay,
+  isTopOverlay,
+  overlayPopHandled,
+  handleOverlayPop,
+} from "./overlay-stack";
 const props = withDefaults(
   defineProps<{
     open: boolean;
@@ -26,11 +33,12 @@ const props = withDefaults(
 const emit = defineEmits<{ close: [] }>();
 const id = useId(),
   panel = useTemplateRef<HTMLElement>("panel"),
+  shade = useTemplateRef<HTMLElement>("shade"),
   discard = shallowRef(false);
 let previous: HTMLElement | null = null,
   token = "",
   openedURL = "",
-  savedOverflow = "",
+  layerRoot: HTMLElement | null = null,
   mounted = false;
 function focusables() {
   return [
@@ -40,7 +48,7 @@ function focusables() {
   ].filter((el) => el.getClientRects().length > 0);
 }
 function ask() {
-  if (props.busy) return;
+  if (props.busy || !isTopOverlay(layerRoot)) return;
   if (props.dirty) {
     discard.value = true;
     void nextTick(() =>
@@ -53,7 +61,7 @@ function ask() {
   emit("close");
 }
 function key(event: KeyboardEvent) {
-  if (!props.open) return;
+  if (!props.open || !isTopOverlay(layerRoot)) return;
   if (event.key === "Escape") {
     event.preventDefault();
     if (discard.value) discard.value = false;
@@ -77,8 +85,15 @@ function key(event: KeyboardEvent) {
     }
   }
 }
-function pop() {
-  if (!props.open || history.state?.asterOverlay === token) return;
+function pop(event: PopStateEvent) {
+  if (
+    !props.open ||
+    !isTopOverlay(layerRoot) ||
+    overlayPopHandled(event) ||
+    history.state?.asterOverlay === token
+  )
+    return;
+  handleOverlayPop(event);
   if (props.busy || props.dirty) {
     history.pushState({ ...history.state, asterOverlay: token }, "");
     if (props.dirty && !props.busy) discard.value = true;
@@ -89,6 +104,7 @@ function pop() {
 function focus(event: FocusEvent) {
   if (
     props.open &&
+    isTopOverlay(layerRoot) &&
     event.target instanceof Node &&
     !panel.value?.contains(event.target)
   )
@@ -97,9 +113,8 @@ function focus(event: FocusEvent) {
 function cleanup() {
   if (!mounted) return;
   mounted = false;
-  document.body.style.overflow = savedOverflow;
-  const app = document.getElementById("app");
-  if (app) app.inert = false;
+  const wasTop = layerRoot ? leaveOverlay(layerRoot) : false;
+  layerRoot = null;
   document.removeEventListener("keydown", key);
   document.removeEventListener("focusin", focus);
   window.removeEventListener("popstate", pop);
@@ -111,7 +126,8 @@ function cleanup() {
       history.replaceState(state, "");
     }
   }
-  if (previous?.isConnected) previous.focus();
+  if (wasTop && previous?.isConnected && !previous.closest("[inert]"))
+    previous.focus();
   discard.value = false;
 }
 watch(
@@ -127,12 +143,11 @@ watch(
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    savedOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const app = document.getElementById("app");
-    if (app) app.inert = true;
     token = `cloud-${key32()}`;
     openedURL = location.href;
+    layerRoot = shade.value;
+    if (!layerRoot) return;
+    enterOverlay(layerRoot, token, openedURL);
     history.pushState({ ...history.state, asterOverlay: token }, "");
     mounted = true;
     document.addEventListener("keydown", key);
@@ -149,6 +164,7 @@ onBeforeUnmount(cleanup);
     ><Transition name="overlay"
       ><div
         v-if="open"
+        ref="shade"
         class="overlay-shade"
         :class="{ 'as-drawer': drawer }"
         @click.self="ask"

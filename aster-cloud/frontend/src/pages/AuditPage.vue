@@ -478,6 +478,23 @@ function timeText(raw: string) {
                 <dt>{{ tr("操作对象", "Target") }}</dt>
                 <dd>{{ entry.target }}</dd>
               </div>
+              <template v-if="entry.identity_detail">
+                <div>
+                  <dt>{{ tr("变更说明", "Reason") }}</dt>
+                  <dd>{{ entry.identity_detail.reason }}</dd>
+                </div>
+                <div>
+                  <dt>{{ tr("账户版本", "Account revision") }}</dt>
+                  <dd>
+                    {{ entry.identity_detail.base_revision }} →
+                    {{ entry.identity_detail.result_revision }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ tr("操作 ID", "Operation ID") }}</dt>
+                  <dd>{{ entry.identity_detail.operation_id }}</dd>
+                </div>
+              </template>
             </dl>
           </div>
         </article>

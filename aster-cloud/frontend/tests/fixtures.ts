@@ -37,6 +37,7 @@ export const instance: Instance = {
   updated_at: "2026-10-22T00:00:00Z",
 };
 export const admin: User = {
+  revision: 1,
   id: "c".repeat(32),
   email: "admin@example.invalid",
   name: "测试管理员",

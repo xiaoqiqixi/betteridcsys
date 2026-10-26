@@ -40,7 +40,7 @@ func (c Console) Handler() http.Handler {
 			return
 		}
 		path := r.URL.Path
-		if strings.HasPrefix(path, "/console/v1/auth/") || path == "/console/v1/users" || strings.HasPrefix(path, "/console/v1/users/") || path == "/console/v1/roles" {
+		if strings.HasPrefix(path, "/console/v1/auth/") || path == "/console/v1/users" || strings.HasPrefix(path, "/console/v1/users/") || strings.HasPrefix(path, "/console/v1/identity-operations/") || path == "/console/v1/roles" {
 			c.Identity.Handler().ServeHTTP(w, r)
 			return
 		}
@@ -606,12 +606,20 @@ func (c Console) maintenanceAs(ctx context.Context, actor, node string, on bool)
 }
 
 type ConsoleAudit struct {
-	ID        int64     `json:"id"`
-	Source    string    `json:"source"`
-	Actor     string    `json:"actor"`
-	Action    string    `json:"action"`
-	Target    string    `json:"target"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             int64                `json:"id"`
+	Source         string               `json:"source"`
+	Actor          string               `json:"actor"`
+	Action         string               `json:"action"`
+	Target         string               `json:"target"`
+	CreatedAt      time.Time            `json:"created_at"`
+	IdentityDetail *IdentityAuditDetail `json:"identity_detail,omitempty"`
+}
+
+type IdentityAuditDetail struct {
+	OperationID    string `json:"operation_id"`
+	BaseRevision   uint64 `json:"base_revision"`
+	ResultRevision uint64 `json:"result_revision"`
+	Reason         string `json:"reason"`
 }
 
 func (c Console) audits(w http.ResponseWriter, r *http.Request) {
@@ -645,6 +653,10 @@ func (c Console) audits(w http.ResponseWriter, r *http.Request) {
 		out = out[:100]
 		v := out[len(out)-1]
 		next = q.next(v)
+	}
+	if e = c.Store.attachIdentityAuditDetails(r.Context(), out); e != nil {
+		consoleError(w, e)
+		return
 	}
 	output(w, 200, map[string]any{"items": out, "next_cursor": next})
 }

@@ -51,6 +51,7 @@ func identityCSRFHTTP(t *testing.T, s *Service, token string) string {
 
 func identityHTTPMutation(t *testing.T, s *Service, token, method, path string, value any) *httptest.ResponseRecorder {
 	t.Helper()
+	value = identityFixtureInput(t, s, method, path, value)
 	b, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +61,8 @@ func identityHTTPMutation(t *testing.T, s *Service, token, method, path string, 
 	r.Header.Set("Origin", s.origin)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-CSRF-Token", identityCSRFHTTP(t, s, token))
+	k, _ := randomToken()
+	r.Header.Set("Idempotency-Key", k[:32])
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	return w
@@ -67,6 +70,7 @@ func identityHTTPMutation(t *testing.T, s *Service, token, method, path string, 
 
 func queuedIdentityMutation(t *testing.T, s *Service, token, method, path string, value any) (func(), func() *httptest.ResponseRecorder) {
 	t.Helper()
+	value = identityFixtureInput(t, s, method, path, value)
 	b, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +82,8 @@ func queuedIdentityMutation(t *testing.T, s *Service, token, method, path string
 	r.Header.Set("Origin", s.origin)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-CSRF-Token", identityCSRFHTTP(t, s, token))
+	k, _ := randomToken()
+	r.Header.Set("Idempotency-Key", k[:32])
 	w := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() { defer close(done); s.Handler().ServeHTTP(w, r) }()
@@ -121,6 +127,36 @@ func requireIdentity401(t *testing.T, response *httptest.ResponseRecorder) {
 	if response.Code != 401 || json.Unmarshal(response.Body.Bytes(), &body) != nil || body.Error.Code != "AUTH_REQUIRED" || !strings.HasPrefix(response.Header().Get("Content-Type"), "application/json") {
 		t.Fatalf("revoked queued write must return complete HTTP 401 AUTH_REQUIRED, got %d", response.Code)
 	}
+}
+
+// B1 keeps its HTTP/session-race seam but uses the current strict identity wire
+// contract. B's malformed-input tests use a separate raw helper without defaults.
+func identityFixtureInput(t *testing.T, s *Service, method, path string, value any) any {
+	t.Helper()
+	if !strings.HasPrefix(path, "/console/v1/users") || method == "GET" {
+		return value
+	}
+	b, e := json.Marshal(value)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var v map[string]any
+	if json.Unmarshal(b, &v) != nil {
+		t.Fatal("fixture input is not an object")
+	}
+	if _, ok := v["reason"]; !ok {
+		v["reason"] = "Isolated HTTP session fixture"
+	}
+	if method == "PATCH" {
+		if _, ok := v["revision"]; !ok {
+			var rev uint64
+			if e = s.db.QueryRow("SELECT revision FROM controller_console_users WHERE id=?", strings.TrimPrefix(path, "/console/v1/users/")).Scan(&rev); e != nil {
+				t.Fatal(e)
+			}
+			v["revision"] = rev
+		}
+	}
+	return v
 }
 
 func TestMySQLQueuedIdentityWritesRecheckSession(t *testing.T) {

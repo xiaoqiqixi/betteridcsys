@@ -15,6 +15,7 @@ import MigrationWizard from "../src/components/MigrationWizard.vue";
 import NavLinks from "../src/components/NavLinks.vue";
 import { instance, node, operation, resources } from "./fixtures";
 import { mockContext } from "./helpers";
+import { identityFixtureResponse } from "./identity-fixtures";
 vi.stubGlobal("crypto", webcrypto);
 const wrappers: Array<{ unmount: () => void }> = [];
 const options = (context: ReturnType<typeof mockContext>["context"]) => ({
@@ -34,6 +35,7 @@ const options = (context: ReturnType<typeof mockContext>["context"]) => ({
   },
 });
 beforeEach(() => {
+  sessionStorage.clear();
   vi.spyOn(history, "back").mockImplementation(() => {});
   Element.prototype.scrollIntoView = vi.fn();
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(
@@ -358,14 +360,9 @@ describe("user role editor boundaries", () => {
   it("sends fixed roles without a permissions field and never persists the entered password", async () => {
     const { default: UserEditor } =
       await import("../src/components/UserEditor.vue");
-    const { context, calls } = mockContext((_m, _p, body) => ({
-      user: {
-        ...context.session.user.value!,
-        ...(body as object),
-        id: "e".repeat(32),
-        permissions: ["instances.read"],
-      },
-    }));
+    const { context, calls } = mockContext((_m, _p, body, key) =>
+      identityFixtureResponse("identity.user_created", key, body),
+    );
     const wrapper = mount(UserEditor, {
       ...options(context),
       props: {
@@ -379,10 +376,10 @@ describe("user role editor boundaries", () => {
     });
     wrappers.push(wrapper);
     await flushPromises();
-    const inputs = wrapper.findAll("input");
-    await inputs[0]!.setValue("New member");
-    await inputs[1]!.setValue("new@example.invalid");
-    await inputs[2]!.setValue("NeverPersist123!");
+    await wrapper.get("input[type=text]").setValue("New member");
+    await wrapper.get("input[type=email]").setValue("new@example.invalid");
+    await wrapper.get("input[type=password]").setValue("NeverPersist123!");
+    await wrapper.get("textarea").setValue("Provision limited member access");
     await wrapper.get("form").trigger("submit");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.body).toEqual({
@@ -390,23 +387,19 @@ describe("user role editor boundaries", () => {
       email: "new@example.invalid",
       role: "viewer",
       password: "NeverPersist123!",
+      reason: "Provision limited member access",
     });
-    expect(sessionStorage.getItem("aster.cloud.pending.v1")).not.toContain(
-      "NeverPersist",
-    );
+    expect(
+      sessionStorage.getItem("aster.cloud.identity.pending.v1"),
+    ).not.toContain("NeverPersist");
     expect(calls[0]?.method).toBe("POST");
   });
   it("requires custom permissions explicitly, including empty grants, and dirty cancel does not silently discard", async () => {
     const { default: UserEditor } =
       await import("../src/components/UserEditor.vue");
-    const { context, calls } = mockContext((_m, _p, body) => ({
-      user: {
-        ...context.session.user.value!,
-        ...(body as object),
-        id: "f".repeat(32),
-        permissions: [],
-      },
-    }));
+    const { context, calls } = mockContext((_m, _p, body, key) =>
+      identityFixtureResponse("identity.user_created", key, body),
+    );
     const wrapper = mount(UserEditor, {
       ...options(context),
       props: {
@@ -420,10 +413,12 @@ describe("user role editor boundaries", () => {
     });
     wrappers.push(wrapper);
     await flushPromises();
-    const inputs = wrapper.findAll("input");
-    await inputs[0]!.setValue("Restricted");
-    await inputs[1]!.setValue("limited@example.invalid");
-    await inputs[2]!.setValue("NeverPersist456!");
+    await wrapper.get("input[type=text]").setValue("Restricted");
+    await wrapper.get("input[type=email]").setValue("limited@example.invalid");
+    await wrapper.get("input[type=password]").setValue("NeverPersist456!");
+    await wrapper
+      .get("textarea")
+      .setValue("Create explicitly empty custom access");
     const select = wrapper.get("[role=combobox]");
     await select.trigger("keydown", { key: "ArrowDown" });
     await select.trigger("keydown", { key: "End" });

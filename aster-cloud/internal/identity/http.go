@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -28,6 +29,12 @@ func failure(w http.ResponseWriter, status int, code string) {
 }
 func identityError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrRevision):
+		failure(w, 409, "REVISION_CONFLICT")
+	case errors.Is(err, ErrRevisionLimit):
+		failure(w, 409, "REVISION_LIMIT")
+	case errors.Is(err, ErrOperationUsed):
+		failure(w, 409, "OPERATION_USED")
 	case errors.Is(err, ErrInput):
 		failure(w, 400, "INVALID_INPUT")
 	case errors.Is(err, ErrConflict):
@@ -321,7 +328,70 @@ func (s *Service) Handler() http.Handler {
 			}
 			s.Require("users.manage", http.HandlerFunc(s.users)).ServeHTTP(w, r)
 		default:
+			if strings.HasPrefix(path, "/console/v1/identity-operations/") && validID(strings.TrimPrefix(path, "/console/v1/identity-operations/")) {
+				if r.Method != "GET" {
+					failure(w, 405, "METHOD_NOT_ALLOWED")
+					return
+				}
+				s.Require("users.manage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					v, err := s.readIdentityOperation(r.Context(), strings.TrimPrefix(r.URL.Path, "/console/v1/identity-operations/"))
+					if err != nil {
+						identityError(w, err)
+						return
+					}
+					output(w, 200, map[string]any{"operation": v})
+				})).ServeHTTP(w, r)
+				return
+			}
+			if strings.HasPrefix(path, "/console/v1/users/") && strings.HasSuffix(path, "/revoke-sessions") {
+				target := strings.TrimSuffix(strings.TrimPrefix(path, "/console/v1/users/"), "/revoke-sessions")
+				if !validID(target) {
+					failure(w, 404, "NOT_FOUND")
+					return
+				}
+				if r.Method != "POST" {
+					failure(w, 405, "METHOD_NOT_ALLOWED")
+					return
+				}
+				s.Require("users.manage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var in RevokeSessions
+					if decode(r, &in) != nil {
+						failure(w, 400, "INVALID_INPUT")
+						return
+					}
+					ctx, err := operationRequest(r)
+					if err != nil {
+						identityError(w, err)
+						return
+					}
+					a, _ := Actor(ctx)
+					u, err := s.revokeSessions(ctx, a.ID, target, in)
+					if err != nil {
+						identityError(w, err)
+						return
+					}
+					if a.ID == u.ID {
+						s.clearCookie(w)
+					}
+					s.identityWriteOutput(w, ctx, u, 200)
+				})).ServeHTTP(w, r)
+				return
+			}
 			if strings.HasPrefix(path, "/console/v1/users/") && validID(strings.TrimPrefix(path, "/console/v1/users/")) {
+				if r.Method == "GET" {
+					s.Require("users.manage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						u, err := scanUser(s.db.QueryRowContext(r.Context(), "SELECT "+userColumns+" FROM controller_console_users WHERE id=?", strings.TrimPrefix(r.URL.Path, "/console/v1/users/")))
+						if errors.Is(err, sql.ErrNoRows) {
+							err = ErrNotFound
+						}
+						if err != nil {
+							identityError(w, err)
+							return
+						}
+						output(w, 200, map[string]any{"user": u})
+					})).ServeHTTP(w, r)
+					return
+				}
 				if r.Method != "PATCH" {
 					failure(w, 405, "METHOD_NOT_ALLOWED")
 					return
@@ -354,12 +424,17 @@ func (s *Service) users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := Actor(r.Context())
-	u, err := s.createUser(r.Context(), actor.ID, in)
+	ctx, err := operationRequest(r)
 	if err != nil {
 		identityError(w, err)
 		return
 	}
-	output(w, 201, map[string]any{"user": u})
+	u, err := s.createUser(ctx, actor.ID, in)
+	if err != nil {
+		identityError(w, err)
+		return
+	}
+	s.identityWriteOutput(w, ctx, u, 201)
 }
 func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 	var in UpdateUser
@@ -368,10 +443,29 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := Actor(r.Context())
-	u, err := s.updateUser(r.Context(), actor.ID, strings.TrimPrefix(r.URL.Path, "/console/v1/users/"), in)
+	ctx, err := operationRequest(r)
 	if err != nil {
 		identityError(w, err)
 		return
 	}
-	output(w, 200, map[string]any{"user": u})
+	u, err := s.updateUser(ctx, actor.ID, strings.TrimPrefix(r.URL.Path, "/console/v1/users/"), in)
+	if err != nil {
+		identityError(w, err)
+		return
+	}
+	s.identityWriteOutput(w, ctx, u, 200)
+}
+
+func (s *Service) identityWriteOutput(w http.ResponseWriter, ctx context.Context, u User, status int) {
+	k, err := identityKey(ctx)
+	if err != nil {
+		identityError(w, err)
+		return
+	}
+	op, err := s.operationByID(ctx, k)
+	if err != nil {
+		identityError(w, err)
+		return
+	}
+	output(w, status, map[string]any{"user": u, "operation": op})
 }

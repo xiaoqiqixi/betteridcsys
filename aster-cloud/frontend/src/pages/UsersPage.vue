@@ -10,6 +10,7 @@ import UiButton from "../components/UiButton.vue";
 import StateBlock from "../components/StateBlock.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import UserEditor from "../components/UserEditor.vue";
+import IdentityPendingTray from "../components/IdentityPendingTray.vue";
 const {
   prefs: { tr },
   session,
@@ -110,6 +111,7 @@ async function saved() {
         >
       </div>
     </header>
+    <IdentityPendingTray @verified="list.reload()" />
     <StateBlock
       :loading="(!list.data.value && list.loading.value) || roles.loading.value"
       :error="(!list.data.value && list.error.value) || roles.error.value"

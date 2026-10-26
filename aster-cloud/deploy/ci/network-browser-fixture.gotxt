@@ -420,6 +420,7 @@ func seedOwnedBrowserMembers(t *testing.T, ctx context.Context, store *SQLStore,
 		r.RemoteAddr = "127.0.0.1:45455"
 		if method != "GET" {
 			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Idempotency-Key", id())
 			r.Header.Set("Origin", origin)
 			r.Header.Set("X-CSRF-Token", csrf)
 		}
@@ -451,7 +452,7 @@ func seedOwnedBrowserMembers(t *testing.T, ctx context.Context, store *SQLStore,
 		t.Fatal("member seed administrator authentication unavailable")
 	}
 	out := ownedBrowserMembers{Count: 205, IDs: []string{}, ViewerEmail: "members-viewer@example.invalid", ViewerPassword: "Browser-Members-" + id() + "!"}
-	created := request("POST", "/users", identity.CreateUser{Email: out.ViewerEmail, Name: "只读成员验收", Password: out.ViewerPassword, Role: "viewer"}, cookies[0], session.CSRF, 201)
+	created := request("POST", "/users", identity.CreateUser{Email: out.ViewerEmail, Name: "只读成员验收", Password: out.ViewerPassword, Role: "viewer", Reason: "隔离浏览器成员只读验收准备"}, cookies[0], session.CSRF, 201)
 	var viewer struct {
 		User identity.User `json:"user"`
 	}

@@ -13,16 +13,19 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-const userColumns = "id,email,name,role,enabled,permissions"
+const userColumns = "id,email,name,role,enabled,permissions,revision"
 
 type scanner interface{ Scan(...any) error }
 
 func scanUser(row scanner, extra ...any) (User, error) {
 	var u User
 	var raw []byte
-	fields := append([]any{&u.ID, &u.Email, &u.Name, &u.Role, &u.Enabled, &raw}, extra...)
+	fields := append([]any{&u.ID, &u.Email, &u.Name, &u.Role, &u.Enabled, &raw, &u.Revision}, extra...)
 	if err := row.Scan(fields...); err != nil {
 		return User{}, err
+	}
+	if u.Revision < 1 || u.Revision > maxIdentityRevision {
+		return User{}, ErrStoredState
 	}
 	var stored []string
 	if err := json.Unmarshal(raw, &stored); err != nil {
@@ -107,7 +110,7 @@ func insertUser(ctx context.Context, tx *sql.Tx, email, name, hash, role string,
 	if err != nil {
 		return User{}, err
 	}
-	u := User{ID: token[:32], Email: email, Name: name, Role: role, Enabled: true, Permissions: p}
+	u := User{ID: token[:32], Email: email, Name: name, Role: role, Enabled: true, Permissions: p, Revision: 1}
 	raw, _ := json.Marshal(p)
 	_, err = tx.ExecContext(ctx, "INSERT INTO controller_console_users(id,email,name,password_hash,role,enabled,permissions,created_at,updated_at) VALUES(?,?,?,?,?,TRUE,?,?,?)", u.ID, u.Email, u.Name, hash, u.Role, raw, now, now)
 	return u, conflict(err)
@@ -152,6 +155,12 @@ func (s *Service) createUser(ctx context.Context, actorID string, in CreateUser)
 	if _, err := managerSession(ctx, actorID); err != nil {
 		return User{}, err
 	}
+	if _, err := identityKey(ctx); err != nil || !validIdentityReason(in.Reason) {
+		return User{}, ErrInput
+	}
+	if identityIntentContainsPassword(createIdentityIntent(in), in.Password) {
+		return User{}, ErrInput
+	}
 	email, err := normalizeEmail(in.Email)
 	if err != nil || !validName(in.Name) {
 		return User{}, ErrInput
@@ -175,6 +184,9 @@ func (s *Service) createUser(ctx context.Context, actorID string, in CreateUser)
 	if err != nil {
 		return User{}, err
 	}
+	if err = unusedIdentityKey(ctx, tx); err != nil {
+		return User{}, err
+	}
 	p, _ := permissions(in.Role, in.Permissions)
 	if !mayManage(actor, nil, User{Role: in.Role, Permissions: p}) {
 		return User{}, ErrForbidden
@@ -183,7 +195,7 @@ func (s *Service) createUser(ctx context.Context, actorID string, in CreateUser)
 	if err != nil {
 		return User{}, err
 	}
-	if err = audit(ctx, tx, actorID, "identity.user_created", u.ID, s.now()); err != nil {
+	if err = finishIdentityOperation(ctx, tx, actorID, u, "identity.user_created", 0, createIdentityIntent(in), s.now()); err != nil {
 		return User{}, err
 	}
 	return u, tx.Commit()
@@ -195,6 +207,12 @@ func validID(id string) bool {
 func (s *Service) updateUser(ctx context.Context, actorID, target string, in UpdateUser) (User, error) {
 	if _, err := managerSession(ctx, actorID); err != nil {
 		return User{}, err
+	}
+	if _, err := identityKey(ctx); err != nil || !validIdentityReason(in.Reason) || in.Revision < 1 || in.Revision > maxIdentityRevision {
+		return User{}, ErrInput
+	}
+	if in.Password != nil && identityIntentContainsPassword(updateIdentityIntent(in), *in.Password) {
+		return User{}, ErrInput
 	}
 	if !validID(target) || (in.Email == nil && in.Name == nil && in.Password == nil && in.Role == nil && in.Enabled == nil && in.Permissions == nil) {
 		return User{}, ErrInput
@@ -217,6 +235,9 @@ func (s *Service) updateUser(ctx context.Context, actorID, target string, in Upd
 	}
 	actor, err := s.authorizedManager(ctx, tx, actorID)
 	if err != nil {
+		return User{}, err
+	}
+	if err = unusedIdentityKey(ctx, tx); err != nil {
 		return User{}, err
 	}
 	u, err := scanUser(tx.QueryRowContext(ctx, "SELECT "+userColumns+" FROM controller_console_users WHERE id=?", target))
@@ -265,6 +286,13 @@ func (s *Service) updateUser(ctx context.Context, actorID, target string, in Upd
 	if actorID == target && (securityChanged || !u.Enabled) {
 		return User{}, ErrForbidden
 	}
+	if original.Revision != in.Revision {
+		return User{}, ErrRevision
+	}
+	if original.Revision == maxIdentityRevision {
+		return User{}, ErrRevisionLimit
+	}
+	u.Revision++
 	if original.Role == "admin" && original.Enabled && (u.Role != "admin" || !u.Enabled) {
 		var count int
 		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM controller_console_users WHERE role='admin' AND enabled=TRUE").Scan(&count); err != nil {
@@ -274,13 +302,17 @@ func (s *Service) updateUser(ctx context.Context, actorID, target string, in Upd
 			return User{}, ErrForbidden
 		}
 	}
+	var result sql.Result
 	if in.Password == nil {
-		_, err = tx.ExecContext(ctx, "UPDATE controller_console_users SET email=?,name=?,role=?,enabled=?,permissions=?,updated_at=? WHERE id=?", u.Email, u.Name, u.Role, u.Enabled, nextP, s.now(), u.ID)
+		result, err = tx.ExecContext(ctx, "UPDATE controller_console_users SET email=?,name=?,role=?,enabled=?,permissions=?,updated_at=?,revision=? WHERE id=? AND revision=?", u.Email, u.Name, u.Role, u.Enabled, nextP, s.now(), u.Revision, u.ID, original.Revision)
 	} else {
-		_, err = tx.ExecContext(ctx, "UPDATE controller_console_users SET email=?,name=?,role=?,enabled=?,permissions=?,password_hash=?,updated_at=? WHERE id=?", u.Email, u.Name, u.Role, u.Enabled, nextP, hash, s.now(), u.ID)
+		result, err = tx.ExecContext(ctx, "UPDATE controller_console_users SET email=?,name=?,role=?,enabled=?,permissions=?,password_hash=?,updated_at=?,revision=? WHERE id=? AND revision=?", u.Email, u.Name, u.Role, u.Enabled, nextP, hash, s.now(), u.Revision, u.ID, original.Revision)
 	}
 	if err != nil {
 		return User{}, conflict(err)
+	}
+	if n, e := result.RowsAffected(); e != nil || n != 1 {
+		return User{}, ErrRevision
 	}
 	// A security or credential change invalidates every session immediately.
 	if securityChanged || in.Password != nil || original.Email != u.Email {
@@ -288,7 +320,7 @@ func (s *Service) updateUser(ctx context.Context, actorID, target string, in Upd
 			return User{}, err
 		}
 	}
-	if err = audit(ctx, tx, actorID, "identity.user_updated", u.ID, s.now()); err != nil {
+	if err = finishIdentityOperation(ctx, tx, actorID, u, "identity.user_updated", original.Revision, updateIdentityIntent(in), s.now()); err != nil {
 		return User{}, err
 	}
 	return u, tx.Commit()
@@ -462,7 +494,8 @@ func (s *Service) login(ctx context.Context, email, password, oldToken, addr str
 		return User{}, "", err
 	}
 	var uid, hash string
-	err = s.db.QueryRowContext(ctx, "SELECT id,password_hash FROM controller_console_users WHERE email=?", normalized).Scan(&uid, &hash)
+	var revision uint64
+	err = s.db.QueryRowContext(ctx, "SELECT id,password_hash,revision FROM controller_console_users WHERE email=?", normalized).Scan(&uid, &hash, &revision)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return User{}, "", err
 	}
@@ -488,7 +521,7 @@ func (s *Service) login(ctx context.Context, email, password, oldToken, addr str
 			return User{}, "", err
 		}
 	}
-	if !valid || lookupErr != nil || !u.Enabled || currentHash != hash {
+	if !valid || lookupErr != nil || !u.Enabled || currentHash != hash || revision < 1 || u.Revision != revision {
 		target := tokenHash(normalized)
 		if err = audit(ctx, tx, "anonymous", "identity.login_failed", hex.EncodeToString(target[:]), s.now()); err != nil {
 			return User{}, "", err

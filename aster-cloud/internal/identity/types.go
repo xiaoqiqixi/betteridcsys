@@ -21,6 +21,10 @@ var (
 	ErrNotFound       = errors.New("identity not found")
 	ErrAuthentication = errors.New("authentication required")
 	ErrRateLimited    = errors.New("login rate limited")
+	ErrRevision       = errors.New("identity revision conflict")
+	ErrRevisionLimit  = errors.New("identity revision exhausted")
+	ErrOperationUsed  = errors.New("identity operation already used")
+	ErrStoredState    = errors.New("invalid stored identity state")
 )
 
 var allPermissions = []string{"audit.read", "instances.dangerous", "instances.manage", "instances.read", "migration.manage", "nodes.manage", "nodes.read", "settings.manage", "storage.manage", "storage.read", "storage.restore", "users.manage"}
@@ -34,6 +38,7 @@ type User struct {
 	Role        string   `json:"role"`
 	Enabled     bool     `json:"enabled"`
 	Permissions []string `json:"permissions"`
+	Revision    uint64   `json:"revision"`
 }
 
 func (u User) Can(permission string) bool {
@@ -148,8 +153,11 @@ type CreateUser struct {
 	Password    string   `json:"password"`
 	Role        string   `json:"role"`
 	Permissions []string `json:"permissions,omitempty"`
+	Reason      string   `json:"reason"`
 }
 type UpdateUser struct {
+	Revision    uint64    `json:"revision"`
+	Reason      string    `json:"reason"`
 	Email       *string   `json:"email,omitempty"`
 	Name        *string   `json:"name,omitempty"`
 	Password    *string   `json:"password,omitempty"`

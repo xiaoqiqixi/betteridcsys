@@ -135,6 +135,52 @@ function removePending(slot: string) {
   next.delete(slot);
   return saveLedger(next);
 }
+// Legacy identity writes shared this opaque ledger with other operations.
+// Their fingerprints cannot be mapped back to an account or reconciled using
+// the new receipt protocol. Preserve them and fail closed, rather than permit
+// a changed reason/revision to bypass an unknown pre-upgrade write.
+export function legacyIdentityBarrier(
+  owner: string,
+): "blocked" | "legacy" | "" {
+  try {
+    const raw = sessionStorage.getItem("aster.cloud.pending.v1") ?? "[]";
+    if (!withinBudget(raw)) return "blocked";
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return "blocked";
+    const slots = new Set<string>();
+    let barrier = false;
+    for (const p of value) {
+      if (
+        !record(p) ||
+        typeof p.owner !== "string" ||
+        !p.owner ||
+        typeof p.fingerprint !== "string" ||
+        !/^[a-f0-9]{64}$/.test(p.fingerprint) ||
+        typeof p.key !== "string" ||
+        !/^[a-f0-9]{32}$/.test(p.key) ||
+        (p.purpose !== undefined &&
+          !["creation", "dispatch", "reconcile", "other"].includes(
+            p.purpose as string,
+          )) ||
+        (p.binding !== undefined &&
+          (!validBinding(p.binding) || p.binding.id !== p.key))
+      )
+        return "blocked";
+      const slot = `${p.owner}:${p.fingerprint}`;
+      if (slots.has(slot)) return "blocked";
+      slots.add(slot);
+      if (
+        p.owner === owner &&
+        (!p.purpose || p.purpose === "other") &&
+        !p.binding
+      )
+        barrier = true;
+    }
+    return barrier ? "legacy" : "";
+  } catch {
+    return "blocked";
+  }
+}
 // The owner is the requester of this pending write, not necessarily the task's
 // immutable creator. Legacy writes without a full binding remain unresolved.
 export function acknowledgeOperations(

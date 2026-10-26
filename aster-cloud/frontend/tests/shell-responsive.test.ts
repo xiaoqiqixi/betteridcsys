@@ -79,6 +79,7 @@ async function shellFixture(compact = true) {
   });
   vi.stubGlobal("matchMedia", matchMedia);
   const viewer: User = {
+    revision: 1,
     id: "d".repeat(32),
     email: "shell-viewer@example.invalid",
     name: "Synthetic read-only member",

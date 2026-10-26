@@ -16,6 +16,7 @@ cloud=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 ci="$cloud/deploy/ci"
 python3 -B "$ci/test_members_browser_contract.py"
 node --test "$ci/members-browser.test.mjs"
+node --test "$ci/identity-browser.test.mjs"
 [[ -f $cloud/frontend/dist/index.html ]] || fail 'Build the real frontend before browser acceptance.'
 [[ -f $ci/network-browser.mjs ]] || fail 'The required UI acceptance script is missing.'
 scratch=$(mktemp -d "$RUNNER_TEMP/aster-network-browser.XXXXXXXX")
@@ -139,7 +140,9 @@ import json, pathlib, sys
 cloud, scratch = map(pathlib.Path, sys.argv[1:])
 (scratch / 'go-overlay.json').write_text(json.dumps({'Replace': {
     str(cloud / 'internal/control/owned_nat_browser_fixture_test.go'):
-    str(cloud / 'deploy/ci/network-browser-fixture.gotxt')
+    str(cloud / 'deploy/ci/network-browser-fixture.gotxt'),
+    str(cloud / 'internal/control/owned_identity_browser_fixture_test.go'):
+    str(cloud / 'deploy/ci/identity-browser-fixture.gotxt')
 }}))
 PY
 (cd "$cloud" && go test -mod=readonly -race -overlay "$scratch/go-overlay.json" -c -o "$scratch/browser.test" ./internal/control)
@@ -316,3 +319,32 @@ for path in output.iterdir():
 shutil.copyfile(source, output / 'fixture.json')
 PY
 printf 'PASS: actual desktop/mobile browser with strict TLS, real MySQL, UI plan/reconcile/recovery and immutable history. Node RPC is simulated; this is not KVM/dataplane acceptance.\n'
+
+# W07-B has its OWN database and result contract. Do not permit account writes
+# in, or remove the history digest from, the original 205-member read-only gate.
+export BROWSER_ARTIFACT_DIR="$cloud/artifacts/network-browser/identity"
+mkdir "$BROWSER_ARTIFACT_DIR" || fail 'Refuse to mix identity browser evidence.'
+rm -- "$scratch/stop-browser" "$scratch/browser-credentials.json"
+fixture_done=false
+fixture_status=''
+(cd "$cloud/internal/control" && exec "$scratch/browser.test" -test.v -test.count=1 -test.timeout=10m -test.run '^TestOwnedIdentityBrowserFixture$') >"$scratch/identity-fixture.log" 2>&1 &
+fixture_pid=$!
+ready=false
+for ((attempt=0;attempt<900;attempt++)); do
+  if ! kill -0 "$fixture_pid" 2>/dev/null; then break; fi
+  if [[ -s $BROWSER_CREDENTIALS_FILE ]] && grep -q 'READY: identity loopback HTTPS' "$scratch/identity-fixture.log"; then ready=true; break; fi
+  sleep 0.1
+done
+[[ $ready == true ]] || fail 'Independent identity fixture did not become ready; private diagnostics withheld.'
+# The same one-day localhost certificate and ONLY the disposable NSS profile
+# remain in use. No additional host trust, TLS exception or public listener.
+curl --fail --silent --show-error --cacert "$scratch/ca.pem" --resolve localhost:5447:127.0.0.1 --max-time 10 "$BASE_URL/" -o /dev/null
+identity_browser_status=0
+node "$ci/identity-browser.mjs" >"$scratch/identity-browser.log" 2>&1 || identity_browser_status=$?
+stop_fixture
+[[ $identity_browser_status == 0 ]] || fail 'Identity browser acceptance failed; inspect only its sanitized report.json.'
+[[ $fixture_status == 0 ]] || fail 'Independent identity durable-history acceptance failed; private diagnostics withheld.'
+grep -q '^--- PASS: TestOwnedIdentityBrowserFixture ' "$scratch/identity-fixture.log" || fail 'Required identity fixture did not pass.'
+if grep -qE -- '--- (SKIP|FAIL):' "$scratch/identity-fixture.log"; then fail 'Identity fixture must never skip or fail.'; fi
+cp -- "$scratch/identity-fixture.json" "$BROWSER_ARTIFACT_DIR/fixture.json"
+node "$ci/identity-browser-contract.mjs" "$BROWSER_ARTIFACT_DIR"

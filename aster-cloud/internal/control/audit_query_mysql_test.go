@@ -81,6 +81,33 @@ func auditExpectedRows(t *testing.T, s *SQLStore) []ConsoleAudit {
 			t.Fatal(e)
 		}
 	}
+	// Expected optional identity details come directly from the persisted test
+	// operation facts, independently of the production page enrichment helper.
+	proofRows, e := s.DB.Query("SELECT audit_id,operation_id,base_revision,result_revision,reason FROM controller_identity_operations")
+	if e != nil {
+		t.Fatal(e)
+	}
+	proofs := map[int64]IdentityAuditDetail{}
+	for proofRows.Next() {
+		var id int64
+		var p IdentityAuditDetail
+		if e = proofRows.Scan(&id, &p.OperationID, &p.BaseRevision, &p.ResultRevision, &p.Reason); e != nil {
+			proofRows.Close()
+			t.Fatal(e)
+		}
+		proofs[id] = p
+	}
+	e = proofRows.Err()
+	proofRows.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i := range out {
+		if p, ok := proofs[out[i].ID]; ok && out[i].Source == "identity" {
+			copy := p
+			out[i].IdentityDetail = &copy
+		}
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].CreatedAt.After(out[j].CreatedAt)

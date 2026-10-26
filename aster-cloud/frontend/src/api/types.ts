@@ -5,6 +5,7 @@ export interface User {
   role: string;
   enabled: boolean;
   permissions: string[];
+  revision: number;
 }
 export interface Session {
   user: User;
@@ -123,6 +124,12 @@ export interface Audit {
   action: string;
   target: string;
   created_at: string;
+  identity_detail?: {
+    operation_id: string;
+    base_revision: number;
+    result_revision: number;
+    reason: string;
+  };
 }
 export interface OperationInput {
   action: Action;

@@ -1,14 +1,36 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import {
+  computed,
+  onScopeDispose,
+  reactive,
+  shallowRef,
+  useId,
+  watch,
+} from "vue";
 import type { Role, User } from "../api/types";
+import { ApiError, userResponse } from "../api/client";
+import {
+  identityReason,
+  publicIdentityIntent,
+  validActionIntent,
+} from "../api/identity";
 import { useConsole } from "../context";
-import { useMutation } from "../composables/mutation";
-import { userResponse } from "../api/client";
+import { useIdentityMutation } from "../composables/identity-mutation";
+import {
+  identityFieldLabels,
+  identityNoticeLabels,
+  identityRevocationLabels,
+} from "../identity-copy";
 import { permissionNames } from "../format";
 import UiOverlay from "./UiOverlay.vue";
-import UiSelect from "./UiSelect.vue";
 import UiButton from "./UiButton.vue";
+import StateBlock from "./StateBlock.vue";
 import InlineError from "./InlineError.vue";
+import IdentityEditorFields, {
+  type IdentityEditorModel,
+} from "./IdentityEditorFields.vue";
+import IdentityOperationNotice from "./IdentityOperationNotice.vue";
+import IdentitySessionRevocation from "./IdentitySessionRevocation.vue";
 const props = defineProps<{
   open: boolean;
   user: User | null;
@@ -16,20 +38,33 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const {
-  prefs: { tr },
-  notify,
-  session,
-} = useConsole();
-const mutation = useMutation();
-const form = reactive({
+    api,
+    session,
+    prefs: { tr },
+    notify,
+  } = useConsole(),
+  mutation = useIdentityMutation(),
+  id = useId();
+const form = reactive<IdentityEditorModel>({
   name: "",
   email: "",
   password: "",
   role: "viewer",
   enabled: true,
-  permissions: [] as string[],
+  permissions: [],
+  reason: "",
 });
-let original = "";
+const latest = shallowRef<User | null>(null),
+  loading = shallowRef(false),
+  loadError = shallowRef("");
+const revokeOpen = shallowRef(false),
+  revokeReason = shallowRef("");
+let original = "",
+  ticket = 0,
+  abort: AbortController | undefined;
+const self = computed(
+  () => !!latest.value && latest.value.id === session.user.value?.id,
+);
 const roleNames: Record<string, [string, string]> = {
   admin: ["管理员", "Administrator"],
   operator: ["操作员", "Operator"],
@@ -48,74 +83,231 @@ const options = computed(() =>
       label: roleNames[r.id] ? tr(...roleNames[r.id]!) : r.name,
     })),
 );
-const grants = computed(() =>
+const permissionOptions = computed(() =>
   [...new Set(props.roles.flatMap((r) => r.permissions))]
     .filter((p) => session.can(p))
-    .sort(),
+    .sort()
+    .map((value) => ({
+      value,
+      label: permissionNames[value] ? tr(...permissionNames[value]!) : value,
+    })),
 );
+const shownForm = computed(() => ({
+  ...form,
+  permissions:
+    form.role === "custom"
+      ? [...form.permissions]
+      : [...(props.roles.find((r) => r.id === form.role)?.permissions ?? [])],
+}));
+const fieldLabels = computed(() =>
+    identityFieldLabels(tr, !!props.user, form.role === "custom"),
+  ),
+  noticeLabels = computed(() => identityNoticeLabels(tr)),
+  revokeLabels = computed(() => identityRevocationLabels(tr));
 const dirty = computed(() => original !== JSON.stringify(form));
-const valid = computed(
+const profileChanged = computed(() => {
+  if (!latest.value) return true;
+  const u = latest.value;
+  return (
+    form.name !== u.name ||
+    form.email !== u.email ||
+    !!form.password ||
+    form.role !== u.role ||
+    form.enabled !== u.enabled ||
+    (form.role === "custom" &&
+      JSON.stringify([...form.permissions].sort()) !==
+        JSON.stringify(u.permissions))
+  );
+});
+const pending = computed(() =>
+  mutation.pending.value.find((p) =>
+    props.user
+      ? p.target === props.user.id
+      : p.action === "identity.user_created" &&
+        p.target === form.email.trim().toLowerCase(),
+  ),
+);
+const noticeState = computed(() =>
+  mutation.busy.value
+    ? "busy"
+    : mutation.blocked.value
+      ? "blocked"
+      : pending.value
+        ? "uncertain"
+        : mutation.error.value === "revision"
+          ? "conflict"
+          : null,
+);
+const managerAllowed = computed(
   () =>
-    form.name.length > 0 &&
-    form.name.trim() === form.name &&
-    [...form.name].length <= 100 &&
-    /^[^\s@]+@[^\s@]+$/.test(form.email) &&
-    new TextEncoder().encode(form.email).length <= 254 &&
-    options.value.some((r) => r.value === form.role) &&
-    (props.user
-      ? !form.password || new TextEncoder().encode(form.password).length >= 12
-      : new TextEncoder().encode(form.password).length >= 12),
+    !latest.value ||
+    session.user.value?.role === "admin" ||
+    (latest.value.role !== "admin" &&
+      latest.value.permissions.every((p) => session.can(p))),
 );
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      Object.assign(form, {
-        name: props.user?.name || "",
-        email: props.user?.email || "",
-        password: "",
-        role: props.user?.role || "viewer",
-        enabled: props.user?.enabled ?? true,
-        permissions:
-          props.user?.role === "custom" ? [...props.user.permissions] : [],
-      });
-      original = JSON.stringify(form);
-      mutation.clearMessage();
-    } else form.password = "";
-  },
-  { immediate: true },
+const frozen = computed(
+  () =>
+    loading.value ||
+    !!loadError.value ||
+    !managerAllowed.value ||
+    mutation.unavailable.value ||
+    mutation.busy.value ||
+    !!mutation.inspecting.value ||
+    !!pending.value ||
+    mutation.error.value === "revision",
 );
-function toggle(value: string) {
-  form.permissions = form.permissions.includes(value)
-    ? form.permissions.filter((p) => p !== value)
-    : [...form.permissions, value].sort();
+function update(value: IdentityEditorModel) {
+  if (frozen.value) return;
+  const roleChanged = value.role !== form.role;
+  Object.assign(form, {
+    ...value,
+    permissions: roleChanged ? [] : [...value.permissions],
+  });
 }
-async function submit() {
-  if (!valid.value || mutation.pendingKey.value) return;
-  const body = {
+function body() {
+  return {
     name: form.name,
-    email: form.email,
+    email: form.email.trim().toLowerCase(),
     role: form.role,
-    ...(props.user ? { enabled: form.enabled } : {}),
+    ...(latest.value
+      ? { enabled: form.enabled, revision: latest.value.revision }
+      : {}),
     ...(form.password ? { password: form.password } : {}),
     ...(form.role === "custom"
       ? { permissions: [...form.permissions].sort() }
       : {}),
+    reason: form.reason,
   };
-  const result = await mutation.execute(
-    props.user ? "PATCH" : "POST",
-    props.user ? `/users/${encodeURIComponent(props.user.id)}` : "/users",
-    body,
-    userResponse,
-    { expectedStatus: props.user ? 200 : 201 },
+}
+const valid = computed(() => {
+  const projection = publicIdentityIntent(body());
+  return (
+    !!projection &&
+    validActionIntent(
+      props.user ? "identity.user_updated" : "identity.user_created",
+      projection,
+    ) &&
+    options.value.some((o) => o.value === form.role) &&
+    (!props.user || !!latest.value) &&
+    profileChanged.value
   );
-  if (result) {
+});
+function reset(u: User | null) {
+  latest.value = u;
+  Object.assign(form, {
+    name: u?.name ?? "",
+    email: u?.email ?? "",
+    password: "",
+    role:
+      u?.role ??
+      (options.value.some((r) => r.value === "viewer")
+        ? "viewer"
+        : options.value.some((r) => r.value === "custom")
+          ? "custom"
+          : (options.value[0]?.value ?? "")),
+    enabled: u?.enabled ?? true,
+    permissions: u?.role === "custom" ? [...u.permissions] : [],
+    reason: "",
+  });
+  original = JSON.stringify(form);
+  revokeOpen.value = false;
+  revokeReason.value = "";
+}
+async function load() {
+  abort?.abort();
+  abort = new AbortController();
+  const version = ++ticket,
+    epoch = session.epoch.value;
+  loadError.value = "";
+  mutation.clearError();
+  if (!props.open || !session.can("users.manage")) {
+    reset(null);
+    loading.value = false;
+    return;
+  }
+  if (!props.user) {
+    reset(null);
+    loading.value = false;
+    return;
+  }
+  const target = props.user.id;
+  loading.value = true;
+  try {
+    const result = await api.get(
+      `/users/${target}`,
+      userResponse,
+      abort.signal,
+    );
+    if (version !== ticket || session.epoch.value !== epoch) return;
+    if (result.user.id !== target) throw new ApiError("invalid");
+    reset(result.user);
+  } catch (cause) {
+    if (version === ticket && session.epoch.value === epoch) {
+      loadError.value = cause instanceof ApiError ? cause.kind : "network";
+      if (loadError.value === "unauthorized") session.invalidate();
+    }
+  } finally {
+    if (version === ticket) loading.value = false;
+  }
+}
+watch(
+  [() => props.open, () => props.user?.id, () => session.epoch.value],
+  () => {
     form.password = "";
+    void load();
+  },
+  { immediate: true },
+);
+onScopeDispose(() => {
+  ticket++;
+  abort?.abort();
+  form.password = "";
+  revokeReason.value = "";
+});
+async function submit() {
+  if (frozen.value || !valid.value) return;
+  const target = latest.value;
+  const result = await mutation.execute(
+    target ? "identity.user_updated" : "identity.user_created",
+    target,
+    body(),
+    () => props.open,
+  );
+  form.password = "";
+  if (result) {
     original = JSON.stringify(form);
     notify(
-      props.user
+      target
         ? tr("成员已更新。", "Member updated.")
         : tr("成员已创建。", "Member created."),
+    );
+    emit("saved");
+    emit("close");
+  }
+}
+async function revoke() {
+  if (frozen.value || !latest.value || !identityReason(revokeReason.value))
+    return;
+  const result = await mutation.execute(
+    "identity.sessions_revoked",
+    latest.value,
+    { revision: latest.value.revision, reason: revokeReason.value },
+    () => props.open && revokeOpen.value,
+  );
+  if (result) {
+    notify(tr("已撤销全部会话。", "All sessions revoked."));
+    revokeOpen.value = false;
+    emit("saved");
+    emit("close");
+  }
+}
+async function inspect() {
+  if (pending.value && (await mutation.inspect(pending.value))) {
+    notify(
+      tr(
+        "原操作已核实，请查看最新成员资料。",
+        "Original operation verified. Check the latest member details.",
+      ),
     );
     emit("saved");
     emit("close");
@@ -126,137 +318,125 @@ async function submit() {
   <UiOverlay
     :open="open"
     :title="user ? tr('编辑成员', 'Edit member') : tr('新增成员', 'Add member')"
-    :busy="mutation.busy.value"
-    :dirty="dirty && !mutation.pendingKey.value"
+    :busy="mutation.busy.value || !!mutation.inspecting.value"
+    :dirty="dirty && !pending"
     drawer
     :close-label="tr('关闭', 'Close')"
     :discard-label="tr('放弃未保存的更改', 'Discard unsaved changes')"
     :continue-label="tr('继续编辑', 'Continue editing')"
     @close="emit('close')"
-    ><form id="user-editor" class="user-form" @submit.prevent="submit">
-      <fieldset :disabled="mutation.busy.value || !!mutation.pendingKey.value">
-        <label class="field"
-          >{{ tr("姓名", "Name")
-          }}<input
-            v-model="form.name"
-            required
-            maxlength="100"
-            autocomplete="name" /></label
-        ><label class="field"
-          >{{ tr("邮箱", "Email")
-          }}<input
-            v-model="form.email"
-            type="email"
-            required
-            maxlength="254"
-            autocomplete="off" /></label
-        ><label class="field"
-          >{{
-            user
-              ? tr(
-                  "新密码（留空则不更改）",
-                  "New password (leave blank to keep)",
-                )
-              : tr("初始密码", "Initial password")
-          }}<input
-            v-model="form.password"
-            type="password"
-            :required="!user"
-            minlength="12"
-            maxlength="1024"
-            autocomplete="new-password"
-          /><span class="field-note">{{
+  >
+    <StateBlock
+      v-if="loading || loadError"
+      :loading="loading"
+      :error="loadError"
+      @reload="load"
+    />
+    <template v-else>
+      <form
+        key="identity-form"
+        :id="`${id}-form`"
+        class="identity-editor-form"
+        novalidate
+        @submit.prevent="submit"
+      >
+        <IdentityOperationNotice
+          v-if="noticeState"
+          :state="noticeState"
+          :labels="noticeLabels"
+          :operation-id="pending?.key"
+          :target-label="latest?.email || form.email"
+          :base-revision="latest?.revision"
+          :busy="mutation.busy.value || !!mutation.inspecting.value"
+          @reload="load"
+          @inspect="inspect"
+        />
+        <p v-if="!managerAllowed" class="identity-access-error" role="alert">
+          {{
             tr(
-              "至少 12 字节，不会保存到浏览器。",
-              "At least 12 bytes. Never saved in the browser.",
+              "该成员的权限已变化，你不能再管理此账户。",
+              "This member’s access has changed. You can no longer manage this account.",
             )
-          }}</span></label
-        ><label class="field"
-          >{{ tr("角色", "Role")
-          }}<UiSelect
-            v-model="form.role"
-            :options="options"
-            :label="tr('选择角色', 'Choose role')"
-            :disabled="mutation.busy.value || !!mutation.pendingKey.value"
-        /></label>
-        <div v-if="form.role === 'custom'" class="permission-group">
-          <h3>{{ tr("授予权限", "Granted permissions") }}</h3>
-          <label v-for="grant in grants" :key="grant" class="check-row"
-            ><input
-              type="checkbox"
-              :checked="form.permissions.includes(grant)"
-              @change="toggle(grant)"
-            /><span>{{
-              permissionNames[grant] ? tr(...permissionNames[grant]!) : grant
-            }}</span></label
-          >
-        </div>
-        <label v-if="user" class="check-row user-enabled"
-          ><input v-model="form.enabled" type="checkbox" /><span>{{
-            tr("允许此成员登录", "Allow this member to sign in")
-          }}</span></label
-        >
-      </fieldset>
-      <InlineError
-        :error="mutation.error.value"
-        :pending-key="mutation.pendingKey.value"
-      />
-    </form>
+          }}
+        </p>
+        <IdentityEditorFields
+          key="identity-fields"
+          :model-value="shownForm"
+          :editing="!!user"
+          :self="self"
+          :disabled="frozen"
+          :role-options="options"
+          :permission-options="permissionOptions"
+          :labels="fieldLabels"
+          @update:model-value="update"
+        />
+        <InlineError
+          v-if="mutation.error.value && !noticeState"
+          :error="mutation.error.value"
+        />
+      </form>
+      <IdentitySessionRevocation
+        v-if="latest"
+        :open="revokeOpen"
+        :target-label="latest.name + ' · ' + latest.email"
+        :target-id="latest.id"
+        :self="self"
+        :reason="revokeReason"
+        :disabled="frozen || profileChanged"
+        :busy="mutation.busy.value || !!mutation.inspecting.value"
+        :labels="revokeLabels"
+        @open="revokeOpen = true"
+        @close="
+          revokeOpen = false;
+          revokeReason = '';
+        "
+        @update:reason="revokeReason = $event"
+        @confirm="revoke"
+      >
+        <template #notice
+          ><IdentityOperationNotice
+            v-if="noticeState"
+            :state="noticeState"
+            :labels="noticeLabels"
+            :operation-id="pending?.key"
+            :target-label="latest.email"
+            :base-revision="latest.revision"
+            :busy="mutation.busy.value || !!mutation.inspecting.value"
+            @reload="load"
+            @inspect="inspect" /><InlineError
+            v-else-if="mutation.error.value"
+            :error="mutation.error.value"
+        /></template>
+      </IdentitySessionRevocation>
+    </template>
     <template #footer="{ close }"
-      ><UiButton :disabled="mutation.busy.value" @click="close">{{
-        tr("取消", "Cancel")
-      }}</UiButton
+      ><UiButton
+        :disabled="mutation.busy.value || !!mutation.inspecting.value"
+        @click="close"
+        >{{ tr("取消", "Cancel") }}</UiButton
       ><UiButton
         type="submit"
-        form="user-editor"
+        :form="`${id}-form`"
         variant="primary"
         :busy="mutation.busy.value"
-        :disabled="!valid || !dirty || !!mutation.pendingKey.value"
+        :disabled="frozen || !valid"
         >{{
           user
             ? tr("保存更改", "Save changes")
             : tr("创建成员", "Create member")
         }}</UiButton
       ></template
-    ></UiOverlay
-  >
+    >
+  </UiOverlay>
 </template>
 <style scoped>
-.user-form fieldset {
-  padding: 0;
-  margin: 0;
-  border: 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
+.identity-editor-form {
+  display: grid;
+  gap: 20px;
 }
-.permission-group {
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--subtle);
-}
-.permission-group h3 {
-  font-size: 13px;
-  margin: 0 0 12px;
-}
-.check-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  min-height: 44px;
-  font-size: 13px;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-.check-row input {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent);
-  flex-shrink: 0;
-}
-.user-enabled {
-  margin-top: 4px;
+.identity-access-error {
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1.6;
 }
 </style>

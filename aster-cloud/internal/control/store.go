@@ -2,6 +2,7 @@ package control
 
 import (
 	"aster/billing/controllerapi"
+	"aster/cloud/internal/identity"
 	"aster/cloud/internal/networking"
 	"aster/cloud/internal/nodeproto"
 	"aster/cloud/migrations"
@@ -116,6 +117,15 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 				return e
 			}
 		}
+		if migration.Version == 12 {
+			existingIndexes, e = identity.IdentityMigrationPlan(ctx, conn, migration.SQL)
+			if errors.Is(e, identity.ErrConflict) {
+				return ErrConflict
+			}
+			if e != nil {
+				return e
+			}
+		}
 		for _, statement := range strings.Split(migration.SQL, ";") {
 			if q := strings.TrimSpace(statement); q != "" {
 				if existingIndexes[q] {
@@ -133,6 +143,14 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		}
 		if migration.Version == 11 {
 			if e = checkUsersPaginationIndex(ctx, conn); e != nil {
+				return e
+			}
+		}
+		if migration.Version == 12 {
+			if e = identity.CheckOperationsSchema(ctx, conn); errors.Is(e, identity.ErrConflict) {
+				return ErrConflict
+			}
+			if e != nil {
 				return e
 			}
 		}
@@ -199,6 +217,11 @@ func (s *SQLStore) Check(ctx context.Context) error {
 		return err
 	}
 	if err := checkUsersPaginationIndex(ctx, s.DB); err != nil {
+		return err
+	}
+	if err := identity.CheckOperationsSchema(ctx, s.DB); errors.Is(err, identity.ErrConflict) {
+		return ErrConflict
+	} else if err != nil {
 		return err
 	}
 	if e := (&networking.Store{DB: s.DB}).Check(ctx); e != nil {

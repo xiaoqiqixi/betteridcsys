@@ -154,7 +154,8 @@
         "IDENTITY_PERMISSION_PLAN.md",
         "../aster-cloud/docs/MEMBERS_PAGINATION.md",
         "IDENTITY_SESSION_FENCE.md",
-        "EXECUTION-20261026.md"
+        "EXECUTION-20261026.md",
+        "IDENTITY_OPERATIONS.md"
       ],
       "checklist_ids": [
         "B4.1",
@@ -190,14 +191,33 @@
         {
           "id": "W07-B1",
           "title": "排队身份写入的会话事务fence",
-          "state": "implemented_local",
-          "scope": "严格事务内session hash/owner/expiry复核、注销锁序和真实HTTP并发回归；本地身份/控制面真实MySQL race669 PASS、0FAIL/0SKIP及vet/Linux静态构建通过，最终SHA CI待执行。",
+          "state": "ci_verified",
+          "scope": "事务内session fence、注销锁序、HTTP并发及真实MySQL已取得同SHA Cloud11/11与财务4/4 SUCCESS；不包含后续schema12变更。",
           "not_included": [
             "用户revision",
             "显式全设备撤销",
             "身份操作回执与未知结果锁",
             "MFA/SSO",
             "资源任务取消"
+          ],
+          "source_sha": "b2c273fd9bf8a1c82e0daf51bae34d8ee5d0e4dd"
+        },
+        {
+          "id": "W07-B",
+          "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
+          "state": "implemented_local",
+          "scope": "后端schema12/严格HTTP/事务回滚、独立公开意图账本、Gemini视图集成；本地前端994测试、真实MySQL/race701 PASS事件（0FAIL/0SKIP）、vet和Linux构建通过。新增独立身份写浏览器门禁，实际运行和人工看图尚待同SHA CI。",
+          "not_included": [
+            "数据库强制append-only逐表授权（W13）",
+            "MFA/step-up",
+            "SSO/客户会话",
+            "财务员工权限组",
+            "真实KVM/物理数据面"
+          ],
+          "evidence": [
+            "IDENTITY_OPERATIONS.md",
+            "EXECUTION-20261026.md",
+            "../aster-cloud/docs/CONSOLE_API.md"
           ]
         }
       ]
@@ -3096,7 +3116,16 @@
           "note": "身份接口入口"
         }
       ],
-      "current_evidence": [],
+      "current_evidence": [
+        {
+          "path": "aster-cloud/internal/identity/identity_operations_mysql_test.go",
+          "note": "账户revision、撤销/回执与HTTP权限/回滚实库回归；不是MFA或DB强制append-only"
+        },
+        {
+          "path": "aster-cloud/deploy/ci/identity-browser.mjs",
+          "note": "新增独立真实API身份写浏览器入口，当前待实际执行，不替代既有205成员只读验收"
+        }
+      ],
       "execution_note": "W07-A在4626e32通过205人成员分页真实MySQL/18浏览器检查及6图；W07-B1继续处理排队会话撤销竞态，不把整个账号/角色域标完成。"
     },
     {
@@ -3134,7 +3163,16 @@
           "note": "严格解码"
         }
       ],
-      "current_evidence": [],
+      "current_evidence": [
+        {
+          "path": "aster-cloud/internal/identity/identity_operations_mysql_test.go",
+          "note": "账户revision、撤销/回执与HTTP权限/回滚实库回归；不是MFA或DB强制append-only"
+        },
+        {
+          "path": "aster-cloud/deploy/ci/identity-browser.mjs",
+          "note": "新增独立真实API身份写浏览器入口，当前待实际执行，不替代既有205成员只读验收"
+        }
+      ],
       "execution_note": "保留原独立HTTPS/CSRF；W07-B1新增身份写事务会话fence，真实RED→GREEN已复现与修复，最终新SHA CI待执行。"
     },
     {
@@ -9813,6 +9851,6 @@
   "release_state": "not_published",
   "real_kvm_acceptance": "deferred_by_user",
   "requirements_scope": "原269项逐项保留现状、下一步与验收；1625个末级字段/交互细节在原功能树中，不能把工作包完成等同全部叶子完成。",
-  "active_batch": "20261026-identity-session-fence",
+  "active_batch": "20261026-identity-operations",
   "batch_record": "EXECUTION-20261026.md"
 }

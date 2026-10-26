@@ -26,13 +26,26 @@
 | GET `/auth/me` | 已登录 | 无 | 200 `{user,csrf_token}` |
 | POST `/auth/logout` | 已登录；须 CSRF | 无须 body | 204，撤销会话并清 cookie |
 | GET `/roles` | 已登录 | 无 | 200 `{items:[{id,name,permissions}]}` |
-| GET `/users` | `users.manage` | 无 query | 200 `{items:[User],limit:100,truncated_possible:true}` |
-| POST `/users` | `users.manage` 与委派规则 | `{email,name,password,role,permissions?}` | 201 `{user}` |
-| PATCH `/users/{user_id}` | `users.manage` 与委派规则 | `email?,name?,password?,role?,enabled?,permissions?` | 200 `{user}` |
+| GET `/users` | `users.manage` | 可选单一 `cursor`；完整键集分页见 [成员分页](MEMBERS_PAGINATION.md) | 200 `{items:[User],limit:100,truncated_possible,next_cursor}` |
+| GET `/users/{user_id}` | `users.manage` | 无 | 200 `{user}`，当前 revision |
+| POST `/users` | `users.manage` 与委派规则 | `{email,name,password,role,permissions?,reason}`；稳定 key | 201 `{user,operation}` |
+| PATCH `/users/{user_id}` | `users.manage` 与委派规则 | 必填 `revision,reason`，以及 `email?,name?,password?,role?,enabled?,permissions?`；稳定 key | 200 `{user,operation}` |
+| POST `/users/{user_id}/revoke-sessions` | `users.manage` 与目标委派规则，含本人 | `{revision,reason}`；稳定 key | 200 `{user,operation}`；本人清 cookie |
+| GET `/identity-operations/{key}` | 当前 `users.manage`、原 actor、仍可管理目标 | 无 | 200 `{operation}`；未知/外来404，不证明未执行 |
 
-`User` 固定公开字段：`id,email,name,role,enabled,permissions`。没有 password/hash、session token 或内部凭证。用户名邮箱规范化为小写 ASCII 邮箱；name 为 1–100 个 Unicode 字符。所有 user/instance/operation/artifact ID 为 32 位小写 hex；节点 ID 为 root 配置的独立标识。
+`User` 固定公开字段：`id,email,name,role,enabled,permissions,revision`。没有 password/hash、session token 或内部凭证。用户名邮箱规范化为小写 ASCII 邮箱；name 为 1–100 个 Unicode 字符。所有 user/instance/operation/artifact ID 为 32 位小写 hex；节点 ID 为 root 配置的独立标识。
 
 固定 `admin/operator/viewer` 角色 **不传 permissions 字段**，grants 由服务端确定。新建或切入 `custom` 时必须显式传数组，可为空 `[]`；编辑已有 custom 不传该字段则保留。PATCH 至少修改一个字段；显式 null 不能充当“保留”或“清除”。
+
+### 身份变更与回执（schema12）
+
+账户 revision 为1…9007199254740991；写入推进一次，过期409 `REVISION_CONFLICT` 不覆盖草稿，达到上限409 `REVISION_LIMIT`。
+三类身份写必须有且只有一个32位小写hex `Idempotency-Key`。已使用key409 `OPERATION_USED`，不自动重放。
+理由是1–500个Unicode字符的单行文本，首尾无空格、无控制字符。密码或密码摘要不进入操作回执/审计。
+`operation`绑定原actor/target/action/base/result revision、完整非秘密intent、摘要、reason、audit_id（十进制字符串）和UTC时间。
+资料变更、撤销session、audit和receipt同事务；不能用当前资料相同或GET404解锁未知写。
+旧前端缺少revision/reason/key会被拒绝，前后端必须成对部署；schema12回滚须恢复匹配备份。
+详见[账户操作合同](../../docs/IDENTITY_OPERATIONS.md)。应用没有receipt修改/删除接口，但现有schema级DML并非数据库强制append-only授权；逐表收敛单列W13。
 
 ### 权限与委派
 
@@ -47,7 +60,7 @@
 
 - 非 admin 的 `users.manage` 是 **有界委派**：目标当前 grants 与拟赋予 grants 都必须是管理者自身当前 grants 的子集，且不得创建、编辑或重置任何 admin 的密码。custom 即使另持全部 grants，也不因此成为 admin。
 - 最后一个 enabled admin 不能被降权或禁用；用户不能改变自身角色/grants 或禁用自身。检查在数据库事务内串行执行，不依赖 UI 隐藏按钮。
-- 当前用户列表最多 100 条，没有用户分页 API。`settings.manage` 是权限白名单中的能力标识，**当前没有公开 settings 写接口**；节点注册、TLS pin、镜像、网络、storage 与 preset 审批仍是 root 受保护配置工作，不是浏览器任意编辑。
+- 用户列表每页最多100条，以 `(created_at,id)` 确定性分页，`next_cursor=null` 才到末页。`settings.manage` 是权限白名单中的能力标识，**当前没有公开 settings 写接口**；节点注册、TLS pin、镜像、网络、storage 与 preset 审批仍是 root 受保护配置工作，不是浏览器任意编辑。
 
 ## 3. 只读资源 API
 

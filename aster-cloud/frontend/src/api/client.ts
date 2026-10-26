@@ -45,6 +45,8 @@ export const validUser = (x: unknown): x is User =>
   text(x.name) &&
   text(x.role) &&
   typeof x.enabled === "boolean" &&
+  finite(x.revision) &&
+  x.revision >= 1 &&
   Array.isArray(x.permissions) &&
   x.permissions.every(text);
 export const validSession = (x: unknown): x is Session =>
@@ -123,7 +125,21 @@ export const validAudit = (x: unknown): x is Audit =>
   record(x) &&
   (text(x.id) || finite(x.id)) &&
   (x.source === "identity" || x.source === "resource") &&
-  ["actor", "action", "target", "created_at"].every((k) => text(x[k]));
+  ["actor", "action", "target", "created_at"].every((k) => text(x[k])) &&
+  (x.identity_detail === undefined ||
+    (x.source === "identity" &&
+      record(x.identity_detail) &&
+      text(x.identity_detail.operation_id) &&
+      /^[a-f0-9]{32}$/.test(x.identity_detail.operation_id) &&
+      finite(x.identity_detail.base_revision) &&
+      finite(x.identity_detail.result_revision) &&
+      x.identity_detail.result_revision ===
+        x.identity_detail.base_revision + 1 &&
+      text(x.identity_detail.reason) &&
+      x.identity_detail.reason.trim() === x.identity_detail.reason &&
+      [...x.identity_detail.reason].length >= 1 &&
+      [...x.identity_detail.reason].length <= 500 &&
+      !/[\p{Cc}\u2028\u2029]/u.test(x.identity_detail.reason)));
 export function validPage<T>(
   x: unknown,
   guard: (v: unknown) => v is T,

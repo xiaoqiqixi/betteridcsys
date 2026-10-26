@@ -76,7 +76,7 @@ func mysqlIdentity(t *testing.T) (*Service, *sql.DB) {
 	t.Cleanup(func() { db.Close() })
 	var b []byte
 	for _, migration := range migrations.All() {
-		if migration.Version == 2 || migration.Version == 11 {
+		if migration.Version == 2 || migration.Version == 11 || migration.Version == 12 {
 			b = append(b, []byte(migration.SQL)...)
 		}
 	}
@@ -560,6 +560,8 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 			req.Host = "console.example.invalid"
 			if body != nil {
 				req.Header.Set("Content-Type", "application/json")
+				op, _ := randomToken()
+				req.Header.Set("Idempotency-Key", op[:32])
 			}
 			if csrf != "" {
 				req.Header.Set("X-CSRF-Token", csrf)
@@ -627,7 +629,7 @@ func TestMySQLConsoleIdentity(t *testing.T) {
 		if status, _ := request("GET", "/console/v1/roles", nil, "", ""); status != 200 {
 			t.Fatal("roles failed", status)
 		}
-		if status, _ := request("POST", "/console/v1/users", CreateUser{Email: "created@example.invalid", Name: "Created", Password: testPassword, Role: "operator"}, csrf, s.origin); status != 201 {
+		if status, _ := request("POST", "/console/v1/users", CreateUser{Email: "created@example.invalid", Name: "Created", Password: testPassword, Role: "operator", Reason: "Isolated HTTP creation"}, csrf, s.origin); status != 201 {
 			t.Fatal("create contract", status)
 		}
 		if status, _ := request("GET", "/console/v1/users", nil, "", ""); status != 200 {
