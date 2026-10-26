@@ -6,7 +6,7 @@ or implicit tenant binding. `viewer` can read controller infrastructure but cann
 mutate it. Tenant self-service needs a separate, explicit ownership mapping.
 
 Construct `New(db, Config{Origin: "https://fixed-console-origin"})` after applying
-the complete current controller migrations (identity tables from `002`, members index from `011`). Mount `Handler()` for the identity endpoints and use
+the complete current controller migrations (identity tables from `002`, members index from `011`, revisions/operations from `012`). Mount `Handler()` for the identity endpoints and use
 `Require(permission, handler)` for every other console endpoint. Read `Actor(ctx)`
 inside the handler and enforce operation-specific ownership and dangerous/restore
 permissions there too. This middleware is not a substitute for those checks.
@@ -69,7 +69,7 @@ are absent. Prefer `ASTER_CLOUD_TEST_DSN` whose database name **must contain
 `_test`**, or the existing native CI `ASTER_MYSQL_TEST_DSN` whose database must be
 exactly `aster_ci_test`. In either case the fixture principal needs CREATE/DROP
 DATABASE on the isolated test server: the test creates a random
-`aster_cloud_test_identity_<hex>` database, applies identity migrations 002 and 011, and drops
+`aster_cloud_test_identity_<hex>` database, applies identity migrations 002, 011 and 012, and drops
 that database on cleanup. It never reuses customer/controller tables or prints
 DSNs. Do not provide any production DSN. A skipped local test is not MySQL
 acceptance; CI must run with the real fixture and zero skips.
@@ -111,3 +111,30 @@ tests seed and remove actual private DB sessions, without any production bypass.
 This does not claim revision conflict handling, explicit all-session revocation,
 MFA/SSO, or a fence for already accepted resource operations. Full design and
 remaining identity contracts: repository `docs/IDENTITY_SESSION_FENCE.md`.
+
+
+## Account revisions and identity receipts (W07-B, schema12)
+
+Create/update and explicit all-session revocation require one stable lowercase
+32-hex Idempotency-Key and a single-line reason (1–500 Unicode code points).
+Update/revoke also require the latest revision; a stale revision returns409
+REVISION_CONFLICT, never an overwrite. Used keys return409 OPERATION_USED; no
+credential request is replayed. Every committed user change, session deletion,
+audit and operation receipt is one transaction. Ordinary name changes do not
+revoke existing device sessions. Revocation fences already-started login issuance
+by rechecking both revision and password hash under the identity lock.
+
+Mount the current Console.Handler dispatcher, including
+`GET /console/v1/identity-operations/{key}`. Only its originating current manager
+may read a receipt, and target delegation is checked again. A404/current profile
+is not proof that an unknown write did not execute. Passwords and password hashes
+are absent from receipts; the public intent records only password_changed.
+
+The Vue ledger preserves full non-secret intents before sending, locks the same
+actor/target across changed drafts, and reconciles only the original receipt.
+Self-revocation exits authenticated UI even after a lost response; a fresh login
+can verify its own retained record. Frontend/backend must deploy together; old
+clients missing key/revision/reason are rejected. Rollback requires a matching
+schema backup. Application receipts have no update/delete API; the current
+schema-level runtime DML grant is NOT database-enforced append-only permission.
+See [the complete contract](../../../docs/IDENTITY_OPERATIONS.md).

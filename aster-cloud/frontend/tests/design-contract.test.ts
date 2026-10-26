@@ -29,6 +29,27 @@ const themes = [
   ),
 );
 describe("design contracts (static tokens, not browser computed)", () => {
+  it.each([
+    "IdentityEditorFields",
+    "IdentityOperationNotice",
+    "IdentitySessionRevocation",
+  ])(
+    "keeps %s dark selectors on their component, never the entire document",
+    (name) => {
+      const { descriptor } = parse(
+        readFileSync(resolve(root, `components/${name}.vue`), "utf8"),
+      );
+      const result = compileStyle({
+        source: descriptor.styles[0]!.content,
+        id: "data-v-identity-contract",
+        filename: `${name}.vue`,
+        scoped: true,
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.code).not.toMatch(/\[data-theme="dark"\]\s*(?:,|\{)/);
+      expect(result.code).toMatch(/\[data-theme="dark"\]\s+\.aw-/);
+    },
+  );
   it("compiles the modal notification rule without hiding the entire application", () => {
     const source = readFileSync(
       resolve(root, "components/ToastStack.vue"),

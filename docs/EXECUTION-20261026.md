@@ -99,3 +99,20 @@ UiOverlay增加共享层栈，只有最上层处理焦点/Escape/Back；关闭�
 
 当前runtime仍有专用数据库级DML，所以回执是应用append-only，不是DB强制不可篡改。逐表最小授权与升级收敛留在W13，不能靠较窄表GRANT掩盖既有更宽授权。
 本包不等于整个W07或全清单完成：MFA/step-up/SSO、财务员工权限组、W08资源交付及后续工作继续按计划推进；真KVM验收仍后置。
+
+### 首轮同SHA CI 的实际失败与修复（bcfb364）
+
+[Cloud 40333597266](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40333597266)的独立MySQL门在
+`internal/networking/TestMySQLNetworkHTTPRealSessionsPermissionsAndOriginalIDLookup`登录时503。
+原因是这个独立网络测试夹具刻意只加载schema1–5，未跟随身份服务补11/12；其建号也仍缺新必填reason/key。
+本地此前701结果仅覆盖identity/control两包，因此不能代表整个Cloud实库门。没有把503算认证拒绝或通过。
+
+修复只更新该测试的身份准备，保留独立网络schema5的原断言和所有授权/幂等/回收测试，不给生产代码添加兼容缺省。
+随后扩大本机真实MySQL/race到全部`cmd/... internal/... migrations`：**2538 PASS事件、0FAIL**；
+四项实际OVS/NAT native测试在macOS明确SKIP，另migrations包无测试文件。Linux对应四项仍必须由22/24独立native job实际运行。
+未用本地跳过代替Linux检查。
+
+同时通过实际Vue SFC编译复现三份原稿的`:global([data-theme="dark"]) .component`会丢弃后半选择器，
+错误地落到整个主题根。改为全限定compound放入`:global(...)`，保留Gemini配色/布局且不污染全站；
+新增三个编译后选择器负例，先3 RED后GREEN。完整前端现为42文件/**997项**，format/typecheck/build通过。
+原稿哈希不变，工程修订另计。bcfb364的CI不记全绿，修复后须重新跑完整同SHA门和新实际浏览器/看图。

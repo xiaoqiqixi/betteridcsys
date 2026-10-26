@@ -206,7 +206,7 @@
           "id": "W07-B",
           "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
           "state": "implemented_local",
-          "scope": "后端schema12/严格HTTP/事务回滚、独立公开意图账本、Gemini视图集成；本地前端994测试、真实MySQL/race701 PASS事件（0FAIL/0SKIP）、vet和Linux构建通过。新增独立身份写浏览器门禁，实际运行和人工看图尚待同SHA CI。",
+          "scope": "schema12、严格身份事务/回执、公开意图账本与Gemini视图已实现；前端997测试、两包MySQL/race701 PASS及扩展全部源码2538 PASS通过。bcfb364首轮CI因独立网络夹具旧身份schema失败；已修夹具与编译后深色选择器，待新精确SHA完整CI和真实浏览器/人工看图。",
           "not_included": [
             "数据库强制append-only逐表授权（W13）",
             "MFA/step-up",

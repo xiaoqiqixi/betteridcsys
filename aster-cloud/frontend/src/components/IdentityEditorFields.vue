@@ -440,7 +440,7 @@ function handleReasonInput(event: Event): void {
   -webkit-font-smoothing: antialiased;
 }
 
-:global([data-theme="dark"]) .aw-identity-fields,
+:global([data-theme="dark"] .aw-identity-fields),
 .aw-identity-fields[data-theme="dark"] {
   --aw-ed-bg: var(--surface);
   --aw-ed-surface: var(--subtle);

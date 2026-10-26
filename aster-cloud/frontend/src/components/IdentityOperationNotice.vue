@@ -267,7 +267,7 @@ function handleInspect(): void {
 }
 
 /* Dark Theme Tokens */
-:global([data-theme="dark"]) .aw-op-notice,
+:global([data-theme="dark"] .aw-op-notice),
 .aw-op-notice[data-theme="dark"] {
   --aw-ledger-bg: var(--surface);
   --aw-ledger-surface: var(--subtle);
@@ -285,8 +285,8 @@ function handleInspect(): void {
   --aw-notice-meta-bg: rgba(15, 23, 42, 0.55);
 }
 
-:global([data-theme="dark"]) .aw-op-notice.is-state-conflict,
-:global([data-theme="dark"]) .aw-op-notice.is-state-uncertain,
+:global([data-theme="dark"] .aw-op-notice.is-state-conflict),
+:global([data-theme="dark"] .aw-op-notice.is-state-uncertain),
 .aw-op-notice[data-theme="dark"].is-state-conflict,
 .aw-op-notice[data-theme="dark"].is-state-uncertain {
   --aw-notice-bg: rgba(245, 158, 11, 0.12);
@@ -296,7 +296,7 @@ function handleInspect(): void {
   --aw-notice-icon: #fbbf24;
 }
 
-:global([data-theme="dark"]) .aw-op-notice.is-state-blocked,
+:global([data-theme="dark"] .aw-op-notice.is-state-blocked),
 .aw-op-notice[data-theme="dark"].is-state-blocked {
   --aw-notice-bg: rgba(239, 68, 68, 0.12);
   --aw-notice-border: rgba(248, 113, 113, 0.35);
@@ -305,7 +305,7 @@ function handleInspect(): void {
   --aw-notice-icon: #f87171;
 }
 
-:global([data-theme="dark"]) .aw-op-notice.is-state-confirmed,
+:global([data-theme="dark"] .aw-op-notice.is-state-confirmed),
 .aw-op-notice[data-theme="dark"].is-state-confirmed {
   --aw-notice-bg: rgba(16, 185, 129, 0.12);
   --aw-notice-border: rgba(52, 211, 153, 0.32);

@@ -279,7 +279,7 @@ function handleConfirm(): void {
   -webkit-font-smoothing: antialiased;
 }
 
-:global([data-theme="dark"]) .aw-session-revoke,
+:global([data-theme="dark"] .aw-session-revoke),
 .aw-session-revoke[data-theme="dark"] {
   --aw-ledger-bg: var(--surface);
   --aw-ledger-surface: var(--subtle);

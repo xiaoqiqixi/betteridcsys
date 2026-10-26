@@ -622,18 +622,37 @@ func (b *httpBrowser) login(t *testing.T, email string) {
 }
 func (b *httpBrowser) createUser(t *testing.T, email, role string, grants []string) {
 	t.Helper()
-	in := map[string]any{"email": email, "name": "网络测试用户", "role": role, "password": networkPassword}
+	in := map[string]any{"email": email, "name": "网络测试用户", "role": role, "password": networkPassword, "reason": "隔离网络权限回归准备"}
 	if grants != nil {
 		in["permissions"] = grants
 	}
 	raw, _ := json.Marshal(in)
-	status, _ := b.request(t, "POST", "/console/v1/users", string(raw), "")
+	status, _ := b.request(t, "POST", "/console/v1/users", string(raw), randomID(t))
 	if status != 201 {
 		t.Fatal("create fixture user", status)
 	}
 }
 func TestMySQLNetworkHTTPRealSessionsPermissionsAndOriginalIDLookup(t *testing.T) {
 	s, _ := mysqlFixture(t)
+	// The independent networking Store deliberately tests its schema5 surface.
+	// Its real identity HTTP fixture must nevertheless load the CURRENT identity
+	// schema and send the same required reason/key as every production client.
+	// Do not weaken identity revision reads to accommodate an old test database.
+	for _, m := range migrations.All() {
+		if m.Version != 11 && m.Version != 12 {
+			continue
+		}
+		for _, q := range strings.Split(m.SQL, ";") {
+			if strings.TrimSpace(q) != "" {
+				if _, e := s.DB.Exec(q); e != nil {
+					t.Fatal("current network identity fixture migration failed", m.Version)
+				}
+			}
+		}
+	}
+	if e := identity.CheckOperationsSchema(t.Context(), s.DB); e != nil {
+		t.Fatal("network identity fixture current schema unavailable", e)
+	}
 	insertNode(t, s, "node-a")
 	insertNode(t, s, "node-b")
 	insertInstance(t, s, testInstance, testOwner, "node-a", "running")
