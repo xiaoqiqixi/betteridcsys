@@ -69,3 +69,12 @@ HTTP从原Cookie派生私有context，不接受客户端新增授权字段，不
 
 下一步：普通main提交后跑新同SHA全部16门，逐一核对B2和Ubuntu22完整native结果；继续W07-C/D与其余工作包。
 员工权限组、MFA、所有财务写的统一fence、数据库强制append-only、正式0.5.10/Cloud下载通道、真KVM/物理数据面仍未记完成。
+
+### 3b93252调度核对发现的来源证据缺口
+
+本轮普通main推送已触发财务与独立performance，但Cloud旧路径过滤排除了纯财务/文档变更，因此该SHA缺少Cloud push run。
+发行器严格只认同SHA main push，这时手动dispatch不能补位；不能拿eb1e81f的11门拼成新SHA的16门。
+新增调度合同先1 RED确认paths过滤仍在，再删除Cloud的paths过滤，保留main分支、全部11任务、只读权限与原cancel/严格来源策略。
+今后两个必需工作流每次main push完整调度；这是补齐证据，不是放宽验收、伪造commit触发或更换事件条件。
+Cloud发行合同由28增至29项；当前发行文档同步为Cloud11+财务5，不再一处写15、一处写16。
+3b93252尚未取得全套新门，接下来的完整结果只认包含调度修复的新精确SHA。

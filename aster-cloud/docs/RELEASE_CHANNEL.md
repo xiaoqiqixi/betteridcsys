@@ -47,9 +47,10 @@ bootstrap 首次下载会创建 root 私有缓存，这不等于安装软件 / �
 ## 构建、签名、发布分权
 
 - 只在 main 手动发起独立 build workflow；指定 Cloud tag 必须指向当前 workflow 的精确源码 SHA。
-- 要求同 SHA 的既有财务与 Cloud 回归，加上 Ubuntu22/24 两套 native libvirt 门禁，共 15 项发布前检查（Cloud 11 + 财务 4）。
-  财务新增独立 `Real MySQL financial browser acceptance`，必须实际成功，演示数据浏览器检查不可替代。
-  后续发布 / 下载 job 不混入这 15 项，不能用旧提交或只有 workflow 总结替代每项结论。
+- 要求同 SHA 的财务与 Cloud 回归，加上 Ubuntu22/24 两套 native libvirt 门禁，共 16 项发布前检查（Cloud 11 + 财务 5）。
+  财务独立 `Real MySQL financial browser acceptance` 与 `Native financial acceptance (ubuntu-22.04)` 均须实际成功，演示数据或24检查不可替代。
+  两个必需工作流在每次main push调度，不按改动路径过滤；财务或文档单独变更也必须取得同SHA的完整证据，不能用手动run或旧SHA补位。
+  后续发布 / 下载 job 不混入这16项，不能用旧提交或只有 workflow 总结替代每项结论。
   这是用户批准的支持范围收敛，不是降低 22/24 的门槛；历史 14/15 失败结果保持原样，必须重跑新精确提交。
 - 从同一 Git commit 快照构建两次实际静态 Go 二进制与 Vue UI，并比较完整归档字节。无 prebuilt / fake-build 发布入口。
 - build 不持有 write / OIDC 权限；独立 attest job 只为通过固定策略的数据签名；publisher 使用受信 main 策略验证

@@ -172,6 +172,15 @@ class CloudReleaseContract(unittest.TestCase):
         self.assertIn("Native financial acceptance (ubuntu-22.04)", result["prechecks"][1]["jobs"])
         self.assertTrue(all(method == "GET" for method, _, _ in api.calls))
 
+    def test_exact_sha_push_gates_are_scheduled_for_every_main_change(self):
+        for workflow in ("cloud.yml", "ci.yml"):
+            with self.subTest(workflow=workflow):
+                text = (C.ROOT / ".github/workflows" / workflow).read_text()
+                trigger = text.split("\npermissions:", 1)[0]
+                self.assertIn("\n  push:\n    branches: ['main']\n", trigger)
+                self.assertNotRegex(trigger, r"(?m)^\s+(?:paths|paths-ignore|branches-ignore):")
+                self.assertNotIn("workflow_dispatch", text[text.index("jobs:"):])
+
     def test_each_supported_native_gate_is_required_at_exact_source(self):
         for version in ("22.04", "24.04"):
             with self.subTest(version=version):

@@ -3,13 +3,6 @@ name: Controller and KVM node development checks
 on:
   push:
     branches: ['main']
-    paths:
-      - 'aster-cloud/**'
-      - 'vps-billing/backend/controllerapi/**'
-      - 'vps-billing/backend/internal/controllers/**'
-      - '.github/workflows/cloud.yml'
-      - '.github/workflows/cloud-release-build.yml'
-      - '.github/workflows/cloud-release-publish.yml'
   workflow_dispatch:
 
 permissions:
