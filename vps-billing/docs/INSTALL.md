@@ -1,5 +1,17 @@
 # Ubuntu 原生单机安装
 
+[财务首页](../README.md) · [装好后首次使用](GETTING_STARTED.md) · [已有实例升级](UPGRADE.md) · [宝塔环境](BAOTA.md)
+
+**阅读顺序**：确认主机条件 → 核验发行并 prepare → 准备私密输入 → 审查 plan 并 apply → 检查 HTTPS → 登录并发布商品。以下步骤针对新的专用实例；已有数据不能按全新安装重做。
+
+| 安装前要准备 | 当前要求 |
+| --- | --- |
+| 操作系统 | Ubuntu 22.04 / 24.04 amd64，原生 systemd；不是 Docker，暂不支持26及其他发行版 |
+| 系统组件 | Python 3 与安全 tar 能力、Nginx、本机 Oracle MySQL 8.4 LTS；已编译程序无需 Go / Node.js |
+| 访问入口 | 自己的域名、DNS、正常受信 HTTPS 证书及匹配私钥 |
+| 身份与秘密 | 新专用数据库/账号、私密 DBA 输入、首管理员邮箱和密码文件；没有统一默认密码 |
+| 发行包 | 同版本 API、plugin-host、资源包、BUILD、PROVENANCE、SHA256SUMS，全部核验后使用 |
+
 > **安装前先核对发行**：本页对应Core **0.5.10**。只有固定官方正常Release、精确提交完整CI、公共六资产下载和来源核验均成功，才能使用下列命令；候选源码、草稿、缺少资产或校验失败不构成安装依据。旧v0.5.6–v0.5.9保持原样，其新`prepare` / `stage`仍因来源不在当前`main`祖先链而拒绝；新版本不会修复或覆盖旧标签。见[历史调整与影响](../../docs/HISTORY_REWRITE.md)及[版本合同](RELEASE-v0.5.10.md)。
 
 本文示例的目标版本是 **0.5.10**，是否已交付须按上面的发行条件核验。先核验官方资产并准备完整版本目录，再审查私密实例规格与只读计划，最后用计划 SHA-256 确认实际操作。全新安装会创建专用数据库及账号、系统运行身份、秘密文件、配置、schema、首位管理员和原生服务，切换版本并检查 HTTPS。它不安装操作系统组件、申请证书或修改 DNS。已有实例使用[升级流程](UPGRADE.md)，不能重跑全新安装覆盖。
@@ -41,7 +53,7 @@ systemd 须包含 root 管理的 `/usr/bin/busctl` 及 JSON 输出支持。执�
 
 ## 1. 核对来源与归档
 
-待固定官方仓库的正常 [Release](https://github.com/xiaoqiqixi/betteridcsys/releases)实际提供 `v0.5.10` 后，取得同一 Release 的六资产：
+从固定官方仓库的正常 [v0.5.10 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.10)取得同一版本的六资产；若 Release 不可用、资产不完整或来源不符，停止安装：
 
 - `aster-api-0.5.10-linux-amd64`
 - `aster-plugin-host-0.5.10-linux-amd64`
@@ -200,3 +212,5 @@ curl --fail --show-error https://billing.example.com/readyz
 管理员按 [站点设置](SITE_SETTINGS.md)设置品牌和账单抬头，按 [财务模型](FINANCIAL_MODEL.md)审核币种与独立报价。全新安装仅启用且默认使用 CNY，示例价格不可售；升级保留既有默认币种、旧 USD 报价和历史金额，不自动换汇。确认套餐/报价/币种三个开关后启售，缺价不能使用另一币种金额替代。用合成客户验证幂等、权限和历史账单；默认支付配置下，结账应安全拒绝未配置的渠道。创建订单生成待付款账单，本身不扣款、标记已付或创建 VPS。第三方渠道的验签、去重和结算验收按[支付插件接入指南](PAYMENT_PLUGINS.md)单独进行。
 
 留存发布提交/摘要、MySQL 版本/socket、账号权限、操作 journal、服务/TLS 和恢复演练记录。公共 CA 续期、整机重启、容量、独立实例/离机恢复另行验收，具体范围见 [ACCEPTANCE.md](ACCEPTANCE.md)、[VALIDATION.md](VALIDATION.md)及[日常运维](OPERATIONS.md)。
+
+安装完成后按[财务首次使用](GETTING_STARTED.md)登录自己的管理员账户、设置站点、审核 CNY 报价并发布商品；不要把安装进程完成当作已经开始收款或开通资源。

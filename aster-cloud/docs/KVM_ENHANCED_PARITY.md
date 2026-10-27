@@ -1,6 +1,6 @@
 # KVM 加强版功能对照与开发验收规格
 
-2026-10-25。本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。当前主控数据库为 schema **11**；历史增量段落中的版本号仅表示各次模型引入版本。
+本项目按用户指定的魔方云 **KVM 加强版功能范围**补齐独立主控及 KVM 被控，不把现有 Linux Bridge 基础链称为“加强版已完成”。本文记录当前差距、可交付顺序和逐项证据门槛，不是已完成的 Release 清单。当前主控数据库为 schema **12**；历史增量段落中的版本号仅表示各次模型引入版本。
 
 ## 1. 对标范围与不变边界
 
@@ -60,7 +60,7 @@
 | A12 | `internal/fabric/`、`cmd/aster-network/` | 保留 root CLI 的单宿主 OVS 微分段/双向 meter；本轮新增嵌入式 Activate/Deactivate/Check/Inspect，EX flock 跨隔离、TAP 核验、apply/readback 和 resume。 |
 | A13 | `plugins/billingconnector/`、`cmd/aster-billing-plugin/` | 复用原公开协议和安全 transport 的独立资源适配 CLI；不是支付插件，不由财务 runtime-plugin manager 加载，不替代财务原生持久任务。 |
 | A14 | `migrations/006_instance_network_bindings.sql`、`internal/control/network_tasks.go`、`internal/networking/store.go:ReserveTaskTx`、`internal/nodeproto/network_binding.go`、`internal/hypervisor/ovs.go` | 006 引入的事务内 IPAM/任务绑定、node/2 不可变网络规格、节点 schema-3 所有权及 OVS 生命周期门禁。 |
-| A15 | `../vps-billing/docs/RESOURCE_PLUGINS.md`、财务 runtime resource worker/manager | 新增 manager 管理的 `resource.aster-cloud` 0.1.1 transport（`aster.resource/1`；最低Core **0.5.10**，当前未发布候选；旧正式0.5.9不支持），接原持久开通任务；与 A13 CLI 是不同交付物，不绕过原 job claim/幂等或付款边界。 |
+| A15 | `../vps-billing/docs/RESOURCE_PLUGINS.md`、财务 runtime resource worker/manager | 新增 manager 管理的 `resource.aster-cloud` 0.1.1 transport（`aster.resource/1`；最低Core **0.5.10**，Core已正式发行而worker仍为独立候选；旧正式0.5.9不支持），接原持久开通任务；与 A13 CLI 是不同交付物，不绕过原 job claim/幂等或付款边界。 |
 | A16 | `internal/overlayproto/`、`internal/control/overlay_*`、`internal/fabric/overlay_*`、`internal/hypervisor/overlay*` | schema-7 全局 VPC/epoch、固定 VXLAN peer、受控路由、reserved 成员创建屏障、显式恢复；不是实际跨宿主连通性验收。 |
 | A17 | `internal/fabric/nat_*`、`internal/overlayproto/nat.go`、`frontend/src/pages/OverlayNetworksPage.vue`、`OverlayEpochPage.vue` | root 批准 namespace SNAT/TCP/UDP DNAT、后台完整成员/路由/NAT 及恢复；限制与权限见 [NETWORK_MANAGEMENT.md](NETWORK_MANAGEMENT.md) 和 [NAT.md](../internal/fabric/NAT.md)。 |
 

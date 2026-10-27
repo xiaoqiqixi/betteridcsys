@@ -9,9 +9,9 @@
 
 另一个产物 `resource.aster-cloud` worker **0.1.1** 位于财务项目，由插件管理器管理，
 使用 `aster.resource/1`；其兼容声明为 **`core_min=0.5.10`、`core_max_exclusive=0.6.0`**。
-Core **0.5.10** 当前只是未发布候选，旧正式 **0.5.9** 二进制没有资源协议。
+Core **0.5.10** 已有独立正式发行，旧正式 **0.5.9** 二进制没有资源协议；资源 worker 本身仍为独立候选，不在 Core 六资产中。
 不能把旧main版本字符串、CLI能调用HTTP或协议单测通过，当成旧正式包已能加载资源worker。
-Core、plugin-host、plugin-manager 需来自支持协议的同一候选构建；worker候选版本为0.1.1。
+Core、plugin-host、plugin-manager 需来自支持协议的同一经核验版本；worker候选版本为0.1.1。
 0.1.1区分于旧main本地0.1.0产物，避免修改manifest后同版不同哈希；旧目录不覆盖，包校验不放宽。
 构建/安装和凭据隔离见[财务资源插件文档](../../../vps-billing/docs/RESOURCE_PLUGINS.md)。
 

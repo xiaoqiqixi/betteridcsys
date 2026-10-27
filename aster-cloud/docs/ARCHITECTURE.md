@@ -1,6 +1,6 @@
 # 主控 / KVM 被控的功能与验收边界
 
-2026-10-25，开发中。本文整理当前支持范围；逐轮执行结果以[验证记录](VALIDATION.md)中对应的精确提交为准。接口、页面或 fake runner 测试不代表生产功能已经验收。
+本文整理当前 main 的代码范围；逐轮执行结果以[验证记录](VALIDATION.md)中对应的精确提交为准。接口、页面或 fake runner 测试不代表生产功能已经验收。操作入口见[使用入门](GETTING_STARTED.md)，后续目标与已实现路径分开列出。
 
 用户指定以 KVM 加强版能力为对标范围；逐项差距、当前代码锚点、网络/IPAM 数据约束及交付依赖见 [KVM_ENHANCED_PARITY.md](KVM_ENHANCED_PARITY.md)。该规格不表示加强版已完成，也不改变下面已有实现和实机验收边界。
 
@@ -24,7 +24,7 @@
 ## 本轮已实现的代码路径
 
 - 独立 Vue 3 / TypeScript 管理台：登录、实例列表/创建/详情、真实状态读取、节点维护、按编号直达的资源操作任务详情、精确条件审计查询、用户与角色。支持中文/英文、浅色/深色、桌面/手机，加载/空/错误/忙碌态；没有演示数据回退。
-- 响应式导航：不宽于 1024 CSS px 时使用抽屉，宽屏使用弹性侧栏；文档高度轨道与视口高度固定面板分离，长页不遮挡主内容，短屏菜单独立滚动。键盘目标、焦点回归、背景 inert、滚动锁和跨断点历史清理分别验证；不是物理手机或实际浏览器缩放验收。
+- 响应式导航：52px 一体顶部导航，不宽于 1024 CSS px 使用紧凑入口和抽屉；资源表/连续清单与可收起操作区域适配桌面和手机。键盘目标、焦点回归、背景 inert、滚动锁和跨断点历史清理分别验证；具体源码和截图以验证记录为准，不继承旧侧栏证据，也不是物理手机验收。
 - 管理会话：Secure / HttpOnly / SameSite Cookie、固定 HTTPS Origin、CSRF、登录限流、数据库实时权限、会话撤销、最后管理员保护。admin 包含全部明确权限；operator / viewer / custom 在后端逐动作校验，不能靠隐藏按钮授权。
 - 实例管理：审批 preset 创建、开关机、重启/强制关机、删除与持久化幂等任务。管理员创建是资源动作，不造财务订单。确认删除才回收相应节点的资源预留，迁移源遗留盘继续保守占位。
 - 快照/备份：仅旧普通网络合同下已停止的自有实例，创建、校验、恢复、删除；扁平 qcow2、尺寸/哈希与签名 manifest 校验、原盘恢复保留、限额与故障留痕。不是运行中一致性快照、定时异地备份或跨存储通用实现。OVS 实例拒绝旧 `aster.node.storage/1`，不能恢复时丢掉网络绑定。
@@ -38,13 +38,13 @@
 - NAT 执行：root 预先批准的独立 namespace 支持 IPv4 SNAT 与 TCP/UDP 单端口 DNAT，可指向同 VPC 的跨节点 enabled 成员；另有显式批准的公网 IPv4 出站模式，无须逐个配置公网目的前缀，但继续隔离管理网、underlay、元数据与保留地址。精确 nft 读回、conntrack 撤销、批准 pin 迁移和 owner 墓碑均纳入恢复边界。没有 IPv6/hairpin NAT 或自动物理上联。见 [NAT 合同](../internal/fabric/NAT.md)、[公网出口](PUBLIC_NAT_EGRESS.md) 与 [历史集成验证](NAT_NETWORK_VALIDATION.md)。
 - 公网资源：schema 8 提供公网池、追加库存、唯一分配、实际 NAT 地址选择与确认回收；schema 9 增加普通网络新实例的 `node/3` 真直绑、停止态同 IP/MAC 接管、同 owner/VPC 浮动 IP 绑定/跨节点成员切换/解绑，以及直绑地址保持冷迁移和显式源退役。数据库分配不证明物理地址所有权或上游连通，不能热换运行实例主 IP。见 [公网库存](PUBLIC_IP_MANAGEMENT.md) 与 [VM 公网资源](VM_PUBLIC_IP_MANAGEMENT.md)。
 - 浮动 IPv4 公网入站规则：schema 10 将实例策略与地址绑定分离，新绑定默认拒绝未经允许的新入站；修改策略、切换目标和撤销均冻结完整版本并经过全节点屏障。它只覆盖 VPC 浮动 IPv4 入口，不是完整安全组；旧 legacy 无策略映射不重写且必须明确提示。当前就绪还检查新鲜节点能力和当前 root 批准，不能把历史 ACK 当实时保护。见 [公网入站规则](PUBLIC_INGRESS.md)。
-- 财务资源 transport：新增由财务插件管理器管理的 `resource.aster-cloud` 0.1.1 worker（`aster.resource/1`；`core_min=0.5.10`、`core_max_exclusive=0.6.0`），显式选择后接入原持久开通任务，不新增支付渠道，不把 worker ACK 当服务已开通；没有 HTTP fallback。最低Core 0.5.10目前为未发布候选；旧正式0.5.9不含资源协议，不因旧main版本字符串而获得支持。安装/启用/凭据边界见 [RESOURCE_PLUGINS.md](../../vps-billing/docs/RESOURCE_PLUGINS.md)。另保留独立财务资源适配 CLI：`aster-billing-plugin` 复用原公开商品/请求/六字段结果协议与固定 HTTPS 安全 transport，显式 send、只读 lookup；不是支付渠道、不由 runtime-plugin manager 加载、不自动证明付款或更新服务，也不替代财务原生持久开通链。详见 [适配器 README](../plugins/billingconnector/README.md)。
+- 财务资源 transport：新增由财务插件管理器管理的 `resource.aster-cloud` 0.1.1 worker（`aster.resource/1`；`core_min=0.5.10`、`core_max_exclusive=0.6.0`），显式选择后接入原持久开通任务，不新增支付渠道，不把 worker ACK 当服务已开通；没有 HTTP fallback。最低Core为0.5.10，已有正式发行；worker 0.1.1仍为独立候选且不在Core六资产中。旧正式0.5.9不含资源协议，不因旧main版本字符串而获得支持。安装/启用/凭据边界见 [RESOURCE_PLUGINS.md](../../vps-billing/docs/RESOURCE_PLUGINS.md)。另保留独立财务资源适配 CLI：`aster-billing-plugin` 复用原公开商品/请求/六字段结果协议与固定 HTTPS 安全 transport，显式 send、只读 lookup；不是支付渠道、不由 runtime-plugin manager 加载、不自动证明付款或更新服务，也不替代财务原生持久开通链。详见 [适配器 README](../plugins/billingconnector/README.md)。
 
 机器 API、管理会话、节点 mTLS 是独立安全边界。旧合同冷迁移不是热迁移，源 fence 不经 API 自动解除；任一侧未知时保持占位，不能双启动。
 
 | 状态域 | 当前版本与兼容边界 |
 | --- | --- |
-| 主控 MySQL | 当前 schema **11**：007 全局 VPC/epoch，008 公网库存/租约，009 VM 公网资源，010 实例入站策略，011 成员分页只读索引；001–010 历史迁移保持不可变。绑定、地址占用、策略版本、epoch、操作和审计须一致备份。旧 binary 拒绝新数据库，不能只换程序回滚。 |
+| 主控 MySQL | 当前 schema **12**：007 全局 VPC/epoch，008 公网库存/租约，009 VM 公网资源，010 实例入站策略，011 成员分页索引，012 账户 revision 与身份操作回执；001–011 历史迁移保持不可变。绑定、地址占用、策略版本、epoch、身份回执和审计须一致备份。旧 binary 拒绝新数据库，不能只换程序回滚。 |
 | 节点 journal | 兼容既有 schema 1/2；node/2 绑定使用 **3**，显式网络恢复 completion 使用 **4**，托管公网绑定与永久退役墓碑使用 **5**。旧节点不能忽略新绑定继续执行；OVS 存储/迁移及旧 reconcile 明确拒绝。 |
 | fabric journal | 兼容此前 schema-1 CLI；首次启停门禁写 schema **2**，增加持久 preparing/completed/uncertain 围栏。归档/overlay 使用 schema **3**，NAT owner 与 `nat_profile_ids` 保留所有权墓碑；旧 binary 不得忽略新字段降级。pending/unknown 不允许借历史 applied 回执放行。 |
 
@@ -73,7 +73,7 @@
 
 ## 宿主机要求和安全
 
-- Ubuntu 22.04 / 24.04 分别验证；较新版本先探测，未知版本不自动运行不兼容命令。amd64 KVM 要求硬件虚拟化已启用并有可用 `/dev/kvm`；仅看到 CPU flags 不是完整运行验收。
+- 当前只接受 Ubuntu 22.04 / 24.04 amd64，两个平台分别验证；Ubuntu 26.04 和未知版本拒绝安装。KVM 要求硬件虚拟化已启用并有可用 `/dev/kvm`；仅看到 CPU flags 不是完整运行验收。
 - libvirt / QEMU 使用发行版受支持版本，不固定发行版专属的 systemd daemon 名称；doctor 检测能力，不自动安装包、重启宿主或改公网网卡。
 - 计算节点必须是运营者明确准备的计算宿主机。当前 1 GB 测试服务器同时运行财务，不能因开发请求而自动桥接其 SSH 网卡、清空防火墙或占满内存。
 - 节点间使用经审批的证书和固定目的地。缺 CA、错误主机名、错误客户端身份、过期证书均拒绝；禁用 TLS 验证不是联调方法。

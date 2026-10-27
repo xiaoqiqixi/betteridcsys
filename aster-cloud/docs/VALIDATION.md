@@ -1,8 +1,19 @@
 # 开发验证入口与历史记录
 
-验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列当前本地安装器安全测试，再列精确历史源码；历史日期段落保留原轮次的数量、工具链和限制，不是当前完整测试数量。Cloud 的独立预发布不等于稳定版或真机验收；财务 v0.5.9 发行包不因这些记录而改变。
+验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列最近完整门禁基线，再保留历史工作区和专题记录；历史日期段落的数量、工具链和限制不是当前完整测试数量。Cloud 的独立预发布不等于稳定版或真机验收，也不改变财务既有发行资产。
 
-## 当前工作区 · 通用未知操作账本（W05）
+## 2026-10-27 · 完整门禁基线 b132123
+
+精确源码 `b132123cc9bbc87bdcc2548db3bf8665460c40c5` 的[Cloud 40439673255](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439673255) **11/11** 与[财务 40439673220](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439673220) **5/5** 实际成功，合计同 SHA 16 项。后续源码仍需自己的完整检查，不继承这些绿灯。
+
+- Ubuntu22/24 原生来宾分别实际完成 APT/systemd/libvirt，启动前及最终宿主快照均未改变；来宾软件准备使用 TCG，不是 KVM 客户实例验收。此前其他 SHA 的宿主变化失败保留，不能由这次通过反推已查明根因。
+- 真实 MySQL/严格 HTTPS 浏览器包含既有网络回归与身份写入；身份合同验证 29 项、5 次写入及 5 份已提交回执、10 张实际 PNG。节点 RPC 是替身，不执行真实节点动作。
+- 本轮人工查看其中桌面会话撤销、320px 手机编辑顶部两张；原 Node 报告验证器实际通过。不声称本轮逐张人工检查全部截图或完成全站视觉验收。
+- 财务 Core 0.5.10 已独立正式发行，公开六资产与两平台生产 prepare 复验见[财务公开验收](../../docs/CORE_PUBLIC_PREPARE_ACCEPTANCE.md)；独立资源 worker 0.1.1 仍为候选，不在这六资产中。
+
+完整来源、收据、截图路径和限制见[27日执行记录](../../docs/EXECUTION-20261027.md)。真实 KVM、跨物理节点流量、公网上联、宿主故障恢复、目标用户主机与生产生命周期仍未验收。
+
+## 2026-10-25 工作区 · 通用未知操作账本（W05）
 
 2026-10-25，保留原操作ID、完整任务绑定和只读核对合同。取消恢复时 `slice(0,64)` 与64条新增门槛，
 改为最多1MiB序列化UTF-8预算；这限制同时未核实的数据量，不是累计操作次数，也不是无限容量。
@@ -19,7 +30,7 @@
 
 原始RED/GREEN/完整日志在ignored `artifacts/execution-20261025/`，不将临时构建/运行日志纳入发行。
 
-## 当前工作区 · M0：Ubuntu22/24 支持范围收敛
+## 2026-10-25 工作区 · M0：Ubuntu22/24 支持范围收敛
 
 用户明确暂不支持 Ubuntu26，先完成 Ubuntu22.04/24.04 amd64。当前安装 apply、provision、
 libvirt 依赖计划、TCG 镜像/CLI/C sandbox 白名单、CI matrix 和 Release 文案/必需检查已收敛。
@@ -48,7 +59,7 @@ libvirt 依赖计划、TCG 镜像/CLI/C sandbox 白名单、CI matrix 和 Releas
 `/private/tmp/aster-cloud-tools/actionlint`（`-version`确认1.7.7）完成检查；没有放宽业务安全校验。
 
 
-## 当前工作区 · 财务资源 worker 兼容声明
+## 2026-10-25 工作区 · 财务资源 worker 兼容声明
 
 `resource.aster-cloud` worker 候选升为 **0.1.1**，协议仍为 `aster.resource/1`；最低 Core 修正为
 **0.5.10**，上界仍是 `core_max_exclusive=0.6.0`。这是尚未发布的候选版本，不是正式0.5.9
@@ -75,7 +86,7 @@ CLI编译产物仅在临时目录，SHA256为
 以root私有policy/credential fixture补验，不对本机提权以掩盖跳过。此次未执行完整Linux
 resource worker运行时、真实MySQL、浏览器、GitHub CI或KVM验收，不套用历史绿色结论。
 
-## 当前工作区 · 网络持久意图与新增发行门禁
+## 2026-10-25 工作区 · 网络持久意图与新增发行门禁
 
 2026-10-25，本轮只改前端持久意图校验/存储边界与发行门禁，不改变金额、支付、历史财务
 快照、后端网络动作或权限合同。overlay写前复用读回的完整校验，先冻结并验证payload，
@@ -177,7 +188,7 @@ Ubuntu26 的更新与依赖模拟已成功，但生产安全检查报 `APT_PLAN_
 - 新增 `deploy/ci/test_cloud_mysql_grants.py`，只接受原生 CI 私有 MySQL fixture：实际 RANDOM PASSWORD / ATTRIBUTE / SHOW GRANTS、全部10份迁移 SQL 与外键、runtime 四项 DML 和拒绝 DDL/越库授权。仅临时替换测试传输，不绕过生产 root/文件属主保护；非 fixture 拒绝退出而不是跳过。完整安装器、Ubuntu包脚本和 KVM 真机验收另行进行。
 - 当前 main 精确源码的 CI 运行见 [Controller development checks](https://github.com/xiaoqiqixi/betteridcsys/actions/workflows/cloud.yml)；必须核对运行所指向的 SHA 与结果，不把本地通过或旧运行当新完整验收。
 
-## 当前工作区：开发安装器安全测试
+## 历史工作区：开发安装器安全测试
 
 > 本节为正式通道 / libvirt 增量之前的历史阶段记录；旧计数与“尚未开放”仅指当时实现。
 

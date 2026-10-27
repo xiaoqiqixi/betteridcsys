@@ -1,6 +1,6 @@
 # 独立资源插件：主控对接
 
-Core 0.5.10 未发布候选提供 `resource.aster-cloud` 0.1.1，协议 `aster.resource/1`。它不是支付渠道，也不是旧 `aster-billing-plugin` CLI 的改名。新 worker 由系统插件管理器校验、安装、选择、启用/禁用、回滚，经独立 systemd 服务加载；已有财务主机派发命令可显式选择这个 transport。网页不能安装、执行或配置任意插件路径，也不能从这里直接派发虚拟机。
+Core `0.5.10` 首次正式提供资源协议 `aster.resource/1`；独立 worker **`resource.aster-cloud 0.1.1` 仍为候选**，不包含在 Core 六资产中，也没有因 Core 发行而自动发布。它不是支付渠道，也不是旧 `aster-billing-plugin` CLI 的改名。worker 由系统插件管理器校验、安装、选择、启用/禁用、回滚，经独立 systemd 服务加载；已有财务主机派发命令可显式选择这个 transport。网页不能安装、执行或配置任意插件路径，也不能从这里直接派发虚拟机。
 
 **最低 Core 明确为 `0.5.10`，最高范围 `<0.6.0`。** Core、plugin-host 和 plugin-manager 必须来自同一经核验版本；旧正式 v0.5.9 没有此协议，旧开发包误声明的 `core_min=0.5.9` 不能作为兼容依据，新管理器和运行时均拒绝。资源包不是 Core 六资产之一，须独立核验与批准；此文不是 Release 成功或真机验收声明。
 
@@ -13,7 +13,9 @@ Core 0.5.10 未发布候选提供 `resource.aster-cloud` 0.1.1，协议 `aster.r
 - 不读写金额、币种、付款记录或历史快照，不生成本地已开通/已付款状态。`accepted` 只是主控受理，不是虚拟机已运行。
 - 默认仍是原 HTTPS 路径。选择 resource 后没有 HTTP fallback；worker 缺失/禁用/不匹配会失败，不偷偷绕过插件。
 
-## 安装和选择（Linux amd64，Ubuntu 22.04 / 24.04 目标，22.04 完整原生验收待完成）
+## 安装和选择
+
+目标为 Linux amd64、Ubuntu 22.04 / 24.04。下面是受信构建包的显式主机流程，不是独立插件已公开发行的下载承诺；Core 的两平台原生验证不能替代该 worker 的真实 systemd 安装、生产 token 权限及主控/KVM 验收。
 
 先在受信构建环境构建可校验的包，无网络下载/执行包脚本；构建过程不启用服务：
 

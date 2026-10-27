@@ -4,6 +4,8 @@
 
 ## 初始化与启动
 
+首次安装优先使用[安装向导](install/README.md)，由核验后的独立 Cloud Release 提供角色命令；向导可明确准备依赖/专用数据库、安装 unit 并检查服务。下列命令描述**已准备好主机与配置的手工路径**，不代替向导，也不能直接粘贴示例跳过审批。
+
 程序目标为原生Linux，无Docker。需MySQL8兼容InnoDB及正确UTC时间、根控制的TLS和节点mTLS文件。默认服务监听127.0.0.1:9443并强制TLS，不能由HTTP明文降级或信任X-Forwarded-Proto绕过。外部TLS终结若不能把后端TLS保留则不受支持；不要以修改Handler代替正确配置。
 
 ```
@@ -22,13 +24,19 @@ aster-controller serve -config /etc/aster-controller/config.json
 
 DSN只允许独立`aster_controller`/`aster_cloud`及其`_`前缀子命名空间；MySQL仅Unix socket或明确loopback TCP，拒绝远端明文/skip-verify/preferred TLS及multiStatements/不安全LOCAL INFILE/旧密码选项。不是在现有财务库上增加几张表。迁移为显式命令，有内容SHA256；发现不一致拒绝。创建/升级数据库用户、TLS和备份仍是主机管理员操作，程序不自动创建生产数据库。
 
-服务单元`controller-aster.service`提供sandbox和资源上限模板，**未自动安装/启用**。本期API进程为读取root-private策略而仍以root UID运行，但capabilities清空、只读系统、无VM命令执行；不能把它说成已经完成最小权限分离。发行前需在目标发行版实测systemd和TLS，进一步拆分非特权API身份/凭据交付。
+手工路径的服务单元`controller-aster.service`仅为sandbox和资源上限模板，不由上述CLI命令自动安装/启用；安装向导另有明确批准的服务安装流程。API进程为读取root-private策略而仍以root UID运行，但capabilities清空、只读系统、无VM命令执行；不能把它说成已经完成最小权限分离。目标环境仍需验收systemd和TLS，非特权API身份/凭据交付另行实施。
+
+## 当前 schema 12：身份操作回执
+
+`012_identity_operations.sql` 增加用户 revision 和身份操作回执表，001–011 不修改。创建、编辑账户及撤销会话须使用当前 revision、原因和稳定操作 key；资料/会话/审计/回执在同一事务确认。前后端必须使用同一版本，旧表单缺少这些字段会被拒绝，不能只部署网页。
+
+升级仍须停写、保留独立主控库及匹配配置/journals 的可恢复备份，以独立迁移身份显式 `migrate`，再 `check`；当前 runtime 身份仅持有本库 DML。旧 binary 拒绝新 schema；回滚需匹配备份，不删除012回执或单换旧程序。见[身份操作合同](../../docs/IDENTITY_OPERATIONS.md)与[Console API](../docs/CONSOLE_API.md)。财务库不随之变化。
 
 ## 成员分页升级：schema 10 → 11
 
 011 仅增加 `controller_console_users(created_at,id)` 的稳定只读索引，不修改账户、会话、权限或财务库。仍须在升级窗口按现有停写/备份流程执行显式 `migrate` 与 `check`：索引DDL提交和迁移receipt不是同一事务；重入仅承认名称、列顺序、方向、可见性、BTREE及非unique/非prefix/非expression均精确匹配的索引，不覆盖同名冲突，也不偷偷修复已记录后的漂移。
 
-新包的 controller_mysql schema 元数据由源码迁移自动得到11；不修改旧001–010，也不放宽迁移数量/SHA校验。**即使这次只是索引，旧binary仍拒绝11库**。回滚需匹配的完整主控库备份和一致journals/应用版本；不要删11 receipt、直接drop索引或单换旧binary。不要恢复财务库来代替主控回滚。
+该分页增量当时将 schema 元数据推进到11；当前版本还须继续应用上面的012，不把历史11当作当前目标。不修改旧001–010，也不放宽迁移数量/SHA校验。**即使011只是索引，更旧binary仍拒绝11库**。回滚需匹配的完整主控库备份和一致journals/应用版本；不要删11 receipt、直接drop索引或单换旧binary。不要恢复财务库来代替主控回滚。
 
 新成员前端需要新返回字段 `next_cursor`，请以同一包部署前后端。既有机器管理 `/v1/*` 的最多100条投影不因此变成完整分页；本次只改变会话管理面 `/console/v1/users`。实库/浏览器验收状态见[成员分页](../docs/MEMBERS_PAGINATION.md)。
 
