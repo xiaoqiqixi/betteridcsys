@@ -67,7 +67,7 @@ func runAccountInFlightLogin(t *testing.T, f accountFixture, password string) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("login blocked before pause")
 	}
-	_, err := f.WriteCustomerAccount(f.ctx, f.admin.ID, accountWrite{Operation: "password", ID: f.customer.ID, Revision: f.customer.Revision, Password: "UpdatedPassword!2026", Reason: "verified recovery"})
+	_, err := f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, f.ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "password", ID: f.customer.ID, Revision: f.customer.Revision, Password: "UpdatedPassword!2026", Reason: "verified recovery"})
 	release.Do(func() { close(pause.release) })
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestMySQLAdminCustomerAuditFailureRollsBackAccountAndSessions(t *testing.T)
 		t.Fatal(err)
 	}
 	migrationExec(t, ctx, m.DB, "CREATE TRIGGER reject_account_audit BEFORE INSERT ON audit_events FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fixture audit refusal'")
-	if _, err = m.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "password", ID: before.ID, Revision: before.Revision, Password: "NotCommitted!2026!", Reason: "audit rollback regression"}); err == nil {
+	if _, err = m.WriteCustomerAccount(accountWriteTestContext(t, m, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "password", ID: before.ID, Revision: before.Revision, Password: "NotCommitted!2026!", Reason: "audit rollback regression"}); err == nil {
 		t.Fatal("audit failure ignored")
 	}
 	after, err := m.UserByID(ctx, before.ID)
@@ -112,12 +112,12 @@ func TestMySQLAdminCustomerAuditFailureRollsBackAccountAndSessions(t *testing.T)
 		t.Fatal("session revoked by rolled-back reset", err)
 	}
 	migrationExec(t, ctx, m.DB, "DROP TRIGGER reject_account_audit")
-	created, err := m.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "create", Name: "Created", Email: "new@fixture.local", Role: "admin", Password: "CreatedAccount!2026", Reason: "approved"})
+	created, err := m.WriteCustomerAccount(accountWriteTestContext(t, m, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "create", Name: "Created", Email: "new@fixture.local", Role: "admin", Password: "CreatedAccount!2026", Reason: "approved"})
 	if err != nil || created.Revision != 1 || created.Disabled {
 		t.Fatal(created, err)
 	}
 	// SQL uniqueness is case insensitive; retries cannot create another identity.
-	if _, err = m.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "create", Name: "Duplicate", Email: "NEW@fixture.local", Role: "customer", Password: "CreatedAccount!2026", Reason: "duplicate"}); !errors.Is(err, ErrAccountExists) {
+	if _, err = m.WriteCustomerAccount(accountWriteTestContext(t, m, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "create", Name: "Duplicate", Email: "NEW@fixture.local", Role: "customer", Password: "CreatedAccount!2026", Reason: "duplicate"}); !errors.Is(err, ErrAccountExists) {
 		t.Fatal(err)
 	}
 }

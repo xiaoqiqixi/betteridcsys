@@ -97,7 +97,8 @@
       "state": "in_progress",
       "evidence": [
         "FINANCE_NATIVE_22_24.md",
-        "EXECUTION-20261026.md"
+        "EXECUTION-20261026.md",
+        "EXECUTION-20261027.md"
       ],
       "checklist_ids": [
         "B9.2",
@@ -106,7 +107,7 @@
         "I08",
         "R05"
       ],
-      "scope": "22独立任务、Jammy四包pin、安全tar、Nginx平台准备、OS报告及同SHA五个财务门已实现。e566f20两平台启动MySQL并跑实库/race，但被旧payment-native信任差集测试挡住，完整安装/升级/恢复未执行；精确测试已修，待新16门。"
+      "scope": "eb1e81f实际15/16：24完整native和独立财务浏览器成功，22在Nginx1.18安全最低版本检查失败；改用官方签名metadata审查的固定1.30.6 Jammy包，13项平台/pin本机通过。新SHA完整22链及16门待跑，不降低TLS/SNI。"
     },
     {
       "id": "W05",
@@ -210,7 +211,7 @@
           "id": "W07-B",
           "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
           "state": "implemented_local",
-          "scope": "e566f20主控11/11通过，实际29项身份检查/5写/10图、完整回执及资源历史hash不变，全部10图已人工检查；跨系统16门尚因旧财务测试差集失败，不能将整体W07或发行记完成。",
+          "scope": "e566f20主控11/11通过，实际29项身份检查/5写/10图、完整回执及资源历史hash不变，全部10图已人工检查；eb1e81f跨系统15/16，22仍有Nginx版本兼容阻塞，整体W07/发行未完成。",
           "not_included": [
             "数据库强制append-only逐表授权（W13）",
             "MFA/step-up",
@@ -222,6 +223,22 @@
             "IDENTITY_OPERATIONS.md",
             "EXECUTION-20261026.md",
             "../aster-cloud/docs/CONSOLE_API.md"
+          ]
+        },
+        {
+          "id": "W07-B2",
+          "title": "财务账户写原会话事务fence",
+          "state": "implemented_local",
+          "scope": "四账户写强制原session/actor/hash事务内复核，原session X避免本人删行与logout升级死锁；锁后新SQL时间判expiry，真实MySQL时间primitive已复现。Linux交叉编译/vet通过，严格TLS/完整JSON/真实SQL等待回归尚待新SHA Linux执行。",
+          "not_included": [
+            "staff权限组/MFA/SSO",
+            "所有其他财务写统一fence",
+            "新SQL/金额/支付/历史快照变更",
+            "真KVM/物理网络验收"
+          ],
+          "evidence": [
+            "FINANCE_IDENTITY_SESSION_FENCE.md",
+            "EXECUTION-20261027.md"
           ]
         }
       ]

@@ -71,6 +71,8 @@ func (a *App) parseAccountQuery(r *http.Request, actor User) (accountQuery, erro
 }
 func (a *App) accountError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, ErrAccountSession):
+		fail(w, r, 401, "AUTH_REQUIRED", "登录已失效，请重新登录")
 	case errors.Is(err, ErrAccountInput):
 		fail(w, r, 400, "INVALID_ACCOUNT", "账户资料无效")
 	case errors.Is(err, ErrAccountQuery):
@@ -202,7 +204,8 @@ func (a *App) adminCustomerAccountsHTTP(w http.ResponseWriter, r *http.Request, 
 		}
 		input = accountWrite{Operation: "revoke", ID: parts[0], Revision: body.Revision, Reason: body.Reason}
 	}
-	u, err := store.WriteCustomerAccount(r.Context(), actor.ID, input)
+	ctx := withAccountWriteSession(r.Context(), actor.ID, digest(a.token(r)))
+	u, err := store.WriteCustomerAccount(ctx, actor.ID, input)
 	if err != nil {
 		a.accountError(w, r, err)
 		return

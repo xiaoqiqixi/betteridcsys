@@ -13,8 +13,9 @@
 ## 平台准备
 
 1. 从系统 os-release 严格识别 22.04/24.04，拒绝 Debian、26、其他版本；不接受环境变量伪装平台。
-2. Jammy 使用非 t64 运行库及有实际二进制的 `nginx-core` 包；Noble 保留 t64 运行库与 `nginx`。
-   Nginx 仅通过已认证 APT 下载、核对 Package/Architecture、解到本轮目录，不执行 maintainer scripts。
+2. Jammy使用非t64运行库及经官方签名metadata审查、固定大小/SHA256的Nginx stable1.30.6 Jammy包；
+   不能再用缺少ssl_reject_handshake的Ubuntu nginx-core1.18。Noble保留t64运行库及已认证APT的nginx包。
+   两平台均核对Package/Architecture（Jammy另核对精确Version），解到本轮目录，不执行maintainer scripts；不向宿主添加nginx.org源或签名信任。
 3. MySQL 先验证所选固定 manifest、精确四包/版本/架构/正整数大小/SHA256，再全部下载校验，之后才解包。
    CLI 不接受新 URL、hash、manifest 或已解压目录覆盖。
 4. 不用 Python 大版本号代替 tar 安全能力：要求有效 `data_filter` 和 extractall 的 filter 参数，始终显式 `filter="data"`。
@@ -39,4 +40,9 @@
 [Python tarfile 安全 filter](https://docs.python.org/3.10/library/tarfile.html#extraction-filters)。
 2026-10-26 已下载四个官方22包并逐个核对固定大小/SHA256，尚未本机解压或执行；这不是 PGP InRelease 验证，也不是 Ubuntu22 运行成功。
 本机是 macOS，不伪装成 systemd/Linux 验收。必须以新提交的 Ubuntu22/24 CI 实际记录与清理回执完成本包。
+eb1e81f实际达到15/16门：24完整原生链成功，22停止在Nginx1.18安全最低版本检查，没有降低检查或把失败计通过。
+27日已核验官方stable1.30.6签名Release→Packages大小/SHA256→固定.deb大小/SHA256，篡改Release负例拒绝。
+PGP密钥束取自vendor HTTPS，固定全文件SHA并包含官方文档给出的主指纹；不宣称独立Web of Trust认证。
+OpenPGP.js只在私有临时验证目录，不成为项目依赖。新22包尚未本机提取/运行，仍须新精确SHA完整native链。
+精确pin、签名审查材料及失败记录见[27日续记](EXECUTION-20261027.md)。
 全新物理机器、真实公网证书、负载/灾备和 KVM 生产验收另列，不由 hosted runner 的隔离服务测试替代。

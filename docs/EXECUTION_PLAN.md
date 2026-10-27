@@ -167,6 +167,8 @@ Ubuntu26/其他发行版按独立能力适配与安全预算推进，不用宣�
 后续先实施[W07-B1会话事务边界](IDENTITY_SESSION_FENCE.md)，再推进revision/显式撤销/身份未知结果闭环。
 详细证据、限制及本轮局部结果见[续记](EXECUTION-20261026.md)，不将W07-A通过误记为整套W07完成。
 
-W07-B现已实现schema12及实际28项身份实库闭环；1620cdc的Cloud11门成功，财务倒计时断言失败已稳定复现并修复，
-截图过渡与实际视口也补严到29项，尚待新同SHA验收。同时按[W04合同](FINANCE_NATIVE_22_24.md)补财务Ubuntu22原生链，
-不把24成功当22成功；新增22必需门后总门为16，真实KVM仍后置，后续W07-C/D和其余工作包未记完成。
+W07-B现已实现schema12及实际29项身份实库闭环，e566f20的10张身份图全部重新人工审查。
+eb1e81f达到15/16：Cloud11门、财务24完整native及独立实库浏览器成功，22在Nginx1.18最低安全版本检查失败。
+按[W04合同](FINANCE_NATIVE_22_24.md)改用已审查官方Jammy固定Nginx包，不降低TLS/SNI要求。
+同时补[W07-B2财务账户原会话fence](FINANCE_IDENTITY_SESSION_FENCE.md)，完整Linux执行仍待新SHA；
+详见[27日记录](EXECUTION-20261027.md)。不把24成功当22成功；总门为16，真实KVM仍后置，后续W07-C/D和其余工作包未记完成。

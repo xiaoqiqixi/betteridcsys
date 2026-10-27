@@ -15,8 +15,13 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 [[ $ID == ubuntu ]] || fail 'Only Ubuntu 22.04/24.04 is supported.'
 case $VERSION_ID in
   22.04)
-    platform_libraries=(libaio1 libssl3 libtirpc3 libpcre3)
-    nginx_package=nginx-core
+    platform_libraries=(libaio1 libssl3 libtirpc3)
+    # Jammy's nginx-core 1.18 lacks ssl_reject_handshake. Use the reviewed
+    # official stable Jammy package; no third-party APT source is installed.
+    nginx_package=nginx
+    nginx_package_version='1.30.6-1~jammy'
+    nginx_package_size=1224970
+    nginx_package_sha256='ddafa6d5decef787c7942e6c4a9c62cf881d7ea598ec42b9997ecbf298e1bde3'
     ;;
   24.04)
     platform_libraries=(libaio1t64 libssl3t64 libtirpc3t64)
@@ -25,7 +30,7 @@ case $VERSION_ID in
   *) fail 'Only Ubuntu 22.04/24.04 is supported.' ;;
 esac
 [[ -n ${GITHUB_ENV:-} && -f $GITHUB_ENV && -w $GITHUB_ENV ]] || fail 'Missing job environment output.'
-for command in sudo apt-get dpkg-deb sha256sum; do
+for command in sudo apt-get dpkg-deb sha256sum curl; do
   command -v "$command" >/dev/null || fail "Missing $command."
 done
 
@@ -52,23 +57,37 @@ sudo apt-get "${apt_security[@]}" update
 sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_security[@]}" install --yes --no-install-recommends \
   "${platform_libraries[@]}" libmecab2 libnuma1 libtinfo6 \
   libgssapi-krb5-2 libkrb5-3 libsasl2-2 libudev1 libpcre2-8-0 openssl fonts-noto-cjk
-(
-  cd "$fixture_root/packages"
-  apt-get "${apt_security[@]}" download "$nginx_package"
-)
+if [[ $VERSION_ID == 22.04 ]]; then
+  nginx_filename="nginx_${nginx_package_version}_amd64.deb"
+  nginx_path="$fixture_root/packages/$nginx_filename"
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --connect-timeout 20 --max-time 180 --max-filesize "$nginx_package_size" \
+    "https://nginx.org/packages/ubuntu/pool/nginx/n/nginx/$nginx_filename" --output "$nginx_path"
+  [[ $(stat -c %s -- "$nginx_path") == "$nginx_package_size" ]] || fail 'Pinned Jammy Nginx size mismatch.'
+  printf '%s  %s\n' "$nginx_package_sha256" "$nginx_path" | sha256sum --check --status \
+    || fail 'Pinned Jammy Nginx SHA256 mismatch; refusing metadata/extraction/execution.'
+else
+  (
+    cd "$fixture_root/packages"
+    apt-get "${apt_security[@]}" download "$nginx_package"
+  )
+fi
 shopt -s nullglob
 packages=("$fixture_root/packages/"*.deb)
-[[ ${#packages[@]} == 1 ]] || fail 'Expected one authenticated Ubuntu nginx package.'
+[[ ${#packages[@]} == 1 ]] || fail 'Expected one reviewed Nginx package.'
 package=${packages[0]}
 [[ $(dpkg-deb --field "$package" Package) == "$nginx_package" ]] || fail 'Unexpected Nginx package identity.'
 [[ $(dpkg-deb --field "$package" Architecture) == amd64 ]] || fail 'Unexpected Nginx package architecture.'
+if [[ $VERSION_ID == 22.04 ]]; then
+  [[ $(dpkg-deb --field "$package" Version) == "$nginx_package_version" ]] || fail 'Pinned Jammy Nginx version mismatch.'
+fi
 dpkg-deb --extract "$package" "$fixture_root/nginx"
 nginx_binary="$fixture_root/nginx/usr/sbin/nginx"
 [[ -f $nginx_binary && ! -L $nginx_binary && -x $nginx_binary ]] || fail 'Nginx executable missing.'
 "$nginx_binary" -v
 sha256sum "$package"
 printf 'ASTER_ACCEPT_NGINX_BIN=%s\n' "$nginx_binary" >>"$GITHUB_ENV"
-printf 'PASS: authenticated Ubuntu libraries and isolated Nginx executable prepared.\n'
+printf 'PASS: authenticated Ubuntu libraries and reviewed isolated Nginx executable prepared.\n'
 
 # Exercise the actual host's typed systemd properties before the long database
 # suites. These two root-owned fixtures are loaded for inspection, never started.

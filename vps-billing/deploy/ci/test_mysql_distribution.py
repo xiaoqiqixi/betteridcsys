@@ -126,7 +126,7 @@ class DistributionPolicyTests(unittest.TestCase):
         self.assertIsNotNone(switch)
         command = 'set -euo pipefail\nfail() { exit 9; }\nVERSION_ID=$1\n' + switch.group()
         command += '\nprintf "%s\\n" "$nginx_package" "${platform_libraries[@]}"\n'
-        for version, expected in (('22.04', ['nginx-core', 'libaio1', 'libssl3', 'libtirpc3', 'libpcre3']),
+        for version, expected in (('22.04', ['nginx', 'libaio1', 'libssl3', 'libtirpc3']),
                                   ('24.04', ['nginx', 'libaio1t64', 'libssl3t64', 'libtirpc3t64']),
                                   ('26.04', None)):
             with self.subTest(version=version):
@@ -135,6 +135,20 @@ class DistributionPolicyTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0 if expected else 9)
                 if expected:
                     self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_jammy_nginx_pin_is_checked_before_package_extraction_without_lowering_tls(self):
+        source = (HERE / 'prepare-native-runner.sh').read_text()
+        self.assertIn("nginx_package_version='1.30.6-1~jammy'", source)
+        self.assertIn('nginx_package_size=1224970', source)
+        self.assertIn("nginx_package_sha256='ddafa6d5decef787c7942e6c4a9c62cf881d7ea598ec42b9997ecbf298e1bde3'", source)
+        self.assertIn('https://nginx.org/packages/ubuntu/pool/nginx/n/nginx/$nginx_filename', source)
+        self.assertLess(source.index('Pinned Jammy Nginx SHA256 mismatch'), source.index('dpkg-deb --field'))
+        self.assertLess(source.index('Pinned Jammy Nginx SHA256 mismatch'), source.index('dpkg-deb --extract'))
+        self.assertLess(source.index('Pinned Jammy Nginx version mismatch'), source.index('dpkg-deb --extract'))
+        self.assertNotIn('--insecure', source)
+        edge = (HERE / 'edge-observability.py').read_text()
+        self.assertIn('version >= (1, 19, 4)', edge)
+        self.assertIn('ssl_reject_handshake on;', (HERE.parent / 'nginx.native.conf').read_text())
 
 
 if __name__ == '__main__':

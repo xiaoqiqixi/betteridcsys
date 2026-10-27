@@ -25,7 +25,8 @@ var (
 )
 
 // Shared with catalog management: persistence, not the caller's cached role,
-// determines authorization. SHARE is acquired before other mutable resources.
+// determines authorization. SHARE precedes business-resource locks; identity
+// writes first serialize on their singleton and fence the original session.
 func lockActiveAdministrator(ctx context.Context, tx *sql.Tx, actorID string) (User, error) {
 	actor, err := scanUser(tx.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users WHERE id=? FOR SHARE", actorID))
 	if errors.Is(err, ErrNotFound) {
@@ -202,13 +203,23 @@ func (m *Memory) AdminCustomerAccount(_ context.Context, actor, id string) (User
 	}
 	return normalizedUserRevision(u), nil
 }
-func (m *Memory) WriteCustomerAccount(_ context.Context, actorID string, input accountWrite) (User, error) {
+func (m *Memory) WriteCustomerAccount(ctx context.Context, actorID string, input accountWrite) (User, error) {
+	sessionHash, err := accountWriteSessionHash(ctx, actorID)
+	if err != nil {
+		return User{}, err
+	}
 	w, hash, err := prepareAccountWrite(input)
 	if err != nil {
 		return User{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return User{}, err
+	}
+	if err := m.accountSessionLocked(actorID, sessionHash); err != nil {
+		return User{}, err
+	}
 	actor, err := m.activeAdministratorLocked(actorID)
 	if err != nil {
 		return User{}, err
@@ -327,6 +338,10 @@ func (m *MySQL) AdminCustomerAccount(ctx context.Context, actor, id string) (Use
 	return u, nil
 }
 func (m *MySQL) WriteCustomerAccount(ctx context.Context, actorID string, input accountWrite) (User, error) {
+	sessionHash, err := accountWriteSessionHash(ctx, actorID)
+	if err != nil {
+		return User{}, err
+	}
 	w, hash, err := prepareAccountWrite(input)
 	if err != nil {
 		return User{}, err
@@ -341,6 +356,9 @@ func (m *MySQL) WriteCustomerAccount(ctx context.Context, actorID string, input 
 	// Actor SHARE (not X) also avoids cycles with financial audit actor FK reads.
 	var singleton int
 	if err = tx.QueryRowContext(ctx, "SELECT id FROM email_settings WHERE id=1 FOR UPDATE").Scan(&singleton); err != nil {
+		return User{}, err
+	}
+	if err := lockAccountSession(ctx, tx, actorID, sessionHash); err != nil {
 		return User{}, err
 	}
 	actor, err := lockActiveAdministrator(ctx, tx, actorID)

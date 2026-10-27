@@ -23,6 +23,19 @@ type accountFixture struct {
 	admin, otherAdmin, customer User
 }
 
+func accountWriteTestContext(t *testing.T, store Store, ctx context.Context, actor string) context.Context {
+	t.Helper()
+	u, err := store.UserByID(ctx, actor)
+	if err != nil {
+		t.Fatal("account test session owner missing", err)
+	}
+	s := Session{Hash: ID() + ID(), UserID: actor, Revision: u.Revision, Expires: time.Now().Add(time.Hour)}
+	if err := store.PutSession(ctx, s); err != nil {
+		t.Fatal("account test session creation failed", err)
+	}
+	return withAccountWriteSession(ctx, actor, s.Hash)
+}
+
 func memoryAccountFixture(t *testing.T) accountFixture {
 	t.Helper()
 	m := NewMemory()
@@ -59,7 +72,7 @@ func runAccountContract(t *testing.T, f accountFixture) {
 	if _, err := f.AdminCustomerAccounts(ctx, f.customer.ID, accountQuery{}); !errors.Is(err, ErrAdminRequired) {
 		t.Fatal("customer list authorized", err)
 	}
-	if _, err := f.WriteCustomerAccount(ctx, f.customer.ID, accountWrite{Operation: "revoke", ID: f.admin.ID, Revision: 1, Reason: "test"}); !errors.Is(err, ErrAdminRequired) {
+	if _, err := f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, ctx, f.customer.ID), f.customer.ID, accountWrite{Operation: "revoke", ID: f.admin.ID, Revision: 1, Reason: "test"}); !errors.Is(err, ErrAdminRequired) {
 		t.Fatal("cached authority accepted", err)
 	}
 	// Copy a known fixture hash, not 1005 bcrypt computations or transactions.
@@ -137,7 +150,7 @@ func runAccountContract(t *testing.T, f accountFixture) {
 	}
 	// Name-only changes preserve active sessions; generations still reject an
 	// in-flight login whose password check read the earlier account revision.
-	next, err := f.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "update", ID: old.ID, Name: "Renamed", Role: old.Role, Disabled: false, Revision: old.Revision, Reason: "support request"})
+	next, err := f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "update", ID: old.ID, Name: "Renamed", Role: old.Role, Disabled: false, Revision: old.Revision, Reason: "support request"})
 	if err != nil || next.Revision != old.Revision+1 || next.Email != old.Email {
 		t.Fatal(next, err)
 	}
@@ -148,7 +161,7 @@ func runAccountContract(t *testing.T, f accountFixture) {
 		t.Fatal("stale in-flight login survived", err)
 	}
 	beforeAudits, _ := f.Audits(ctx, old.ID)
-	if _, err = f.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "update", ID: old.ID, Name: "Lost edit", Role: old.Role, Revision: old.Revision, Reason: "stale"}); !errors.Is(err, ErrAccountConflict) {
+	if _, err = f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "update", ID: old.ID, Name: "Lost edit", Role: old.Role, Revision: old.Revision, Reason: "stale"}); !errors.Is(err, ErrAccountConflict) {
 		t.Fatal("stale edit accepted", err)
 	}
 	afterAudits, _ := f.Audits(ctx, old.ID)
@@ -157,7 +170,7 @@ func runAccountContract(t *testing.T, f accountFixture) {
 	}
 	// A promotion must revoke customer cookies, not turn a stolen old cookie
 	// into an administrator session. Disabling and password resets do likewise.
-	next, err = f.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "update", ID: next.ID, Name: next.Name, Role: "admin", Revision: next.Revision, Reason: "approved operator"})
+	next, err = f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "update", ID: next.ID, Name: next.Name, Role: "admin", Revision: next.Revision, Reason: "approved operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +182,7 @@ func runAccountContract(t *testing.T, f accountFixture) {
 		if err = f.PutSession(ctx, session); err != nil {
 			t.Fatal(err)
 		}
-		next, err = f.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: op, ID: next.ID, Revision: next.Revision, Password: "  ResetPassword!2026  ", Reason: "confirmed by support"})
+		next, err = f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: op, ID: next.ID, Revision: next.Revision, Password: "  ResetPassword!2026  ", Reason: "confirmed by support"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +199,7 @@ func runAccountContract(t *testing.T, f accountFixture) {
 	if cost, _ := bcrypt.Cost([]byte(next.PasswordHash)); cost != 12 {
 		t.Fatal("password strength regressed", cost)
 	}
-	next, err = f.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "update", ID: next.ID, Name: next.Name, Role: "customer", Disabled: true, Revision: next.Revision, Reason: "disabled by request"})
+	next, err = f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "update", ID: next.ID, Name: next.Name, Role: "customer", Disabled: true, Revision: next.Revision, Reason: "disabled by request"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +220,7 @@ func runAccountContract(t *testing.T, f accountFixture) {
 		if disabled {
 			role = "admin"
 		}
-		if _, err = f.WriteCustomerAccount(ctx, f.admin.ID, accountWrite{Operation: "update", ID: f.admin.ID, Name: f.admin.Name, Role: role, Disabled: disabled, Revision: f.admin.Revision, Reason: "self"}); !errors.Is(err, ErrSelfAccountChange) {
+		if _, err = f.WriteCustomerAccount(accountWriteTestContext(t, f.Store, ctx, f.admin.ID), f.admin.ID, accountWrite{Operation: "update", ID: f.admin.ID, Name: f.admin.Name, Role: role, Disabled: disabled, Revision: f.admin.Revision, Reason: "self"}); !errors.Is(err, ErrSelfAccountChange) {
 			t.Fatal("self demotion/disable", err)
 		}
 	}
@@ -240,12 +253,16 @@ func runAccountConcurrency(t *testing.T, f accountFixture) {
 	start := make(chan struct{})
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
+	contexts := map[string]context.Context{
+		f.admin.ID:      accountWriteTestContext(t, f.Store, f.ctx, f.admin.ID),
+		f.otherAdmin.ID: accountWriteTestContext(t, f.Store, f.ctx, f.otherAdmin.ID),
+	}
 	for _, pair := range [][2]User{{f.admin, f.otherAdmin}, {f.otherAdmin, f.admin}} {
 		wg.Add(1)
 		go func(actor, target User) {
 			defer wg.Done()
 			<-start
-			_, err := f.WriteCustomerAccount(f.ctx, actor.ID, accountWrite{Operation: "update", ID: target.ID, Name: target.Name, Role: "customer", Revision: target.Revision, Reason: "concurrent demotion"})
+			_, err := f.WriteCustomerAccount(contexts[actor.ID], actor.ID, accountWrite{Operation: "update", ID: target.ID, Name: target.Name, Role: "customer", Revision: target.Revision, Reason: "concurrent demotion"})
 			errs <- err
 		}(pair[0], pair[1])
 	}
@@ -256,7 +273,7 @@ func runAccountConcurrency(t *testing.T, f accountFixture) {
 	for err := range errs {
 		if err == nil {
 			success++
-		} else if errors.Is(err, ErrAdminRequired) {
+		} else if errors.Is(err, ErrAdminRequired) || errors.Is(err, ErrAccountSession) {
 			denied++
 		} else {
 			t.Fatal("unexpected concurrency failure (including deadlock)", err)
@@ -410,7 +427,7 @@ func TestAdminCustomerHTTPAuthorizationCursorAndPrivacy(t *testing.T) {
 		t.Fatal("cross-actor cursor reached store")
 	}
 	adminBefore, _ := m.UserByEmail(t.Context(), "admin@aster.local")
-	if _, err := m.WriteCustomerAccount(t.Context(), adminBefore.ID, accountWrite{Operation: "update", ID: adminBefore.ID, Name: "Updated operator", Role: "admin", Revision: adminBefore.Revision, Reason: "name correction"}); err != nil {
+	if _, err := m.WriteCustomerAccount(accountWriteTestContext(t, m, t.Context(), adminBefore.ID), adminBefore.ID, accountWrite{Operation: "update", ID: adminBefore.ID, Name: "Updated operator", Role: "admin", Revision: adminBefore.Revision, Reason: "name correction"}); err != nil {
 		t.Fatal(err)
 	}
 	before = store.calls.Load()
