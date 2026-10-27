@@ -245,9 +245,6 @@ func TestMySQLAccountSessionExpiryIsCheckedAfterItsRowLock(t *testing.T) {
 	m := f.Store.(*MySQL)
 	c, origin, csrf := accountTLSClient(t, m, f.admin.Email, "AccountFixture!2026")
 	hash := accountCookieHash(t, c, origin)
-	if _, err := m.DB.ExecContext(f.ctx, "UPDATE sessions SET expires_at=UTC_TIMESTAMP(6)+INTERVAL 4 SECOND WHERE token_hash=?", hash); err != nil {
-		t.Fatal(err)
-	}
 	before, err := m.UserByID(f.ctx, f.customer.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -270,11 +267,21 @@ func TestMySQLAccountSessionExpiryIsCheckedAfterItsRowLock(t *testing.T) {
 	done := make(chan accountHTTPResult, 1)
 	go func() { done <- accountHTTPS(c, origin, "POST", path, csrf, body) }()
 	awaitAccountLockWait(t, f.ctx, m.DB, "sessions", done, nil)
+	// Do not make HTTP authentication race a four-second setup window. The
+	// fixture owns this row: after observing the real wait, set its deadline
+	// strictly after the waiting statement began, then let database time pass it.
+	if _, err := blocker.ExecContext(f.ctx, "UPDATE sessions SET expires_at=UTC_TIMESTAMP(6)+INTERVAL 250000 MICROSECOND WHERE token_hash=?", hash); err != nil {
+		t.Fatal(err)
+	}
+	var expires time.Time
+	if err := blocker.QueryRowContext(f.ctx, "SELECT expires_at FROM sessions WHERE token_hash=?", hash).Scan(&expires); err != nil {
+		t.Fatal(err)
+	}
 	// Wait for the database's actual deadline, not a blind sleep or host clock.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var expired bool
-		if err := m.DB.QueryRowContext(f.ctx, "SELECT expires_at<=UTC_TIMESTAMP(6) FROM sessions WHERE token_hash=?", hash).Scan(&expired); err != nil {
+		if err := m.DB.QueryRowContext(f.ctx, "SELECT ?<=UTC_TIMESTAMP(6)", expires).Scan(&expired); err != nil {
 			t.Fatal(err)
 		}
 		if expired {

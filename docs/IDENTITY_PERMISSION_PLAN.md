@@ -185,70 +185,20 @@ POST /console/v1/users/{id}/revoke-sessions
 
 ## 6. W07-C：财务权限组基础与只读最小切片
 
-### 6.1 模型决定（拟实施，不是当前事实）
+**2026-10-27设计细化，以[FINANCE_STAFF_ACCESS.md](FINANCE_STAFF_ACCESS.md)为本切片唯一实施合同。**
+此前本节的接口/权限名/新锁表/全会话失效只是草案，未发布为协议；由详细合同替换，不让两套相冲突的设计并存。
+既有叶子映射与C-01至C-07验收编号继续保留，具体实现仍须逐项记证据。
 
-保留admin/customer的既有含义，**新增staff**作为运营员工账号类型；不把某个customer暗中变成管理员，不把权限组塞进姓名/品牌/商品配置。该决定需要新schema与严格前端会话合同，不能只加一个角色下拉。
-
-- admin：全部发布的业务权限；内置、不可编辑/停用的“管理员角色”定义。最后admin计数只认`role=admin && !disabled`，即使staff获得多项权限也不能代替最后admin。
-- customer：本人购买/订单/账单/服务，不能分配后台权限组；不改变当前所有权过滤。
-- staff：默认零授权；从启用权限组计算授予权限和数据域。未识别的角色、权限、scope及损坏关系全部fail-closed。
-- 首期只支持管理员维护权限组和成员；**不让staff再委派授权**。Cloud有界委派模式不能未审查就照搬到财务。
-
-### 6.2 首批权限与数据域
-
-| 权限 | 首期可用内容 | 不能顺带获得 |
-| --- | --- | --- |
-| `customers.read` | 账户ID/姓名/邮箱/角色/状态只读 | 密码重置、撤销、staff/admin授予、秘密 |
-| `orders.read` | 管理订单列表/详情、历史报价/状态 | 创建付款、标记已付、变更金额、开通任务 |
-| `invoices.read` | 账单/付款尝试的脱敏状态 | 查询/撤销/退款渠道、商户配置 |
-| `services.read` | 现有服务投影 | 虚构VM控制、跨owner操作 |
-| `catalog.read` | 商品/分类/可售状态/独立报价只读 | 修改报价、发布、私密产品配置/主控凭据 |
-| `audit.read` | 许可数据域的业务审计脱敏投影 | 原始主机日志、密钥、任意审计导出 |
-| `reports.read` | 经许可币种的只读汇总 | 汇率转换、改默认币种或账务余额 |
-
-首期模板：“财务只读”（orders/invoices/services/reports）， “客户支持只读”（customers/orders/invoices/services）。模板只是预填权限，不是假造独立业务实现；audit.read单独显式勾选。
-
-数据域首期只开放staff的`all_customers`（明确全站业务读取）和customer固有`self`。UI要明确写出“可查看全站客户业务”，不误导成按团队隔离。`assigned_customers`留后续专门关系表/查询/索引设计；未实现前拒绝该scope，而不是退化成all。不得提供任意SQL、通配owner、从浏览器直接指定tenant范围。
-
-### 6.3 API切片
-
-沿用财务`/api/v1`、POST变更风格和严格JSON/CSRF：
-
-| 接口 | 合同 |
-| --- | --- |
-| `GET /admin/permission-catalog` | 返回代码固定白名单/依赖提示；不可用数据库字符串创造权限 |
-| `GET /admin/permission-groups` | 50条有界、最多100、严格游标；管理员读取 |
-| `GET /admin/permission-groups/{id}` | 单组字段/修订/成员数量；不自动读客户财务详情 |
-| `POST /admin/permission-groups` | name、permissions、scope、enabled、reason；创建草稿/禁用组，不默默授予用户 |
-| `POST /admin/permission-groups/{id}` | 同字段+revision；冲突409，不覆盖新权限；变更同事务审计 |
-| `GET /admin/customer-accounts/{id}/access` | 账号角色、直属group IDs、计算后的effective_permissions/scope、授权版本 |
-| `POST /admin/customer-accounts/{id}/access` | account_revision、group_ids、reason；只允许staff，先校验全部组及scope；整批成功或不变 |
-| 现有`/session` | 增加明确的permissions、scope、authz_version；不能只返回UI可伪造的role标签 |
-
-首期不开放组硬删除；已有成员的组只能显式停用，保留可追溯记录。全字段上限、重复权限/组、未知值和过大JSON在边界拒绝，不截断后保存。建议最多16组/员工、最多全部已知权限数/组；属于公开容量合同，不能暗中丢弃关系来腾空间。
-
-### 6.4 DB与会话版本策略
-
-当前财务schema13。拟新增下一可用 `014_identity_permission_groups.sql`（实施前再次检查编号）；与本轮无SQL的0.5.10候选分开：
-
-- users.role ENUM保留原两个值并添加staff；新增`authz_revision`独立于资料revision，避免改显示姓名就无意撤销全部会话。
-- `identity_policy_lock(id=1)`：身份授权写的序列化锚点。迁移之后将全部相关账户/组/成员变更统一纳入同一锁序，不能新旧锁混用。
-- `permission_groups(id,name,enabled,scope,revision,created_at,updated_at)`；`permission_group_grants(group_id,permission)`唯一复合主键；`user_permission_groups(user_id,group_id)`唯一复合主键及反向索引。
-- sessions新增`authz_snapshot_hash`，值由当前authz_revision、role、启用状态及规范排序的组id/revision/启用/scope构成的授权版本快照摘要产生。摘要只做版本比较，不是对外的授权令牌。
-- 登录在同一一致性事务内读取身份/组版本并保存快照；每次认证重新取当前授权版本，组改/停用/移除成员均使旧快照失配，旧会话401。组变更不必逐个批量修改所有成员，从而不靠无限长事务撤销百万用户。
-- 迁移前旧session无快照：**强制重新登录，不能缺字段就兼容放行**。不改任何财务行；会话记录可保留到正常清理，但不能再授权。
-- API返回非秘密的authz_version标识供前端generation比较；它不替代后端计算。前端在同role权限变化时也清空旧列表、详情、报价以外的管理缓存和未发送编辑状态。
-
-锁序审查是C的放行项：当前账户变更为`email_settings singleton → actor SHARE → target FOR UPDATE`，财务其他事务有自己的currency/user锁序。设计新身份锁时必须把登录、账户、组和成员写列成完整矩阵并跑真实MySQL并发；不能为新增staff写权限到处插锁。**C首期staff只读，现有财务写函数继续要求真实admin；不重写原资金事务。**
-
-### 6.5 路由与页面必须同时闭合
-
-- 不能仅把`/admin/`总门禁改为“staff也能进”。逐路由显式permission映射，未知新增路由默认拒绝；admin亦走状态校验，customer深链仍403。
-- 每个只读存储入口再核当前capability和scope；列表/详情/汇总/审计必须一致，不能列表过滤了详情却传`uid=""`。
-- 最小视图只显示已授权导航与操作；无写权限时不展示可点击“保存”假入口。字段可读不等于可写，页面要标“只读”而非空表单。
-- 权限组编辑分“数据域 / 可查看内容 / 成员 / 变更理由”；默认不勾选全选，保存前展示新增/移除授权差异及影响的现有会话。
-- 两级密码边界保持：财务仍16–72字节bcrypt；主控仍12–1024字节既有算法。统一UI样式不等于替换密码算法或把字符数误当字节数。
-- customer自己的订单不被新组权限影响；admin从客户入口打开订单也仍使用本人所有权条件。
+- 当前仍为Core0.5.10/schema13、admin/customer；先完成W07-B2和W04，再独立切换下一Core0.5.11/schema14。
+  此处不是staff、权限组或0.5.11已实现/可下载的声明，001–013不改。
+- 新staff默认零授权、全站只读数据域；七项明确read_global权限，客户/订单/账单/服务/目录/报表/审计分别控制。
+  不开放员工写账务、付款、任意改状态或宿主操作，不把staff直接放入旧`/admin/`置空uid分支。
+- 组与成员维护采用既有POST/Origin/CSRF风格、revision、理由、唯一操作回执和完整游标；写结果不明只GET核对，不重POST。
+- 复用既有账户singleton保持一致锁序，B2原session/owner/锁后expiry边界适用于新增组写；
+  staff业务查询在自身只读事务内重新核对当前seal/权限，不能只信HTTP先前缓存。
+- 成员停用/重加和权限停用/恢复推进授权版本，旧会话不得复活；只改组名不登出员工，admin/customer旧会话语义不变。
+- 前后端、迁移、七权限读取矩阵、真实MySQL并发、会话换代清缓存、手机/桌面/明暗/中英和实际截图必须闭合；
+  不把设计文档或单项API算完成，金额、支付和历史快照原测试保留。
 
 ## 7. W07-D/E：安全中心与客户SSO，明确后置合同
 
@@ -396,7 +346,7 @@ A属于Cloud，应使用其独立identity真实MySQL fixture和页面，不能�
 
 | 完整树叶子ID | 原叶子名称 | 本计划对应与当前边界 | 验收锚点 |
 | --- | --- | --- | --- |
-| `bill-billing-customers-1-1` | 按名称或邮箱查询客户账户 | C保留既有名称/邮箱查询；staff读取需明确customers.read+scope | C-01/02 |
+| `bill-billing-customers-1-1` | 按名称或邮箱查询客户账户 | C保留既有名称/邮箱查询；staff读取需明确customers.read_global+all_customers | C-01/02 |
 | `bill-billing-customers-1-2` | 筛选客户/管理员角色 | C按正式角色合同扩展staff筛选；未知角色拒绝，不能偷偷改旧枚举 | C-01/04/07 |
 | `bill-billing-customers-1-3` | 筛选启用/停用状态 | C保留启停筛选；停用员工不改变财务义务 | C-01/03 |
 | `bill-billing-customers-1-4` | 服务端有界分页与上一页/下一页 | C保留完整分页；新cursor须绑定authz版本/scope，旧cursor拒绝 | C-03/04 |

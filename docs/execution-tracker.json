@@ -107,7 +107,7 @@
         "I08",
         "R05"
       ],
-      "scope": "eb1e81f实际15/16：24完整native和独立财务浏览器成功，22在Nginx1.18安全最低版本检查失败；改用官方签名metadata审查的固定1.30.6 Jammy包，13项平台/pin本机通过。新SHA完整22链及16门待跑，不降低TLS/SNI。"
+      "scope": "942f62e：24完整native成功；22新Nginx/TLS/edge、完整Go/MySQL/race和前端合同已过，后续SMTP崩溃注入systemctl kill失败（249参数拼写不兼容）。能力选择、支付/清理同类位置与真实OS报告已修，本机14+1+1定向通过，22完整链/新16门仍待验证。 942f62e最终14/16：财务实库浏览器在依赖慢下载阶段40分钟取消、未进入UI测试；不沿用旧SHA。"
     },
     {
       "id": "W05",
@@ -211,7 +211,7 @@
           "id": "W07-B",
           "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
           "state": "implemented_local",
-          "scope": "e566f20主控11/11通过，实际29项身份检查/5写/10图、完整回执及资源历史hash不变，全部10图已人工检查；eb1e81f跨系统15/16，22仍有Nginx版本兼容阻塞，整体W07/发行未完成。",
+          "scope": "942f62e主控11/11成功，实际29项身份检查/5写/10图和5条回执，严格TLS、资源历史hash不变；当前2图人工复看，e566f20同前端代码的全部10图已人工审查。财务22 native仍失败，整体W07/发行未完成。",
           "not_included": [
             "数据库强制append-only逐表授权（W13）",
             "MFA/step-up",
@@ -229,7 +229,7 @@
           "id": "W07-B2",
           "title": "财务账户写原会话事务fence",
           "state": "implemented_local",
-          "scope": "四账户写强制原session/actor/hash事务内复核，原session X避免本人删行与logout升级死锁；锁后新SQL时间判expiry，真实MySQL时间primitive已复现。Linux交叉编译/vet通过，严格TLS/完整JSON/真实SQL等待回归尚待新SHA Linux执行。",
+          "scope": "942f62e两平台完整check.sh成功，原session/actor/hash、锁后DB时间、完整TLS拒绝及真实MySQL/race全套PASS；当前到期fixture另去掉认证抢4秒窗口，保留全部断言，已交叉编译/vet与真实SQL primitive，调整版完整Linux执行待新SHA。跨系统16门仍有22插件CLI兼容失败，不能记整体完成。",
           "not_included": [
             "staff权限组/MFA/SSO",
             "所有其他财务写统一fence",
@@ -239,6 +239,16 @@
           "evidence": [
             "FINANCE_IDENTITY_SESSION_FENCE.md",
             "EXECUTION-20261027.md"
+          ]
+        },
+        {
+          "id": "W07-C",
+          "title": "财务只读员工与权限组",
+          "state": "planned",
+          "scope": "详细合同已统一：拟独立Core0.5.11/schema14，七个明确全站只读权限、组/成员revision、无复活授权seal、独立路由与回执/UI实库闭环；当前没有staff代码或014迁移，不改0.5.10无新增SQL合同。",
+          "evidence": [
+            "FINANCE_STAFF_ACCESS.md",
+            "IDENTITY_PERMISSION_PLAN.md"
           ]
         }
       ]

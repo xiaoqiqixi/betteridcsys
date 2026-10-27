@@ -31,6 +31,23 @@ SPEC.loader.exec_module(HTTP)
 
 
 class NativeReleaseModeTests(unittest.TestCase):
+    def test_cleanup_kill_selector_uses_the_hosts_advertised_option(self):
+        source = SCRIPT.read_text()
+        start = source.index('systemctl_help=$(')
+        end = source.index('\nreadonly systemctl_kill_scope', start) + len('\nreadonly systemctl_kill_scope')
+        block = source[start:end]
+        command = '''set -euo pipefail
+fail() { exit 9; }
+systemctl() { [[ $# == 1 && $1 == --help ]] || exit 80; printf '%s' "$HELP"; }
+''' + block + '\nprintf "%s\\n" "$systemctl_kill_scope"\n'
+        for text, expected in ((' --kill-who=WHO\n', '--kill-who'), (' --kill-whom=WHOM\n', '--kill-whom'),
+                               (' --kill-who=WHO\n --kill-whom=WHOM\n', '--kill-whom'), ('', None)):
+            with self.subTest(expected=expected):
+                result = subprocess.run(['bash', '-c', command], env={**os.environ, 'HELP': text}, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0 if expected else 9)
+                if expected: self.assertEqual(result.stdout.strip(), expected)
+        self.assertIn('systemctl kill "$systemctl_kill_scope=all" --signal=KILL "$unit"', source)
+
     def test_source_version_parser_uses_only_the_actual_core_declaration(self):
         parser = SCRIPT.read_text().split("<<'PYVERSION'\n", 1)[1].split("\nPYVERSION", 1)[0]
         valid = 'package pluginapi\nconst (\n CoreVersion = "0.5.3"\n PaymentMinCoreVersion = "0.5.3"\n)\n'

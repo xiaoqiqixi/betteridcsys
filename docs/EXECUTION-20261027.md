@@ -78,3 +78,53 @@ HTTP从原Cookie派生私有context，不接受客户端新增授权字段，不
 今后两个必需工作流每次main push完整调度；这是补齐证据，不是放宽验收、伪造commit触发或更换事件条件。
 Cloud发行合同由28增至29项；当前发行文档同步为Cloud11+财务5，不再一处写15、一处写16。
 3b93252尚未取得全套新门，接下来的完整结果只认包含调度修复的新精确SHA。
+
+### 942f62e：主控11门通过；22原生进入真实插件后暴露systemctl兼容问题
+
+[Cloud40424839408](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40424839408)最终11/11成功。
+新版身份仍实际29检查/5浏览器写/5提交回执/10张身份图；旧70图和原网络/成员回归保留。
+完整浏览器ZIP为8,728,665字节，SHA256
+`687e573d280239f69843596914ff578003a5e657376e2bac0ebb0d2830a6fcb0`，精确85文件/80PNG白名单核验通过。
+按既有Node合同重新核对全部身份JSON和10张实际PNG；本次人工复看桌面撤销与手机本人撤销两张，布局和警示均正常。
+先前e566f20的全部10图人工审查仍有边界保留，两提交间Cloud前端代码无变化，不把本次两图说成新一轮全站视觉验收。
+本地摘要读取时曾误把`foreign_requests:0`当数组而断言失败，随后使用原有正式报告验证器通过；没有修改产物或放宽合同。
+
+[财务40424839385](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40424839385)中，24的完整checks/native链、
+Go漏洞及官方metadata成功；22同一个完整check.sh已成功，新增严格TLS/完整响应、所有B2会话与真实MySQL锁等待/race用例明确PASS。
+22随后实际通过新Nginx/TLS/edge-observability与SMTP安装、升级、回滚、双UID/FD/完整性前七项检查，
+但在SMTP DATA之后的崩溃注入处失败：`systemctl kill`实际退出1，不能算作已杀死或已恢复。
+后续合成支付native与Core升级/恢复链未到达，不能记22完整通过。
+失败产物10,062字节，SHA256
+`82c46ff3f188a704daf75d9b2708f86e40d5a8b8d529169042c03ce13d7abcf9`；父层清理回执确认本轮资源已清理。
+独立[HTTP performance40424577672](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40424577672)在3b93252成功，
+它不是942f62e新增的同SHA性能结果，更不能补位任何必需门。
+
+审查官方参数表：systemd249只有`--kill-who`，255为`--kill-whom`。
+旧测试固定新拼写，不适用于Jammy；另全库找到合成支付崩溃注入和父层强制清理两处相同问题，一并修复。
+依据：[systemd249源码](https://github.com/systemd/systemd/blob/v249/src/systemctl/systemctl.c)、
+[systemd255源码](https://github.com/systemd/systemd/blob/v255/src/systemctl/systemctl.c)。
+修复在注入前只读实际help，选择已明确列出的完整参数；只发送一次相同KILL、同一个owned main目标，
+缺能力或kill非零仍失败，不先试错发信号、不重试、不删除崩溃/无自动重投/新PID/Core不变断言。
+父层fallback清理也先选择能力，但仍只处理原已创建单元；不能将选项兼容变成任意宿主kill。
+两个子报告另修掉遗漏的Ubuntu24硬编码，改读真实受支持os-release，并记录实际选择的kill参数。
+
+本机新增能力/目标/报告负例、SMTP/TLS与守卫共14项通过，父层清理选择1项、合成支付继承同一守卫1项通过；
+实际systemd kill与22后续原生链仍须新SHA Linux执行，不把mock断言算真崩溃验收。
+
+同时将锁内到期fixture收紧：先观察原session真的等锁，锁持有夹具再设短DB期限，等数据库实际超过期限后释放；
+去掉HTTP认证必须抢在固定4秒内完成的脆弱前提，不重试HTTP、不改401断言。
+该确定性时间primitive在实际隔离MySQL再次复现旧predicate错误接受、锁后新语句拒绝，临时库已删除；
+新完整Go包交叉编译/vet通过，但这份调整后的HTTP用例仍待新Linux运行。
+
+当前0.5.10发布正文改写为“两平台同源码完整native检查是放行前提”，避免一面强制22门、一面发行正文永远写22未验。
+doctor只报告22/24属于支持目标、24为既有基线，始终`this_host_validated=false`且明确自身不查询CI；
+目标状态不再写成永恒pending，也不暗示当前失败CI已过或安装器放宽。对应回归通过。
+后续[员工权限组详细合同](FINANCE_STAFF_ACCESS.md)仅为设计，明确下一独立0.5.11/schema14；本次未实现、未迁移、未发布。
+
+财务浏览器最后因40分钟job期限取消，整轮实际为Cloud11成功、财务3成功/1失败/1取消，合计**14/16成功**，不是15/16或全绿。
+实际日志显示不是UI断言失败：准备阶段从原有Ubuntu Azure签名源下载61.2MB CJK字体约耗22分钟，
+随后Playwright系统依赖继续慢速下载，在真正Strict TLS/MySQL浏览器步骤开始前被取消，无本轮财务浏览器截图/回执可计通过。
+没有删字体、跳过浏览器、拿demo补位或把旧SHA财务浏览器结果拼上。新提交修复明确的CLI兼容缺口后仍须完整重跑；
+如果下载再次失败，仍保留真实失败，不将换runner当功能修复证据。
+该GitHub一次性runner安装运行库时也因libudev依赖更新了同系列systemd255安全补丁；它不是未维护原镜像直接安装的证明，
+不改变生产安装器的系统升级边界，更不能替用户测试服务器或新物理主机背书。

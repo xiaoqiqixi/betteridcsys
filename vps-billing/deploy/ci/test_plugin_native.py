@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 HERE = Path(__file__).resolve().parent
@@ -75,6 +76,45 @@ class SafeDiagnosticTests(unittest.TestCase):
         self.assertNotIn(marker, str(failure.exception))
         self.assertEqual(NATIVE.DIAGNOSTICS.last_api, {"method": "POST", "path": "/api/v1/admin/plugins/check",
                          "expected_status": 200, "actual_status": 503})
+
+
+class SupportedSystemctlTests(unittest.TestCase):
+    def test_only_an_advertised_exact_kill_selector_is_used(self):
+        for output, expected in (
+                (b"     --kill-who=WHO      Whom to send signal to\n", "--kill-who"),
+                (b"     --kill-whom=WHOM    Whom to send signal to\n", "--kill-whom"),
+                (b" --kill-who=WHO\n --kill-whom=WHOM\n", "--kill-whom")):
+            with self.subTest(expected=expected):
+                self.assertEqual(NATIVE.systemctl_kill_scope(output), expected)
+        for output in (b"", b"systemctl 249", b"--kill-whatever=all", b"--kill-who no parameter", b"text--kill-who=WHO", None, "--kill-who=WHO", b" " * 65537):
+            with self.subTest(kind=type(output).__name__, size=len(output) if output is not None else None), self.assertRaises(NATIVE.AcceptanceFailure):
+                NATIVE.systemctl_kill_scope(output)
+
+    def test_both_selectors_kill_only_the_owned_main_with_the_same_signal_once(self):
+        for selector in ("--kill-who", "--kill-whom"):
+            fixture = NATIVE.NativePluginAcceptance.__new__(NATIVE.NativePluginAcceptance)
+            fixture.worker_unit = "aster-ci-smtp-123-1-456.service"
+            fixture.kill_scope = selector
+            with self.subTest(selector=selector), patch.object(NATIVE, "privileged") as command:
+                fixture.kill_worker_main()
+                command.assert_called_once_with("systemctl", "kill", selector + "=main", "--signal=KILL", fixture.worker_unit)
+        for unit, selector in (("sshd.service", "--kill-who"), ("aster-ci-smtp-123-1-456.service", "--kill-all")):
+            fixture.worker_unit, fixture.kill_scope = unit, selector
+            with self.subTest(unit=unit, selector=selector), patch.object(NATIVE, "privileged") as command, self.assertRaises(NATIVE.AcceptanceFailure):
+                fixture.kill_worker_main()
+            command.assert_not_called()
+
+    def test_plugin_and_payment_evidence_use_the_actual_supported_os(self):
+        for version in ("22.04", "24.04"):
+            with self.subTest(version=version), patch.object(Path, "read_text", return_value='ID=ubuntu\nVERSION_ID="' + version + '"\n'):
+                self.assertEqual(NATIVE.runner_environment(), "isolated Ubuntu " + version + " GitHub-hosted runner")
+        for text in ('ID=ubuntu\nVERSION_ID="26.04"\n', 'ID=debian\nVERSION_ID="12"\n', ''):
+            with self.subTest(text=text), patch.object(Path, "read_text", return_value=text), self.assertRaises(NATIVE.AcceptanceFailure):
+                NATIVE.runner_environment()
+        self.assertIn('"environment": runner_environment()', (HERE / "plugin-native.py").read_text())
+        self.assertIn('"environment": shared.runner_environment()', (HERE / "payment-native.py").read_text())
+        for filename in ("plugin-native.py", "payment-native.py"):
+            self.assertIn('"systemctl_kill_selector": self.kill_scope', (HERE / filename).read_text())
 
 
 class IsolatedCanaryBootstrapTests(unittest.TestCase):

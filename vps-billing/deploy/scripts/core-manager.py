@@ -264,17 +264,17 @@ def prepare(version, release_directory, assets_directory=None, api=None, trust=u
 def operating_system_support(distribution, version):
     """Report support scope, not permission to install or host acceptance."""
     baseline = (distribution, version) == ("ubuntu", "24.04")
-    pending = (distribution, version) == ("ubuntu", "22.04")
+    supported = distribution == "ubuntu" and version in {"22.04", "24.04"}
     return {
-        "status": "ok" if baseline else "warning",
+        "status": "ok" if supported else "warning",
         "distribution": distribution, "version": version,
         "supported_baseline": "ubuntu 24.04",
         "deployment_targets": ["ubuntu 22.04", "ubuntu 24.04"],
         "native_ci_baseline": "ubuntu 24.04",
         "support_status": "native_ci_baseline" if baseline else
-                          "target_pending_full_native_validation" if pending else "unsupported",
+                          "supported_target" if supported else "unsupported",
         "this_host_validated": False,
-        "notice": "Ubuntu 22.04 full native validation is pending. Ubuntu 26.04 and other distributions are not supported targets. This report does not change installer host guards or verify this host.",
+        "notice": "Official release requires successful exact-source native CI on both Ubuntu 22.04 and 24.04. Ubuntu 26.04 and other distributions are not supported targets. This report does not query CI, change installer host guards or verify this host.",
     }
 
 

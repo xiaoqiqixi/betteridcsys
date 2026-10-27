@@ -40,6 +40,8 @@
 两平台执行相同原生安装链，财务builder/publisher要求精确main-SHA的全部五任务成功，Cloud总门为16。
 eb1e81f取得15/16门，24完整native链成功；22实际停止在默认Nginx1.18不支持安全SNI拒绝的最低版本检查。
 改用经过官方签名metadata审查的固定1.30.6包，保留TLS/SNI保护；新修复及账户写入原会话fence仍须新SHA完整实库/native验收。
+942f62e已通过两平台全部check.sh和22的Nginx/TLS/edge，后续22在systemctl崩溃注入参数不兼容失败；
+独立财务浏览器因40分钟内系统依赖下载未完成而取消，实际仅14/16门成功。CLI能力选择已修，本轮不把它或旧浏览器记录当正式验收。
 不能只扩matrix或下载pin就宣称22.04验收完成。原生部署，不使用Docker；详见[W04合同](../../docs/FINANCE_NATIVE_22_24.md)。
 
 ## 新发行的六资产（发布后才可使用）

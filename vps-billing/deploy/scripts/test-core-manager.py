@@ -171,7 +171,7 @@ class CorePreparationTests(unittest.TestCase):
     def test_operating_system_support_is_not_a_full_host_acceptance_claim(self):
         for distro, version, state, support in (
                 ("ubuntu", "24.04", "ok", "native_ci_baseline"),
-                ("ubuntu", "22.04", "warning", "target_pending_full_native_validation"),
+                ("ubuntu", "22.04", "ok", "supported_target"),
                 ("ubuntu", "26.04", "warning", "unsupported"),
                 ("debian", "12", "warning", "unsupported")):
             with self.subTest(distro=distro, version=version):
@@ -181,6 +181,8 @@ class CorePreparationTests(unittest.TestCase):
                 self.assertEqual(facts["deployment_targets"], ["ubuntu 22.04", "ubuntu 24.04"])
                 self.assertEqual(facts["native_ci_baseline"], "ubuntu 24.04")
                 self.assertFalse(facts["this_host_validated"])
+                self.assertIn("requires successful exact-source native CI", facts["notice"])
+                self.assertNotIn("validation is pending", facts["notice"])
 
     def test_protected_local_assets_avoid_asset_download_but_verify_official_source(self):
         assets = self.local_assets()

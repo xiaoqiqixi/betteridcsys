@@ -171,6 +171,26 @@ def require(condition, description):
         raise AcceptanceFailure(description)
 
 
+def systemctl_kill_scope(help_output):
+    # systemd 249 advertises --kill-who; 255 advertises --kill-whom. Select an
+    # actual capability before fault injection, never retry the signal or
+    # accept a failed command as proof that a process was killed.
+    require(isinstance(help_output, bytes) and len(help_output) <= 65536,
+            "Systemctl help is unavailable or exceeds the fixture bound")
+    for option in ("--kill-whom", "--kill-who"):
+        if re.search(rb"(?m)^\s*" + option.encode() + rb"=[^\s]+(?:\s|$)", help_output):
+            return option
+    raise AcceptanceFailure("Systemctl exposes no supported exact kill selector")
+
+
+def runner_environment():
+    values = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    version = values.get("VERSION_ID", "").strip('"')
+    require(values.get("ID", "").strip('"') == "ubuntu" and version in {"22.04", "24.04"},
+            "Plugin evidence requires an actual supported Ubuntu runner")
+    return "isolated Ubuntu " + version + " GitHub-hosted runner"
+
+
 def command(arguments, *, expected=0, cwd=None, timeout=30):
     DIAGNOSTICS.last_command = {"command": command_name(arguments), "expected_exit_code": expected,
                                 "actual_exit_code": None}
@@ -306,6 +326,8 @@ class NativePluginAcceptance:
         DIAGNOSTICS.paths(["/", "/opt", "/etc", "/run", self.opt, self.config, self.run, self.root,
                           self.scratch.parent, self.scratch])
         self.validate_contract()
+        self.kill_scope = systemctl_kill_scope(command([
+            "env", "LC_ALL=C", "SYSTEMD_PAGER=cat", "SYSTEMD_COLORS=0", "systemctl", "--help"], timeout=5))
         self.api_uid = pwd.getpwnam(self.api_user).pw_uid
         self.worker_uid = pwd.getpwnam(self.worker_user).pw_uid
         require(self.api_uid != self.worker_uid and min(self.api_uid, self.worker_uid) > 0,
@@ -315,6 +337,11 @@ class NativePluginAcceptance:
         self.accounts = json.loads((self.scratch / "accounts.json").read_text())
         DIAGNOSTICS.enter("authenticate_existing_https_api")
         self.api = API(self.port, str(self.scratch / "ca.pem"), self.accounts)
+
+    def kill_worker_main(self):
+        require(re.fullmatch(r"aster-ci-(?:smtp|payment)-[0-9]+-[0-9]+-[0-9]+\.service", self.worker_unit) is not None
+                and self.kill_scope in {"--kill-who", "--kill-whom"}, "Refusing a non-owned plugin crash target")
+        privileged("systemctl", "kill", self.kill_scope + "=main", "--signal=KILL", self.worker_unit)
 
     def validate_contract(self):
         identity = os.environ["GITHUB_RUN_ID"] + "-" + os.environ["GITHUB_RUN_ATTEMPT"] + "-"
@@ -669,7 +696,8 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
             outcome = pool.submit(self.api.request, "/api/v1/admin/email-settings/test", "POST", {
                 "revision": settings["revision"], "to": "operator@native-ci.invalid"}, 502)
             require(self.fixture.data_received.wait(8), "Crash fixture never reached the SMTP DATA boundary")
-            privileged("systemctl", "kill", "--kill-whom=main", "--signal=KILL", self.worker_unit)
+            DIAGNOSTICS.enter("inject_smtp_crash_after_data")
+            self.kill_worker_main()
             response = outcome.result(timeout=15)
             require(response["error"]["code"] == "SMTP_DELIVERY_UNCERTAIN",
                     "Plugin crash after DATA was not reported conservatively")
@@ -696,7 +724,7 @@ for fd in os.listdir('/proc/'+sys.argv[1]+'/fd'):
         self.checks.append("journal_and_api_responses_contain_no_fixture_credentials")
         report = {"suite": "native-independent-runtime-plugins", "source_commit": command([
             "git", "-C", str(self.source), "rev-parse", "HEAD"]).decode().strip(),
-            "environment": "isolated Ubuntu 24.04 GitHub-hosted runner", "checks": self.checks,
+            "environment": runner_environment(), "systemctl_kill_selector": self.kill_scope, "checks": self.checks,
             "checks_passed": len(self.checks), "stages": self.stages,
             "core_binary_sha256": self.baseline_hash, "core_live_pid_unchanged": True,
             "core_recompiled_for_plugin_install_upgrade_rollback": False,

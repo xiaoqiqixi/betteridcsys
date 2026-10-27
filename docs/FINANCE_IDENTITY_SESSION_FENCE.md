@@ -36,6 +36,11 @@
 新增严格TLS四动作、原会话10类拒绝、实际SQL锁等待下logout/expiry/同owner轮换、锁内过期、本人删session与并发logout负例；
 完整Linux HTTP/MySQL/race结果仍须由新提交的22/24 CI实际运行。
 
+942f62e两平台实际完成同一check.sh，新增B2全套严格TLS/Memory/真实MySQL/race均PASS。
+整轮22 native仍在后续独立SMTP崩溃注入失败，不能将全系统16门记绿。
+提交后又将到期夹具改为“先观察真实session等锁，再由锁持有夹具设短数据库期限”，避免认证抢固定4秒窗口；
+原完整401/未修改目标或业务/未落成功审计约束保留，无HTTP重试。调整版只完成交叉编译/vet与真实SQL时间primitive，完整Linux用例待新SHA。
+
 依据：[MySQL当前时间函数在语句开始求值](https://dev.mysql.com/doc/refman/8.4/en/date-and-time-functions.html)。
 
 本包只加账户身份写fence，不宣称所有其他财务写、MFA、staff授权或数据库强制append-only已完成。

@@ -438,7 +438,8 @@ class NativePaymentAcceptance(shared.NativePluginAcceptance):
         finally:
             privileged("install", "-m", "555", original, executable)
         crash = self.pid(self.worker_unit)
-        privileged("systemctl", "kill", "--kill-whom=main", "--signal=KILL", self.worker_unit)
+        shared.DIAGNOSTICS.enter("inject_payment_worker_crash")
+        self.kill_worker_main()
         require(self.wait_worker("0.1.0", previous=crash) != crash, "Payment worker did not recover independently")
         self.callback(self.settled_event)
         self.unchanged_core("payment_crash_restart_durable_replay")
@@ -453,7 +454,8 @@ class NativePaymentAcceptance(shared.NativePluginAcceptance):
                 for key in ("session", "runtime", "smtp_password", "admin", "customer")), "Native payment journal exposed a fixture credential")
         report = {"suite": "native-synthetic-runtime-payment", "source_commit": shared.command([
             "git", "-C", str(self.source), "rev-parse", "HEAD"]).decode().strip(),
-            "environment": "isolated Ubuntu 24.04 GitHub-hosted runner", "checks": self.checks, "stages": self.stages,
+            "environment": shared.runner_environment(), "systemctl_kill_selector": self.kill_scope,
+            "checks": self.checks, "stages": self.stages,
             "core_uid": self.api_uid, "smtp_uid": smtp_uid, "payment_uid": self.worker_uid,
             "core_live_pid_unchanged": True, "core_binary_sha256": self.baseline_hash,
             "unpublished_synthetic_versions": ["0.1.0", "0.1.1", "0.1.0"], "actual_https_mysql_settlement": True,

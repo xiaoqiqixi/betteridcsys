@@ -32,6 +32,20 @@ UPDATER = load("payment_native_updater", HERE.parent / "scripts/update-manager.p
 
 
 class PaymentNativeGuards(unittest.TestCase):
+    def test_payment_crash_uses_the_same_owned_main_scope_for_both_systemd_capabilities(self):
+        self.assertIs(NATIVE.NativePaymentAcceptance.kill_worker_main,
+                      NATIVE.shared.NativePluginAcceptance.kill_worker_main)
+        for selector in ("--kill-who", "--kill-whom"):
+            fixture = NATIVE.NativePaymentAcceptance.__new__(NATIVE.NativePaymentAcceptance)
+            fixture.worker_unit = "aster-ci-payment-123-1-456.service"
+            fixture.kill_scope = selector
+            with self.subTest(selector=selector), patch.object(NATIVE.shared, "privileged") as command:
+                fixture.kill_worker_main()
+                command.assert_called_once_with("systemctl", "kill", selector + "=main", "--signal=KILL", fixture.worker_unit)
+        source = (HERE / "payment-native.py").read_text()
+        self.assertIn("self.kill_worker_main()", source)
+        self.assertNotIn("--kill-whom=main", source)
+
     def test_failure_metadata_captures_live_worker_and_credential_modes_without_payloads(self):
         fixture = NATIVE.NativePaymentAcceptance.__new__(NATIVE.NativePaymentAcceptance)
         fixture.worker_unit = "aster-ci-payment-1-1-1.service"

@@ -162,8 +162,9 @@ class RuntimeReleaseTests(unittest.TestCase):
         for text in ("Core 0.5.10", "当前 main 祖先", "旧 v0.5.6–v0.5.9", "PREPARED.json",
                      "没有新增数据库迁移", "金额、支付幂等和历史快照不变", "aster.resource/1",
                      "Core >=0.5.10,<0.6.0", "SMTP 1.1.0", "Ubuntu 22.04", "Ubuntu 24.04",
-                     "Ubuntu 26.04", "完整原生验收未完成", "RELEASE-v0.5.10.md"):
+                     "Ubuntu 26.04", "发行要求同一源码的两个平台完整原生检查成功", "原会话", "RELEASE-v0.5.10.md"):
             self.assertIn(text, fields["body"])
+        self.assertNotIn("完整原生验收未完成", fields["body"])
         self.assertEqual(len(api.uploads), 6)
         self.assertEqual({name: data for _, name, data in api.uploads}, files)
         self.assertEqual([call[0] for call in api.mutations], ["POST", "PATCH"])

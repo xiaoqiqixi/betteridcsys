@@ -40,7 +40,7 @@ jobs:
           ref: ${{ github.sha }}
           path: controller
           persist-credentials: false
-      - name: Reverify upstream identity, fifteen gates, signed bytes and new Cloud-only draft
+      - name: Reverify upstream identity, sixteen gates, signed bytes and new Cloud-only draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -I controller/aster-cloud/deploy/ci/cloud_release.py publish --directory "$RUNNER_TEMP/cloud-publish"

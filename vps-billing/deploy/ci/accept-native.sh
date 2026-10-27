@@ -57,6 +57,15 @@ for tool in git tar go npm python3 openssl curl sudo systemctl systemd-analyze i
   command -v "$tool" >/dev/null || fail "Required native tool unavailable: $tool"
 done
 sudo -n true || fail 'Passwordless sudo is required on this disposable runner.'
+systemctl_help=$(LC_ALL=C SYSTEMD_PAGER=cat SYSTEMD_COLORS=0 systemctl --help) || fail 'Cannot inspect systemctl kill capability.'
+if [[ $systemctl_help == *'--kill-whom='* ]]; then
+  systemctl_kill_scope=--kill-whom
+elif [[ $systemctl_help == *'--kill-who='* ]]; then
+  systemctl_kill_scope=--kill-who
+else
+  fail 'Systemctl exposes no supported kill selector; no owned resources created.'
+fi
+readonly systemctl_kill_scope
 mysql_cmd=("$mysql_root/bin/mysql" "--defaults-file=$admin_cnf" --no-login-paths --protocol=SOCKET "--socket=$mysql_socket" --batch --skip-column-names)
 server_data=$("${mysql_cmd[@]}" --execute='SELECT @@datadir' 2>/dev/null) || fail 'Could not verify owned native MySQL identity.'
 [[ $(realpath -e "$server_data") == "$fixture_root/data" ]] || fail 'Refusing any database outside the owned fixture data directory.'
@@ -94,7 +103,7 @@ cleanup() {
       sleep 0.2
     done
     if [[ $stopped != true ]]; then
-      sudo -n systemctl kill --kill-whom=all --signal=KILL "$unit" >/dev/null 2>&1
+      sudo -n systemctl kill "$systemctl_kill_scope=all" --signal=KILL "$unit" >/dev/null 2>&1
       for ((attempt=0; attempt<15; attempt++)); do
         state=$(sudo -n systemctl show "$unit" -p ActiveState --value 2>/dev/null)
         if [[ $state == inactive || $state == failed ]]; then stopped=true; break; fi
