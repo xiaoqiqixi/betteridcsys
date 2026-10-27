@@ -269,3 +269,33 @@ actionlint、Python AST、台账JSON与diff检查通过。均为本机合同/模
 Cloud329b168的40445796442已实际11/11成功；读取时同SHA财务40445796578尚有checks运行，未记录为16门全绿。
 本批只改文档与文档测试，不改SQL、金额、支付、历史快照、运行时代码或UI，也未创建/覆盖任何旧标签、Release或资产。
 新main提交仍须其自身完整CI；文档优化不将W07-C员工权限或W08–W17目标标记完成。
+
+## 首个Cloud RC实际公开，继续W07-C与四组合复验
+
+8092c3c最终取得财务40448316285 **5/5**、Cloud40448316272 **11/11**；观察器仅查询同一运行，未因观察超时重启CI。
+按原生产`green_checks`经只读真实API再次确认16门、main和标签/Release不存在后，冻结该源码，创建新注解标签
+`cloud-v0.1.0-rc.1`（对象400333ef9886773cf414f3fb0763500cb5253c5d，tagger仓库所有者），未移动旧标签。
+真实双构建/独立签名40450543793 **2/2成功**，独立发布/匿名验收40451094771 **3/3成功**；
+新预发布Release425041579于04:41:38Z公开，九资产已实际完整匿名下载，原生产数据验证器核对全部清单/源码/静态ELF通过。
+本机不是Linux root验签/plan；真实Sigstore/认证后生产plan来自该发布器两个Ubuntu24角色任务。
+
+两份实际回执ZIP分别446/445字节，完整hash、artifact ID、唯一JSON/CRC、严格13字段及角色包摘要均已重新下载核对；
+全部旧九Release的关键字段/正文hash/全部资产和财务latest与发布前一致。源码、九摘要与限制见[公开验收](CLOUD_PUBLIC_ACCEPTANCE.md)。
+检查实际包后发现源码相对文档链接与解压布局不完全匹配；不重打资产，新Release正文仅追加固定标签在线文档入口，写后再核对标签/源/九资产和财务latest未变。
+下载通道已实际存在，但不是稳定生产版、整机安装或KVM/物理网络验收；后续包的离线文档布局仍须修复。
+
+为不把Ubuntu24的公开plan当作Ubuntu22结果，本轮新增只读手动`cloud-public-prepare.yml`：22/24×主控/被控四组合，
+使用真实无token bootstrap、Sigstore与生产plan，不传apply/start，也不安装系统依赖；区别固定已发行source8092c3c与后续验收控制源码。
+独立checker绑定Release425041579、tag、源码、两包摘要及精确bool/13字段，并核对实际宿主版本。
+先对未实现入口RED，补齐后6个离线顶级测试通过。另用OS边界模型复现完整stat比较误把读取atime更新当内容变更，
+修为只忽略atime、继续锁定dev/inode/owner/mode/nlink/size/mtime/ctime后GREEN；不是忽略文件内容或权限漂移。
+本段编写时四组合门尚未启动，须新main实际运行；原生软件准备不替代它。
+
+W07-C新`internal/staffaccess`只实现完整不可变授权快照：七项精确权限、停用关系历史、205组不截断、用户绑定、
+返回切片不可篡改、缺失/坏seal与坏策略整笔拒绝。13顶级/52 PASS事件、0 FAIL/SKIP，race/vet和10轮race通过；
+四个隔离错误变体均触发真实断言失败；Linux/amd64测试ELF只交叉编译未执行。
+会话/SQL/014迁移、API、PII投影和UI尚未接入，当前staff角色不开放；详见[实施合同](FINANCE_STAFF_ACCESS.md)。
+
+本机本批395项定向Python回归全部通过，actionlint、Python AST、JSON、187条本地文档路径及diff检查通过；
+原269项台账items逐字段未变，只更新W03证据、W07-C范围和分系统交付状态，不把全计划变完成。
+这些新代码不能继承8092c3c的16门；新main完整CI、四组合真下载和后续W07-C闭环继续推进。

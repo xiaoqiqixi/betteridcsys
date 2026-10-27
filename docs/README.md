@@ -49,6 +49,7 @@
 | --- | --- |
 | 某版本改了什么 | [财务变更记录](../vps-billing/docs/CHANGELOG.md) · [主控变更记录](../aster-cloud/CHANGELOG.md) |
 | 财务正式资产与公开下载 | [Core v0.5.10 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.10) · [公开 prepare 复验](CORE_PUBLIC_PREPARE_ACCEPTANCE.md) |
+| 主控与被控预发布下载 | [Cloud RC Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1) · [公开资产/验签/plan复验](CLOUD_PUBLIC_ACCEPTANCE.md) |
 | 哪个提交通过了哪些测试 | [财务验证](../vps-billing/docs/VALIDATION.md) · [主控验证](../aster-cloud/docs/VALIDATION.md) |
 | 旧版本为什么不能重新准备 | [历史归属调整与升级限制](HISTORY_REWRITE.md) |
 | 哪些还没做完 | [工作包计划](EXECUTION_PLAN.md) · [逐项台账](execution-tracker.json) · [KVM 功能对照](../aster-cloud/docs/KVM_ENHANCED_PARITY.md) |

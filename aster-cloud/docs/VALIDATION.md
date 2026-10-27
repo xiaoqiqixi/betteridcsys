@@ -2,6 +2,18 @@
 
 验证结论绑定精确源码与执行环境，不随 `main` 更新自动继承。本页先列最近完整门禁基线，再保留历史工作区和专题记录；历史日期段落的数量、工具链和限制不是当前完整测试数量。Cloud 的独立预发布不等于稳定版或真机验收，也不改变财务既有发行资产。
 
+## 2026-10-27 · 首个Cloud RC公开交付
+
+发行源码`8092c3cc0517c69562e8a5cdd94bc5e389e1bc8e`的Cloud40448316272 **11/11**、财务40448316285 **5/5**全部成功。
+[双构建/独立签名40450543793](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40450543793) **2/2** 与
+[发布/公开验收40451094771](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40451094771) **3/3** 实际成功。
+新`cloud-v0.1.0-rc.1` Release425041579公开，九资产已实际匿名下载并以原生产数据验证函数核对；
+Ubuntu24上的两角色真实Sigstore复验/认证后生产plan成功，未安装或启动Cloud服务。旧九个Release与全部资产/正文及财务latest未变。
+准确摘要、两份原始ZIP及边界见[公开交付记录](../../docs/CLOUD_PUBLIC_ACCEPTANCE.md)。这不是stable或真KVM验收。
+
+后续新增Ubuntu22/24×主控/被控四组合公开下载门；此处不预填其通过结果，也不将24的plan当22的结果。
+本轮staff授权模型仅为本机未激活的独立切片，不包含在上述已发行源码，不借用这些CI结论。
+
 ## 2026-10-27 · 完整门禁基线 b132123
 
 精确源码 `b132123cc9bbc87bdcc2548db3bf8665460c40c5` 的[Cloud 40439673255](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439673255) **11/11** 与[财务 40439673220](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439673220) **5/5** 实际成功，合计同 SHA 16 项。后续源码仍需自己的完整检查，不继承这些绿灯。

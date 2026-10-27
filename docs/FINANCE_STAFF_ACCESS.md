@@ -1,6 +1,6 @@
 # W07-C：财务员工权限组实施合同
 
-状态：设计待实施，不是现有功能声明。以当前main/schema13为审查基点；先完成W07-B2账户原会话边界和W04平台门。
+状态：实施中，授权快照域模型已在本机实现；尚未接入登录、数据库、HTTP或UI，不是现有员工功能声明。以当前main/schema13为审查基点；W07-B2账户原会话边界和W04平台门已另有精确源码证据。
 需要新SQL的本包拟进入**下一独立Core0.5.11候选/schema14**，切换时一次同步API版本、前端、默认安装版本和发行说明。
 当前0.5.10/schema13无新增SQL合同不暗改；旧001–013不重写，旧标签/资产不重发。本文件不表示0.5.11已存在或可下载。
 
@@ -25,6 +25,12 @@
 customers.read_global仅查询当前customer账号，不开放管理员/员工目录或其凭据；管理员管理成员仍走独立admin接口。
 订单/账单的客户邮箱与姓名只在同时具备customers.read_global、且关联账号属于客户域时投影；否则仅返回owner ID，不能先全取再前端藏列。
 历史账单中的收件/联系人快照也受相同投影约束；不能通过嵌套snapshot、关联任务或审计详情漏出被隐藏的个人资料。
+员工审计采用独立显式字段投影，不返回任意旧`Audit.Detail`或其自由文本reason；不能靠正则从自由文本猜测并清除个人资料。
+ActorEmail只允许在具备customers.read_global且关联actor确属customer时投影，不由该权限开放admin/staff目录。
+没有该权限时，订单/账单关联账户仅保留owner ID，不加载完整User再交给前端隐藏；详情中的关联审计/支付记录也遵守同样边界。
+权限也不沿业务关联隐式扩张：订单详情没有invoices.read_global时只给关联账单ID，不嵌入完整账单；反向同理。
+reports.read_global只给汇总，无orders.read_global时不附“最近订单”；customers.read_global不默认返回该客户的订单/服务明细。
+审计事件不嵌入原始请求、产品私密配置、未获授权的关联对象或自由文本，以免绕过这些独立数据域。
 首包没有按客户分派的数据域，UI必须明确“全站只读”，不得让操作者误以为只授某客户。
 staff不得借客户端接口创建/取消订单、付款、改账户或获取管理设置；公开商品目录仍可匿名浏览。
 授权数据域首包只有`all_customers`，不接受`assigned_customers`或浏览器自报owner；权限ID中的global也是防误授权提示。
@@ -137,7 +143,7 @@ staff登录发行在singleton SHARE下重新核对原密码校验所见账户rev
 
 ## 7. 2026-10-27实施前原型证据与待办
 
-本包仍未接入生产代码或新增正式SQL。为避免当前0.5.10/schema13在正式构建中被暗改，候选DDL与可运行探针仅放在ignored的
+以下是域模型落地前的原型记录，不是完整实现或新增正式SQL。为避免当前0.5.10/schema13在正式构建中被暗改，候选DDL与可运行探针仅放在ignored的
 `vps-billing/artifacts/execution-20261027/staff-seal/`；不是可直接安装的014迁移，不对既有库执行。
 
 - stdlib Go探针实际复现active-only seal的两个复活反例（零组、原停用组）；改为纳入tombstone后均不复活。
@@ -155,3 +161,27 @@ staff登录发行在singleton SHARE下重新核对原密码校验所见账户rev
 不得将这些原型结果记作W07-C已交付，或用它们替代上述必需负例。
 
 先交付可用的只读员工权限与admin管理闭环，不顺便开放员工账务写、第三方支付或主控root能力；受控写权限另立合同和验收。
+
+## 8. 授权快照的实际模型切片（本机实现，尚未激活staff）
+
+源码位于`vps-billing/backend/internal/staffaccess/`，只使用标准库，无数据库、HTTP、运行时配置或角色开关。
+测试边界是本合同已有的“完整授权快照→seal/有效权限/旧seal核对”，不是读取私有函数或替换内部协作者。
+`NewSnapshot(userID, []MembershipPolicy)`接收同一事务完整读取的全部关系，拥有输入副本；返回不可变快照。
+`Seal/Permissions/Allows/MatchesSeal`不认证用户，不能代替原session、当前user/role/enabled和事务内权限复核。
+
+- 固定七项全站只读权限，拒绝未知、重复、尾空格/别名、错误scope、坏ID及超界revision；无隐式read或admin权限。
+- seal输入包含全部停用关系与当前组policy，权限只在关系和组均启用时生效；不存在最早64/100项截断。
+- 输入排序不影响结果，调用方或返回切片的变更不影响已创建快照；零值快照和缺少/非小写hex/错误seal均拒绝。
+- 版本1编码固定为`aster.staff-access/1`加NUL、32位用户ID加NUL，再依group ID升序写逐行紧凑JSON；
+  字段依次为group_id、membership_revision、membership_enabled、policy_revision、group_enabled、scope、permissions。
+  权限字典序排列，nil规范化为空数组；普通组名/revision不属于输入。输出为SHA256的小写64位hex。
+- 两份已知seal向量由Python hashlib/紧凑JSON独立计算并写入测试；以后不能悄悄改格式，使既有会话不可解释。
+
+实际先执行空授权新接口的RED，再最小实现GREEN；随后有效权限用例对初步实现RED，补齐完整策略后GREEN。
+最终13个顶级测试/52个PASS事件、0 FAIL/SKIP，Darwin arm64 Go1.26.4 `-race`及vet通过，10轮race全部成功；
+Linux/amd64测试ELF已交叉编译但未执行，不算Linux或MySQL验收。
+隔离临时模块分别注入丢停用历史、64项截断、不绑定用户、返回可变授权别名四种错误，均触发实际断言失败，非编译/连接错误。
+原始日志、已知向量和变异结果保存在ignored的`vps-billing/artifacts/execution-20261027/staffaccess/`。
+
+本切片尚未被财务认证或业务查询调用；实际session seal、完整014迁移/结构验证、存储事务、组/成员回执、只读PII投影、HTTP、UI和真实浏览器仍须继续。
+不能把域模型的全部关系遍历推定为未来SQL已完整读取，也不能以52个事件替代整个W07-C验收。

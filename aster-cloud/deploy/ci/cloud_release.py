@@ -467,7 +467,7 @@ def main(argv=None):
             if args.policy:
                 V.write_new(args.policy, json_bytes(policy))
             outputs({"source_sha": policy["source_commit"], "version": V.VERSION})
-            print("PASS: trusted-main Cloud prerelease policy; fifteen exact-SHA prechecks, no host apply")
+            print("PASS: trusted-main Cloud prerelease policy; " + str(len(CLOUD_JOBS) + len(FINANCE_JOBS)) + " exact-SHA prechecks, no host apply")
     except (PolicyError, V.ReleaseError, I.InstallerError, P.PackageError) as error:
         # These exception messages are fixed strings from our trusted policy,
         # never HTTP response bodies, subprocess diagnostics or token values.

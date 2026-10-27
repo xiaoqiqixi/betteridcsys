@@ -1,0 +1,58 @@
+name: Published Cloud download acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-cloud-prepare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  public-prepare:
+    name: Published Cloud ${{ matrix.role }} download and plan (${{ matrix.os }})
+    if: github.repository == 'xiaoqiqixi/betteridcsys' && github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        role: [controller, node]
+    steps:
+      - name: Trusted main verifier, not a downloaded candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - name: Anonymous published bytes, real Sigstore and authenticated production plan
+        env:
+          ROLE: ${{ matrix.role }}
+          TARGET_OS: ${{ matrix.os }}
+        run: |
+          set -euo pipefail
+          # Only reviewed main code is privileged. Candidate installer code
+          # must pass real signature/source verification before any import.
+          # No token, user config, host apply, dependency install or service start.
+          # shellcheck disable=SC2024
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 /usr/bin/python3 -I - "$ROLE" \
+            --download-only --evidence "$RUNNER_TEMP/cloud-public-proof.json" \
+            < controller/aster-cloud/deploy/install/release_verify.py
+          sudo -n chmod 0644 "$RUNNER_TEMP/cloud-public-proof.json"
+          python3 -I controller/aster-cloud/deploy/ci/public_cloud_evidence.py \
+            --evidence "$RUNNER_TEMP/cloud-public-proof.json" --role "$ROLE" --runner-os "$TARGET_OS" \
+            > "$RUNNER_TEMP/cloud-public-verification.json"
+      - name: Retain only bounded nonsecret root proof and actual-platform verification
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: public-cloud-prepare-${{ matrix.os }}-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/cloud-public-proof.json
+            ${{ runner.temp }}/cloud-public-verification.json
+          if-no-files-found: warn
+          overwrite: false
+          retention-days: 7

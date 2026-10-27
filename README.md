@@ -9,7 +9,7 @@
 | 系统 | 用途 | 版本与交付范围 |
 | --- | --- | --- |
 | [财务 Core](vps-billing/README.md) | 商品、客户、订单、账单、运营设置与审计 | Core `0.5.10`：[正式 Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.10)，[公开资产验收](docs/CORE_PUBLIC_PREPARE_ACCEPTANCE.md) |
-| [云主控与 KVM 被控](aster-cloud/README.md) | 实例、节点、资源任务、网络与公网 IP | 独立开发系统；预发布通道为 `cloud-v0.1.0-rc.1`，下载以该通道实际公开的 Release 为准；真实 KVM、物理网络和生产部署尚未验收 |
+| [云主控与 KVM 被控](aster-cloud/README.md) | 实例、节点、资源任务、网络与公网 IP | [0.1.0-rc.1 预发布](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/cloud-v0.1.0-rc.1)，[公开下载验收](docs/CLOUD_PUBLIC_ACCEPTANCE.md)；不是稳定版，真实 KVM、物理网络和生产部署尚未验收 |
 
 Go + Vue 3 / TypeScript + MySQL，原生 Linux 部署，不使用 Docker。当前部署目标为 **Ubuntu 22.04 / 24.04 amd64**，暂不支持 Ubuntu 26.04 或其他发行版。全新财务站点默认中文、人民币 CNY；语言与币种独立设置，不自动换汇，不改写历史金额。
 

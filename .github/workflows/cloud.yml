@@ -46,6 +46,7 @@ jobs:
           python3 -B aster-cloud/deploy/ci/test_cloud_installer.py
           python3 -B aster-cloud/deploy/scripts/test_cloud_package.py
           python3 -B aster-cloud/deploy/ci/test_cloud_release.py
+          python3 -B aster-cloud/deploy/ci/test_public_cloud_evidence.py
           python3 -B aster-cloud/deploy/ci/test_cloud_release_verifier.py
           python3 -B aster-cloud/deploy/ci/test_libvirt_native.py
 

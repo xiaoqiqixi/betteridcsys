@@ -76,9 +76,10 @@
       "depends_on": [
         "W01"
       ],
-      "state": "ci_verified",
+      "state": "environment_verified",
       "evidence": [
         "EXECUTION-20261027.md",
+        "CLOUD_PUBLIC_ACCEPTANCE.md",
         "../aster-cloud/deploy/ci/libvirt-native.md"
       ],
       "checklist_ids": [
@@ -95,8 +96,8 @@
         "R04",
         "R07"
       ],
-      "scope": "b132123财务5/5与Cloud11/11同SHA全16门成功，22/24真实签名来宾/宿主双检查点均不变、实际浏览器完成。独立正式下载通道仍待Cloud标签/构建/签名/Release和两个角色匿名生产plan；当前不称已发行。",
-      "source_sha": "b132123cc9bbc87bdcc2548db3bf8665460c40c5"
+      "scope": "8092c3c同SHA16门成功；双构建/独立签名40450543793及发布/两角色公开验收40451094771全部成功。RC425041579九资产实际匿名下载，Ubuntu24真实验签/生产plan及旧九Release/财务latest不变复核通过；22/24×两角色公开门本轮待跑，真实安装与KVM/生产仍另验，包内相对文档链接待后续分发修复。",
+      "source_sha": "8092c3cc0517c69562e8a5cdd94bc5e389e1bc8e"
     },
     {
       "id": "W04",
@@ -258,7 +259,7 @@
           "id": "W07-C",
           "title": "财务只读员工与权限组",
           "state": "in_progress",
-          "scope": "拟独立Core0.5.11/schema14。Go原型复现并修正active-only seal导致旧零组/停用组会话复活的合同；实际隔离MySQL三旧表/四新表候选DDL和14精准负例通过、旧字段/会话保留。生产staff/014迁移/接口/前端尚未实现，原型不充当完整迁移或浏览器验收。",
+          "scope": "拟独立Core0.5.11/schema14。实际staffaccess授权快照模型本机13顶级/52 PASS、race/vet和四个隔离错误变体回归通过；含停用关系、205组不截断、用户绑定和不可变输出。未接入认证/SQL/HTTP/UI，staff尚未开放。此前隔离MySQL候选DDL及14精准负例仍只是三旧表/四新表原型，不充当完整迁移或浏览器验收。",
           "evidence": [
             "FINANCE_STAFF_ACCESS.md",
             "IDENTITY_PERMISSION_PLAN.md"
@@ -9892,9 +9893,13 @@
       "current_evidence": []
     }
   ],
-  "release_state": "not_published",
+  "release_state": "partial_delivery",
+  "release_components": {
+    "core": {"version": "0.5.10", "tag": "v0.5.10", "release_id": 424987299, "source_sha": "dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0", "prerelease": false, "scope": "完整六资产与22/24生产prepare已复验；不等于用户主机或全系统生产验收"},
+    "cloud": {"version": "0.1.0-rc.1", "tag": "cloud-v0.1.0-rc.1", "release_id": 425041579, "source_sha": "8092c3cc0517c69562e8a5cdd94bc5e389e1bc8e", "prerelease": true, "production_ready": false, "real_kvm_accepted": false, "scope": "九资产匿名完整下载、Ubuntu24两角色真实验签/生产plan成功；22/24四组合门待本轮新源码执行"}
+  },
   "real_kvm_acceptance": "deferred_by_user",
   "requirements_scope": "原269项逐项保留现状、下一步与验收；1625个末级字段/交互细节在原功能树中，不能把工作包完成等同全部叶子完成。",
-  "active_batch": "20261026-identity-operations",
-  "batch_record": "EXECUTION-20261026.md"
+  "active_batch": "20261027-cloud-public-staff-snapshot",
+  "batch_record": "EXECUTION-20261027.md"
 }
