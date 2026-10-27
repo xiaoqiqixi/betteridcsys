@@ -4,27 +4,30 @@
 [主控变更记录](../../aster-cloud/CHANGELOG.md)，不属于财务正式发行资产。
 下文旧版本按当时范围保留；历史的“尚未实现”和阶段性测试措辞不表示当前 main 的完整状态。
 
-## Core 0.5.10 · 开发候选（未发布）
+## Core 0.5.10 · 版本合同与2026-10-27发行记录
 
-- 为重写后的 main 准备新的严格来源发行；旧标签、资产、祖先和收据验证不弱化。
+- 从重写后的main建立新的严格来源发行；旧标签、资产、祖先和收据验证不弱化。
 - 资源运行时的最低 Core 修正为0.5.10；独立资源插件候选0.1.1，避免覆盖旧本地0.1.0。SMTP仍为1.1.0。
 - 区分管理员报表币种与客户购买币种、只读加载失败与写入结果未知；审计标题自然化，所有弹窗关闭按钮跟随当前语言。
 - 新增真实 MySQL、同源 Secure Cookie、私有 Firefox TLS 信任的浏览器门禁；新入口已接 CI/发行构建，实际运行结果另记。旧内存 demo 门禁继续保留，不互相冒充。
-- 新增Ubuntu22独立原生验收任务，与24执行相同systemd/TLS/MySQL/升级恢复链；分别选择Jammy/Noble包及安全tar能力。发行/prepare精确信任清单要求当前候选同SHA五个财务必需任务，旧版合同不改。完整22运行结果仍待验。
+- 新增Ubuntu22独立原生验收任务，与24执行相同systemd/TLS/MySQL/升级恢复链；分别选择Jammy/Noble包及安全tar能力。发行/prepare精确信任清单要求同SHA五个财务必需任务，旧版合同不改；dab0167两平台完整链与公开资产prepare已分别实际通过。
 - 修复登录限流倒计时因同一响应多次采样时间而将120秒显示成121秒；不放宽后端限流或重复提交约束。
-- 金额、支付、币种和历史快照逻辑及001–013 SQL不变；候选不等于正式发行，不提供尚未存在的下载承诺。
+- 账户创建、更新、密码重置与撤销在事务中复核原session和当前admin，锁后以新语句核对DB期限，防止注销/过期/轮换越过原请求边界。
+- 正式构建40439181617、发布器40441128635与两平台公开prepare40441393371成功；正常Release424987299、完整六资产、202发行文件及原始收据复核通过。不是用户机、整机或真实支付验收。
+- 金额、支付、币种、历史快照和001–013 SQL不变。资源插件0.1.1仍为独立候选，未新增staff/MFA或自动开通worker。
 
-[候选范围与发行条件](RELEASE-v0.5.10.md) · [实际验证记录](VALIDATION.md)。
+[本版范围与发行条件](RELEASE-v0.5.10.md) · [实际验证记录](VALIDATION.md)。
 
 ## 当前版本与近期更新导航
 
-当前正式财务版本为 **Core v0.5.9**，于 **2026-10-22** 发布，固定源码 `4252fed`、六项资产；
+2026-10-27已复验的财务版本为**Core v0.5.10**，固定源码`dab0167`、正常Release及完整六资产；
 SMTP 保持独立 **v1.1.0**、五项资产，不随主控 main 开发重新发行。正式发行只表示版本交付，
 不代表真实支付渠道、主控/KVM 或目标运营环境已经验收。
 
 | 版本 | 变化摘要与边界 | 详细说明与发行入口 |
 | --- | --- | --- |
-| Core 0.5.9（当前正式） | 独立产品配置、新订单私密配置快照、已付款订单的唯一手动任务；schema 13 / 23 表。默认无 worker，不附带完整主控或真实 VM 开通。 | [发行说明](RELEASE-v0.5.9.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.9) |
+| Core 0.5.10（2026-10-27正式） | 新主线来源、原会话事务fence、Ubuntu22/24完整链及公开资产prepare；schema13不变。 | [版本合同](RELEASE-v0.5.10.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.10) |
+| Core 0.5.9（历史） | 独立产品配置、新订单私密配置快照、已付款订单的唯一手动任务；schema13/23表，默认无worker；新prepare有历史来源限制。 | [发行说明](RELEASE-v0.5.9.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.9) |
 | Core 0.5.8（历史） | 类型 → 地区 → 节点 → 套餐购买与后台分类管理，默认选中当前节点首个公开套餐；schema 12 / 20 表。节点只是商品分类，不是实际计算资源。 | [发行说明](RELEASE-v0.5.8.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.8) |
 | Core 0.5.7（历史） | 正式接入客户/管理员控制台，整理语言、币种与账户偏好入口，统一主题语义；继续 schema 10，不增加支付渠道或资源开通。 | [发行说明](RELEASE-v0.5.7.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.7) |
 | Core 0.5.6（历史） | 客户与角色管理、停用/密码重置/会话撤销、单笔订单详情、商品草稿/复制/编辑/独立定价，以及脱敏日志与分页审计；009/010 将财务库提升至 schema 10。 | [历史发布资料](RELEASE.md) · [GitHub Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.6) |

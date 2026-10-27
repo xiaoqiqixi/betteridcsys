@@ -4,6 +4,11 @@
 
 2026-10-25的只读盘点中，`v0.5.10` ref为404，8个现有Release中没有同名项；这是历史快照，不是版本预留，实际发行前必须再次核对。当前状态以[官方Release](https://github.com/xiaoqiqixi/betteridcsys/releases/tag/v0.5.10)与精确SHA验证记录为准。
 
+2026-10-27实际发行：source `dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0`的财务五门、正式构建40439181617、独立发布器40441128635成功，正常Release `424987299`与完整六资产已公开。
+公开prepare40441393371在Ubuntu22/24各自实际成功，复核202发行文件、13迁移及原始收据，未执行程序、安装、服务或数据库操作。
+后续main b132123另有完整16门成功，不是发行资产的source。完整摘要与范围见[公开验收](../../docs/CORE_PUBLIC_PREPARE_ACCEPTANCE.md)；
+用户主机、任意旧分叉目录升级、整机/真实KVM等未验范围仍保留，不将公开prepare说成生产环境验收。
+
 ## 版本和范围
 
 - Core API / plugin-host、前端 package / lock、插件管理器默认 Core：`0.5.10`。

@@ -1,6 +1,6 @@
 # W02：公开 Core 六资产与正式 prepare 验收
 
-状态：新增验收入口，尚未运行正式0.5.10公开资产；不是已发行或已安装声明。
+状态（2026-10-27）：正式0.5.10公开六资产与Ubuntu22/24生产prepare已实际通过；不是已安装或整机生产验收声明。
 源码候选native测试、正式构建、公开下载与目标主机安装分别记账，不能相互替代。
 
 ## 固定范围
@@ -46,3 +46,19 @@ gh workflow run core-public-prepare.yml \
 `test_public_core_prepare.py`为离线接线/负例测试，不是下载或Linux原子prepare实际运行。
 真正执行的收据和CI链接取得前，本项保持未验。该独立发布后工作流也不补位main精确SHA的5个财务或16个总门。
 通过只证明公开资产和受保护准备目录，不证明正式安装/升级、用户服务器可用、跨分叉旧目录兼容或完整生产验收。
+
+## 首次实际验收
+
+- 公开Release `424987299`、标签`v0.5.10`、精确source `dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0`，正常非草稿、非预发布。
+- [正式构建40439181617](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439181617)与[独立发布器40441128635](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40441128635)均成功。
+- [公开prepare40441393371](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40441393371)：Ubuntu22/24 **2/2成功**，控制源码为main `b132123`，不是把控制器SHA误当Release源码。
+  各自真实准备并复核202文件、13迁移；匿名下载/完整来源/正式prepare/原始收据复核与清理均true，程序执行/安装false、服务/数据库动作none。
+- 已下载并完整核对两份单JSON的966字节ZIP：22 SHA256 `d2b0b1fea3546b28a5603f0e5ab75a4cbec2bb83954d476a52db8e04e8448fb6`，
+  24 SHA256 `a0231b00216686e0c94680b371ee4be6cc54e2a4d861ff25ac23061ed14570f7`。
+- 本机也实际匿名下载完整六资产，经未修改的生产内存验证函数核对BUILD、PROVENANCE、源码映射/祖先和13迁移。
+  元数据走只读GitHub API，资产下载client无token；本机未做Linux受保护prepare，不能用这部分替代上面的两个平台结果。
+  原始下载与回执保存于ignored的`vps-billing/artifacts/execution-20261027/core-public/`。
+
+资源包内README为构建前的源码快照，部分状态文字仍写候选/未发布；它不是实时Release状态。
+main与发布后补记说明当前真实状态，不修改该标签、资源字节或SHA256。安装版本、协议、默认版本与六资产均为0.5.10；
+后续版本的README采用版本合同/发行条件，避免把构建前临时状态固化成安装结论。

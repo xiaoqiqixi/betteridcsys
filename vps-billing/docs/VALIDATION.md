@@ -1,4 +1,23 @@
-## 2026-10-25：Core 0.5.10 / resource 0.1.1 候选（未发布）
+# 财务验证记录
+
+## 2026-10-27：正式Core0.5.10与发布后公开验收
+
+以下分别记录来源与实际范围，不以任一项替代其他项：
+
+- 发行源码`dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0`的[财务40435816730](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40435816730)五门全部成功：Ubuntu22/24完整Go/MySQL/race、前端、systemd/TLS、插件崩溃、安装升级/备份恢复/回滚及浏览器均实跑。
+- [Runtime build40439181617](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439181617)与[独立发布器40441128635](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40441128635)成功，正常非草稿Release `424987299`，六资产绑定精确发行源码。
+- [公开prepare40441393371](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40441393371)在Ubuntu22/24 **2/2成功**：实际无凭据下载、完整来源、生产prepare、202发行文件/13迁移与原始收据复核及清理通过；程序执行/安装false、服务/数据库动作none。
+- 后续main `b132123`的[财务40439673220](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439673220)5/5、[Cloud40439673255](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439673255)11/11均成功。它不是发行资产的source SHA，更晚改动仍须自己的完整门禁。
+
+完整资产/ZIP摘要和边界见[公开验收](../../docs/CORE_PUBLIC_PREPARE_ACCEPTANCE.md)及[27日执行记录](../../docs/EXECUTION-20261027.md)。
+源码候选native链不冒充正式新资产整机安装，公开prepare也不替代用户主机、真实已准备旧分叉目录升级、宝塔环境、公共证书续期、真实支付、KVM/物理网络或全站最终视觉验收。
+资源包内文档是构建前源码快照，状态文字以对应Release及发布后复验记录澄清，不重发旧标签/资产。
+
+---
+
+以下各日期段落保留当时状态与失败，不将历史待验改写为当时已通过。
+
+## 2026-10-25：Core 0.5.10 / resource 0.1.1 候选（当时未发布）
 
 以下记录本轮提交前的候选准备检查；主线提交/推送不等于发行，本阶段没有创建 tag/Release。旧记录、旧标签与历史资产不覆盖。远端只读核对时 `v0.5.10` ref 返回 404，8 个 Release 未找到同名项；未来发布前仍须重新核对。当前版本号不是完整验收声明。
 

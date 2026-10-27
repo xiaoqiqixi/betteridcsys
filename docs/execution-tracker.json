@@ -57,7 +57,7 @@
       "depends_on": [
         "W00"
       ],
-      "state": "in_progress",
+      "state": "environment_verified",
       "evidence": [
         "CORE_PUBLIC_PREPARE_ACCEPTANCE.md",
         "EXECUTION-20261027.md"
@@ -67,7 +67,8 @@
         "R03",
         "R07"
       ],
-      "scope": "dab0167财务5/5真实通过；生产financial gate再验成功后新建v0.5.10。正式构建40439181617在运行，尚无正式Release/公开prepare通过证据。新增22/24只读公开prepare入口，13项离线接线测试不充当实跑。"
+      "scope": "Core0.5.10正常Release424987299，正式构建40439181617与独立发布器40441128635成功；公开验收40441393371在22/24实际匿名下载六资产、完整来源/生产prepare/202文件13迁移及清理均通过。本机完整六资产也已复验。不等于用户机安装、真实已准备旧分叉目录升级或整个系统生产验收；这些边界仍列W16。",
+      "source_sha": "dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0"
     },
     {
       "id": "W03",
@@ -75,8 +76,11 @@
       "depends_on": [
         "W01"
       ],
-      "state": "in_progress",
-      "evidence": [],
+      "state": "ci_verified",
+      "evidence": [
+        "EXECUTION-20261027.md",
+        "../aster-cloud/deploy/ci/libvirt-native.md"
+      ],
       "checklist_ids": [
         "CL-K01",
         "CL-K02",
@@ -91,7 +95,8 @@
         "R04",
         "R07"
       ],
-      "scope": "dab0167主控10/11，22在VM启动前原baseline3→4个接口而拒绝，24软件准备及其他门成功；来源未归属，仍15/16总门。保留严格比较、修先发失败被finally覆盖并加只读链路分类，Cloud标签/Release未创建。"
+      "scope": "b132123财务5/5与Cloud11/11同SHA全16门成功，22/24真实签名来宾/宿主双检查点均不变、实际浏览器完成。独立正式下载通道仍待Cloud标签/构建/签名/Release和两个角色匿名生产plan；当前不称已发行。",
+      "source_sha": "b132123cc9bbc87bdcc2548db3bf8665460c40c5"
     },
     {
       "id": "W04",
@@ -112,8 +117,8 @@
         "I08",
         "R05"
       ],
-      "scope": "dab0167再次财务5/5：22/24完整check.sh、真实MySQL/race、systemd/TLS、SMTP/合成支付崩溃恢复、Core安装升级/备份恢复/回滚及清理、demo和独立实库浏览器全部成功。只属隔离CI，不是用户机/生产或正式公开下载验收；新修改仍须自身完整门禁。",
-      "source_sha": "dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0"
+      "scope": "b132123两平台完整财务5/5再次成功；实际Go/MySQL/race、原生systemd/TLS、插件崩溃恢复、安装升级/备份恢复/回滚、demo与独立实库浏览器通过。正式Core0.5.10 source为dab0167，已另有22/24公开prepare2/2。均不替代用户机或真实生产验收，新修改仍须自身门禁。",
+      "source_sha": "b132123cc9bbc87bdcc2548db3bf8665460c40c5"
     },
     {
       "id": "W05",
@@ -216,8 +221,8 @@
         {
           "id": "W07-B",
           "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
-          "state": "implemented_local",
-          "scope": "dab0167主控身份实库/browser相关任务成功，原10图e566f20人工审查与942两图复查记录保留；财务22/24五门现均通过。但Cloud22宿主保护仍失败，完整总门/发行未完成，不把旧SHA图片伪作新视觉审查。",
+          "state": "ci_verified",
+          "scope": "b132123完整16门成功；真实身份浏览器29检查/5写/5回执/10图，独立validator复核通过；本轮人工看2图，源码与e566f20已人工审查全部10图的生产frontend相同。不是本轮全10图人工检查或全站W15完成。",
           "not_included": [
             "数据库强制append-only逐表授权（W13）",
             "MFA/step-up",
@@ -229,13 +234,14 @@
             "IDENTITY_OPERATIONS.md",
             "EXECUTION-20261026.md",
             "../aster-cloud/docs/CONSOLE_API.md"
-          ]
+          ],
+          "source_sha": "b132123cc9bbc87bdcc2548db3bf8665460c40c5"
         },
         {
           "id": "W07-B2",
           "title": "财务账户写原会话事务fence",
           "state": "ci_verified",
-          "scope": "dab0167两平台完整check.sh/MySQL/race及财务5/5再次成功，包含确定性锁内到期和原会话fence。仅此账户安全切片，不包括所有财务写、MFA/staff或全仓库发行。",
+          "scope": "b132123两平台完整check.sh/MySQL/race及财务5/5再次成功，原会话fence/锁内到期实跑；正式0.5.10发行source为dab0167。仅此账户安全切片，不包括所有财务写、MFA/staff或全目标。",
           "not_included": [
             "staff权限组/MFA/SSO",
             "所有其他财务写统一fence",
@@ -246,13 +252,13 @@
             "FINANCE_IDENTITY_SESSION_FENCE.md",
             "EXECUTION-20261027.md"
           ],
-          "source_sha": "dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0"
+          "source_sha": "b132123cc9bbc87bdcc2548db3bf8665460c40c5"
         },
         {
           "id": "W07-C",
           "title": "财务只读员工与权限组",
-          "state": "planned",
-          "scope": "详细合同已统一：拟独立Core0.5.11/schema14，七个明确全站只读权限、组/成员revision、无复活授权seal、独立路由与回执/UI实库闭环；当前没有staff代码或014迁移，不改0.5.10无新增SQL合同。",
+          "state": "in_progress",
+          "scope": "拟独立Core0.5.11/schema14。Go原型复现并修正active-only seal导致旧零组/停用组会话复活的合同；实际隔离MySQL三旧表/四新表候选DDL和14精准负例通过、旧字段/会话保留。生产staff/014迁移/接口/前端尚未实现，原型不充当完整迁移或浏览器验收。",
           "evidence": [
             "FINANCE_STAFF_ACCESS.md",
             "IDENTITY_PERMISSION_PLAN.md"

@@ -203,3 +203,47 @@ dab0167最终[财务40435816730](https://github.com/xiaoqiqixi/betteridcsys/acti
 正式[Runtime build40439181617](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439181617)已实际运行，尚未完成，
 不能称已发布。Cloud标签与Release仍未创建。本轮新增CI入口/宿主诊断不改40个财务构建/发布信任blob，
 不改财务运行代码、SQL、金额、支付或历史快照；后续main本身仍须新的完整CI，不能借dab0167给新源码背书。
+
+## W07-C：等待正式构建期间补实测设计边界，未激活新角色
+
+重新读取当前Store/HTTP/原始SQL后，发现员工授权seal若按“启用关系”筛选，零组会话在获权后移除、
+停用组会话在启用后再停用两种路径都可重新匹配旧seal。独立Go可运行模型已真实复现，并验证纳入完整tombstone关系可阻止；
+205组末项、排序、改名、未知/重复权限也通过，详细合同已修正，不用全站统一登出掩盖相关对象版本缺失。
+
+同一已确认存活的本机MySQL8.4.11/socket-only执行新建专属空库的DDL原型，三旧表/四新表结构与FK、ENUM尾部追加、
+旧列/行/会话不变、关系revision保留已实测。新增精准负例先发现尾空格权限与非hex seal会被候选约束接受，
+改进候选后14类SQL拒绝与七项合法权限/合法seal正向均通过，测试库全部删除。
+没有把本机IPC沙箱的首次访问拒绝误判为数据库停止；在同一socket提权只读确认存活，没有另起实例或重启。
+原型源、RED/GREEN JSON与DDL留在ignored artifacts，生产001–013和schema13/版本不动。
+完整staff功能、27表预检、Linux实库并发/浏览器仍待正式实现，W07-C不是已完成；见[合同与原型范围](FINANCE_STAFF_ACCESS.md)。
+
+## Core0.5.10正式交付与b132123完整16门
+
+2026-10-27，源码`dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0`的Runtime build40439181617、独立发布器40441128635均实际成功。
+新正常Release `424987299` / `v0.5.10`已公开，目标为该完整source，不是后续控制器main。无旧标签/资产覆盖。
+六资产均实际匿名完整下载，大小/hash、BUILD、PROVENANCE、源码与13迁移经未修改生产内存验证通过。
+独立公开prepare40441393371在Ubuntu22/24 **2/2成功**，逐平台真实prepare/202发行文件及本地原始收据复核、清理成功；
+程序执行/安装false，服务/数据库动作none。两份966字节ZIP完整hash及全部六资产摘要见[公开验收记录](CORE_PUBLIC_PREPARE_ACCEPTANCE.md)。
+这仍不是用户机安装、真实旧分叉目录升级、宝塔、公共CA续期或全系统生产验收，不将W02局部闭环当整套目标完成。
+
+随后main `b132123cc9bbc87bdcc2548db3bf8665460c40c5`取得财务40439673220 **5/5**、Cloud40439673255 **11/11**，
+首次同一新源码全部16门成功。Cloud22/24签名来宾均完成实际APT/systemd/libvirt；两检查点宿主完整快照均不变，KVM仍false。
+各ZIP完整验证：22为2,373字节、`45ae29ae1e15598aa535052cb1a6928b16db08c93ff56c1c744320de8c6a55ae`；
+24为2,382字节、`65342ffddeb4d55f80c7da0290a3db346821fd3b6f88a5a257cd9ae9009eb5d5`。
+这不将DAB启动前接口变动改判通过，也没有证明其进程归属；本轮是严格守卫真正未发生差异的新记录，不忽略接口或重置baseline。
+
+实际管理台浏览器ZIP为8,711,607字节、`6a083e800c32d57aed4379db880995837111fcec59007ef52adf2741cefe77ea`，
+完整核对85文件名单/hash后提取身份10 PNG/2 JSON；原Node独立validator实际通过29检查、5写、5条MySQL提交回执。
+本轮人工复看1440桌面撤销及320手机编辑两图，无可见溢出/遮挡；不据截图推断键盘、性能或全站WCAG通过。
+生产frontend src/package/lock/vite/index自e566f20完整10图人工审查后逐字节相同；这不冒称本轮人工看完10图或完成W15。
+浏览器任务40分钟预算内实际进入Strict TLS/MySQL并完成，未删字体、换演示数据或延长现有超时。
+
+发现root README、更新/宝塔/升级入口仍留有构建前的固定未发布状态；已改main为版本合同/条件及日期化实际记录，
+旧资源文档仍保留源码快照，不能覆盖标签或重写已发布hash来纠正文案。新Release仅追加发布后复验及快照说明，
+写后核对原正文前缀、source/tag及六资产ID/大小/digest均未变。新回归用真实b132123旧README先复现RED、再GREEN，
+同时守住安装入口及Core版本声明；旧日期段落保留当时失败，不篡改成历史全绿。
+本轮文档与新回归仍须其自身新main完整CI，不能把b13212316门直接用于后续Cloud发布。
+
+入口排查扩展到更新/升级/宝塔、变更与验证记录及历史调整文档，当前措辞均改为条件和日期化实际证据；
+新5项README/入口回归对真实旧b132123四入口复现RED后GREEN，197项本地定向检查、actionlint、JSON及diff检查通过。
+历史日期段落保留原当时状态。当前远端只有main，GitHub公开contributors API仅xiaoqiqixi，无Codex；不以本地log代替该结果。
