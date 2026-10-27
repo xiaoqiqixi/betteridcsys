@@ -162,3 +162,44 @@ W04与W07-B2可以按128a86d的各自实际范围记`ci_verified`；这不是用
 Core0.5.10和Cloud RC仍未创建新标签或Release，正式六资产下载/prepare验收未完成。
 安装与版本文档改用明确的发行放行条件，避免版本化安装包永远写“未发布”；同时纠正Python>=3.12的过时说法，
 实际要求仍为安全tar能力且不放宽filter。此类文档更新不把候选提前宣布为已交付。
+
+## dab0167：启动前的宿主变化已定位到阶段，进程归属仍待证
+
+已确认远端main为`dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0`，没有增加分支或创建标签。
+[Cloud40435816788](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40435816788)的22任务121964114939在VM启动前拒绝。
+脱敏ZIP完整校验：1,550字节，SHA256 `36363a015dbe14f3bfeba8239e1c80137e345d5c864a24d0a55c4f1b7a4d4aec`。
+原始baseline为3个接口，pre-VM及最终均4个；新增ifindex4、ether、无IPv4/IPv6地址且有master。
+路由及防火墙hash相同、progress空、guest_result_seen=false、qemu_process_verified=false；没有运行本轮来宾安装。
+这只定位变化早于VM，不证明Docker或其他服务归属，更不能把此次失败当22安装回归通过。
+
+确认并复现另一夹具缺陷：`finally`的网络失败覆盖先发的`HOST_NETWORK_CHANGED_BEFORE_VM`或来宾失败，
+导致最终报告失去第一处实际原因。新增直接调用真实execute控制流的回归先RED：两项错误码被覆盖；
+修复后保留先发失败且最终核对照常运行，末次变化/采集不可用仍不能成功，临时变化后来恢复也不救回先发失败。
+原快照已拒绝后才追加独立详细link诊断，输出固定kind/master类别，不输出实际名称/地址/任意linkinfo内容，不忽略任何接口。
+详细link内动态timer不引入原准入数据，诊断失败也不放行。50项libvirt合同与29项Cloud发行合同本机通过；
+这不是新的Linux VM运行或宿主变化根因已修复。
+
+测试服务器已再次由工具执行SSH只读握手，仍在密钥交换前对端关闭；无密码发送、private known_hosts为空。
+首次信任记录仅在本轮私有文件使用accept-new，公钥一旦存在必须精确匹配，不关闭主机校验，也不冒称已独立验证指纹。
+Mac仍锁屏，Gemini不可操作；没有发送源码、旧UI图或服务器资料，继续后端/测试而不是停下等桌面。
+
+为补齐W02发布后的真正公开资产prepare，新增独立22/24只读工作流与`public-core-prepare.py`：
+固定Core0.5.10/审查source，六资产用无凭据生产client下载，调用原正式prepare和完整prepared_release只读复核，
+保护路径/文件/来源/13迁移验证不替换，只使用本轮root私密scratch并清理；不安装、不启动、不动DB。
+13项离线负例/接线测试通过，包括资产缺失/重复/坏字节、错误source、假prepare、完整目录验证拒绝、错收据、变化的Release、
+SQL数量、非Linux与坏token；**尚未执行真实新公开版本**，详见[验收合同](CORE_PUBLIC_PREPARE_ACCEPTANCE.md)。
+财务发行74项、runtime26项回归按项目正常Python测试入口通过；首次误用`-I`导致同目录测试模块不可导入，
+已按现有check.sh的发现/正常入口重跑，不因此修改测试或生产导入。全部workflow actionlint及diff检查通过。
+
+dab0167最终[财务40435816730](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40435816730)为5/5成功，
+两平台完整native链及独立实库浏览器均通过；Cloud最终10/11成功，仍15/16总门，22启动前宿主变化不改判。
+新下载native ZIP并完整校验34文件清单、大小和hash，与前一轮受控清单一致：
+24为23,041字节、`86a73a9a46eee2934f307342c2fc2d48d210ac8acd72395530ee9f613a424172`；
+22为23,121字节、`065cf7b1a1f3797ab5cae4a4a92e4a3040ab77c8a72f585730ca098ce32d5d1b`。
+实际SMTP/合成支付failures为0、新安装succeeded、owned资源清理为true；ignored归档保留，不把日志/秘密提交仓库。
+
+以真实GitHub只读接口运行原生产`green_financial_ci`，确认精确dab0167、run40435816730/attempt1的五门均成功；
+复核版本/标签/Release未占用后，按既有发布授权新建`v0.5.10`指向该源码。
+正式[Runtime build40439181617](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40439181617)已实际运行，尚未完成，
+不能称已发布。Cloud标签与Release仍未创建。本轮新增CI入口/宿主诊断不改40个财务构建/发布信任blob，
+不改财务运行代码、SQL、金额、支付或历史快照；后续main本身仍须新的完整CI，不能借dab0167给新源码背书。

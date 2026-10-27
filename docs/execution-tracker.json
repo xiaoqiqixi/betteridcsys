@@ -58,12 +58,16 @@
         "W00"
       ],
       "state": "in_progress",
-      "evidence": [],
+      "evidence": [
+        "CORE_PUBLIC_PREPARE_ACCEPTANCE.md",
+        "EXECUTION-20261027.md"
+      ],
       "checklist_ids": [
         "R01",
         "R03",
         "R07"
-      ]
+      ],
+      "scope": "dab0167财务5/5真实通过；生产financial gate再验成功后新建v0.5.10。正式构建40439181617在运行，尚无正式Release/公开prepare通过证据。新增22/24只读公开prepare入口，13项离线接线测试不充当实跑。"
     },
     {
       "id": "W03",
@@ -87,7 +91,7 @@
         "R04",
         "R07"
       ],
-      "scope": "独立通道代码与16门已接；128a86d仍15/16，Cloud24宿主接口数量变化且原因未归属。补VM前原baseline检查及脱敏结构差异，严格比较不放宽，未创建Cloud标签/Release。"
+      "scope": "dab0167主控10/11，22在VM启动前原baseline3→4个接口而拒绝，24软件准备及其他门成功；来源未归属，仍15/16总门。保留严格比较、修先发失败被finally覆盖并加只读链路分类，Cloud标签/Release未创建。"
     },
     {
       "id": "W04",
@@ -108,8 +112,8 @@
         "I08",
         "R05"
       ],
-      "scope": "128a86d财务5/5：22/24完整Go/MySQL/race、原生systemd/TLS、SMTP/合成支付崩溃恢复、Core安装升级/备份恢复/回滚/故障保持和清理、demo及独立真实API浏览器全部成功。22/24实际kill selector与OS报告已核验。只属隔离CI，不是用户机/生产或正式公开下载验收；新修改须自身完整门禁。",
-      "source_sha": "128a86d091d806c39b9c33c8a945c0fc20b19f06"
+      "scope": "dab0167再次财务5/5：22/24完整check.sh、真实MySQL/race、systemd/TLS、SMTP/合成支付崩溃恢复、Core安装升级/备份恢复/回滚及清理、demo和独立实库浏览器全部成功。只属隔离CI，不是用户机/生产或正式公开下载验收；新修改仍须自身完整门禁。",
+      "source_sha": "dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0"
     },
     {
       "id": "W05",
@@ -213,7 +217,7 @@
           "id": "W07-B",
           "title": "账户revision、显式会话撤销、身份回执与未知结果闭环",
           "state": "implemented_local",
-          "scope": "942f62e主控11/11成功，实际29项身份检查/5写/10图和5条回执，严格TLS、资源历史hash不变；当前2图人工复看，e566f20同前端代码的全部10图已人工审查。财务22 native仍失败，整体W07/发行未完成。",
+          "scope": "dab0167主控身份实库/browser相关任务成功，原10图e566f20人工审查与942两图复查记录保留；财务22/24五门现均通过。但Cloud22宿主保护仍失败，完整总门/发行未完成，不把旧SHA图片伪作新视觉审查。",
           "not_included": [
             "数据库强制append-only逐表授权（W13）",
             "MFA/step-up",
@@ -231,7 +235,7 @@
           "id": "W07-B2",
           "title": "财务账户写原会话事务fence",
           "state": "ci_verified",
-          "scope": "128a86d两平台完整check.sh/MySQL/race及财务5/5成功，确定性锁内到期回归实跑；原session/actor/hash、完整TLS拒绝、注销/轮换/本人删session与logout并发均通过。仅此财务账户安全切片，不包括所有财务写/MFA/staff或全仓库发行。",
+          "scope": "dab0167两平台完整check.sh/MySQL/race及财务5/5再次成功，包含确定性锁内到期和原会话fence。仅此账户安全切片，不包括所有财务写、MFA/staff或全仓库发行。",
           "not_included": [
             "staff权限组/MFA/SSO",
             "所有其他财务写统一fence",
@@ -242,7 +246,7 @@
             "FINANCE_IDENTITY_SESSION_FENCE.md",
             "EXECUTION-20261027.md"
           ],
-          "source_sha": "128a86d091d806c39b9c33c8a945c0fc20b19f06"
+          "source_sha": "dab0167d58cd99a19fc4a0eafff23bbe7ff95cf0"
         },
         {
           "id": "W07-C",

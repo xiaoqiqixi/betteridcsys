@@ -268,11 +268,14 @@ def address_inventory_delta(before, after):
     categories = {"lo": "loopback", "eth0": "primary_ethernet", "eth1": "secondary_ethernet",
                   "docker0": "docker_bridge", "virbr0": "libvirt_bridge"}
     link_types = {"loopback", "ether", "none", "ppp", "tunnel", "sit", "ip6tnl", "tunnel6", "gre", "wireguard"}
+    link_kinds = {"bridge", "veth", "tun", "dummy", "vlan", "vxlan", "bond", "openvswitch", "macvlan", "ipvlan", "wireguard", "vrf", "geneve"}
 
     def inventory(items):
         if not isinstance(items, list) or len(items) > 4096:
             return None
         values = {}
+        names = {item["ifindex"]: item.get("ifname") for item in items
+                 if isinstance(item, dict) and type(item.get("ifindex")) is int}
         for item in items:
             if not isinstance(item, dict) or type(item.get("ifindex")) is not int or not 0 < item["ifindex"] < 2 ** 31 or item["ifindex"] in values:
                 return None
@@ -284,10 +287,17 @@ def address_inventory_delta(before, after):
                 family = address.get("family") if isinstance(address, dict) else None
                 families[family if family in ("inet", "inet6") else "other"] += 1
             name, link_type = item.get("ifname"), item.get("link_type")
+            link_info = item.get("linkinfo")
+            link_kind = link_info.get("info_kind") if isinstance(link_info, dict) else None
+            master = item.get("master")
+            if type(master) is int:
+                master = names.get(master)
             values[item["ifindex"]] = {"ifindex": item["ifindex"],
                 "name_category": categories.get(name, "other") if isinstance(name, str) else "other",
                 "link_type": link_type if isinstance(link_type, str) and link_type in link_types else "other",
-                "address_families": families, "master_present": "master" in item}
+                "link_kind": link_kind if isinstance(link_kind, str) and link_kind in link_kinds else "other",
+                "address_families": families, "master_present": "master" in item,
+                "master_category": (categories.get(master, "other") if isinstance(master, str) else "other") if "master" in item else "none"}
         return values
 
     left, right = inventory(before), inventory(after)
@@ -338,6 +348,18 @@ def verify_host_network_checkpoint(before, *, phase):
         HOST_PRE_VM_PROOF = proof
     else:
         HOST_PROOF = proof
+    if not proof["unchanged"]:
+        try:
+            ip = next(p for p in ("/usr/sbin/ip", "/usr/bin/ip", "/sbin/ip") if Path(p).is_file())
+            # Separate diagnostic snapshot: detailed link timers must not enter
+            # or rebase the original complete address/route/firewall admission.
+            details = json.loads(run([ip, "-j", "-d", "link", "show"]))
+            delta = address_inventory_delta(before["addresses"], details)
+            for item in delta.get("added", []) + delta.get("removed", []):
+                item.pop("address_families")  # `link show` does not read addresses.
+            proof["link_inventory_delta"] = delta
+        except Exception:
+            proof["link_inventory_delta"] = {"available": False}
     require(proof["unchanged"], "HOST_NETWORK_CHANGED_BEFORE_VM" if phase == "before_vm" else "HOST_NETWORK_OR_FIREWALL_CHANGED")
     return proof
 
@@ -790,7 +812,14 @@ def execute(args):
             require(result.get("passed") is True, "GUEST_ACCEPTANCE_FAILED")
             validate_result(result, metadata)
     finally:
-        verify_host_network_checkpoint(before, phase="after_vm")
+        already_failed = sys.exc_info()[0] is not None
+        try:
+            verify_host_network_checkpoint(before, phase="after_vm")
+        except Exception:
+            # Never turn a failure into success, or replace the earlier cause.
+            # Final proof is still recorded if available; absent proof is not green.
+            if not already_failed:
+                raise
     require(SANDBOX_PROOF.get("passed") is True and SANDBOX_PROOF.get("qemu_process_verified") is True and
             RELAY_PROOF.get("spawned_seen") is True and RELAY_PROOF.get("lifecycle", {}).get("cleanup_complete") is True,
             "NATIVE_PROCESS_ISOLATION_OR_RELAY_CLEANUP_UNVERIFIED")

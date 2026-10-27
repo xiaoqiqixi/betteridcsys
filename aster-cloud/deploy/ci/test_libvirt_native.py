@@ -441,7 +441,8 @@ class NativeFixtureContract(unittest.TestCase):
         self.assertEqual(delta["added_count"], 1)
         self.assertEqual(delta["removed_count"], 0)
         self.assertEqual(delta["added"], [{"ifindex": 8, "name_category": "other", "link_type": "ether",
-            "address_families": {"inet": 1, "inet6": 1, "other": 0}, "master_present": True}])
+            "link_kind": "other", "address_families": {"inet": 1, "inet6": 1, "other": 0},
+            "master_present": True, "master_category": "other"}])
         self.assertNotIn("PRIVATE", json.dumps(proof))
         # A known Docker/libvirt interface is only classified, never ignored.
         for name, category in (("docker0", "docker_bridge"), ("virbr0", "libvirt_bridge")):
@@ -487,6 +488,86 @@ class NativeFixtureContract(unittest.TestCase):
         source = inspect.getsource(h.execute)
         self.assertLess(source.index('verify_host_network_checkpoint(before, phase="before_vm")'), source.index('result = run_vm('))
         self.assertEqual(source.count('before = host_network()'), 1)
+
+    def test_execute_preserves_the_first_failure_but_always_records_final_network_proof(self):
+        before = {"addresses": [], "routes": [], "firewall": {}}
+        after = {**before, "addresses": [{"ifindex": 4, "ifname": "PRIVATE_LINK", "master": "docker0"}]}
+        unavailable = h.Refused("HOST_READONLY_IP_TOOL_REQUIRED")
+        cases = ((after, None, after, "HOST_NETWORK_CHANGED_BEFORE_VM", 0),
+                 (after, None, before, "HOST_NETWORK_CHANGED_BEFORE_VM", 0),
+                 (before, h.Refused("GUEST_ACCEPTANCE_FAILED"), after, "GUEST_ACCEPTANCE_FAILED", 1),
+                 (before, h.Refused("GUEST_ACCEPTANCE_FAILED"), unavailable, "GUEST_ACCEPTANCE_FAILED", 1),
+                 (before, None, after, "HOST_NETWORK_OR_FIREWALL_CHANGED", 1),
+                 (before, None, unavailable, "HOST_READONLY_IP_TOOL_REQUIRED", 1))
+        for pre_vm, guest_error, final_state, expected, guest_calls in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+                root = Path(directory).resolve()
+                args = argparse.Namespace(ubuntu="22.04", source_root=str(root), source_sha="a" * 40, output=str(root / "out"))
+                metadata = {**self.metadata(), "nonce": "b" * 32}
+                stack.enter_context(mock.patch.object(h.platform, "system", return_value="Linux"))
+                stack.enter_context(mock.patch.object(h.platform, "machine", return_value="x86_64"))
+                stack.enter_context(mock.patch.object(h.os, "geteuid", return_value=1000))
+                stack.enter_context(mock.patch.multiple(h, TOOLS=(), HOST_PROOF={}, HOST_PRE_VM_PROOF={}, OUTPUT_CREATED=None))
+                stack.enter_context(mock.patch.object(h, "run", return_value=b"a" * 40))
+                stack.enter_context(mock.patch.object(h, "prepare_sandbox"))
+                stack.enter_context(mock.patch.object(h, "obtain_image", return_value=(root / "image", {})))
+                stack.enter_context(mock.patch.object(h, "make_seed", return_value=(root / "seed", metadata)))
+                snapshots = stack.enter_context(mock.patch.object(h, "host_network", side_effect=[before, pre_vm, final_state]))
+                vm = stack.enter_context(mock.patch.object(h, "run_vm", return_value=self.result(), side_effect=guest_error))
+                with self.assertRaisesRegex(h.Refused, "^" + expected + "$"):
+                    h.execute(args)
+                self.assertEqual(vm.call_count, guest_calls)
+                self.assertEqual(snapshots.call_count, 3)
+                self.assertEqual(h.HOST_PROOF.get("unchanged"), final_state == before if isinstance(final_state, dict) else None)
+                self.assertEqual(h.HOST_PRE_VM_PROOF["unchanged"], pre_vm == before)
+                self.assertFalse((root / "out" / "summary.json").exists())
+
+    def test_detailed_links_classify_veth_and_master_without_exporting_private_values(self):
+        import inspect
+        self.assertIn('[ip, "-j", "address", "show"]', inspect.getsource(h.host_network))
+        self.assertNotIn('"-d"', inspect.getsource(h.host_network))
+        self.assertIn('[ip, "-j", "-d", "link", "show"]', inspect.getsource(h.verify_host_network_checkpoint))
+        before = {"addresses": [{"ifindex": 3, "ifname": "docker0", "addr_info": []}], "routes": [], "firewall": {}}
+        after = copy.deepcopy(before)
+        link = {"ifindex": 4, "ifname": "PRIVATE_LINK", "master": 3,
+                "link_type": "ether", "linkinfo": {"info_kind": "veth", "info_data": {"PRIVATE_KEY": "PRIVATE_VALUE"}}}
+        after["addresses"].append(link)
+        proof = h.network_proof(before, after)
+        self.assertFalse(proof["unchanged"])
+        added = proof["address_inventory_delta"]["added"][0]
+        self.assertEqual(added["link_kind"], "veth")
+        self.assertEqual(added["master_category"], "docker_bridge")
+        self.assertNotIn("PRIVATE", json.dumps(proof))
+        for master in ("docker0", 3):
+            link["master"] = master
+            self.assertEqual(h.address_inventory_delta(before["addresses"], after["addresses"])["added"][0]["master_category"], "docker_bridge")
+        for value in ("PRIVATE_KIND", [], None, {"info_kind": "PRIVATE_KIND"}):
+            link["linkinfo"] = value
+            proof = h.network_proof(before, after)
+            self.assertFalse(proof["unchanged"])
+            self.assertEqual(proof["address_inventory_delta"]["added"][0]["link_kind"], "other")
+            self.assertNotIn("PRIVATE", json.dumps(proof))
+
+    def test_optional_link_diagnostics_never_authorize_a_changed_or_unavailable_network(self):
+        before = {"addresses": [], "routes": [], "firewall": {}}
+        after = {**before, "addresses": [{"ifindex": 4, "ifname": "PRIVATE_LINK"}]}
+        links = [{"ifindex": 3, "ifname": "docker0"}, {"ifindex": 4, "ifname": "PRIVATE_LINK", "master": "docker0",
+                  "linkinfo": {"info_kind": "veth", "info_data": {"PRIVATE_KEY": "PRIVATE_VALUE"}}}]
+        for output in (json.dumps(links).encode(), b"PRIVATE_INVALID_JSON", OSError("PRIVATE_DIAGNOSTIC_FAILURE")):
+            with self.subTest(output_type=type(output).__name__), mock.patch.object(h, "HOST_PRE_VM_PROOF", {}), \
+                    mock.patch.object(h, "host_network", return_value=after), mock.patch.object(h.Path, "is_file", return_value=True), \
+                    mock.patch.object(h, "run", return_value=output, side_effect=output if isinstance(output, Exception) else None) as command:
+                with self.assertRaisesRegex(h.Refused, "^HOST_NETWORK_CHANGED_BEFORE_VM$"):
+                    h.verify_host_network_checkpoint(before, phase="before_vm")
+                proof = h.HOST_PRE_VM_PROOF
+                self.assertFalse(proof["unchanged"])
+                self.assertEqual(proof["after_sha256"], h.network_proof(before, after)["after_sha256"])
+                self.assertNotIn("PRIVATE", json.dumps(proof))
+                command.assert_called_once_with(["/usr/sbin/ip", "-j", "-d", "link", "show"])
+                self.assertNotIn("address_families", json.dumps(proof["link_inventory_delta"]))
+        with mock.patch.object(h, "HOST_PROOF", {}), mock.patch.object(h, "host_network", return_value=before), mock.patch.object(h, "run") as command:
+            self.assertTrue(h.verify_host_network_checkpoint(before, phase="after_vm")["unchanged"])
+            command.assert_not_called()
 
     def test_progress_requires_owned_nonce_and_fixed_stage_without_exporting_inputs(self):
         with mock.patch.object(g, "PROGRESS_NONCE", None), mock.patch("builtins.open") as opened:
