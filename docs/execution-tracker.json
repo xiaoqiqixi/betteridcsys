@@ -71,7 +71,7 @@
       "depends_on": [
         "W01"
       ],
-      "state": "planned",
+      "state": "in_progress",
       "evidence": [],
       "checklist_ids": [
         "CL-K01",
@@ -86,7 +86,8 @@
         "R03",
         "R04",
         "R07"
-      ]
+      ],
+      "scope": "独立通道代码与16门已接；128a86d仍15/16，Cloud24宿主接口数量变化且原因未归属。补VM前原baseline检查及脱敏结构差异，严格比较不放宽，未创建Cloud标签/Release。"
     },
     {
       "id": "W04",
@@ -94,7 +95,7 @@
       "depends_on": [
         "W02"
       ],
-      "state": "in_progress",
+      "state": "ci_verified",
       "evidence": [
         "FINANCE_NATIVE_22_24.md",
         "EXECUTION-20261026.md",
@@ -107,7 +108,8 @@
         "I08",
         "R05"
       ],
-      "scope": "942f62e：24完整native成功；22新Nginx/TLS/edge、完整Go/MySQL/race和前端合同已过，后续SMTP崩溃注入systemctl kill失败（249参数拼写不兼容）。能力选择、支付/清理同类位置与真实OS报告已修，本机14+1+1定向通过，22完整链/新16门仍待验证。 942f62e最终14/16：财务实库浏览器在依赖慢下载阶段40分钟取消、未进入UI测试；不沿用旧SHA。"
+      "scope": "128a86d财务5/5：22/24完整Go/MySQL/race、原生systemd/TLS、SMTP/合成支付崩溃恢复、Core安装升级/备份恢复/回滚/故障保持和清理、demo及独立真实API浏览器全部成功。22/24实际kill selector与OS报告已核验。只属隔离CI，不是用户机/生产或正式公开下载验收；新修改须自身完整门禁。",
+      "source_sha": "128a86d091d806c39b9c33c8a945c0fc20b19f06"
     },
     {
       "id": "W05",
@@ -228,8 +230,8 @@
         {
           "id": "W07-B2",
           "title": "财务账户写原会话事务fence",
-          "state": "implemented_local",
-          "scope": "942f62e两平台完整check.sh成功，原session/actor/hash、锁后DB时间、完整TLS拒绝及真实MySQL/race全套PASS；当前到期fixture另去掉认证抢4秒窗口，保留全部断言，已交叉编译/vet与真实SQL primitive，调整版完整Linux执行待新SHA。跨系统16门仍有22插件CLI兼容失败，不能记整体完成。",
+          "state": "ci_verified",
+          "scope": "128a86d两平台完整check.sh/MySQL/race及财务5/5成功，确定性锁内到期回归实跑；原session/actor/hash、完整TLS拒绝、注销/轮换/本人删session与logout并发均通过。仅此财务账户安全切片，不包括所有财务写/MFA/staff或全仓库发行。",
           "not_included": [
             "staff权限组/MFA/SSO",
             "所有其他财务写统一fence",
@@ -239,7 +241,8 @@
           "evidence": [
             "FINANCE_IDENTITY_SESSION_FENCE.md",
             "EXECUTION-20261027.md"
-          ]
+          ],
+          "source_sha": "128a86d091d806c39b9c33c8a945c0fc20b19f06"
         },
         {
           "id": "W07-C",

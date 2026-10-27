@@ -1,8 +1,8 @@
 # Ubuntu 原生单机安装
 
-> **候选未发布（2026-10-25）**：本页已同步 Core **0.5.10** 候选，不能现在照抄命令安装不存在的资产。先等待该精确提交完整 CI、正常 Release、公共六资产下载和来源核验通过。旧 v0.5.6–v0.5.9 保持原样，其新 `prepare` / `stage` 仍因来源不在当前 `main` 祖先链而拒绝；新版本不会修复或覆盖旧标签。见[历史调整与影响](../../docs/HISTORY_REWRITE.md)及[候选发行说明](RELEASE-v0.5.10.md)。
+> **安装前先核对发行**：本页对应Core **0.5.10**。只有固定官方正常Release、精确提交完整CI、公共六资产下载和来源核验均成功，才能使用下列命令；候选源码、草稿、缺少资产或校验失败不构成安装依据。旧v0.5.6–v0.5.9保持原样，其新`prepare` / `stage`仍因来源不在当前`main`祖先链而拒绝；新版本不会修复或覆盖旧标签。见[历史调整与影响](../../docs/HISTORY_REWRITE.md)及[版本合同](RELEASE-v0.5.10.md)。
 
-本文示例的目标版本是 **0.5.10**，不是已验收发行声明。先核验官方资产并准备完整版本目录，再审查私密实例规格与只读计划，最后用计划 SHA-256 确认实际操作。全新安装会创建专用数据库及账号、系统运行身份、秘密文件、配置、schema、首位管理员和原生服务，切换版本并检查 HTTPS。它不安装操作系统组件、申请证书或修改 DNS。已有实例使用[升级流程](UPGRADE.md)，不能重跑全新安装覆盖。
+本文示例的目标版本是 **0.5.10**，是否已交付须按上面的发行条件核验。先核验官方资产并准备完整版本目录，再审查私密实例规格与只读计划，最后用计划 SHA-256 确认实际操作。全新安装会创建专用数据库及账号、系统运行身份、秘密文件、配置、schema、首位管理员和原生服务，切换版本并检查 HTTPS。它不安装操作系统组件、申请证书或修改 DNS。已有实例使用[升级流程](UPGRADE.md)，不能重跑全新安装覆盖。
 
 独立运行时支付插槽 `aster.payment/1` 自 Core 0.5.3 起提供，第三方渠道由运营者和开发者按[支付插件接入指南](PAYMENT_PLUGINS.md)完成适配、独立构建与验收，无需重编 Core。支付默认关闭，本文安装流程不会安装渠道或执行收款。当前未提供官方真实渠道、渠道交易查询、撤销、退款及特定渠道要求的回调应答（ACK）；VPS 开通也需另行接入。SMTP 1.1.0 独立安装、默认关闭，仅支持管理员配置和主动测试。`APP_MODE=production` 表示持久化及严格配置检查，不是生产认证。原生检查的准确提交、运行和限制见 [VALIDATION.md](VALIDATION.md)。宝塔共享环境另见 [BAOTA.md](BAOTA.md)。
 
@@ -10,14 +10,14 @@
 
 手工 Nginx 模板使用 `ssl_reject_handshake`，须 Nginx **>=1.19.4** 且启用 HTTP SSL 模块；不要直接假设发行版默认包满足，也不要删除该保护来兼容旧包。指令最低版本见 [Nginx 官方说明](https://nginx.org/en/docs/http/ngx_http_ssl_module.html#ssl_reject_handshake)。Ubuntu22 隔离验证使用已核验官方来源的 Nginx 1.30.6；这不是自动替主机升级 Nginx 或所有发行版的支持承诺。
 
-部署验证目标为 **Ubuntu Server 22.04 / 24.04 LTS、amd64**；Ubuntu 24.04 仍是正式 CI 与发布门禁的基线，不能把新增目标写成已经完成支持验收。采用原生 Linux 部署，不使用 Docker；主机须已有 Python 3、Bash/GNU 工具、systemd、Nginx，以及可通过本机 Unix socket 使用的 Oracle MySQL **8.4 LTS** 和兼容的 `mysql`/`mysqldump`。运行 API 不需要 Go 或 Node.js。管理员先审查容量、现有服务、端口和目录，提供真实 HTTPS 域名及受信任证书。系统软件与 MySQL 实例本身须按 [Ubuntu Nginx 指引](https://ubuntu.com/server/docs/how-to/web-services/install-nginx/)及 [MySQL 官方 APT 指引](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/)独立安装、核验；不要在旧库主机上执行新装数据库步骤。
+部署验证目标为 **Ubuntu Server 22.04 / 24.04 LTS、amd64**；正式发行要求Ubuntu22/24分别通过同源码原生门禁，不以支持目标代替当前主机验收。采用原生 Linux 部署，不使用 Docker；主机须已有 Python 3、Bash/GNU 工具、systemd、Nginx，以及可通过本机 Unix socket 使用的 Oracle MySQL **8.4 LTS** 和兼容的 `mysql`/`mysqldump`。运行 API 不需要 Go 或 Node.js。管理员先审查容量、现有服务、端口和目录，提供真实 HTTPS 域名及受信任证书。系统软件与 MySQL 实例本身须按 [Ubuntu Nginx 指引](https://ubuntu.com/server/docs/how-to/web-services/install-nginx/)及 [MySQL 官方 APT 指引](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/)独立安装、核验；不要在旧库主机上执行新装数据库步骤。
 
-2026-10-20 的 Ubuntu 22.04 阶段验证已实际运行支付 Unix RPC/race 回归、systemd 249 的 typed hook 检查及 `close_range(CLOEXEC)` 能力探针。隔离 Oracle MySQL 8.4.11 上的全后端 `-race` 回归已完成，940 PASS、0 FAIL、0 SKIP，`go vet` 通过；整套原生安装、HTTPS、升级、备份恢复与回滚仍未验收。这些结果不等于 Ubuntu 22.04 正式支持已完成，准确源码、执行结果及后续进度以 [验证记录](VALIDATION.md) 为准。
+2026-10-20 的 Ubuntu 22.04 阶段验证已实际运行支付 Unix RPC/race 回归、systemd 249 的 typed hook 检查及 `close_range(CLOEXEC)` 能力探针。隔离 Oracle MySQL 8.4.11 上的全后端 `-race` 回归已完成，940 PASS、0 FAIL、0 SKIP，`go vet` 通过；当时整套原生安装、HTTPS、升级、备份恢复与回滚尚未验收。这些结果不等于 Ubuntu 22.04 当前版本已验收；该历史段落仅记录当时范围，准确源码、执行结果及后续进度以 [验证记录](VALIDATION.md) 为准。
 
 | 平台 | 当前范围与限制 |
 | --- | --- |
-| Ubuntu 22.04 / amd64 | 新增部署验证目标，仅有上述有边界的回归与能力证据；完整原生验收待完成 |
-| Ubuntu 24.04 / amd64 | 既有正式 CI/发布基线；当前 0.5.10 候选仍须通过自身完整门禁，不能沿用历史结论 |
+| Ubuntu 22.04 / amd64 | 独立完整原生CI门；已执行的精确SHA与范围见验证记录，不能替任意主机背书 |
+| Ubuntu 24.04 / amd64 | 保留独立原生CI；与22一样，实际版本必须通过自身完整门禁，不能沿用历史结论 |
 | Ubuntu 26.04、Debian 等其他发行版 | 暂不支持，不在本轮部署目标内 |
 | RHEL / Rocky / AlmaLinux | 不宣称支持；Nginx worker 身份、SELinux、systemd 与工具路径尚须适配和实测 |
 | Alpine / OpenRC | 不宣称支持；现有执行器依赖真实 systemd，不能绕过服务校验 |
@@ -25,9 +25,9 @@
 
 独立插件宿主要求 Linux **>=5.11** 的 `close_range(CLOEXEC)` 能力；缺失时拒绝启动，不降低描述符隔离保护。发行版兼容工作不改变 Oracle MySQL 8.4、权限、支付协议或发布来源约束，也不放宽官方临时 CI runner 的发行版守卫。
 
-`doctor` 明确报告两类目标和验收状态：24.04 是既有完整 native CI 基线，22.04 仍待完整原生验收；任何一项 `ok` 都不是本机已验收。26.04 与其他发行版标为 unsupported。本轮不扩大或收紧 install/upgrade 的既有宿主判定，不能据此宣称工具已对所有非目标发行版硬拒绝。
+`doctor`报告22/24属于支持目标，并保留24作为既有基线；它不查询CI，始终保留`this_host_validated=false`，任何一项`ok`都不代表本机已验收。26和其他发行版为unsupported。该报告不改变install/upgrade原有宿主授权条件。
 
-Ubuntu 22 默认 Python 3.10 已执行上述运行时管理工具的离线回归；正式 CI 的 MySQL DEB 安全提取／打包夹具另要求 Python **>=3.12**。后者在本轮默认 Python 上未通过，不能把业务数据库回归当作打包门禁，也不能为兼容目标而降低该提取器保护。
+Ubuntu22默认Python3.10的运行工具与原生夹具已在精确源码的独立CI实跑。MySQL DEB提取检查实际安全能力而非Python大版本：必须同时有可调用的`tarfile.data_filter`和`extractall(filter=...)`，始终显式使用data filter；缺少安全backport时拒绝，不回退为不安全解包。两平台实际源码、完整原生结果与清理见[验证记录](../../docs/EXECUTION-20261027.md)。
 
 生产诊断使用 JSON/journald，业务审计使用 MySQL 真分页，配置与读取见 [生产日志与审计](LOGGING.md)。整机日志持久化/容量示例必须单独审核，不随安装自动应用。当前构建工具链固定 Go 1.27.3；安全依赖 `x/crypto v0.56.0` 要求构建最低 Go 1.26，已编译的原生静态 API 不依赖主机 Go，不因此排除 Ubuntu 22。
 

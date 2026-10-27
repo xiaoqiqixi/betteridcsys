@@ -41,6 +41,9 @@
 提交后又将到期夹具改为“先观察真实session等锁，再由锁持有夹具设短数据库期限”，避免认证抢固定4秒窗口；
 原完整401/未修改目标或业务/未落成功审计约束保留，无HTTP重试。调整版只完成交叉编译/vet与真实SQL时间primitive，完整Linux用例待新SHA。
 
+128a86d已在22/24真实MySQL/race完整执行这份调整后的用例，财务5项门全部成功，独立真实API浏览器也通过。
+本切片可记`ci_verified`，仍不包含其他财务写、staff/MFA、生产服务器或真KVM验收；整个仓库仍有Cloud宿主网络保护失败，不提前发行。
+
 依据：[MySQL当前时间函数在语句开始求值](https://dev.mysql.com/doc/refman/8.4/en/date-and-time-functions.html)。
 
 本包只加账户身份写fence，不宣称所有其他财务写、MFA、staff授权或数据库强制append-only已完成。

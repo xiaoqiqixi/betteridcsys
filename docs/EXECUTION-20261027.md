@@ -128,3 +128,37 @@ doctor只报告22/24属于支持目标、24为既有基线，始终`this_host_va
 如果下载再次失败，仍保留真实失败，不将换runner当功能修复证据。
 该GitHub一次性runner安装运行库时也因libudev依赖更新了同系列systemd255安全补丁；它不是未维护原镜像直接安装的证明，
 不改变生产安装器的系统升级边界，更不能替用户测试服务器或新物理主机背书。
+
+## 128a86d：财务22/24完整通过；主控宿主保护仍拦截，未发行
+
+源码`128a86d091d806c39b9c33c8a945c0fc20b19f06`：
+
+- [财务40430011285](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40430011285)：**5/5成功**。
+  两平台均完成全部Go/MySQL/race、前端、安全合同、systemd/TLS、插件崩溃/恢复、Core安装/升级/备份恢复/回滚与清理；
+  demo浏览器与独立真实MySQL财务浏览器也通过，没有拿942f62e超时结果补位。
+- 22实际选择`--kill-who`，24选择`--kill-whom`；两平台SMTP报告各9检查、失败0/跳过0；
+  合成支付真实HTTPS/MySQL结算回归、Core PID不变与清理退出0均有实际回执，不是仅mock命令。
+- 已下载两份native ZIP并核对完整大小/SHA256/ZIP安全边界后读取：
+  22为23,189字节、`2e53475f2dad8babf7f850eebd650c0c52263dfeb4fd3fcc43f6426967262716`；
+  24为23,062字节、`1aeab9467163709a4c9fa67388d6672b9192ac174f86125db6638c8630697768`。
+  证据保留在ignored的`vps-billing/artifacts/execution-20261027/128a86d/`，无生产凭据。
+- [独立性能40430011350](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40430011350)也成功；
+  仍与原生/浏览器/漏洞扫描分开，不充当其中任意任务。
+- [Cloud40430011168](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40430011168)：**10/11成功**，实际MySQL与浏览器成功；
+  24来宾完成实际APT/systemd/libvirt、签名镜像和明确无KVM检查，但宿主前后`addresses.length`变化，路由和防火墙hash不变。
+  父层因此返回`HOST_NETWORK_OR_FIREWALL_CHANGED`，整轮仍是**15/16**，不把来宾成功算整项通过。
+
+该Cloud失败ZIP为2,380字节、SHA256
+`797d11836f289de367dfd11d42fb215126ff443591a70bde665dee812120b6d8`，完整核验后读取。
+当前旧产物只有接口数量差异路径，没有接口结构或发生阶段，不能推断是Docker、DHCP、QEMU或安装器导致，**根因未归属**。
+原保护维持失败，不添加忽略Docker/veth的白名单、不截断原快照、不移动baseline、不改成warning或重试求绿。
+
+新增两项有界定位：原最初baseline保持，在VM启动前再次完整核对，结束后的核对保留；
+两者任一变化都失败。诊断只输出接口数量、ifindex、固定名称类别、link type、地址族数量，不输出名称/MAC/IP。
+至多32条诊断详情明确标出截断和真实总数，65个接口/仅第65条改变的回归证明实际比较和hash仍覆盖完整快照。
+本机47项libvirt合同通过；独立workflow另要求两个检查点都真实通过。**新增定位不等于此宿主变动已经修复**，仍须新SHA实际检查。
+
+W04与W07-B2可以按128a86d的各自实际范围记`ci_verified`；这不是用户服务器/公网/真实支付/KVM或整个功能清单完成。
+Core0.5.10和Cloud RC仍未创建新标签或Release，正式六资产下载/prepare验收未完成。
+安装与版本文档改用明确的发行放行条件，避免版本化安装包永远写“未发布”；同时纠正Python>=3.12的过时说法，
+实际要求仍为安全tar能力且不放宽filter。此类文档更新不把候选提前宣布为已交付。

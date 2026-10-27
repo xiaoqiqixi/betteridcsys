@@ -44,6 +44,7 @@ SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}
 OUTPUT_CREATED = None
 VM_PROGRESS = []
 HOST_PROOF = {}
+HOST_PRE_VM_PROOF = {}
 GUEST_RESULT_SEEN = False
 RELAY_PROOF = {}
 SANDBOX_PROOF = {}
@@ -255,6 +256,50 @@ def changed_paths(before, after, path="", limit=32):
     return list(dict.fromkeys(output))[:limit]
 
 
+def address_inventory_delta(before, after):
+    """Classify interface changes without exporting names, MACs or addresses.
+
+    This is diagnostic only: raw normalized equality remains the admission
+    condition. Docker/veth/libvirt interfaces are never excluded from it.
+    """
+    result = {"available": False,
+              "before_count": len(before) if isinstance(before, list) else None,
+              "after_count": len(after) if isinstance(after, list) else None}
+    categories = {"lo": "loopback", "eth0": "primary_ethernet", "eth1": "secondary_ethernet",
+                  "docker0": "docker_bridge", "virbr0": "libvirt_bridge"}
+    link_types = {"loopback", "ether", "none", "ppp", "tunnel", "sit", "ip6tnl", "tunnel6", "gre", "wireguard"}
+
+    def inventory(items):
+        if not isinstance(items, list) or len(items) > 4096:
+            return None
+        values = {}
+        for item in items:
+            if not isinstance(item, dict) or type(item.get("ifindex")) is not int or not 0 < item["ifindex"] < 2 ** 31 or item["ifindex"] in values:
+                return None
+            families = {"inet": 0, "inet6": 0, "other": 0}
+            addresses = item.get("addr_info", [])
+            if not isinstance(addresses, list):
+                return None
+            for address in addresses:
+                family = address.get("family") if isinstance(address, dict) else None
+                families[family if family in ("inet", "inet6") else "other"] += 1
+            name, link_type = item.get("ifname"), item.get("link_type")
+            values[item["ifindex"]] = {"ifindex": item["ifindex"],
+                "name_category": categories.get(name, "other") if isinstance(name, str) else "other",
+                "link_type": link_type if isinstance(link_type, str) and link_type in link_types else "other",
+                "address_families": families, "master_present": "master" in item}
+        return values
+
+    left, right = inventory(before), inventory(after)
+    if left is None or right is None:
+        return result
+    added, removed = sorted(set(right) - set(left)), sorted(set(left) - set(right))
+    result.update(available=True, added_count=len(added), removed_count=len(removed),
+                  added=[right[index] for index in added[:32]], removed=[left[index] for index in removed[:32]],
+                  details_truncated=len(added) > 32 or len(removed) > 32)
+    return result
+
+
 def network_proof(before, after):
     """Only category/hash evidence; no host address or firewall value leaves CI."""
     sections = ("addresses", "routes", "firewall")
@@ -263,6 +308,7 @@ def network_proof(before, after):
     return {"unchanged": before == after,
             "changed_sections": [name for name in sections if before[name] != after[name]],
             "difference_paths": changed_paths(before, after),
+            "address_inventory_delta": address_inventory_delta(before["addresses"], after["addresses"]),
             "before_sha256": {name: hashed(before[name]) for name in sections},
             "after_sha256": {name: hashed(after[name]) for name in sections}}
 
@@ -282,6 +328,18 @@ def host_network():
                                             for line in run(["/usr/bin/sudo", "-n", p]).decode().splitlines()
                                             if not line.startswith("#")) for p in saves]
     return result
+
+
+def verify_host_network_checkpoint(before, *, phase):
+    global HOST_PROOF, HOST_PRE_VM_PROOF
+    require(phase in {"before_vm", "after_vm"}, "HOST_NETWORK_CHECKPOINT_REJECTED")
+    proof = network_proof(before, host_network())
+    if phase == "before_vm":
+        HOST_PRE_VM_PROOF = proof
+    else:
+        HOST_PROOF = proof
+    require(proof["unchanged"], "HOST_NETWORK_CHANGED_BEFORE_VM" if phase == "before_vm" else "HOST_NETWORK_OR_FIREWALL_CHANGED")
+    return proof
 
 
 def process_identity(pid):
@@ -724,6 +782,7 @@ def execute(args):
             seed, metadata = make_seed(work, root, args.source_sha, provenance)
             overlay = work / "root.qcow2"
             run(["/usr/bin/qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", str(image), str(overlay), "16G"])
+            verify_host_network_checkpoint(before, phase="before_vm")
             result = run_vm(qemu_arguments(work, image, overlay, seed, nonce=metadata["nonce"]), work, metadata)
             # Never export arbitrary nested data from a failed VM report.
             # Successful reports also pass the complete schema before export.
@@ -731,13 +790,13 @@ def execute(args):
             require(result.get("passed") is True, "GUEST_ACCEPTANCE_FAILED")
             validate_result(result, metadata)
     finally:
-        HOST_PROOF = network_proof(before, host_network())
-        require(HOST_PROOF["unchanged"], "HOST_NETWORK_OR_FIREWALL_CHANGED")
+        verify_host_network_checkpoint(before, phase="after_vm")
     require(SANDBOX_PROOF.get("passed") is True and SANDBOX_PROOF.get("qemu_process_verified") is True and
             RELAY_PROOF.get("spawned_seen") is True and RELAY_PROOF.get("lifecycle", {}).get("cleanup_complete") is True,
             "NATIVE_PROCESS_ISOLATION_OR_RELAY_CLEANUP_UNVERIFIED")
     summary = {k: result[k] for k in ("passed", "real_apt", "real_systemd", "libvirt_prepared", "kvm_ready", "image_sha256", "ubuntu", "source_sha")}
     summary.update(schema=1, host_network_unchanged=True, tcg_only=True,
+                   host_network_proof=HOST_PROOF, host_network_pre_vm_proof=HOST_PRE_VM_PROOF,
                    host_process_isolation_verified=True, sandbox_selftests_passed=True, relay_cleanup_verified=True,
                    sandbox_proof=SANDBOX_PROOF, relay_proof=RELAY_PROOF,
                    doctor_protocol=result["doctor_protocol"], explicit_kvm_denial=result["explicit_kvm_denial"],
@@ -748,8 +807,8 @@ def execute(args):
 
 
 def main(argv=None):
-    global OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF
-    OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF = None, [], {}, False, {}, {}
+    global OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, HOST_PRE_VM_PROOF, GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF
+    OUTPUT_CREATED, VM_PROGRESS, HOST_PROOF, HOST_PRE_VM_PROOF, GUEST_RESULT_SEEN, RELAY_PROOF, SANDBOX_PROOF = None, [], {}, {}, False, {}, {}
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", choices=sorted(IMAGES), required=True)
     parser.add_argument("--source-root", required=True)
@@ -765,12 +824,14 @@ def main(argv=None):
     except Refused as error:
         if OUTPUT_CREATED is not None:
             (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": str(error), "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False,
-                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF, "relay_proof": RELAY_PROOF, "sandbox_proof": SANDBOX_PROOF}) + "\n")
+                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF,
+                "host_network_pre_vm_proof": HOST_PRE_VM_PROOF, "relay_proof": RELAY_PROOF, "sandbox_proof": SANDBOX_PROOF}) + "\n")
         print("FAIL: " + str(error), file=sys.stderr); return 1
     except Exception:
         if OUTPUT_CREATED is not None:
             (OUTPUT_CREATED / "summary.json").write_text(json.dumps({"schema": 1, "passed": False, "code": "NATIVE_FIXTURE_REFUSED_DETAILS_WITHHELD", "source_sha": args.source_sha, "ubuntu": args.ubuntu, "image_sha256": IMAGES[args.ubuntu][2], "kvm_ready": False,
-                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF, "relay_proof": RELAY_PROOF, "sandbox_proof": SANDBOX_PROOF}) + "\n")
+                "progress": VM_PROGRESS, "guest_result_seen": GUEST_RESULT_SEEN, "host_network_proof": HOST_PROOF,
+                "host_network_pre_vm_proof": HOST_PRE_VM_PROOF, "relay_proof": RELAY_PROOF, "sandbox_proof": SANDBOX_PROOF}) + "\n")
         print("FAIL: NATIVE_FIXTURE_REFUSED_DETAILS_WITHHELD", file=sys.stderr); return 1
 
 

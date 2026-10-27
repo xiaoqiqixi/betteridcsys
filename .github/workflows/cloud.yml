@@ -113,6 +113,8 @@ jobs:
               assert all(proof[k] is True for k in ('passed', 'real_apt', 'real_systemd', 'libvirt_prepared'))
               assert proof['kvm_ready'] is False
           assert summary['host_network_unchanged'] is True and summary['tcg_only'] is True
+          assert summary['host_network_pre_vm_proof']['unchanged'] is True
+          assert summary['host_network_proof']['unchanged'] is True
           assert summary['host_process_isolation_verified'] is True and summary['sandbox_selftests_passed'] is True
           assert summary['relay_cleanup_verified'] is True
           assert guest['explicit_kvm_denial'] is True and guest['non_kvm_doctor_checks_passed'] is True

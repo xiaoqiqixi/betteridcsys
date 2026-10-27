@@ -29,7 +29,7 @@
 
 Core 的交付格式为 Linux amd64 的 API、插件宿主和资源包。当前安装、升级文档准备 `0.5.10` 候选路径；**该版本尚未正式发布，不是现在可执行的下载承诺**。旧 `0.5.9` 资产存在不代表其新 prepare 可通过，见页首限制；升级前仍须审查 schema13、备份恢复和目标主机要求。从 [GitHub Releases](https://github.com/xiaoqiqixi/betteridcsys/releases)取得同一版本的六项资产，核对 `SHA256SUMS`、`BUILD.json` 和 `PROVENANCE.json`，再用主机准备器组装完整版本目录。服务器运行应用无需 Go 或 Node.js，单个可执行文件还不足以完成安装。
 
-财务既有完整原生验收基线为 Ubuntu24.04 / amd64、Python3、systemd、Nginx、本机 MySQL8.4 LTS，以及已准备的域名和 TLS 证书。Ubuntu22.04 是本轮补验目标，完整安装链尚未通过；Cloud22软件准备结果不能代替财务22验收。Ubuntu26及其他发行版不在本轮支持承诺内。管理员审查私密实例规格和只读计划后，以实际计划 SHA-256 确认操作。执行器负责受支持实例的数据库账号、配置、数据库更新、首位管理员、服务、版本切换与 HTTPS 检查。宝塔环境复用已有服务，单独审查本站配置。
+财务既有完整原生验收基线为 Ubuntu24.04 / amd64、Python3、systemd、Nginx、本机 MySQL8.4 LTS，以及已准备的域名和 TLS 证书。财务22/24的隔离完整原生链已在精确源码128a86d通过，见[27日记录](docs/EXECUTION-20261027.md)；它不代替目标主机验收，也不代表0.5.10已正式交付。Cloud结果不为财务背书。Ubuntu26及其他发行版不在本轮支持承诺内。管理员审查私密实例规格和只读计划后，以实际计划 SHA-256 确认操作。执行器负责受支持实例的数据库账号、配置、数据库更新、首位管理员、服务、版本切换与 HTTPS 检查。宝塔环境复用已有服务，单独审查本站配置。
 
 - [原生安装](vps-billing/docs/INSTALL.md) · [宝塔部署](vps-billing/docs/BAOTA.md)
 - [后台版本更新](vps-billing/docs/UPDATES.md) · [升级与回退](vps-billing/docs/UPGRADE.md) · [备份恢复](vps-billing/docs/BACKUP_RECOVERY.md)

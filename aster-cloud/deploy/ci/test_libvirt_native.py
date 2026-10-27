@@ -426,6 +426,68 @@ class NativeFixtureContract(unittest.TestCase):
         self.assertNotEqual(proof["before_sha256"]["addresses"], proof["after_sha256"]["addresses"])
         self.assertTrue(h.network_proof(before, before)["unchanged"])
 
+    def test_interface_delta_is_structural_and_never_exports_addresses_or_names(self):
+        before = {"addresses": [{"ifindex": 1, "ifname": "lo", "link_type": "loopback", "addr_info": []}], "routes": [], "firewall": {}}
+        after = copy.deepcopy(before)
+        after["addresses"].append({"ifindex": 8, "ifname": "PRIVATE_INTERFACE", "link_type": "ether",
+            "address": "PRIVATE_MAC", "master": "PRIVATE_MASTER", "addr_info": [
+                {"family": "inet", "local": "PRIVATE_IP"}, {"family": "inet6", "local": "PRIVATE_IPV6"}],
+            "flags": ["UP", "PRIVATE_FLAG"], "operstate": "UP"})
+        proof = h.network_proof(before, after)
+        self.assertFalse(proof["unchanged"])
+        delta = proof["address_inventory_delta"]
+        self.assertTrue(delta["available"])
+        self.assertEqual((delta["before_count"], delta["after_count"]), (1, 2))
+        self.assertEqual(delta["added_count"], 1)
+        self.assertEqual(delta["removed_count"], 0)
+        self.assertEqual(delta["added"], [{"ifindex": 8, "name_category": "other", "link_type": "ether",
+            "address_families": {"inet": 1, "inet6": 1, "other": 0}, "master_present": True}])
+        self.assertNotIn("PRIVATE", json.dumps(proof))
+        # A known Docker/libvirt interface is only classified, never ignored.
+        for name, category in (("docker0", "docker_bridge"), ("virbr0", "libvirt_bridge")):
+            after["addresses"][-1]["ifname"] = name
+            value = h.network_proof(before, after)
+            self.assertFalse(value["unchanged"])
+            self.assertEqual(value["address_inventory_delta"]["added"][0]["name_category"], category)
+
+    def test_interface_delta_handles_invalid_inventory_without_exporting_it_or_passing_changes(self):
+        for item in ({"ifname": "PRIVATE_NAME"}, {"ifindex": True}, {"ifindex": "PRIVATE_INDEX"}, None):
+            before = {"addresses": [], "routes": [], "firewall": {}}
+            after = {**before, "addresses": [item]}
+            proof = h.network_proof(before, after)
+            self.assertFalse(proof["unchanged"])
+            self.assertFalse(proof["address_inventory_delta"]["available"])
+            self.assertNotIn("PRIVATE", json.dumps(proof))
+
+    def test_diagnostic_detail_budget_never_truncates_actual_equality_or_hashes(self):
+        empty = {"addresses": [], "routes": [], "firewall": {}}
+        full = {**empty, "addresses": [{"ifindex": index + 1, "addr_info": []} for index in range(65)]}
+        proof = h.network_proof(empty, full)
+        self.assertFalse(proof["unchanged"])
+        self.assertEqual(proof["address_inventory_delta"]["added_count"], 65)
+        self.assertEqual(len(proof["address_inventory_delta"]["added"]), 32)
+        self.assertTrue(proof["address_inventory_delta"]["details_truncated"])
+        changed = copy.deepcopy(full)
+        changed["addresses"][64]["addr_info"] = [{"family": "inet", "local": "PRIVATE_IP"}]
+        proof = h.network_proof(full, changed)
+        self.assertFalse(proof["unchanged"])
+        self.assertNotEqual(proof["before_sha256"]["addresses"], proof["after_sha256"]["addresses"])
+        self.assertNotIn("PRIVATE", json.dumps(proof))
+
+    def test_pre_vm_checkpoint_fails_before_the_guest_without_rebasing_or_ignoring_changes(self):
+        before = {"addresses": [], "routes": [], "firewall": {}}
+        after = {**before, "addresses": [{"ifindex": 8, "ifname": "docker0", "addr_info": []}]}
+        with mock.patch.object(h, "HOST_PRE_VM_PROOF", {}), mock.patch.object(h, "host_network", return_value=after):
+            with self.assertRaisesRegex(h.Refused, "HOST_NETWORK_CHANGED_BEFORE_VM"):
+                h.verify_host_network_checkpoint(before, phase="before_vm")
+            self.assertFalse(h.HOST_PRE_VM_PROOF["unchanged"])
+        with mock.patch.object(h, "HOST_PROOF", {}), mock.patch.object(h, "host_network", return_value=before):
+            self.assertTrue(h.verify_host_network_checkpoint(before, phase="after_vm")["unchanged"])
+        import inspect
+        source = inspect.getsource(h.execute)
+        self.assertLess(source.index('verify_host_network_checkpoint(before, phase="before_vm")'), source.index('result = run_vm('))
+        self.assertEqual(source.count('before = host_network()'), 1)
+
     def test_progress_requires_owned_nonce_and_fixed_stage_without_exporting_inputs(self):
         with mock.patch.object(g, "PROGRESS_NONCE", None), mock.patch("builtins.open") as opened:
             g.progress("prepare")
