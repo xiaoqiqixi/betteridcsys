@@ -65,3 +65,27 @@
 原始本机资产、生产数据校验结果、发布前后基线与两份实际ZIP保存在ignored的
 `aster-cloud/artifacts/execution-20261027/cloud-public/`。当前源码与后续进度见[Cloud验证](../aster-cloud/docs/VALIDATION.md)，
 使用入口见[主控入门](../aster-cloud/docs/GETTING_STARTED.md)，[安装信任链](../aster-cloud/docs/RELEASE_CHANNEL.md)保留完整规则。
+
+## 随后补验：Ubuntu22/24 × 两角色实际4/4成功
+
+[公开四组合40454038287](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40454038287)已实际 **4/4成功**，不是把前面24的结果改写为22。
+验收控制源码为`20208555d95d72bd3f97f8b5efa2776083946696`；固定已发行源码仍为`8092c3cc0517c69562e8a5cdd94bc5e389e1bc8e`。
+这直接验证main推进后既有RC仍可正确下载与验签，不要求把tag移动到新main。
+
+四个ZIP已全部重新下载核对完整摘要、两个唯一JSON成员/CRC、源运行/控制源码及实际target facts，
+再以原独立checker重验根回执的来源、角色、包摘要和严格13字段；没有拿离线fixture作实测。
+
+| 平台 / 角色 | artifact ID | ZIP字节 | ZIP SHA256 |
+| --- | ---: | ---: | --- |
+| ubuntu-22.04 / controller | 12711737397 | 996 | `395c0cb147fca7990d99dce544b2fe7659569184aad49f5023673569343be764` |
+| ubuntu-22.04 / node | 12711802212 | 992 | `dbcbda19c8050de3e904b145a004c5d8a571bd019b302426ef59b74e3d99fdc4` |
+| ubuntu-24.04 / controller | 12711282204 | 996 | `597647292de8e94e76939fa26c327f30c9d5ba19c9b5866d00a16910e5b45600` |
+| ubuntu-24.04 / node | 12711792038 | 993 | `5d3ea2adc0c4f50add3e42a296cc333c06a271b5bf00d52ece88ab805bdc69e0` |
+
+四项实际均为匿名下载、真实Sigstore复验与认证后生产plan成功；host_apply/service_started/real_kvm_acceptance全部false。
+原始ZIP、平台报告及矩阵复核JSON位于`aster-cloud/artifacts/execution-20261027/cloud-public/matrix-2020855/`。
+此结果只扩大公开下载/只读plan的平台证据，不把新控制源码的完整16门、真实安装、staff集成或KVM验收填绿。
+
+随后同控制源码2020855的[财务40453853089](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40453853089) **5/5**、
+[Cloud40453853002](https://github.com/xiaoqiqixi/betteridcsys/actions/runs/40453853002) **11/11**均实际成功，原生产发布策略又经真实只读API复核完整16门。
+独立性能40453853030也成功，但不计入或替代16项必需集合。上述结果仍不使staff数据库/接口/UI、真实安装或KVM成为已验收。

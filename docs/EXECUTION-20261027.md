@@ -299,3 +299,16 @@ W07-C新`internal/staffaccess`只实现完整不可变授权快照：七项精�
 本机本批395项定向Python回归全部通过，actionlint、Python AST、JSON、187条本地文档路径及diff检查通过；
 原269项台账items逐字段未变，只更新W03证据、W07-C范围和分系统交付状态，不把全计划变完成。
 这些新代码不能继承8092c3c的16门；新main完整CI、四组合真下载和后续W07-C闭环继续推进。
+
+### 2020855：四组合公开复验已实跑成功，完整CI仍分别记账
+
+main已推送20208555d95d72bd3f97f8b5efa2776083946696；公开四组合40454038287实际4/4成功，
+Ubuntu22/24各自运行主控/被控的真实匿名下载、Sigstore复验及认证后生产plan。控制source2020855与发行source8092c3c严格分开。
+四份992–996字节ZIP已全部重新下载，完整hash/双JSON/CRC、原运行与控制source、actual platform及全部根回执字段复核通过；
+host_apply、service_started、real_kvm_acceptance均false，详见[公开验收续记](CLOUD_PUBLIC_ACCEPTANCE.md)。
+原始ZIP/报告保存在ignored的cloud-public/matrix-2020855。读取时同源完整财务40453853089、Cloud40453853002仍在运行，未预填16门通过。
+后续继续staff数据库/会话/读取/界面闭环；不把纯授权模型或公开plan充当生产资源验收。
+
+随后该2020855源码财务40453853089 **5/5**、Cloud40453853002 **11/11**及独立性能40453853030全部成功；
+未修改的生产green_checks再读实际API确认16项的名称、event/main/source/attempt与全部success，不拼接旧源码。
+台账与公开验收续记据此更新；下一源码仍需自身CI，staff功能未开放、离线文档布局与其余W07/W08–W17继续实施。
